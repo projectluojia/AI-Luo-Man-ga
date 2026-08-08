@@ -1,0 +1,17 @@
+.env
+.env.*
+!.env.example
+.agents/
+.co?ex/
+agent/.venv/
+agent/.venv-stale/
+**/__pycache__/
+*.py[cod]
+var/
+dontcommitthis/
+*.asm
+*.db
+*.db-shm
+*.db-wal
+coverage.out
+dist/

@@ -1,0 +1,526 @@
+openapi: 3.1.0
+info:
+  title: AI珞（爱珞） V3 Web Access API
+  version: 2.0.0
+  description: Every HTTP response carries X-Request-ID, X-Trace-ID, and a W3C traceparent generated from validated input correlation headers.
+servers:
+  - url: http://127.0.0.1:8080
+paths:
+  /api/v1/echoes:
+    post:
+      deprecated: true
+      summary: Create and start an Echo
+      description: Compatibility route. It has the same mandatory idempotency contract as /api/v2/echoes; new clients must use v2.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [message]
+              properties:
+                message:
+                  type: string
+                  minLength: 1
+                  maxLength: 4000
+      responses:
+        "202":
+          description: Echo accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EchoAccepted"
+        "200":
+          description: A completed durable creation record was replayed; no second Echo or Run was created or scheduled.
+          headers:
+            Idempotency-Replayed:
+              $ref: "#/components/headers/IdempotencyReplayed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EchoAccepted"
+        "400":
+          $ref: "#/components/responses/Error"
+        "409":
+          description: The Idempotency-Key is already bound to a different request body.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          $ref: "#/components/responses/QueueFull"
+        "503":
+          description: The App is disabled or its persisted configuration is temporarily unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          $ref: "#/components/responses/Error"
+  /api/v2/echoes:
+    post:
+      summary: Idempotently create and schedule an Echo
+      description: Echo, attempt-1 Run, and the App-scoped idempotency mapping are committed in one transaction.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [message]
+              properties:
+                message:
+                  type: string
+                  minLength: 1
+                  maxLength: 4000
+      responses:
+        "202":
+          description: A new Echo and queued Run were atomically accepted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EchoAccepted"
+        "200":
+          description: The stored response for the same key and request was replayed.
+          headers:
+            Idempotency-Replayed:
+              $ref: "#/components/headers/IdempotencyReplayed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EchoAccepted"
+        "400":
+          $ref: "#/components/responses/Error"
+        "409":
+          description: The Idempotency-Key is already bound to a different request body.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          $ref: "#/components/responses/QueueFull"
+        "503":
+          description: The App is disabled or its persisted configuration is temporarily unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          $ref: "#/components/responses/Error"
+  /api/v1/echoes/{echo_id}:
+    parameters:
+      - $ref: "#/components/parameters/EchoID"
+    get:
+      summary: Get Echo state and persisted events
+      responses:
+        "200":
+          description: Echo state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EchoState"
+        "404":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
+    delete:
+      summary: Cancel a running Echo
+      responses:
+        "204":
+          description: Cancellation requested
+        "409":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
+  /api/v1/echoes/{echo_id}/events:
+    parameters:
+      - $ref: "#/components/parameters/EchoID"
+    get:
+      summary: Stream persisted and live Echo events
+      parameters:
+        - name: Last-Event-ID
+          in: header
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+      responses:
+        "200":
+          description: Server-sent event stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: Each data field is a serialized EchoEvent; event ids are monotonically increasing within the App-scoped Echo.
+        "404":
+          description: The Echo does not exist in the current App. This response does not disclose whether the identifier exists in another App.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          $ref: "#/components/responses/Error"
+  /api/v1/capabilities:
+    get:
+      summary: List capabilities enabled for the campus-services App
+      responses:
+        "200":
+          description: Capability list
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [capabilities]
+                properties:
+                  capabilities:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Capability"
+        "503":
+          description: The App is disabled or its persisted Capability policy is temporarily unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /healthz:
+    get:
+      summary: Process liveness
+      responses:
+        "200":
+          description: The Go process is alive. No dependency is probed.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [status]
+                properties:
+                  status:
+                    type: string
+                    const: live
+  /readyz:
+    get:
+      summary: Service readiness
+      responses:
+        "200":
+          description: Ready
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [status]
+                properties:
+                  status:
+                    type: string
+                    const: ready
+        "503":
+          $ref: "#/components/responses/Error"
+  /metrics:
+    get:
+      summary: Prometheus process metrics
+      description: Exposes fixed, low-cardinality operational metrics without App, Echo, Run, call, payload, prompt, or credential labels.
+      responses:
+        "200":
+          description: Prometheus text exposition
+          content:
+            text/plain:
+              schema:
+                type: string
+components:
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: App-scoped client operation identifier. Reuse is valid only with the identical normalized request.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+        pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    EchoID:
+      name: echo_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+  schemas:
+    Capability:
+      type: object
+      additionalProperties: false
+      required: [id, version, name, description, service_id, input_schema_json, side_effect, requires_confirmation]
+      properties:
+        id:
+          type: string
+        version:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        service_id:
+          type: string
+        input_schema_json:
+          type: string
+          description: Registered strict JSON Schema serialized as JSON.
+        side_effect:
+          type: string
+          enum: [none, read, write, external]
+        requires_confirmation:
+          type: boolean
+        required_permissions:
+          type: array
+          items:
+            type: string
+    EchoAccepted:
+      type: object
+      required: [echo_id, status_url, events_url]
+      properties:
+        echo_id:
+          type: string
+          format: uuid
+        status_url:
+          type: string
+        events_url:
+          type: string
+    Echo:
+      type: object
+      additionalProperties: false
+      required: [echo_id, app_id, input_message, status, created_at]
+      properties:
+        echo_id:
+          type: string
+        app_id:
+          type: string
+        input_message:
+          type: string
+        status:
+          type: string
+          enum: [running, succeeded, failed, cancelled]
+        final_message:
+          type: string
+        error_code:
+          type: string
+          description: Stable safe error code. Internal causes are never returned.
+        error_message:
+          type: string
+          description: Safe localized message. Internal errors, provider bodies, paths, and credentials are never returned.
+        created_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+    EchoEvent:
+      type: object
+      additionalProperties: false
+      required: [app_id, echo_id, sequence, type, payload, created_at]
+      properties:
+        app_id:
+          type: string
+        echo_id:
+          type: string
+        run_id:
+          type: string
+        sequence:
+          type: integer
+          minimum: 1
+        type:
+          type: string
+        payload: {}
+        created_at:
+          type: string
+          format: date-time
+    Run:
+      type: object
+      additionalProperties: false
+      required:
+        - run_id
+        - run_group_id
+        - app_id
+        - echo_id
+        - attempt
+        - status
+        - model
+        - model_config_version
+        - protocol_version
+        - max_steps
+        - max_tool_calls
+        - max_input_tokens
+        - max_output_tokens
+        - max_total_tokens
+        - max_output_bytes
+        - max_cost_microusd
+        - provider_timeout_ms
+        - used_input_tokens
+        - used_output_tokens
+        - used_total_tokens
+        - used_cost_microusd
+        - used_provider_retries
+        - deadline
+        - available_at
+        - last_agent_sequence
+        - created_at
+      properties:
+        run_id:
+          type: string
+        run_group_id:
+          type: string
+          description: Stable identity shared by retry attempts of one root execution; a child Run has its own group.
+        app_id:
+          type: string
+        echo_id:
+          type: string
+        parent_run_id:
+          type: string
+          description: Present only for the single governed child Run level.
+        origin_call_id:
+          type: string
+          description: Parent CapabilityCall identity that created this child Run.
+        attempt:
+          type: integer
+          minimum: 1
+        status:
+          type: string
+          enum: [queued, running, succeeded, failed, cancelled, timed_out]
+        model:
+          type: string
+        model_config_version:
+          type: string
+        protocol_version:
+          type: string
+        max_steps:
+          type: integer
+          minimum: 0
+        max_tool_calls:
+          type: integer
+          minimum: 1
+        max_input_tokens:
+          type: integer
+          minimum: 1
+        max_output_tokens:
+          type: integer
+          minimum: 1
+        max_total_tokens:
+          type: integer
+          minimum: 1
+        max_output_bytes:
+          type: integer
+          minimum: 1
+        max_cost_microusd:
+          type: integer
+          minimum: 0
+        provider_timeout_ms:
+          type: integer
+          minimum: 100
+        used_input_tokens:
+          type: integer
+          minimum: 0
+        used_output_tokens:
+          type: integer
+          minimum: 0
+        used_total_tokens:
+          type: integer
+          minimum: 0
+        used_cost_microusd:
+          type: integer
+          minimum: 0
+        used_provider_retries:
+          type: integer
+          minimum: 0
+          maximum: 320
+        deadline:
+          type: string
+          format: date-time
+        available_at:
+          type: string
+          format: date-time
+          description: Earliest durable scheduling time for this Run attempt.
+        lease_expires_at:
+          type: string
+          format: date-time
+        last_agent_sequence:
+          type: integer
+          minimum: 0
+        capability_scope:
+          type: array
+          maxItems: 64
+          uniqueItems: true
+          description: Persisted acceptance-time Capability ceiling; child Runs contain a further narrowed subset and never contain agent.run.
+          items:
+            type: string
+        error_code:
+          type: string
+          description: Stable safe error code.
+        error_message:
+          type: string
+          description: Safe localized error message.
+        created_at:
+          type: string
+          format: date-time
+        started_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+    EchoState:
+      type: object
+      additionalProperties: false
+      required: [echo, runs, events]
+      properties:
+        echo:
+          $ref: "#/components/schemas/Echo"
+        runs:
+          type: array
+          items:
+            $ref: "#/components/schemas/Run"
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/EchoEvent"
+    Error:
+      type: object
+      additionalProperties: false
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          description: Stable machine-readable error code.
+        message:
+          type: string
+          description: Safe localized message without internal error details.
+  responses:
+    QueueFull:
+      description: The App-scoped durable Run capacity is exhausted. An idempotent replay of an already accepted request is still allowed.
+      headers:
+        Retry-After:
+          description: Minimum client retry delay in seconds.
+          schema:
+            type: integer
+            minimum: 1
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Error:
+      description: Structured error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+  headers:
+    IdempotencyReplayed:
+      description: True when the response came from the durable idempotency mapping and no new work was scheduled.
+      schema:
+        type: string
+        const: "true"

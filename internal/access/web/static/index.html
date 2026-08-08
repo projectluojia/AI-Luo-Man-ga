@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>AI珞（爱珞） V3 Web Access 测试</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <main>
+    <h1>AI珞（爱珞） V3 · Web Access 测试</h1>
+    <p id="status">检查服务状态中…</p>
+    <form id="form">
+      <label for="message">消息</label>
+      <textarea id="message" rows="4" required>请查询从文理学部到信息学部下一班校巴。</textarea>
+      <button type="submit">创建 Echo</button>
+      <button type="button" id="cancel" disabled>取消</button>
+    </form>
+    <pre id="output" aria-live="polite"></pre>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>

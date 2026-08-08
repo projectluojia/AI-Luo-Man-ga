@@ -1,0 +1,4 @@
+grpcio==1.83.0
+grpcio-tools==1.83.0
+openai==2.17.0
+protobuf==7.35.1

@@ -1,0 +1,78 @@
+syntax = "proto3";
+
+package ailuo.runtime.v1;
+
+option go_package = "github.com/projectluojia/AI-Luo-Man-ga/gen/runtimev1;runtimev1";
+
+service RuntimeHost {
+  rpc Describe(DescribeRequest) returns (RuntimeDescription);
+  rpc Start(LifecycleRequest) returns (LifecycleResponse);
+  rpc Health(LifecycleRequest) returns (LifecycleResponse);
+  rpc Invoke(InvokeRequest) returns (InvokeResponse);
+  rpc Stop(LifecycleRequest) returns (LifecycleResponse);
+}
+
+message RuntimeIdentity {
+  string runtime_id = 1;
+  string version = 2;
+  string protocol_version = 3;
+}
+
+message DescribeRequest {
+  RuntimeIdentity identity = 1;
+}
+
+message RuntimeDescription {
+  string runtime_id = 1;
+  string version = 2;
+  string mode = 3;
+  repeated string supported_protocol_versions = 4;
+}
+
+message LifecycleRequest {
+  RuntimeIdentity identity = 1;
+}
+
+message LifecycleResponse {
+  RuntimeIdentity identity = 1;
+  bool ready = 2;
+  string status_code = 3;
+}
+
+message GovernedRequestContext {
+  string app_id = 1;
+  string echo_id = 2;
+  string request_id = 3;
+  string trace_id = 4;
+  string user_id = 5;
+  string session_id = 6;
+  string run_id = 7;
+  string parent_run_id = 8;
+  uint32 call_depth = 9;
+  int64 deadline_unix_ms = 10;
+  string idempotency_key = 11;
+  string confirmation_id = 12;
+  string protocol_version = 13;
+  repeated string permission_scope = 14;
+  repeated string call_chain = 15;
+  string call_id = 16;
+  string target_type = 17;
+  string capability_id = 18;
+  string service_id = 19;
+  string tool_id = 20;
+}
+
+message InvokeRequest {
+  RuntimeIdentity identity = 1;
+  GovernedRequestContext context = 2;
+  bytes payload_json = 3;
+}
+
+message InvokeResponse {
+  RuntimeIdentity identity = 1;
+  bool success = 2;
+  bytes payload_json = 3;
+  string error_code = 4;
+  reserved 5;
+  bool retryable = 6;
+}
