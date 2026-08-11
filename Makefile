@@ -1,18 +1,23 @@
-.PHONY: generate setup-agent test test-race test-integration vet run
+.PHONY: generate setup-agent test test-python test-race test-integration vet run
 
 GOCACHE ?= /tmp/ailuo-gocache
+UV ?= uv
+PYTHON := $(UV) run --project agent --locked python
 
 generate:
 	PATH="$$(go env GOPATH)/bin:$$PATH" protoc --go_out=. --go_opt=module=github.com/projectluojia/AI-Luo-Man-ga --go-grpc_out=. --go-grpc_opt=module=github.com/projectluojia/AI-Luo-Man-ga proto/agent.proto proto/runtime_host.proto
-	agent/.venv/bin/python -m grpc_tools.protoc -I proto --python_out=agent/generated --grpc_python_out=agent/generated proto/agent.proto
+	$(PYTHON) -m grpc_tools.protoc -I proto --python_out=agent/generated --grpc_python_out=agent/generated proto/agent.proto
 
 setup-agent:
-	python3 -m venv agent/.venv
-	agent/.venv/bin/pip install -r agent/requirements.txt
+	$(UV) sync --project agent --locked
 
 test:
 	GOCACHE=$(GOCACHE) go test ./...
-	agent/.venv/bin/python -m unittest discover -s agent -p 'test_*.py' -v
+	$(MAKE) test-python
+
+test-python:
+	$(PYTHON) -m compileall -q agent
+	$(PYTHON) -m unittest discover -s agent -p 'test_*.py' -v
 
 test-race:
 	GOCACHE=$(GOCACHE) go test -race ./...
