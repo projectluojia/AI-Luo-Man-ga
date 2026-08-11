@@ -1132,6 +1132,16 @@ Service 的 `requested_permissions` 是该 Service 及其依赖 Tool 的权限�
 
 这套机制提供有界重放与保守的故障后安全性，不声称实现外部系统的分布式事务。外部副作用若在远端成功、本地终态提交前进程丢失，会进入 `idempotency_outcome_unknown`，不会自动冒险重试；具体业务必须通过远端幂等协议或对账适配器收敛。
 
+### 确认与副作用治理实现基线（2026-08-12）
+
+高风险写入或外部副作用（`side_effect` 为 `write`/`external`）必须先经过 Go 权威确认存储，再由 Dispatcher 执行。SQLite 迁移 15 新增 `confirmations` 表：主键为 `(app_id, confirmation_id)`，外键绑定已存在的 Echo 与 Run，`target_type`/`side_effect`/`status` 均为闭式 CHECK，`argument_digest` 为规范化 JSON 的 SHA-256 摘要，`expires_at` 必须晚于创建时间，`waiting` 无决策时间而其余状态必须携带决策时间。所有读写按 `app_id` 作用域执行，跨 App 读取直接不可见。
+
+确认状态机只承认 `waiting`/`approved`/`rejected`/`expired`/`revoked` 五种状态；`waiting` 是唯一可决策状态，`approved` 是唯一可执行副作用的授权态，其余失效状态不可逆转。决策、撤销与过期都以 CAS 方式执行：重复相同决策幂等成功，冲突决策返回 `ErrAlreadyDecided`，过期或撤销后不可再决策。`Decide`/`Revoke`/`Expire`/`Verify`/`Resolve` 对过期记录一致返回 `ErrExpired`。
+
+确认记录绑定 App、Echo、Run、Call、目标类型与目标标识、副作用类型、幂等键与参数摘要；验证时任何维度不匹配都拒绝（跨 App 在读取层直接返回 not-found，不泄露记录是否存在）。参数摘要由确认时参数经规范化后取 SHA-256，参数改变后旧确认摘要必然不匹配，不可复用。重启后待确认状态从持久化存储恢复，非进程内存。Run 取消时批量撤销该 Run 下全部等待/批准确认。
+
+Service 实现 `runtime.ConfirmationVerifier`（编译期断言），经 `WithConfirmationVerifier` 注入 Dispatcher；`requires_confirmation` 的 Capability/Tool 未配置验证器、缺少确认标识或验证失败一律 fail-closed 收敛为 `confirmation_required`。当前 `runtime.ConfirmationRequest` 不携带本次调用的参数摘要，Dispatcher 边界的参数变化由持久化幂等指纹冲突拒绝；带摘要的 `Verify` 入口可在确认边界直接强制摘要匹配。执行结果不是确认状态：未知执行结果由幂等层返回 `idempotency_outcome_unknown`，不自动重试副作用，也不把“未知”伪报为成功或失败。
+
 ### Agent 协议与 Provider 可靠性实现基线（2026-07-26）
 
 Go 健康探测携带可接受的协议版本和当前模型标识；Python 只有在版本兼容且能在有界时间内读取该模型元数据时才报告就绪。每个 Run 的 `StartRun` 固定协议版本并携带可选 `parent_run_id`、步数、ToolCall、输入/输出/总 Token、输出字节、可选成本和单次 Provider 超时预算；两端校验 parent 标识非自指且格式合法，Python 必须先返回同版本的 `RunAccepted`，业务帧才可继续。
