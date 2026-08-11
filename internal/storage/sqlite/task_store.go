@@ -19,16 +19,10 @@ var taskIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
 var _ task.Store = (*Store)(nil)
 
 func init() {
-	// 版本 15/16/17 占位迁移：身份（15）、会话（16）、确认（17）三个模块
-	// 处于并行开发分支，尚未并入本分支。为保证 schema_migrations 版本连续
-	// （ValidateBackup 要求 migrationCount==version），按会话模块已建立的占位
-	// 约定临时占用这三个版本号；对应模块的正式迁移并入后必须删除占位注册，
-	// 否则会重复注册并以显式错误终止启动。
-	registerMigration(15, `CREATE TEMP TABLE IF NOT EXISTS task_module_gap_placeholder_15 (id INTEGER PRIMARY KEY);`)
-	registerMigration(16, `CREATE TEMP TABLE IF NOT EXISTS task_module_gap_placeholder_16 (id INTEGER PRIMARY KEY);`)
-	registerMigration(17, `CREATE TEMP TABLE IF NOT EXISTS task_module_gap_placeholder_17 (id INTEGER PRIMARY KEY);`)
-	// 迁移 18：后台任务持久状态机。状态迁移全部以租约令牌与租约到期条件
-	// 做原子守卫；CHECK 约束在 SQL 边界强制状态机与参数的合法取值范围。
+	// 后台任务持久状态机的前向迁移固定为版本 18；版本 15（身份）、16（会话）、
+	// 17（确认）分别由对应模块占用，合并后迁移序列 1–18 连续。
+	// 状态迁移全部以租约令牌与租约到期条件做原子守卫；CHECK 约束在 SQL 边界
+	// 强制状态机与参数的合法取值范围。
 	registerMigration(18, `
 CREATE TABLE tasks (
   app_id TEXT NOT NULL,
