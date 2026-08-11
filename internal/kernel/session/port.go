@@ -64,6 +64,4 @@ type BlobStore interface {
 	Get(context.Context, string) ([]byte, error)
 	// Delete 删除 Blob；删除后不可再读取。
 	Delete(context.Context, string) error
-	// Size 返回 Blob 内容字节数。
-	Size(context.Context, string) (int64, error)
 }

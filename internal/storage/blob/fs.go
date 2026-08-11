@@ -147,34 +147,6 @@ func (b *Store) Delete(ctx context.Context, blobID string) (resultErr error) {
 	return nil
 }
 
-// Size 返回 Blob 内容字节数；不存在或已删除返回 ErrBlobNotFound。
-func (b *Store) Size(ctx context.Context, blobID string) (_ int64, resultErr error) {
-	started := time.Now()
-	defer func() { observeBlobOperation(ctx, "blob_size", started, resultErr) }()
-	if err := ctx.Err(); err != nil {
-		return 0, err
-	}
-	if err := b.validateBlobID(blobID); err != nil {
-		return 0, err
-	}
-	file, err := b.root.Open(filepath.FromSlash(blobID))
-	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return 0, session.ErrBlobNotFound
-		}
-		return 0, fmt.Errorf("open blob content: %w", err)
-	}
-	info, err := file.Stat()
-	closeErr := file.Close()
-	if err != nil {
-		return 0, fmt.Errorf("stat blob content: %w", err)
-	}
-	if closeErr != nil {
-		return 0, fmt.Errorf("close blob content: %w", closeErr)
-	}
-	return info.Size(), nil
-}
-
 // validateBlobID 校验 Blob 标识。文件系统适配器进一步拒绝 ':'，
 // 因为 Windows 文件名字符集不允许冒号，避免同一 blobID 在不同平台产生不同行为。
 func (b *Store) validateBlobID(blobID string) error {

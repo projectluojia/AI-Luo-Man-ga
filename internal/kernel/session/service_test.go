@@ -176,7 +176,7 @@ func TestServiceRejectsContentSizeMismatch(t *testing.T) {
 	if !errors.Is(err, session.ErrInvalidMessage) {
 		t.Fatalf("大小不匹配 error=%v, want ErrInvalidMessage", err)
 	}
-	if _, err := blobs.Size(context.Background(), "messages/msg-1"); !errors.Is(err, session.ErrBlobNotFound) {
+	if _, err := blobs.Get(context.Background(), "messages/msg-1"); !errors.Is(err, session.ErrBlobNotFound) {
 		t.Fatalf("大小不匹配不应留下 Blob，得到 %v", err)
 	}
 }

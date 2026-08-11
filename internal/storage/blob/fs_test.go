@@ -24,17 +24,13 @@ func openBlobStore(t *testing.T, maxBytes int64) (*blob.Store, string) {
 	return store, rootDir
 }
 
-func TestBlobPutGetSizeDeleteRoundTrip(t *testing.T) {
+func TestBlobPutGetDeleteRoundTrip(t *testing.T) {
 	store, _ := openBlobStore(t, 1024)
 	ctx := context.Background()
 	body := []byte("图片附件二进制正文")
 
 	if err := store.Put(ctx, "attachments/att-1", body); err != nil {
 		t.Fatalf("写入 Blob：%v", err)
-	}
-	size, err := store.Size(ctx, "attachments/att-1")
-	if err != nil || size != int64(len(body)) {
-		t.Fatalf("Blob 大小=%d err=%v", size, err)
 	}
 	got, err := store.Get(ctx, "attachments/att-1")
 	if err != nil || !bytes.Equal(got, body) {
@@ -50,9 +46,6 @@ func TestBlobPutGetSizeDeleteRoundTrip(t *testing.T) {
 	// 删除后不可读。
 	if _, err := store.Get(ctx, "attachments/att-1"); !errors.Is(err, session.ErrBlobNotFound) {
 		t.Fatalf("删除后读取 error=%v, want ErrBlobNotFound", err)
-	}
-	if _, err := store.Size(ctx, "attachments/att-1"); !errors.Is(err, session.ErrBlobNotFound) {
-		t.Fatalf("删除后 Size error=%v, want ErrBlobNotFound", err)
 	}
 	if err := store.Delete(ctx, "attachments/att-1"); !errors.Is(err, session.ErrBlobNotFound) {
 		t.Fatalf("重复删除 error=%v, want ErrBlobNotFound", err)

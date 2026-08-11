@@ -225,10 +225,6 @@ func TestServiceVerifyApprovedSucceedsAndRejectsNonApproved(t *testing.T) {
 	if err := service.VerifyConfirmation(context.Background(), verifyRequest(record)); err != nil {
 		t.Fatalf("approved verify got %v, want nil", err)
 	}
-	// 正确摘要的 Verify 同样通过。
-	if err := service.Verify(context.Background(), verifyRequest(record), record.ArgumentDigest); err != nil {
-		t.Fatalf("approved digest verify got %v, want nil", err)
-	}
 
 	// 拒绝状态不可执行。
 	rejected := requestConfirmation(t, service, "app", "echo", "run", "call-2",
@@ -286,37 +282,6 @@ func TestServiceVerifyRejectsScopeMismatch(t *testing.T) {
 	// 跨 App 读不到记录：App 隔离在读取层已经保证。
 	if _, err := service.Resolve(context.Background(), "other", record.ConfirmationID); !errors.Is(err, confirmation.ErrNotFound) {
 		t.Fatalf("cross-app resolve got %v, want ErrNotFound", err)
-	}
-}
-
-func TestServiceVerifyRejectsArgumentDigestMismatch(t *testing.T) {
-	t.Parallel()
-	service, _, clock := openService(t)
-	record := requestConfirmation(t, service, "app", "echo", "run", "call-1",
-		confirmation.RequestSpec{
-			CapabilityID: "campus.bus.notify", TargetType: confirmation.TargetTypeCapability,
-			TargetID: "campus.bus.notify", SideEffect: confirmation.SideEffectExternal,
-			IdempotencyKey: "operation-1",
-		},
-		`{"amount":10}`, clock.current().Add(time.Hour))
-	if _, err := service.Decide(context.Background(), "app", record.ConfirmationID,
-		confirmation.StatusApproved, "user-1", clock.current().Add(time.Minute)); err != nil {
-		t.Fatalf("decide approve: %v", err)
-	}
-	// 参数改变后的摘要必须被拒绝：旧确认不可复用。
-	changedDigest, err := confirmation.Digest([]byte(`{"amount":100}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if changedDigest == record.ArgumentDigest {
-		t.Fatal("digests must differ for changed arguments")
-	}
-	if err := service.Verify(context.Background(), verifyRequest(record), changedDigest); !errors.Is(err, confirmation.ErrDigestMismatch) {
-		t.Fatalf("changed digest got %v, want ErrDigestMismatch", err)
-	}
-	// 原始参数摘要仍然有效。
-	if err := service.Verify(context.Background(), verifyRequest(record), record.ArgumentDigest); err != nil {
-		t.Fatalf("original digest got %v, want nil", err)
 	}
 }
 

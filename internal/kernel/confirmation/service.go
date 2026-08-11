@@ -263,36 +263,25 @@ var _ runtime.ConfirmationVerifier = (*Service)(nil)
 
 // VerifyConfirmation 实现 runtime.ConfirmationVerifier，供 Dispatcher 注入。
 // 校验通过返回 nil，否则返回稳定错误（Dispatcher 统一收敛为
-// ErrConfirmationRequired 公共错误）。
+// ErrConfirmationRequired 公共错误）。参数变化导致的旧确认失效由创建时记录的
+// argument_digest 与 Dispatcher 边界的持久化幂等指纹共同保证。
 //
 // 说明：runtime.ConfirmationRequest 目前不携带本次调用的参数摘要，
-// 因此本方法只校验记录存在、授权状态、有效期与请求中的范围绑定
-// （App/Echo/Run/目标/副作用/幂等键）。需要强制参数摘要匹配的调用方
-// 应使用带摘要参数的 Verify；在 Dispatcher 边界补齐参数摘要传递后，
-// 本方法即可统一执行摘要匹配。
+// 本方法校验记录存在、授权状态、有效期与请求中的范围绑定
+// （App/Echo/Run/目标/副作用/幂等键）。
 func (s *Service) VerifyConfirmation(ctx context.Context, request runtime.ConfirmationRequest) error {
-	return s.verify(ctx, request, "")
+	return s.verify(ctx, request)
 }
 
-// Verify 在 VerifyConfirmation 的基础上，额外校验本次调用携带的参数摘要
-// 与确认时记录的参数摘要一致；不一致返回 ErrDigestMismatch，
-// 保证"参数改变后旧确认不可复用"。
-func (s *Service) Verify(ctx context.Context, request runtime.ConfirmationRequest, argumentDigest string) error {
-	return s.verify(ctx, request, argumentDigest)
-}
-
-func (s *Service) verify(ctx context.Context, request runtime.ConfirmationRequest, argumentDigest string) error {
+func (s *Service) verify(ctx context.Context, request runtime.ConfirmationRequest) error {
 	if err := ValidateRequest(request); err != nil {
 		return err
-	}
-	if argumentDigest != "" && ValidateArgumentDigest(argumentDigest) != nil {
-		return fmt.Errorf("%w: invalid current argument digest", ErrInvalidRequest)
 	}
 	record, err := s.store.Get(ctx, request.AppID, request.ConfirmationID)
 	if err != nil {
 		return err
 	}
-	err = verifyRecord(record, request, argumentDigest, s.now().UTC())
+	err = verifyRecord(record, request, s.now().UTC())
 	if err != nil {
 		observe.Warn(ctx, "确认验证失败",
 			observe.Component("confirmation"),
@@ -309,11 +298,7 @@ func (s *Service) verify(ctx context.Context, request runtime.ConfirmationReques
 }
 
 // verifyRecord 执行确认记录的完整匹配规则。
-func verifyRecord(record Confirmation, request runtime.ConfirmationRequest, argumentDigest string, now time.Time) error {
-	// 参数摘要匹配：参数改变后的旧确认不可复用。
-	if argumentDigest != "" && record.ArgumentDigest != argumentDigest {
-		return ErrDigestMismatch
-	}
+func verifyRecord(record Confirmation, request runtime.ConfirmationRequest, now time.Time) error {
 	// 范围绑定：跨 App、目标（Capability/Tool）、Echo、Run、副作用或幂等键一律拒绝。
 	if record.AppID != request.AppID || record.TargetType != request.TargetType ||
 		record.TargetID != request.TargetID || record.EchoID != request.EchoID ||

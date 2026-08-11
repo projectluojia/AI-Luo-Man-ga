@@ -63,7 +63,6 @@ var (
 	ErrExpired           = errors.New("confirmation has expired")
 	ErrRevoked           = errors.New("confirmation has been revoked")
 	ErrAlreadyDecided    = errors.New("confirmation was already decided")
-	ErrDigestMismatch    = errors.New("confirmation argument digest mismatch")
 	ErrScopeMismatch     = errors.New("confirmation scope mismatch")
 	ErrDuplicate         = errors.New("confirmation already exists")
 	ErrInvalidTransition = errors.New("invalid confirmation state transition")
