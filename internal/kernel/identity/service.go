@@ -23,7 +23,7 @@ func NewService(store Store) *Service {
 
 // CreateUser 创建 Deployment 级内部用户。user_id 由管理控制面显式提供，
 // 平台外部标识永远不会被当作内部 user_id。
-func (s *Service) CreateUser(ctx context.Context, userID string) (_ User, resultErr error) {
+func (s *Service) CreateUser(ctx context.Context, userID string) (User, error) {
 	if err := ValidateUserID(userID); err != nil {
 		return User{}, fmt.Errorf("%w: user_id=%q", ErrInvalid, userID)
 	}
@@ -48,7 +48,7 @@ func (s *Service) GetUser(ctx context.Context, userID string) (User, error) {
 
 // DisableUser 禁用用户。禁用立即生效：ResolveIdentity 与 EffectivePermissions
 // 在下一个查询时刻返回 ErrUserDisabled。
-func (s *Service) DisableUser(ctx context.Context, userID string) (_ User, resultErr error) {
+func (s *Service) DisableUser(ctx context.Context, userID string) (User, error) {
 	if err := ValidateUserID(userID); err != nil {
 		return User{}, fmt.Errorf("%w: user_id=%q", ErrInvalid, userID)
 	}
@@ -64,7 +64,7 @@ func (s *Service) DisableUser(ctx context.Context, userID string) (_ User, resul
 }
 
 // EnableUser 重新启用用户。
-func (s *Service) EnableUser(ctx context.Context, userID string) (_ User, resultErr error) {
+func (s *Service) EnableUser(ctx context.Context, userID string) (User, error) {
 	if err := ValidateUserID(userID); err != nil {
 		return User{}, fmt.Errorf("%w: user_id=%q", ErrInvalid, userID)
 	}
@@ -82,7 +82,7 @@ func (s *Service) EnableUser(ctx context.Context, userID string) (_ User, result
 // BindExternalIdentity 把 App 级外部平台身份绑定到已存在的内部用户。
 // 目标用户不存在返回 ErrNotFound（不自动创建匿名权威用户）；目标用户已禁用
 // 返回 ErrUserDisabled；同一外部身份已绑定到其他用户返回 ErrAlreadyBound。
-func (s *Service) BindExternalIdentity(ctx context.Context, binding ExternalIdentity) (resultErr error) {
+func (s *Service) BindExternalIdentity(ctx context.Context, binding ExternalIdentity) error {
 	normalized, err := NormalizeExternalIdentity(binding)
 	if err != nil {
 		return fmt.Errorf("%w: platform=%q", ErrInvalid, binding.Platform)
@@ -100,7 +100,7 @@ func (s *Service) BindExternalIdentity(ctx context.Context, binding ExternalIden
 }
 
 // UnbindExternalIdentity 解绑外部平台身份。身份不存在返回 ErrNotFound。
-func (s *Service) UnbindExternalIdentity(ctx context.Context, appID, platform, platformSpaceID, platformUserID string) (resultErr error) {
+func (s *Service) UnbindExternalIdentity(ctx context.Context, appID, platform, platformSpaceID, platformUserID string) error {
 	appID, platform, platformSpaceID, platformUserID, err := NormalizeBindingKey(appID, platform, platformSpaceID, platformUserID)
 	if err != nil {
 		return err
@@ -118,7 +118,7 @@ func (s *Service) UnbindExternalIdentity(ctx context.Context, appID, platform, p
 
 // ResolveIdentity 把平台外部身份解析为受治理身份上下文（查询时计算）。
 // 身份不存在返回 ErrNotFound；绑定用户已禁用返回 ErrUserDisabled。
-func (s *Service) ResolveIdentity(ctx context.Context, appID, platform, platformSpaceID, platformUserID string) (_ IdentityContext, resultErr error) {
+func (s *Service) ResolveIdentity(ctx context.Context, appID, platform, platformSpaceID, platformUserID string) (IdentityContext, error) {
 	appID, platform, platformSpaceID, platformUserID, err := NormalizeBindingKey(appID, platform, platformSpaceID, platformUserID)
 	if err != nil {
 		return IdentityContext{}, err
@@ -138,7 +138,7 @@ func (s *Service) ResolveIdentity(ctx context.Context, appID, platform, platform
 }
 
 // IdentityContextForUser 按内部 user_id 构造受治理身份上下文（不经过平台绑定）。
-func (s *Service) IdentityContextForUser(ctx context.Context, appID, userID string) (_ IdentityContext, resultErr error) {
+func (s *Service) IdentityContextForUser(ctx context.Context, appID, userID string) (IdentityContext, error) {
 	if err := ValidateAppID(appID); err != nil {
 		return IdentityContext{}, fmt.Errorf("%w: app_id=%q", ErrInvalid, appID)
 	}
@@ -184,25 +184,15 @@ func (s *Service) identityContextForActiveUser(ctx context.Context, appID, userI
 	return context, nil
 }
 
-// AppMemberships 返回用户在指定 App 的成员关系；无成员关系时返回空切片。
-func (s *Service) AppMemberships(ctx context.Context, appID, userID string) ([]AppMembership, error) {
+// Membership 返回用户在指定 App 的成员关系；用户不存在或无成员关系时返回 ErrNotFound。
+func (s *Service) Membership(ctx context.Context, appID, userID string) (AppMembership, error) {
 	if err := ValidateAppID(appID); err != nil {
-		return nil, fmt.Errorf("%w: app_id=%q", ErrInvalid, appID)
+		return AppMembership{}, fmt.Errorf("%w: app_id=%q", ErrInvalid, appID)
 	}
 	if err := ValidateUserID(userID); err != nil {
-		return nil, fmt.Errorf("%w: user_id=%q", ErrInvalid, userID)
+		return AppMembership{}, fmt.Errorf("%w: user_id=%q", ErrInvalid, userID)
 	}
-	if _, err := s.store.GetUser(ctx, userID); err != nil {
-		return nil, err
-	}
-	membership, err := s.store.GetMembership(ctx, appID, userID)
-	if errors.Is(err, ErrNotFound) {
-		return []AppMembership{}, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	return []AppMembership{membership}, nil
+	return s.store.GetMembership(ctx, appID, userID)
 }
 
 // MembersByApp 返回指定 App 的成员列表（App 隔离的管理员查询）。
@@ -234,7 +224,7 @@ func (s *Service) EffectivePermissions(ctx context.Context, appID, userID string
 }
 
 // EnsureRole 创建或更新 App 级角色元数据。角色权限通过 GrantPermission(role subject) 管理。
-func (s *Service) EnsureRole(ctx context.Context, role Role) (resultErr error) {
+func (s *Service) EnsureRole(ctx context.Context, role Role) error {
 	normalized, err := NormalizeRole(role)
 	if err != nil {
 		return fmt.Errorf("%w: role_id=%q", ErrInvalid, role.RoleID)
@@ -251,7 +241,7 @@ func (s *Service) EnsureRole(ctx context.Context, role Role) (resultErr error) {
 }
 
 // DeleteRole 删除 App 级角色。角色仍被成员引用时返回 ErrRoleInUse。
-func (s *Service) DeleteRole(ctx context.Context, appID, roleID string) (resultErr error) {
+func (s *Service) DeleteRole(ctx context.Context, appID, roleID string) error {
 	if err := ValidateAppID(appID); err != nil {
 		return fmt.Errorf("%w: app_id=%q", ErrInvalid, appID)
 	}
@@ -290,7 +280,7 @@ func (s *Service) ListRoles(ctx context.Context, appID string) ([]Role, error) {
 
 // SetMembership 写入用户在 App 的成员关系（角色集合整体替换）。
 // 用户不存在返回 ErrNotFound；引用不存在的角色返回 ErrRoleNotFound。
-func (s *Service) SetMembership(ctx context.Context, membership AppMembership) (resultErr error) {
+func (s *Service) SetMembership(ctx context.Context, membership AppMembership) error {
 	normalized, err := NormalizeMembership(membership)
 	if err != nil {
 		return fmt.Errorf("%w: user_id=%q", ErrInvalid, membership.UserID)
@@ -308,7 +298,7 @@ func (s *Service) SetMembership(ctx context.Context, membership AppMembership) (
 }
 
 // RemoveMembership 移除用户在 App 的成员关系。成员的直接权限授予随之外键级联撤销。
-func (s *Service) RemoveMembership(ctx context.Context, appID, userID string) (resultErr error) {
+func (s *Service) RemoveMembership(ctx context.Context, appID, userID string) error {
 	if err := ValidateAppID(appID); err != nil {
 		return fmt.Errorf("%w: app_id=%q", ErrInvalid, appID)
 	}
@@ -328,7 +318,7 @@ func (s *Service) RemoveMembership(ctx context.Context, appID, userID string) (r
 
 // GrantPermission 授予用户或角色一项权限。直接授予要求成员关系已存在；
 // 角色授予要求角色已存在。重复授予幂等成功，不推进修订号。
-func (s *Service) GrantPermission(ctx context.Context, grant PermissionGrant) (resultErr error) {
+func (s *Service) GrantPermission(ctx context.Context, grant PermissionGrant) error {
 	if err := ValidatePermissionGrant(grant); err != nil {
 		return fmt.Errorf("%w: permission=%q", ErrInvalid, grant.Permission)
 	}
@@ -346,7 +336,7 @@ func (s *Service) GrantPermission(ctx context.Context, grant PermissionGrant) (r
 }
 
 // RevokePermission 撤销用户或角色的一项权限。权限未授予时返回 ErrNotFound。
-func (s *Service) RevokePermission(ctx context.Context, grant PermissionGrant) (resultErr error) {
+func (s *Service) RevokePermission(ctx context.Context, grant PermissionGrant) error {
 	if err := ValidatePermissionGrant(grant); err != nil {
 		return fmt.Errorf("%w: permission=%q", ErrInvalid, grant.Permission)
 	}

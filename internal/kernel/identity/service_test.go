@@ -101,8 +101,8 @@ func TestExternalPlatformIDNeverBecomesInternalUserID(t *testing.T) {
 	if _, err := service.EffectivePermissions(ctx, "app-a", "external-alice"); !errors.Is(err, identity.ErrNotFound) {
 		t.Fatalf("platform ID resolved as internal user: %v", err)
 	}
-	if memberships, err := service.AppMemberships(ctx, "app-a", "external-alice"); !errors.Is(err, identity.ErrNotFound) {
-		t.Fatalf("platform ID resolved as internal member: memberships=%#v err=%v", memberships, err)
+	if _, err := service.Membership(ctx, "app-a", "external-alice"); !errors.Is(err, identity.ErrNotFound) {
+		t.Fatalf("platform ID resolved as internal member: %v", err)
 	}
 }
 
@@ -197,8 +197,8 @@ func TestPermissionsNeverLeakAcrossApps(t *testing.T) {
 	if err != nil || len(permissionsB) != 0 {
 		t.Fatalf("app-b permissions=%v err=%v, want empty", permissionsB, err)
 	}
-	if memberships, err := service.AppMemberships(ctx, "app-b", "user-1"); err != nil || len(memberships) != 0 {
-		t.Fatalf("app-b memberships=%#v err=%v, want empty", memberships, err)
+	if _, err := service.Membership(ctx, "app-b", "user-1"); !errors.Is(err, identity.ErrNotFound) {
+		t.Fatalf("app-b membership should be absent: %v", err)
 	}
 	if members, err := service.MembersByApp(ctx, "app-b"); err != nil || len(members) != 0 {
 		t.Fatalf("app-b member list=%#v err=%v, want empty", members, err)
@@ -373,16 +373,15 @@ func TestUserLifecycleAndAppMemberships(t *testing.T) {
 	if err != nil || user.Status != identity.UserStatusActive {
 		t.Fatalf("user=%#v err=%v", user, err)
 	}
-	// 初始无成员关系：空切片而非错误。
-	memberships, err := service.AppMemberships(ctx, "app-a", "user-1")
-	if err != nil || len(memberships) != 0 {
-		t.Fatalf("initial memberships=%#v err=%v, want empty", memberships, err)
+	// 初始无成员关系：ErrNotFound。
+	if _, err := service.Membership(ctx, "app-a", "user-1"); !errors.Is(err, identity.ErrNotFound) {
+		t.Fatalf("initial membership error=%v, want ErrNotFound", err)
 	}
 	mustRole(t, service, "app-a", "member", "成员")
 	mustMembership(t, service, "app-a", "user-1", "member")
-	memberships, err = service.AppMemberships(ctx, "app-a", "user-1")
-	if err != nil || len(memberships) != 1 || memberships[0].AppID != "app-a" || !sortedEqual(memberships[0].RoleIDs, []string{"member"}) {
-		t.Fatalf("memberships=%#v err=%v", memberships, err)
+	membership, err := service.Membership(ctx, "app-a", "user-1")
+	if err != nil || membership.AppID != "app-a" || !sortedEqual(membership.RoleIDs, []string{"member"}) {
+		t.Fatalf("membership=%#v err=%v", membership, err)
 	}
 	if members, err := service.MembersByApp(ctx, "app-a"); err != nil || len(members) != 1 || members[0].UserID != "user-1" {
 		t.Fatalf("members=%#v err=%v", members, err)
@@ -390,15 +389,15 @@ func TestUserLifecycleAndAppMemberships(t *testing.T) {
 	// 成员关系整体替换角色集合。
 	mustRole(t, service, "app-a", "admin", "管理员")
 	mustMembership(t, service, "app-a", "user-1", "admin", "member")
-	memberships, err = service.AppMemberships(ctx, "app-a", "user-1")
-	if err != nil || !sortedEqual(memberships[0].RoleIDs, []string{"admin", "member"}) {
-		t.Fatalf("replaced memberships=%#v err=%v", memberships, err)
+	membership, err = service.Membership(ctx, "app-a", "user-1")
+	if err != nil || !sortedEqual(membership.RoleIDs, []string{"admin", "member"}) {
+		t.Fatalf("replaced membership=%#v err=%v", membership, err)
 	}
 	if err := service.RemoveMembership(ctx, "app-a", "user-1"); err != nil {
 		t.Fatal(err)
 	}
-	if memberships, err := service.AppMemberships(ctx, "app-a", "user-1"); err != nil || len(memberships) != 0 {
-		t.Fatalf("after remove memberships=%#v err=%v", memberships, err)
+	if _, err := service.Membership(ctx, "app-a", "user-1"); !errors.Is(err, identity.ErrNotFound) {
+		t.Fatalf("after remove membership error=%v, want ErrNotFound", err)
 	}
 	// 明确的错误路径。
 	if err := service.RemoveMembership(ctx, "app-a", "user-1"); !errors.Is(err, identity.ErrNotFound) {
@@ -410,12 +409,12 @@ func TestUserLifecycleAndAppMemberships(t *testing.T) {
 	if _, err := service.GetUser(ctx, "missing-user"); !errors.Is(err, identity.ErrNotFound) {
 		t.Fatalf("get missing user error=%v, want ErrNotFound", err)
 	}
-	// 语法合法但不存在的 App：按不存在返回空切片（fail closed），不是错误。
-	if memberships, err := service.AppMemberships(ctx, "missing-app", "user-1"); err != nil || len(memberships) != 0 {
-		t.Fatalf("memberships for unknown app=%#v err=%v, want empty", memberships, err)
+	// 语法合法但不存在的 App：按不存在返回 ErrNotFound（fail closed），不是错误。
+	if _, err := service.Membership(ctx, "missing-app", "user-1"); !errors.Is(err, identity.ErrNotFound) {
+		t.Fatalf("membership for unknown app error=%v, want ErrNotFound", err)
 	}
 	// 非法 App ID：ErrInvalid。
-	if _, err := service.AppMemberships(ctx, "Missing-App", "user-1"); !errors.Is(err, identity.ErrInvalid) {
+	if _, err := service.Membership(ctx, "Missing-App", "user-1"); !errors.Is(err, identity.ErrInvalid) {
 		t.Fatalf("invalid app error=%v, want ErrInvalid", err)
 	}
 }
