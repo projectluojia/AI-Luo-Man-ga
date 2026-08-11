@@ -13,7 +13,6 @@ import (
 	"time"
 )
 
-const currentSchemaVersion = 14
 const minimumRestorableSchemaVersion = 9
 
 var (
@@ -124,7 +123,7 @@ func ValidateBackup(ctx context.Context, path string) (resultErr error) {
 		observeStorageOperation(ctx, "backup_validate", started, err)
 		return errors.Join(ErrInvalidBackup, fmt.Errorf("read backup schema version: %w", err))
 	}
-	if version < minimumRestorableSchemaVersion || version > currentSchemaVersion || migrationCount != version {
+	if version < minimumRestorableSchemaVersion || version > currentSchemaVersion() || migrationCount != version {
 		err := fmt.Errorf("schema migration history is outside the supported restore range")
 		observeStorageOperation(ctx, "backup_validate", started, err)
 		return errors.Join(ErrInvalidBackup, err)
