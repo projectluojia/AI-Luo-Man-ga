@@ -10,10 +10,10 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/confirmation"
 )
 
-// 迁移 15：确认与副作用治理表。所有读写按 (app_id, confirmation_id) 作用域执行，
+// 迁移 17：确认与副作用治理表。所有读写按 (app_id, confirmation_id) 作用域执行，
 // 并通过外键把确认绑定到已存在的 Echo 与 Run。
 func init() {
-	registerMigration(15, `
+	registerMigration(17, `
 CREATE TABLE confirmations (
   app_id TEXT NOT NULL,
   confirmation_id TEXT NOT NULL,

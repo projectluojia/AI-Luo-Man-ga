@@ -12,12 +12,8 @@ import (
 )
 
 func init() {
-	// 占位迁移 15：会话模块的前向迁移固定在版本 16，版本 15（身份模块）与 17（确认模块）
-	// 在并行分支开发、尚未合入本包。备份校验要求 schema_migrations 的行数与最大版本一致
-	// （migrationCount==version），因此本分支用临时表语句占住版本 15 保证迁移序列连续；
-	// 临时表随事务提交消失、不落盘，也无业务副作用。身份模块的 registerMigration(15)
-	// 合入本包时必须删除本占位注册，否则重复注册会以显式启动错误终止。
-	registerMigration(15, `CREATE TEMP TABLE IF NOT EXISTS session_module_sequence_placeholder (id INTEGER PRIMARY KEY);`)
+	// 会话模块的前向迁移固定为版本 16；版本 15 由身份模块占用，
+	// 版本 17 由确认模块占用，合并后迁移序列 1–18 连续。
 	registerMigration(16, `
 CREATE TABLE sessions (
   app_id TEXT NOT NULL CHECK(length(app_id) BETWEEN 1 AND 128),

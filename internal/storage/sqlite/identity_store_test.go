@@ -75,8 +75,8 @@ func TestIdentityMigration15CreatesIdentitySchema(t *testing.T) {
 		t.Fatal(err)
 	}
 	var version int
-	if err := db.QueryRow(`SELECT max(version) FROM schema_migrations`).Scan(&version); err != nil || version != 15 {
-		t.Fatalf("schema version=%d err=%v, want 15", version, err)
+	if err := db.QueryRow(`SELECT max(version) FROM schema_migrations`).Scan(&version); err != nil || version < 15 {
+		t.Fatalf("schema version=%d err=%v, want >=15", version, err)
 	}
 	var tables int
 	if err := db.QueryRow(`SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN ('users','external_identities','app_memberships','roles','permission_grants','identity_binding_revisions')`).Scan(&tables); err != nil || tables != 6 {
