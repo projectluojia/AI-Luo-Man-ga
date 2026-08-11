@@ -103,7 +103,7 @@ func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	command := exec.CommandContext(ctx, filepath.Join(root, "agent/.venv/bin/python"), "-m", "agent.runtime", "--listen", address)
+	command := exec.CommandContext(ctx, agenthost.DefaultPythonPath(root), "-m", "agent.runtime", "--listen", address)
 	command.Dir = root
 	command.Env = append(os.Environ(),
 		"AILUO_MODEL_API_KEY=test-key",

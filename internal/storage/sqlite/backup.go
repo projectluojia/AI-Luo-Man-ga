@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -49,18 +50,12 @@ func (s *Store) Backup(ctx context.Context, destination string) (resultErr error
 	if err := ValidateBackup(ctx, temporary); err != nil {
 		return err
 	}
-	if err := os.Link(temporary, destination); errors.Is(err, os.ErrExist) {
+	if err := publishDatabaseFile(temporary, destination); errors.Is(err, os.ErrExist) {
 		return ErrBackupDestinationExists
 	} else if err != nil {
 		return fmt.Errorf("publish sqlite backup: %w", err)
 	}
 	published = true
-	if err := os.Remove(temporary); err != nil {
-		return fmt.Errorf("remove published backup temporary link: %w", err)
-	}
-	if err := syncDirectory(parent); err != nil {
-		return fmt.Errorf("sync backup directory: %w", err)
-	}
 	observeStorageOperation(ctx, "backup", started, nil)
 	return nil
 }
@@ -90,7 +85,7 @@ func ValidateBackup(ctx context.Context, path string) (resultErr error) {
 		observeStorageOperation(ctx, "backup_validate", started, err)
 		return errors.Join(ErrInvalidBackup, err)
 	}
-	uri := (&url.URL{Scheme: "file", Path: absolute}).String() + "?mode=ro&immutable=1"
+	uri := sqliteFileURI(absolute) + "?mode=ro&immutable=1"
 	db, err := sql.Open("sqlite", uri)
 	if err != nil {
 		observeStorageOperation(ctx, "backup_validate", started, err)
@@ -140,6 +135,14 @@ func ValidateBackup(ctx context.Context, path string) (resultErr error) {
 	}
 	observeStorageOperation(ctx, "backup_validate", started, nil)
 	return nil
+}
+
+func sqliteFileURI(absolute string) string {
+	path := filepath.ToSlash(absolute)
+	if filepath.VolumeName(absolute) != "" && !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	return (&url.URL{Scheme: "file", Path: path}).String()
 }
 
 func validateRequiredSchema(ctx context.Context, db *sql.DB, version int) error {
@@ -268,27 +271,21 @@ func RestoreBackup(ctx context.Context, backupPath, destination string) (resultE
 	if err := errors.Join(copyErr, closeSourceErr); err != nil {
 		return fmt.Errorf("copy backup for restore: %w", err)
 	}
-	if err := temporary.Sync(); err != nil {
-		return fmt.Errorf("sync restored database: %w", err)
-	}
 	if err := temporary.Close(); err != nil {
 		return fmt.Errorf("close restored database: %w", err)
+	}
+	if err := hardenAndSyncFile(temporaryPath); err != nil {
+		return fmt.Errorf("harden restored database: %w", err)
 	}
 	if err := ValidateBackup(ctx, temporaryPath); err != nil {
 		return err
 	}
-	if err := os.Link(temporaryPath, destination); errors.Is(err, os.ErrExist) {
+	if err := publishDatabaseFile(temporaryPath, destination); errors.Is(err, os.ErrExist) {
 		return ErrRestoreDestinationExists
 	} else if err != nil {
 		return fmt.Errorf("publish restored database: %w", err)
 	}
 	published = true
-	if err := os.Remove(temporaryPath); err != nil {
-		return fmt.Errorf("remove restored database temporary link: %w", err)
-	}
-	if err := syncDirectory(parent); err != nil {
-		return fmt.Errorf("sync restore directory: %w", err)
-	}
 	observeStorageOperation(ctx, "restore", started, nil)
 	return nil
 }
@@ -343,31 +340,6 @@ func reserveTemporaryPath(parent, pattern string) (string, error) {
 		return "", err
 	}
 	return path, nil
-}
-
-func hardenAndSyncFile(path string) (resultErr error) {
-	file, err := os.OpenFile(path, os.O_RDWR, 0)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		resultErr = errors.Join(resultErr, file.Close())
-	}()
-	if err := file.Chmod(0o600); err != nil {
-		return err
-	}
-	return file.Sync()
-}
-
-func syncDirectory(path string) (resultErr error) {
-	directory, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		resultErr = errors.Join(resultErr, directory.Close())
-	}()
-	return directory.Sync()
 }
 
 func copyWithContext(ctx context.Context, destination io.Writer, source io.Reader) error {

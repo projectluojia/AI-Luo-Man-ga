@@ -678,7 +678,6 @@ func TestShutdownWaitsForAdmittedCreationBeforeCancellingRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
 	backend := &fakeOrchestrator{
 		store:         store,
 		block:         true,
@@ -731,6 +730,9 @@ func TestShutdownWaitsForAdmittedCreationBeforeCancellingRun(t *testing.T) {
 	record, _, err := store.GetEcho(context.Background(), "campus-services", accepted["echo_id"])
 	if err != nil || record.Status != kernelecho.StatusCancelled {
 		t.Fatalf("record=%#v err=%v", record, err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
 	}
 }
 

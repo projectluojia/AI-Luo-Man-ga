@@ -310,6 +310,8 @@ def _model_api_key() -> str:
         raise ValueError("生产环境模型密钥必须来自受限文件")
     if not secret_file:
         return raw_secret
+    if os.name != "posix":
+        raise ValueError("当前平台不支持模型密钥文件属主校验，请使用受治理的密钥源")
     flags = os.O_RDONLY
     if hasattr(os, "O_CLOEXEC"):
         flags |= os.O_CLOEXEC

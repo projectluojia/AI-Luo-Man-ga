@@ -71,6 +71,12 @@ func TestLoadConfigRequiresRestrictedSecretFileInProduction(t *testing.T) {
 	}
 	t.Setenv("AILUO_MODEL_API_KEY", "")
 	t.Setenv("AILUO_MODEL_API_KEY_FILE", secretPath)
+	if !unixSecurityAvailable {
+		if _, err := loadConfig(); err == nil || !strings.Contains(err.Error(), "owner-only permission verification") {
+			t.Fatalf("unsupported secret file verification error=%v", err)
+		}
+		return
+	}
 	if _, err := loadConfig(); err != nil {
 		t.Fatalf("restricted secret file rejected: %v", err)
 	}
@@ -114,6 +120,9 @@ func TestLoadConfigRejectsRelativeRuntimeInstallRoot(t *testing.T) {
 }
 
 func TestConfigureInstalledRuntimesAllowsEmptySecureCatalog(t *testing.T) {
+	if !unixSecurityAvailable {
+		t.Skip("非 Unix 平台显式关闭安装目录属主校验")
+	}
 	root := t.TempDir()
 	if err := os.Chmod(root, 0o700); err != nil {
 		t.Fatal(err)
@@ -128,6 +137,9 @@ func TestConfigureInstalledRuntimesAllowsEmptySecureCatalog(t *testing.T) {
 }
 
 func TestConfigureInstalledRuntimesRegistersHostedCatalogAndRequiresAddress(t *testing.T) {
+	if !unixSecurityAvailable {
+		t.Skip("非 Unix 平台显式关闭安装目录属主校验")
+	}
 	root := writeMainInstalledFixture(t)
 	if _, err := configureInstalledRuntimes(t.Context(), config{
 		runtimeInstallRoot: root,

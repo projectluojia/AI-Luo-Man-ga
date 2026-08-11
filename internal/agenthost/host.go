@@ -6,11 +6,9 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"os"
 	"os/exec"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	agentv1 "github.com/projectluojia/AI-Luo-Man-ga/gen/agentv1"
@@ -73,20 +71,20 @@ func (h *Host) Err() error {
 func (h *Host) Stop(ctx context.Context) error {
 	select {
 	case <-h.done:
-		return normalizeStopError(h.Err())
+		return h.Err()
 	default:
 	}
-	if err := h.command.Process.Signal(os.Interrupt); err != nil {
+	if err := interruptProcess(h.command.Process); err != nil {
 		select {
 		case <-h.done:
-			return normalizeStopError(h.Err())
+			return h.Err()
 		default:
 			return fmt.Errorf("通知 Python AI Agent 停止：%w", err)
 		}
 	}
 	select {
 	case <-h.done:
-		return normalizeStopError(h.Err())
+		return normalizeExpectedStopError(h.Err())
 	case <-ctx.Done():
 		if err := h.command.Process.Kill(); err != nil {
 			return errors.Join(ctx.Err(), fmt.Errorf("强制停止 Python AI Agent：%w", err))
@@ -98,22 +96,6 @@ func (h *Host) Stop(ctx context.Context) error {
 			return errors.Join(ctx.Err(), fmt.Errorf("Python AI Agent 强制停止后未退出"))
 		}
 	}
-}
-
-func normalizeStopError(err error) error {
-	if err == nil {
-		return nil
-	}
-	var exitError *exec.ExitError
-	if errors.As(err, &exitError) {
-		if status, ok := exitError.Sys().(syscall.WaitStatus); ok && status.Signaled() {
-			signal := status.Signal()
-			if signal == syscall.SIGINT || signal == syscall.SIGTERM {
-				return nil
-			}
-		}
-	}
-	return err
 }
 
 func Dial(ctx context.Context, address string) (*grpc.ClientConn, agentv1.AgentRuntimeClient, error) {

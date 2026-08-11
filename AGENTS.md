@@ -33,6 +33,8 @@ AI珞（爱珞） V3 is a multi-entry AI assistant platform. The Go kernel is th
 
 The first product space is the `campus-services` App（校园综合服务 App）. Campus bus is its first Capability group, owned by the `campus` Service. The repository owns the Go backend and a minimal Web integration page only; it does not own the product frontend.
 
+The ordinary Go kernel, Web Access, SQLite, and Python Agent development path must remain buildable and testable on Windows, Linux, and macOS. Unix ownership, Unix Socket, and process-group isolation capabilities remain explicit Unix-only security boundaries until an equally strong native implementation exists; unsupported platforms fail closed. Python environments and dependencies are managed only through `uv`, `agent/pyproject.toml`, and the committed `agent/uv.lock`.
+
 ## Non-Negotiable Architecture
 
 - Go owns Access, Echo/Run orchestration, authorization, Registry, routing, loading, persistence, scheduling, observability, audit, cancellation, and recovery.
@@ -246,8 +248,9 @@ Before considering a change complete, run the relevant focused tests and then th
 ```bash
 gofmt -w .
 GOCACHE=/tmp/github.com/projectluojia/AI-Luo-Man-ga-gocache go test ./...
-agent/.venv/bin/python -m py_compile agent/*.py
-agent/.venv/bin/python -m unittest discover -s agent -p 'test_*.py' -v
+uv sync --project agent --locked
+uv run --project agent --locked python -m compileall -q agent
+uv run --project agent --locked python -m unittest discover -s agent -p 'test_*.py' -v
 GOCACHE=/tmp/github.com/projectluojia/AI-Luo-Man-ga-gocache go test -race ./...
 GOCACHE=/tmp/github.com/projectluojia/AI-Luo-Man-ga-gocache go vet ./...
 GOCACHE=/tmp/github.com/projectluojia/AI-Luo-Man-ga-gocache go test -tags=integration ./internal/kernel/loader -v -timeout=30s

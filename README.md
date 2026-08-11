@@ -24,7 +24,7 @@ Web Access API
 
 ## 本地运行
 
-要求：Go 1.26、Python 3.14、Protobuf 编译器，以及支持原生 ToolCall 的 OpenAI-compatible 模型。
+要求：Go 1.26、[uv](https://docs.astral.sh/uv/)、Python 3.11–3.14、Protobuf 编译器，以及支持原生 ToolCall 的 OpenAI-compatible 模型。Python 版本与依赖由 `agent/pyproject.toml` 和 `agent/uv.lock` 统一管理，不使用系统 `pip` 直接安装。
 
 ```bash
 make setup-agent
@@ -72,6 +72,8 @@ make test-race
 make vet
 make test-integration
 ```
+
+普通 Go/Python Agent 开发链路支持 Windows、Linux 和 macOS，默认 Python 路径会适配各平台的 uv 虚拟环境。安装目录属主验证、Unix Socket 和进程组隔离属于 Unix Runtime Host 安全边界，当前只在 Linux/macOS 启用；非 Unix 平台会显式拒绝这些能力。CI 在三平台运行核心测试，并在 Linux 运行 race、vet 和全部跨进程集成测试。
 
 集成测试会启动真实 Python Agent 进程，通过 OpenAI SDK 的流式协议发起原生 ToolCall，并完成 Go Capability、Service、Tool、数据库和最终回复的闭环。`go test -tags=integration ./internal/kernel/loader` 另行启动真实 isolated Runtime Host 子进程，验证 Unix gRPC、协议身份、优雅退出和进程组强制清理；该测试需要允许创建本机 Unix Socket。
 

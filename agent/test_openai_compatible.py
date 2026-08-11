@@ -86,6 +86,17 @@ class OpenAICompatibleProviderTest(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(ValueError):
                 _model_api_key()
 
+        if os.name != "posix":
+            with patch.dict(os.environ, {
+                "AILUO_ENVIRONMENT": "production",
+                "AILUO_MODEL_API_KEY": "",
+                "OPENAI_API_KEY": "",
+                "AILUO_MODEL_API_KEY_FILE": "model-key",
+            }):
+                with self.assertRaises(ValueError):
+                    _model_api_key()
+            return
+
         with tempfile.TemporaryDirectory() as directory:
             path = os.path.join(directory, "model-key")
             with open(path, "w", encoding="utf-8") as secret:
