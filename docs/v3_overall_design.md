@@ -517,6 +517,14 @@ isolated 扩展由 Go `IsolatedProcessHost` 启动。可执行文件、参数、
 
 上述实现完成了可长期保留的 Runtime Host 协议、Go 客户端/宿主校验器、持久安装目录发现与内核启动重注册、hosted 连接与容量边界，以及 isolated 真进程监管，但还不等于完整包平台已经交付。仓库尚未提供承载某种扩展语言或包格式的真实 Host Backend；hosted 共享进程的 CPU、内存和文件系统级资源隔离也需结合最终 Deployment 方案完成。当前安装目录属主校验在非 Unix 平台关闭失败，因此该能力目前只支持 Unix Deployment。Python Agent 仍由现有专用 Agent Host 管理。产品链路接入真实扩展 Backend 并完成对应恢复和资源限制验证前，不得把测试夹具描述成已上线扩展。
 
+2026-08-12 三模式接入基线：三种运行模式已由 Loader 统一接入，**campus 完全重构为 hosted 内置包（无旧兼容）**：
+
+- **hosted 生产 Backend = wazero 进程内沙箱**（`internal/kernel/loader/wasm_host.go`）。业务扩展包默认形态：wasm32-wasi 工件经线性内存上限（默认 128 MiB）与 WASI 裁剪（无文件系统/网络/环境变量）执行，每次调用独立实例（零共享状态），stdin/stdout JSON 信封 ABI（`{tool_id,payload}` → `{ok,result,code,message}`）。guest 需要内核能力时经宿主函数（host function）投影，线性内存 ABI + 按调用绑定的治理上下文（guest 无法伪造 app_id/权限）；`CapabilitySpec.ToolID` 让 Dispatcher 把 Capability 直接执行的工具注入治理上下文，运行时级 Handler 据此分发。campus 的存储查询即经 `ailuo.bus.query` 宿主函数投影（App 隔离在宿主侧强制），业务治理（数据权威性/新鲜度）留在 guest 复用 `internal/campus/bus`。
+- **embedded 机制**（`embedded_host.go`）：进程内 Runtime，供内核自有组件以包形式纳入统一治理；当前无生产业务包，机制完整并有测试。
+- **isolated 资源限额**：`ProcessSpec.Limits`（RLIMIT_AS/CPU/NOFILE/FSIZE）由锁固定，Linux 用 prlimit 在子进程启动后立即应用，其余平台对非零限额 fail-closed。
+- **Agent 定位**：内核内置的 isolated Runtime（执行者），与 isolated 扩展包同构（子进程 + gRPC），仅分发方式（随内核发布）与调用通道（双向流编排 vs 一元 Invoke）不同；不注册"可被调用的 Capability"，也不塞进 Loader 一元 Invoke 契约。
+- 安装目录发现仍只支持 Unix Deployment（属主校验 fail-closed）；内置 hosted 包（campus）不依赖安装目录，三平台均可装载。hosted 工件 CPU 指令级预算与外部 Runtime Host 进程形态接线保留为后续 P1。
+
 ### 防止微服务化失控
 
 除非明确评估，逻辑 Service/Tool 不得自行拥有：

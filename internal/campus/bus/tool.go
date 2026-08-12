@@ -23,38 +23,39 @@ const (
 	JourneySearchInputSchemaJSON = `{"type":"object","properties":{"origin_stop_id":{"type":"string","minLength":1},"destination_stop_id":{"type":"string","minLength":1},"depart_after":{"type":"string","format":"date-time"},"limit":{"type":"integer","minimum":1,"maximum":50}},"required":["origin_stop_id","destination_stop_id"],"additionalProperties":false}`
 )
 
-func ToolRegistrations(store Store) []registry.ToolRegistration {
-	return []registry.ToolRegistration{
+// ToolSpecs 返回校巴工具规格（单一来源，供安装清单与 Registry 注册共用）。
+func ToolSpecs() []registry.ToolSpec {
+	return []registry.ToolSpec{
 		{
-			Spec: registry.ToolSpec{
-				ID:              StopSearchToolID,
-				Version:         "1.0.0",
-				Description:     "Search authoritative campus bus stops by name or alias.",
-				InputSchemaJSON: StopSearchInputSchemaJSON,
-				SideEffect:      registry.SideEffectRead,
-			},
-			Handler: stopSearchHandler(store),
+			ID:              StopSearchToolID,
+			Version:         "1.0.0",
+			Description:     "Search authoritative campus bus stops by name or alias.",
+			InputSchemaJSON: StopSearchInputSchemaJSON,
+			SideEffect:      registry.SideEffectRead,
 		},
 		{
-			Spec: registry.ToolSpec{
-				ID:              RouteListToolID,
-				Version:         "1.0.0",
-				Description:     "List authoritative campus bus routes.",
-				InputSchemaJSON: RouteListInputSchemaJSON,
-				SideEffect:      registry.SideEffectRead,
-			},
-			Handler: routeListHandler(store),
+			ID:              RouteListToolID,
+			Version:         "1.0.0",
+			Description:     "List authoritative campus bus routes.",
+			InputSchemaJSON: RouteListInputSchemaJSON,
+			SideEffect:      registry.SideEffectRead,
 		},
 		{
-			Spec: registry.ToolSpec{
-				ID:              JourneySearchToolID,
-				Version:         "1.0.0",
-				Description:     "Search authoritative campus bus journeys by stops and departure time.",
-				InputSchemaJSON: JourneySearchInputSchemaJSON,
-				SideEffect:      registry.SideEffectRead,
-			},
-			Handler: journeySearchHandler(store, time.Now),
+			ID:              JourneySearchToolID,
+			Version:         "1.0.0",
+			Description:     "Search authoritative campus bus journeys by stops and departure time.",
+			InputSchemaJSON: JourneySearchInputSchemaJSON,
+			SideEffect:      registry.SideEffectRead,
 		},
+	}
+}
+
+// ToolHandlers 返回校巴工具执行器（注入存储端口），供 hosted 包 guest 装配使用。
+func ToolHandlers(store Store) map[string]registry.Handler {
+	return map[string]registry.Handler{
+		StopSearchToolID:    stopSearchHandler(store),
+		RouteListToolID:     routeListHandler(store),
+		JourneySearchToolID: journeySearchHandler(store, time.Now),
 	}
 }
 

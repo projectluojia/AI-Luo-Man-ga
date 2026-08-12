@@ -153,7 +153,7 @@ func (d *Dispatcher) InvokeCapability(ctx context.Context, request contracts.Req
 	child.TargetType = "capability"
 	child.CapabilityID = capabilityID
 	child.ServiceID = spec.ServiceID
-	child.ToolID = ""
+	child.ToolID = spec.ToolID
 	result, replayed, err := d.invokeHandler(ctx, request, "capability", capabilityID, spec.Version, spec.SideEffect, fingerprint, func(executionContext context.Context) (json.RawMessage, error) {
 		return handler(executionContext, child, payload)
 	})

@@ -24,12 +24,26 @@ var (
 
 var environmentNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,127}$`)
 
+// ProcessLimits 是 isolated 包的 OS 资源限额。Unix 平台在子进程启动后立即强制执行；
+// 非 Linux Unix 与 Windows 平台对携带非零限额的包 fail-closed（0 表示不限制）。
+type ProcessLimits struct {
+	// MaxAddressBytes 是虚拟地址空间上限（RLIMIT_AS）。
+	MaxAddressBytes uint64 `json:"max_address_bytes,omitempty"`
+	// MaxCPUSeconds 是 CPU 时间上限（RLIMIT_CPU）。
+	MaxCPUSeconds uint64 `json:"max_cpu_seconds,omitempty"`
+	// MaxOpenFiles 是最大打开文件数（RLIMIT_NOFILE）。
+	MaxOpenFiles uint64 `json:"max_open_files,omitempty"`
+	// MaxFileBytes 是单个文件最大字节（RLIMIT_FSIZE）。
+	MaxFileBytes uint64 `json:"max_file_bytes,omitempty"`
+}
+
 type ProcessSpec struct {
 	Path    string
 	Args    []string
 	Env     []string
 	WorkDir string
 	Address string
+	Limits  ProcessLimits
 }
 
 type IsolatedProcessHostConfig struct {
@@ -207,6 +221,12 @@ func startCommandProcess(ctx context.Context, spec ProcessSpec) (*commandProcess
 	if err := command.Start(); err != nil {
 		return nil, err
 	}
+	// 启动后立即应用资源限额：Linux 用 prlimit，其他平台对非零限额 fail-closed。
+	if err := applyProcessLimits(command.Process, spec.Limits); err != nil {
+		_ = command.Process.Kill()
+		_ = command.Wait()
+		return nil, err
+	}
 	process := &commandProcess{command: command, done: make(chan struct{})}
 	go func() {
 		_ = command.Wait()
@@ -377,7 +397,8 @@ func (r *processRuntime) finish() error {
 func validateProcessSpec(spec ProcessSpec) error {
 	if !filepath.IsAbs(spec.Path) || filepath.Clean(spec.Path) != spec.Path ||
 		!filepath.IsAbs(spec.WorkDir) || filepath.Clean(spec.WorkDir) != spec.WorkDir ||
-		!isLocalRuntimeAddress(spec.Address) || len(spec.Args) > 128 || len(spec.Env) > 64 {
+		!isLocalRuntimeAddress(spec.Address) || len(spec.Args) > 128 || len(spec.Env) > 64 ||
+		!validProcessLimits(spec.Limits) {
 		return ErrInvalidProcessSpec
 	}
 	info, err := os.Lstat(spec.Path)
@@ -446,4 +467,20 @@ func forbiddenProcessEnvironment(name string) bool {
 
 func validProcessDuration(value time.Duration) bool {
 	return value >= 100*time.Millisecond && value <= time.Minute
+}
+
+// maxProcessLimit* 是资源限额的合理性上限，防止异常配置写入系统限制。
+const (
+	maxProcessLimitAddress = uint64(1 << 40) // 1 TiB
+	maxProcessLimitCPU     = uint64(1 << 31)
+	maxProcessLimitFiles   = uint64(1 << 20)
+	maxProcessLimitFile    = uint64(1 << 40)
+)
+
+// validProcessLimits 校验限额在合理性上限内。
+func validProcessLimits(limits ProcessLimits) bool {
+	return limits.MaxAddressBytes <= maxProcessLimitAddress &&
+		limits.MaxCPUSeconds <= maxProcessLimitCPU &&
+		limits.MaxOpenFiles <= maxProcessLimitFiles &&
+		limits.MaxFileBytes <= maxProcessLimitFile
 }

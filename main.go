@@ -180,8 +180,35 @@ func run() (resultErr error) {
 	// 的 Capability 在未获批准前 fail-closed（缺确认标识或验证失败一律拒绝执行）。
 	confirmations := confirmation.NewService(store)
 	dispatcher := runtime.NewDispatcher(reg, policy, runtime.WithMaxCallDepth(16), runtime.WithIdempotencyStore(store), runtime.WithConfirmationVerifier(confirmations))
-	if err := campus.Register(reg, dispatcher, store); err != nil {
-		return fmt.Errorf("register campus service: %w", err)
+	// 校园服务以 hosted 包形态装配：内置 wasm 工件在进程内沙箱执行，
+	// 权威存储经宿主函数投影（App 隔离在宿主侧强制），Dispatcher 治理保持不变。
+	campusHost, err := loader.NewWasmHost(loader.WasmHostConfig{
+		ReadArtifact:  campus.ReadArtifact,
+		HostFunctions: campus.HostedFunctions(store),
+	})
+	if err != nil {
+		return fmt.Errorf("create campus hosted boundary: %w", err)
+	}
+	campusManager, err := loader.New(map[string]loader.Host{loader.ModeHosted: campusHost})
+	if err != nil {
+		return fmt.Errorf("create campus runtime loader: %w", err)
+	}
+	defer func() {
+		shutdownContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		resultErr = errors.Join(resultErr, campusManager.Shutdown(shutdownContext))
+	}()
+	if err := loader.RegisterInstalled(campusManager, reg, []loader.InstalledRecord{{
+		Runtime:      campus.Manifest(),
+		Tools:        campus.ToolSpecs(),
+		Service:      campus.ServiceSpec(),
+		Capabilities: campus.CapabilitySpecs(),
+	}}); err != nil {
+		return fmt.Errorf("register campus hosted package: %w", err)
+	}
+	// campus 是 pin 的内置包：启动预热，编译失败则内核拒绝就绪（fail-closed）。
+	if err := campusManager.Warmup(ctx, []string{campus.ServiceID}, 1); err != nil {
+		return fmt.Errorf("warm campus hosted package: %w", err)
 	}
 	runtimeManager, err := configureInstalledRuntimes(ctx, config, reg)
 	if err != nil {

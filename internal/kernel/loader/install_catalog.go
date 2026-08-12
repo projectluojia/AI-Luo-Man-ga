@@ -52,11 +52,12 @@ type InstalledManifest struct {
 }
 
 type InstalledProcessSpec struct {
-	Path    string   `json:"path"`
-	Args    []string `json:"args"`
-	Env     []string `json:"env"`
-	WorkDir string   `json:"work_dir"`
-	Address string   `json:"address"`
+	Path    string        `json:"path"`
+	Args    []string      `json:"args"`
+	Env     []string      `json:"env"`
+	WorkDir string        `json:"work_dir"`
+	Address string        `json:"address"`
+	Limits  ProcessLimits `json:"limits,omitempty"`
 }
 
 type InstalledLock struct {
@@ -72,6 +73,7 @@ type InstalledLock struct {
 
 type InstalledRecord struct {
 	Directory    string
+	ArtifactPath string
 	Runtime      Manifest
 	Tools        []registry.ToolSpec
 	Service      registry.ServiceSpec
@@ -168,6 +170,29 @@ func (c *Catalog) VerifyProcess(ctx context.Context, manifest Manifest, process 
 	return nil
 }
 
+// ReadArtifact 读取与 manifest 锁定的 hosted 工件字节。
+// 每次读取都重新校验目录、属主、清单一致性与工件 digest，防止 TOCTOU 替换。
+func (c *Catalog) ReadArtifact(ctx context.Context, manifest Manifest) ([]byte, error) {
+	record, err := c.readRecordByID(ctx, manifest.ID)
+	if err != nil {
+		return nil, err
+	}
+	if !sameRuntimeManifest(record.Runtime, manifest) {
+		return nil, ErrInstallChanged
+	}
+	if record.Runtime.Mode != ModeHosted {
+		return nil, ErrUnsupportedMode
+	}
+	data, err := os.ReadFile(record.ArtifactPath)
+	if err != nil {
+		return nil, errors.Join(ErrInstallCatalogInvalid, err)
+	}
+	if int64(len(data)) > maxInstallArtifact {
+		return nil, ErrInstallCatalogInvalid
+	}
+	return data, nil
+}
+
 func (c *Catalog) readRecordByID(ctx context.Context, id string) (InstalledRecord, error) {
 	if c == nil || !stableIDPattern.MatchString(id) {
 		return InstalledRecord{}, ErrInstallCatalogInvalid
@@ -248,6 +273,7 @@ func (c *Catalog) readRecord(ctx context.Context, directory string) (InstalledRe
 		spec := ProcessSpec{
 			Path: artifactPath, Args: append([]string(nil), lock.Process.Args...),
 			Env: append([]string(nil), lock.Process.Env...), WorkDir: workDir, Address: lock.Process.Address,
+			Limits: lock.Process.Limits,
 		}
 		if err := validateProcessSpec(spec); err != nil {
 			return InstalledRecord{}, err
@@ -255,7 +281,7 @@ func (c *Catalog) readRecord(ctx context.Context, directory string) (InstalledRe
 		process = &spec
 	}
 	record := InstalledRecord{
-		Directory: directory, Runtime: runtimeManifest,
+		Directory: directory, ArtifactPath: artifactPath, Runtime: runtimeManifest,
 		Tools: cloneToolSpecs(installed.Tools), Service: cloneInstalledService(installed.Service),
 		Capabilities: cloneCapabilitySpecs(installed.Capabilities), Process: process,
 	}

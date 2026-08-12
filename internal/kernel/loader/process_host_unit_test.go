@@ -25,11 +25,44 @@ func TestValidateProcessSpecRejectsUnsafeExecutionInputs(t *testing.T) {
 		func() ProcessSpec { value := base; value.Env = []string{"LD_PRELOAD=/tmp/inject.so"}; return value }(),
 		func() ProcessSpec { value := base; value.Env = []string{"SAFE=1", "SAFE=2"}; return value }(),
 		func() ProcessSpec { value := base; value.Args = []string{"bad\x00argument"}; return value }(),
+		func() ProcessSpec {
+			value := base
+			value.Limits = ProcessLimits{MaxAddressBytes: 1 << 50}
+			return value
+		}(),
+		func() ProcessSpec { value := base; value.Limits = ProcessLimits{MaxCPUSeconds: 1 << 40}; return value }(),
+		func() ProcessSpec { value := base; value.Limits = ProcessLimits{MaxOpenFiles: 1 << 30}; return value }(),
+		func() ProcessSpec { value := base; value.Limits = ProcessLimits{MaxFileBytes: 1 << 50}; return value }(),
 	}
 	for _, spec := range tests {
 		if err := validateProcessSpec(spec); err == nil {
 			t.Fatalf("unsafe spec accepted: %#v", spec)
 		}
+	}
+}
+
+func TestValidProcessLimits(t *testing.T) {
+	cases := []struct {
+		name   string
+		limits ProcessLimits
+		want   bool
+	}{
+		{name: "zero means unlimited", limits: ProcessLimits{}, want: true},
+		{name: "reasonable address", limits: ProcessLimits{MaxAddressBytes: 1 << 30}, want: true},
+		{name: "excessive address", limits: ProcessLimits{MaxAddressBytes: 1 << 50}, want: false},
+		{name: "reasonable cpu", limits: ProcessLimits{MaxCPUSeconds: 3600}, want: true},
+		{name: "excessive cpu", limits: ProcessLimits{MaxCPUSeconds: 1 << 40}, want: false},
+		{name: "reasonable files", limits: ProcessLimits{MaxOpenFiles: 1024}, want: true},
+		{name: "excessive files", limits: ProcessLimits{MaxOpenFiles: 1 << 30}, want: false},
+		{name: "reasonable file size", limits: ProcessLimits{MaxFileBytes: 1 << 20}, want: true},
+		{name: "excessive file size", limits: ProcessLimits{MaxFileBytes: 1 << 50}, want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := validProcessLimits(tc.limits); got != tc.want {
+				t.Fatalf("validProcessLimits(%+v) = %v, want %v", tc.limits, got, tc.want)
+			}
+		})
 	}
 }
 

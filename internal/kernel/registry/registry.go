@@ -56,6 +56,9 @@ type CapabilitySpec struct {
 	SideEffect           string   `json:"side_effect"`
 	RequiresConfirmation bool     `json:"requires_confirmation"`
 	RequiredPermissions  []string `json:"required_permissions,omitempty"`
+	// ToolID 声明该 Capability 直接执行的工具；Dispatcher 将其注入治理上下文的 ToolID，
+	// hosted 等运行时级 Handler 据此分发。空表示 Capability 自行处理分发。
+	ToolID string `json:"tool_id,omitempty"`
 }
 
 type ServiceSpec struct {
@@ -374,6 +377,8 @@ func validateCapabilitySpec(service ServiceSpec, mapID string, spec CapabilitySp
 		return fmt.Errorf("%w: capability %q has invalid required permissions", ErrInvalidSpec, spec.ID)
 	case !permissionSubset(spec.RequiredPermissions, service.RequestedPermissions):
 		return fmt.Errorf("%w: capability %q permissions exceed service %q requested permissions", ErrInvalidSpec, spec.ID, service.ID)
+	case spec.ToolID != "" && !validStableID(spec.ToolID):
+		return fmt.Errorf("%w: capability %q has invalid tool id %q", ErrInvalidSpec, spec.ID, spec.ToolID)
 	default:
 		return nil
 	}

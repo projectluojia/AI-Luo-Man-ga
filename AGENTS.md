@@ -202,6 +202,19 @@ The App-scoped storage/public-error, durable Echo/Run state, Go trust-boundary/i
 
 该批模块的存储/服务/调度代码与测试全部合并并通过 Go 全量测试、`go vet`、`-race`、Python 测试与 e2e 集成门禁（e2e 断言 Web 消息已持久化到会话台账）。
 
+## 2026-08-12 三模式包接入基线（embedded / hosted / isolated）
+
+按"包 = 逻辑单元（Tool/Service）+ 运行模式"的统一架构，落地三种运行模式的 Loader 接入；**campus 完全重构为 hosted 内置包，无旧兼容**（`campus.Register` 直连注册已删除）：
+
+- hosted 生产 Backend（wazero）：`internal/kernel/loader/wasm_host.go` 用 wazero 沙箱执行 wasm32-wasi 工件——线性内存上限（默认 128 MiB）、WASI 裁剪（无文件系统/网络/环境变量）、每次调用独立实例（调用之间零共享状态）、stdin/stdout JSON 信封 ABI（`{tool_id,payload}` → `{ok,result,code,message}`）、宿主函数（host function）线性内存 ABI 投影（guest 以 `//go:wasmimport` 调用），治理上下文按调用绑定（guest 无法伪造 app_id/权限/调用链）。
+- campus hosted 化：业务逻辑在 `internal/campus/bus`（纯 Go，`bus.Store` 端口）；guest（`extensions/campus`，wasm32-wasi，`//go:build wasip1`）复用 bus handler，存储经宿主函数 `ailuo.bus.query` 投影（App 隔离/权限在宿主侧强制）；工件 `go:embed` 进内核（`internal/campus/builtin`），`campus.Manifest/ReadArtifact` 以 digest 锁定工件防漂移；链路为 Dispatcher → Loader.Acquire → WasmHost → campus guest → 宿主函数 → bus.Store，Dispatcher 治理（Schema/权限/深度/取消/幂等）与 App 策略不变。
+- `CapabilitySpec` 新增 `ToolID`：Dispatcher 把 Capability 直接执行的工具注入治理上下文 `ToolID`，运行时级 Handler（含 hosted guest）据此分发。
+- 信封错误码闭环：guest 闭式错误码（`invalid_argument`/`data_unavailable`/`data_incomplete`/`data_untrusted`/`data_expired`/`internal`）由宿主映射为稳定内部错误（数据治理错误保留类别），未知错误码按协议违例拒绝。
+- embedded 机制：`internal/kernel/loader/embedded_host.go`（进程内 Runtime，Verify 校验内置包表，生命周期/治理与 hosted/isolated 一致）；当前无生产 embedded 业务包（为内核自有组件以包形式纳管预留），有完整单元测试。
+- isolated 资源限额：`ProcessSpec.Limits`（RLIMIT_AS/RLIMIT_CPU/RLIMIT_NOFILE/RLIMIT_FSIZE）由锁固定；Linux 用 `prlimit` 在子进程启动后立即应用，非 Linux Unix 与 Windows 对非零限额 fail-closed；合理上限校验 + Linux 真实进程集成测试（FSIZE 生效）。
+- 参考 hosted 包 `extensions/strings.tool`（纯计算字符串工具）演示沙箱契约与分发形态；`extensions/*/build.ps1|build.sh` 交叉编译 wasm32-wasi 工件。
+- 测试：campus 完整 hosted 链路行为测试（journey 排序/空结果/App 隔离/快照治理/Schema/取消/深度）、WasmHost 单元与并发隔离测试、host function 投影测试；orchestrator 与 e2e 均改走真实 hosted 链路（装配时 Warmup 提前编译，避免占用 Run deadline）。
+
 ## Known Production Blockers
 
 Unless the user explicitly reprioritizes, address these before expanding product breadth.
@@ -212,7 +225,7 @@ No unresolved item remains from the 2026-07-26 P0 audit. This is dated evidence,
 
 ### P1 — Designed But Not Yet Implemented
 
-- Product wiring of a real extension Host Backend and hosted shared-process CPU/memory/filesystem isolation. Persistent installed-manifest/lock discovery and kernel startup registration, the Runtime Host protocol, client/server validation, hosted connection/capacity boundary, and isolated process lifecycle are implemented baselines.
+- Hosted 包余下的生产边界：hosted 工件 CPU 指令级预算（wazero 实验特性）、外部 Runtime Host 进程形态的产品接线（`GRPCHost`/`AILUO_RUNTIME_HOST_ADDRESS` 保留为可选外部宿主）、外部 hosted 包安装目录分发在非 Unix 平台受属主校验 fail-closed 限制（内置 hosted 包如 campus 不受影响）。wazero 进程内沙箱与 campus 迁移（2026-08-12 基线）已落地。
 - Multi-entry identity/session/message normalization.
 - A production database adapter if deployment requirements exceed SQLite.
 - Authorized Zhihui Luojia ingestion adapter.
