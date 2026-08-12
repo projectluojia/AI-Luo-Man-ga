@@ -18,10 +18,8 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access"
 	kernelecho "github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/idempotency"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/identity"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/session"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
 )
 
@@ -118,7 +116,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/echoes/{echo_id}/events", s.echoEvents)
 	static, _ := fs.Sub(staticFiles, "static")
 	mux.Handle("GET /", http.FileServer(http.FS(static)))
-	return observe.HTTPMiddleware("web_access", securityHeaders(mux))
+	return observe.HTTPMiddleware("web_access", access.SecurityHeaders(mux))
 }
 
 func (s *Server) Recover(ctx context.Context) (int, error) {
@@ -258,34 +256,7 @@ func (s *Server) createEcho(writer http.ResponseWriter, request *http.Request) {
 	input.Message = intake.Text
 	echoID, created, err := s.orchestrator.CreateIdempotent(request.Context(), input)
 	if err != nil {
-		if errors.Is(err, kernelecho.ErrAppDisabled) {
-			writeJSON(writer, http.StatusServiceUnavailable, map[string]string{"code": "app_disabled", "message": "当前 App 已停用"})
-			return
-		}
-		if errors.Is(err, kernelecho.ErrAppConfigUnavailable) {
-			observe.Error(request.Context(), "读取 App 配置失败", err,
-				observe.StringAttr("app_id", s.appID),
-			)
-			writeJSON(writer, http.StatusServiceUnavailable, map[string]string{"code": "app_config_unavailable", "message": "当前 App 配置暂时不可用"})
-			return
-		}
-		if errors.Is(err, kernelecho.ErrQueueFull) {
-			observe.Warn(request.Context(), "Run 队列已达到配置容量",
-				observe.StringAttr("app_id", s.appID),
-			)
-			writer.Header().Set("Retry-After", "1")
-			writeJSON(writer, http.StatusTooManyRequests, map[string]string{"code": "queue_full", "message": "当前任务队列已满，请稍后重试"})
-			return
-		}
-		if errors.Is(err, idempotency.ErrKeyConflict) {
-			observe.Warn(request.Context(), "Echo 创建幂等键与既有请求冲突",
-				observe.StringAttr("app_id", s.appID),
-			)
-			writeJSON(writer, http.StatusConflict, map[string]string{"code": "idempotency_conflict", "message": "Idempotency-Key 已用于不同的创建请求"})
-			return
-		}
-		observe.Error(request.Context(), "创建 Echo 失败", err)
-		writeJSON(writer, http.StatusInternalServerError, map[string]string{"code": "internal_error", "message": "Echo 创建失败"})
+		access.WriteEchoError(writer, request, err)
 		return
 	}
 	if created {
@@ -315,26 +286,7 @@ func (s *Server) createEcho(writer http.ResponseWriter, request *http.Request) {
 // writeIntakeError 把标准消息入口（Hub.Intake）的错误映射为稳定的公共 HTTP 响应。
 // 身份未绑定、被禁用或 Hub 未配置身份解析时一律 fail-closed，不泄露内部细节。
 func (s *Server) writeIntakeError(writer http.ResponseWriter, request *http.Request, err error) {
-	switch {
-	case errors.Is(err, access.ErrAppMismatch), errors.Is(err, access.ErrAnonymousOnly):
-		observe.Warn(request.Context(), "平台消息身份校验被拒绝", observe.StringAttr("reason", err.Error()))
-		writeJSON(writer, http.StatusForbidden, map[string]string{"code": "platform_identity_rejected", "message": "平台身份不被接受"})
-	case errors.Is(err, identity.ErrNotFound):
-		observe.Warn(request.Context(), "平台身份未绑定内部用户", observe.StringAttr("reason", err.Error()))
-		writeJSON(writer, http.StatusUnauthorized, map[string]string{"code": "identity_not_found", "message": "平台身份未绑定"})
-	case errors.Is(err, identity.ErrUserDisabled):
-		observe.Warn(request.Context(), "平台身份对应的用户已禁用", observe.StringAttr("reason", err.Error()))
-		writeJSON(writer, http.StatusForbidden, map[string]string{"code": "user_disabled", "message": "用户已禁用"})
-	case errors.Is(err, session.ErrMessageConflict):
-		observe.Warn(request.Context(), "平台消息去重键与既有消息冲突", observe.StringAttr("reason", err.Error()))
-		writeJSON(writer, http.StatusConflict, map[string]string{"code": "idempotency_conflict", "message": "Idempotency-Key 已用于不同的创建请求"})
-	case errors.Is(err, session.ErrInvalidMessage), errors.Is(err, session.ErrInvalidSession):
-		observe.Warn(request.Context(), "平台消息未通过标准消息校验", observe.StringAttr("reason", err.Error()))
-		writeJSON(writer, http.StatusBadRequest, map[string]string{"code": "invalid_request", "message": "标准消息校验失败"})
-	default:
-		observe.Error(request.Context(), "标准消息入库失败", err)
-		writeJSON(writer, http.StatusInternalServerError, map[string]string{"code": "internal_error", "message": "消息入库失败"})
-	}
+	access.WriteIntakeError(writer, request, err)
 }
 
 func (s *Server) queueEcho(parent context.Context, echoID string) {
@@ -715,14 +667,4 @@ func ensureJSONEOF(decoder *json.Decoder) error {
 		return err
 	}
 	return nil
-}
-
-func securityHeaders(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		writer.Header().Set("X-Content-Type-Options", "nosniff")
-		writer.Header().Set("X-Frame-Options", "DENY")
-		writer.Header().Set("Referrer-Policy", "no-referrer")
-		writer.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'")
-		next.ServeHTTP(writer, request)
-	})
 }

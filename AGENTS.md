@@ -215,6 +215,17 @@ The App-scoped storage/public-error, durable Echo/Run state, Go trust-boundary/i
 - 参考 hosted 包 `extensions/strings.tool`（纯计算字符串工具）演示沙箱契约与分发形态；`extensions/*/build.ps1|build.sh` 交叉编译 wasm32-wasi 工件。
 - 测试：campus 完整 hosted 链路行为测试（journey 排序/空结果/App 隔离/快照治理/Schema/取消/深度）、WasmHost 单元与并发隔离测试、host function 投影测试；orchestrator 与 e2e 均改走真实 hosted 链路（装配时 Warmup 提前编译，避免占用 Run deadline）。
 
+## 2026-08-13 多入口身份归一化基线
+
+- 平台事件统一入口：`internal/access/ingress` 提供 `POST /api/v1/ingress/{platform}`——平台适配器把原始事件规范化为标准 `Event` 后推送，内核经 Hub 走"校验 → 身份解析 → 会话找到或创建 → 标准消息入库 → 幂等 Echo 创建"的受治理链路；平台永远不直接创建 Echo、不写消息库、不解析身份（与 Web 适配器同约束）。
+- 严格入站契约：64KiB 请求体上限、`DisallowUnknownFields` 严格解码、单 JSON 对象 EOF 校验、平台路径标识正则、字段级校验（platform_message_id/message_type/text≤4000/幂等键复用 `idempotency.ValidateKey`）；非法平台身份标识（含控制字符）映射 400 `invalid_platform_identity`（此前会误落 500）。
+- 跨入口共享错误映射：`access.WriteIntakeError`/`WriteEchoError`/`SecurityHeaders` 从 Web 适配器抽取为共享函数，web 与 ingress 共用同一公共错误契约（身份未绑定 401 `identity_not_found`、用户禁用 403 `user_disabled`、平台消息去重键冲突 409 `idempotency_conflict`、队列满 429+Retry-After、App 禁用/配置不可用 503）。
+- 幂等闭环：同一平台消息重复投递（相同 platform_message_id + 幂等键）在消息与 Echo 两侧同时去重，重放返回既有 echo 且 created=false；同一 platform_message_id 配不同幂等键被拒绝（409），不产生新消息/新 Echo。
+- 会话归一：同一身份用户跨平台消息归一到同一 `session-<user_id>` 会话（消息在会话内按序累积），匿名渠道使用保留匿名会话。
+- `identity-bind` 维护命令：`main.go` 新增幂等身份开通（CreateUser 已存在则继续、同一外部身份重复绑定同一用户视为成功重放、绑定其他用户明确报错、成员关系 upsert），支持 --user/--app/--platform/--space/--platform-user/--roles，用于控制面开通内部用户与平台绑定。
+- HTTP 接线：外层 ServeMux 组合——`/api/v1/ingress/` 前缀交给 ingress，其余路径交给 Web Access（健康检查、Echo/SSE、演示页面）。
+- 测试：ingress 9 个用例（身份解析/去重/会话连续性/幂等冲突/未绑定与禁用/匿名/畸形事件/错误映射）+ identity-bind 幂等与冲突测试 + access 全量回归。
+
 ## Known Production Blockers
 
 Unless the user explicitly reprioritizes, address these before expanding product breadth.
@@ -225,8 +236,7 @@ No unresolved item remains from the 2026-07-26 P0 audit. This is dated evidence,
 
 ### P1 — Designed But Not Yet Implemented
 
-- Hosted 包余下的生产边界：hosted 工件 CPU 指令级预算（wazero 实验特性）、外部 Runtime Host 进程形态的产品接线（`GRPCHost`/`AILUO_RUNTIME_HOST_ADDRESS` 保留为可选外部宿主）、外部 hosted 包安装目录分发在非 Unix 平台受属主校验 fail-closed 限制（内置 hosted 包如 campus 不受影响）。wazero 进程内沙箱与 campus 迁移（2026-08-12 基线）已落地。
-- Multi-entry identity/session/message normalization.
+- Hosted 包余下的生产边界：hosted 工件 CPU 指令级预算（wazero 实验特性）、外部 Runtime Host 进程形态的产品接线（`GRPCHost`/`AILUO_RUNTIME_HOST_ADDRESS` 保留为可选外部宿主）、外部 hosted 包安装目录分发在非 Unix 平台受属主校验 fail-closed 限制（内置 hosted 包如 campus 不受影响）。wazero 进程内沙箱与 campus 迁移（2026-08-12 基线）已落地。Windows 等非 Linux 平台的 isolated 资源限额仍依赖 Job Objects 等原生等价物（当前非零限额 fail-closed）。
 - A production database adapter if deployment requirements exceed SQLite.
 - Authorized Zhihui Luojia ingestion adapter.
 

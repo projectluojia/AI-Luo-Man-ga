@@ -360,7 +360,9 @@ func NormalizeMembership(membership AppMembership) (AppMembership, error) {
 }
 
 func canonicalStrings(values []string) []string {
-	result := append([]string(nil), values...)
+	// make 而非 append(nil, ...)：空输入保持非 nil 空切片，JSON 序列化为 [] 而非 null。
+	result := make([]string, len(values))
+	copy(result, values)
 	sort.Strings(result)
 	return result
 }

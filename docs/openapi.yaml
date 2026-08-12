@@ -234,6 +234,70 @@ paths:
             text/plain:
               schema:
                 type: string
+  /api/v1/ingress/{platform}:
+    post:
+      summary: Ingest one normalized platform event
+      description: >-
+        Unified platform event entry. Platform adapters normalize raw events and POST
+        them here; the kernel resolves the platform identity to an internal user,
+        persists the standard session/message, and idempotently creates the Echo.
+        PlatformUserID empty means an anonymous channel and uses the reserved
+        anonymous sender. Repeated delivery with the same platform_message_id and
+        idempotency_key replays the stored Echo with created=false; the same
+        platform_message_id with a different idempotency_key is rejected as a conflict.
+      parameters:
+        - name: platform
+          in: path
+          required: true
+          description: Platform identifier used in identity binding, lowercase letters, digits, dot, underscore, hyphen.
+          schema:
+            type: string
+            pattern: "^[a-z0-9][a-z0-9._-]{0,63}$"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PlatformEvent"
+      responses:
+        "200":
+          description: The message was persisted and its Echo was created or replayed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IntakeAccepted"
+        "400":
+          description: Invalid event fields, malformed JSON, unknown fields, or an invalid platform identity.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: The platform identity is not bound to an internal user.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: The platform identity is rejected or its user is disabled.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: The same platform_message_id was already persisted with a different idempotency_key.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          $ref: "#/components/responses/QueueFull"
+        "500":
+          description: Internal error; safe public message only.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
 components:
   parameters:
     IdempotencyKey:
@@ -254,6 +318,64 @@ components:
         type: string
         format: uuid
   schemas:
+    PlatformEvent:
+      type: object
+      additionalProperties: false
+      required: [platform_message_id, message_type, text, occurred_at, idempotency_key]
+      properties:
+        platform_space_id:
+          type: string
+          description: Platform space (group/channel) identifier; empty for anonymous channels.
+          maxLength: 128
+        platform_user_id:
+          type: string
+          description: Opaque platform user identifier; empty means anonymous channel. Control characters are rejected.
+          maxLength: 256
+        platform_session_id:
+          type: string
+          description: Platform-side session identifier recorded as a session binding.
+        platform_message_id:
+          type: string
+          description: Stable platform message identifier, deduplicated per App and platform.
+          minLength: 1
+          maxLength: 128
+        message_type:
+          type: string
+          description: Standard message type, e.g. text.
+          minLength: 1
+        text:
+          type: string
+          minLength: 1
+          maxLength: 4000
+        reply_to:
+          type: string
+        occurred_at:
+          type: string
+          format: date-time
+        idempotency_key:
+          type: string
+          description: App-scoped idempotency key shared between message persistence and Echo creation.
+          minLength: 1
+          maxLength: 128
+          pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    IntakeAccepted:
+      type: object
+      additionalProperties: false
+      required: [echo_id, session_id, message_id, sender_user_id, created]
+      properties:
+        echo_id:
+          type: string
+        session_id:
+          type: string
+          description: Normalized session identifier; identity users share one session per user.
+        message_id:
+          type: string
+        sender_user_id:
+          type: string
+          description: Resolved internal user, or the reserved anonymous sender for anonymous channels.
+        created:
+          type: boolean
+          description: False when the delivery replayed an already persisted message and Echo.
     Capability:
       type: object
       additionalProperties: false

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/access/ingress"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access/web"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/agenthost"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/bootstrap"
@@ -96,9 +97,84 @@ func runMaintenanceCommand(arguments []string, output io.Writer) (bool, error) {
 		}
 		_, err := fmt.Fprintln(output, "SQLite 数据库已恢复并通过完整性校验")
 		return true, err
+	case "identity-bind":
+		flags := flag.NewFlagSet("identity-bind", flag.ContinueOnError)
+		flags.SetOutput(io.Discard)
+		database := flags.String("database", "", "SQLite 数据库绝对路径")
+		userID := flags.String("user", "", "Deployment 级内部用户 user_id")
+		appID := flags.String("app", campus.AppID, "App 标识")
+		platform := flags.String("platform", "", "外部平台标识")
+		space := flags.String("space", "", "外部平台空间标识")
+		platformUser := flags.String("platform-user", "", "外部平台用户标识")
+		roles := flags.String("roles", "", "逗号分隔的角色标识列表（可选）")
+		if err := flags.Parse(arguments[1:]); err != nil || flags.NArg() != 0 || *database == "" || *userID == "" {
+			return true, fmt.Errorf("configuration error: identity-bind requires --database and --user")
+		}
+		if !filepath.IsAbs(*database) {
+			return true, fmt.Errorf("configuration error: identity-bind requires an absolute --database path")
+		}
+		platformConfigured := *platform != "" || *space != "" || *platformUser != ""
+		if platformConfigured && (*platform == "" || *space == "" || *platformUser == "") {
+			return true, fmt.Errorf("configuration error: --platform, --space and --platform-user must be provided together")
+		}
+		var roleIDs []string
+		for _, part := range strings.Split(*roles, ",") {
+			if part = strings.TrimSpace(part); part != "" {
+				roleIDs = append(roleIDs, part)
+			}
+		}
+		store, err := sqlite.Open(*database)
+		if err != nil {
+			return true, err
+		}
+		provisionErr := provisionIdentity(ctx, store, identityProvision{
+			AppID: *appID, UserID: *userID,
+			Platform: *platform, PlatformSpaceID: *space, PlatformUserID: *platformUser,
+			RoleIDs: roleIDs,
+		})
+		closeErr := store.Close()
+		if err := errors.Join(provisionErr, closeErr); err != nil {
+			return true, err
+		}
+		_, err = fmt.Fprintf(output, "身份开通完成：user_id=%s app=%s 绑定平台=%s 角色=%d\n", *userID, *appID, *platform, len(roleIDs))
+		return true, err
 	default:
 		return true, fmt.Errorf("configuration error: unknown command")
 	}
+}
+
+// identityProvision 是 identity-bind 命令的输入。
+type identityProvision struct {
+	AppID           string
+	UserID          string
+	Platform        string
+	PlatformSpaceID string
+	PlatformUserID  string
+	RoleIDs         []string
+}
+
+// provisionIdentity 幂等开通内部用户并写入 App 成员关系；可选绑定一个外部平台身份。
+// 用户已存在、同一外部身份重复绑定同一用户、成员角色未变化时都视为成功重放。
+func provisionIdentity(ctx context.Context, store *sqlite.Store, request identityProvision) error {
+	service := identity.NewService(store)
+	if _, err := service.CreateUser(ctx, request.UserID); err != nil && !errors.Is(err, identity.ErrConflict) {
+		return fmt.Errorf("身份开通失败：创建内部用户失败: %w", err)
+	}
+	if request.Platform != "" {
+		if err := service.BindExternalIdentity(ctx, identity.ExternalIdentity{
+			AppID: request.AppID, Platform: request.Platform,
+			PlatformSpaceID: request.PlatformSpaceID, PlatformUserID: request.PlatformUserID,
+			UserID: request.UserID,
+		}); err != nil {
+			return fmt.Errorf("身份开通失败：绑定外部平台身份失败: %w", err)
+		}
+	}
+	if err := service.SetMembership(ctx, identity.AppMembership{
+		AppID: request.AppID, UserID: request.UserID, RoleIDs: request.RoleIDs,
+	}); err != nil {
+		return fmt.Errorf("身份开通失败：写入 App 成员关系失败: %w", err)
+	}
+	return nil
 }
 
 func run() (resultErr error) {
@@ -312,12 +388,18 @@ func run() (resultErr error) {
 	identities := identity.NewService(store)
 	platformHub := access.NewHub(campus.AppID, store, identities)
 	webAccess := web.NewServer(ctx, orchestrator, store, readiness, reg, policy, campus.AppID, platformHub)
+	// 平台事件入口独立挂载：/api/v1/ingress/{platform} 由平台适配器规范化事件驱动，
+	// 其余路径全部交给 Web Access（健康检查、Echo/SSE、演示页面）。
+	ingressServer := ingress.NewServer(campus.AppID, platformHub, orchestrator)
 	if _, err := webAccess.Recover(ctx); err != nil {
 		return fmt.Errorf("recover durable runs: %w", err)
 	}
+	outer := http.NewServeMux()
+	outer.Handle("/api/v1/ingress/", ingressServer.Handler())
+	outer.Handle("/", webAccess.Handler())
 	server := &http.Server{
 		Addr:              config.httpAddress,
-		Handler:           webAccess.Handler(),
+		Handler:           outer,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		IdleTimeout:       60 * time.Second,
