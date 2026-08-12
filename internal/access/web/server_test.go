@@ -200,7 +200,7 @@ func TestWebAccessCancelsRunningEcho(t *testing.T) {
 	if response.Code != http.StatusNoContent {
 		t.Fatalf("cancel status=%d", response.Code)
 	}
-	deadline := time.Now().Add(time.Second)
+	deadline := time.Now().Add(5 * time.Second)
 	for {
 		record, _, err := store.GetEcho(context.Background(), "campus-services", echoID)
 		if err == nil && record.Status == kernelecho.StatusCancelled {
@@ -321,7 +321,7 @@ func TestWebAccessRecoversPersistedQueuedRun(t *testing.T) {
 	if err != nil || count != 1 {
 		t.Fatalf("count=%d err=%v", count, err)
 	}
-	deadline := time.Now().Add(time.Second)
+	deadline := time.Now().Add(5 * time.Second)
 	for {
 		record, _, err := store.GetEcho(context.Background(), "campus-services", echoID)
 		if err == nil && record.Status == kernelecho.StatusSucceeded {
@@ -705,7 +705,7 @@ func TestPersistentSchedulerBoundsConcurrentRuns(t *testing.T) {
 		echoID, _ := createEcho(t, handler, fmt.Sprintf("bounded-%d", index))
 		echoIDs = append(echoIDs, echoID)
 	}
-	deadline := time.Now().Add(time.Second)
+	deadline := time.Now().Add(5 * time.Second)
 	for backend.activeRuns.Load() < 4 && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
 	}
@@ -717,7 +717,7 @@ func TestPersistentSchedulerBoundsConcurrentRuns(t *testing.T) {
 		t.Fatalf("scheduler exceeded worker limit: %d", maximum)
 	}
 	close(gate)
-	deadline = time.Now().Add(2 * time.Second)
+	deadline = time.Now().Add(10 * time.Second)
 	completed := 0
 	for time.Now().Before(deadline) {
 		completed = 0

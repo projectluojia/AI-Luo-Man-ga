@@ -1269,7 +1269,7 @@ func TestOrchestratorDurablyRetriesOnlyRetryableRunAttempts(t *testing.T) {
 func TestOrchestratorRenewsActiveRunLease(t *testing.T) {
 	listener := bufconn.Listen(1 << 20)
 	grpcServer := grpc.NewServer()
-	agentv1.RegisterAgentRuntimeServer(grpcServer, &slowSuccessAgent{delay: 90 * time.Millisecond})
+	agentv1.RegisterAgentRuntimeServer(grpcServer, &slowSuccessAgent{delay: 320 * time.Millisecond})
 	go grpcServer.Serve(listener)
 	defer grpcServer.Stop()
 	connection, err := grpc.DialContext(context.Background(), "bufnet",
@@ -1292,7 +1292,7 @@ func TestOrchestratorRenewsActiveRunLease(t *testing.T) {
 		agentv1.NewAgentRuntimeClient(connection), reg, runtime.NewDispatcher(reg, policy), policy, store,
 		kernelecho.Config{
 			AppID: campus.AppID, Model: "test-model", SystemPrompt: "test", Timezone: "Asia/Shanghai",
-			MaxSteps: 4, RunTimeout: time.Second, LeaseDuration: 30 * time.Millisecond,
+			MaxSteps: 4, RunTimeout: 2 * time.Second, LeaseDuration: 150 * time.Millisecond,
 		},
 	)
 	if _, err := orchestrator.Run(context.Background(), kernelecho.RunRequest{

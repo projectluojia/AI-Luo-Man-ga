@@ -138,16 +138,16 @@ func (h *Hub) validate(message InboundMessage) error {
 		return fmt.Errorf("%w: app_id=%q", ErrAppMismatch, message.AppID)
 	}
 	if message.Platform == "" || message.PlatformMessageID == "" || message.IdempotencyKey == "" {
-		return fmt.Errorf("inbound message is missing platform identity fields")
+		return fmt.Errorf("%w: inbound message is missing platform identity fields", session.ErrInvalidMessage)
 	}
 	if message.MessageType == "" {
-		return fmt.Errorf("inbound message is missing message type")
+		return fmt.Errorf("%w: inbound message is missing message type", session.ErrInvalidMessage)
 	}
 	if utf8.RuneCountInString(message.Text) > MaxTextBytes {
-		return fmt.Errorf("inbound message text exceeds %d characters", MaxTextBytes)
+		return fmt.Errorf("%w: inbound message text exceeds %d characters", session.ErrInvalidMessage, MaxTextBytes)
 	}
 	if len(message.Attachments) > MaxAttachments {
-		return fmt.Errorf("inbound message has too many attachments")
+		return fmt.Errorf("%w: inbound message has too many attachments", session.ErrInvalidMessage)
 	}
 	return nil
 }

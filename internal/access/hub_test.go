@@ -116,14 +116,24 @@ func TestIntakeRejectsAppMismatchAndInvalidMessage(t *testing.T) {
 	if _, err := hub.Intake(context.Background(), message); !errors.Is(err, ErrAppMismatch) {
 		t.Fatalf("got %v, want ErrAppMismatch", err)
 	}
-	message = sampleMessage()
-	message.PlatformMessageID = ""
-	if _, err := hub.Intake(context.Background(), message); err == nil {
-		t.Fatal("缺平台消息标识的消息必须被拒绝")
+	// 校验失败必须归类为 ErrInvalidMessage，供公共错误映射输出 400（而非默认 500）。
+	cases := []struct {
+		name   string
+		mutate func(*InboundMessage)
+	}{
+		{name: "missing message id", mutate: func(m *InboundMessage) { m.PlatformMessageID = "" }},
+		{name: "missing message type", mutate: func(m *InboundMessage) { m.MessageType = "" }},
+		{name: "missing idempotency key", mutate: func(m *InboundMessage) { m.IdempotencyKey = "" }},
+		{name: "oversized text", mutate: func(m *InboundMessage) { m.Text = string(make([]byte, MaxTextBytes+1)) }},
+		{name: "too many attachments", mutate: func(m *InboundMessage) { m.Attachments = make([]AttachmentRef, MaxAttachments+1) }},
 	}
-	message = sampleMessage()
-	message.Text = string(make([]byte, MaxTextBytes+1))
-	if _, err := hub.Intake(context.Background(), message); err == nil {
-		t.Fatal("超长消息必须被拒绝")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			invalid := sampleMessage()
+			tc.mutate(&invalid)
+			if _, err := hub.Intake(context.Background(), invalid); !errors.Is(err, session.ErrInvalidMessage) {
+				t.Fatalf("got %v, want session.ErrInvalidMessage", err)
+			}
+		})
 	}
 }

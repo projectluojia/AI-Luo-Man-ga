@@ -6,29 +6,19 @@ package ingress
 import (
 	"context"
 	"encoding/json"
-	"errors"
-	"fmt"
-	"io"
 	"net/http"
-	"regexp"
 	"time"
-	"unicode/utf8"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access"
 	kernelecho "github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/idempotency"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/identity"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
 )
 
 const (
 	// maxEventBytes 是单条平台事件的请求体上限。
 	maxEventBytes = 64 << 10
-	// maxTextRunes 是单条消息最大字符数（与 Hub 一致）。
-	maxTextRunes = 4000
 )
-
-// platformIDPattern 约束路径平台标识（与内核稳定 ID 规则一致）。
-var platformIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 
 // Event 是平台适配器推送的统一平台事件（规范化入站消息）。
 // platform 由请求路径提供；PlatformUserID 为空表示匿名渠道（走保留匿名路径）。
@@ -68,13 +58,13 @@ func (s *Server) Handler() http.Handler {
 	return observe.HTTPMiddleware("platform_ingress", access.SecurityHeaders(mux))
 }
 
-// ingest 处理一条平台事件：严格解码 → 标准消息校验 → 身份解析 → 会话/消息入库 →
+// ingest 处理一条平台事件：严格解码 → 标准消息校验（Hub）→ 身份解析 → 会话/消息入库 →
 // Echo 创建。重复投递（相同幂等键）返回既有 Echo 且 created 为 false。
 func (s *Server) ingest(writer http.ResponseWriter, request *http.Request) {
 	platform := request.PathValue("platform")
-	if !platformIDPattern.MatchString(platform) {
+	if err := identity.ValidatePlatform(platform); err != nil {
 		observe.Warn(request.Context(), "平台事件路径标识非法", observe.StringAttr("reason", platform))
-		writeJSON(writer, http.StatusBadRequest, map[string]string{"code": "invalid_request", "message": "平台标识不合法"})
+		access.WriteJSON(writer, http.StatusBadRequest, map[string]string{"code": "invalid_request", "message": "平台标识不合法"})
 		return
 	}
 	request.Body = http.MaxBytesReader(writer, request.Body, maxEventBytes)
@@ -83,17 +73,12 @@ func (s *Server) ingest(writer http.ResponseWriter, request *http.Request) {
 	var event Event
 	if err := decoder.Decode(&event); err != nil {
 		observe.Warn(request.Context(), "平台事件请求体解析失败", observe.StringAttr("reason", err.Error()))
-		writeJSON(writer, http.StatusBadRequest, map[string]string{"code": "invalid_request", "message": "请求体不是有效的 JSON 对象"})
+		access.WriteJSON(writer, http.StatusBadRequest, map[string]string{"code": "invalid_request", "message": "请求体不是有效的 JSON 对象"})
 		return
 	}
-	if err := ensureJSONEOF(decoder); err != nil {
+	if err := access.EnsureJSONEOF(decoder); err != nil {
 		observe.Warn(request.Context(), "平台事件请求体包含多余内容", observe.StringAttr("reason", err.Error()))
-		writeJSON(writer, http.StatusBadRequest, map[string]string{"code": "invalid_request", "message": "请求体只能包含一个 JSON 对象"})
-		return
-	}
-	if err := s.validate(event); err != nil {
-		observe.Warn(request.Context(), "平台事件未通过字段校验", observe.StringAttr("reason", err.Error()))
-		writeJSON(writer, http.StatusBadRequest, map[string]string{"code": "invalid_request", "message": "事件字段校验失败"})
+		access.WriteJSON(writer, http.StatusBadRequest, map[string]string{"code": "invalid_request", "message": "请求体只能包含一个 JSON 对象"})
 		return
 	}
 	intake, err := s.hub.Intake(request.Context(), s.toInbound(platform, event))
@@ -117,26 +102,10 @@ func (s *Server) ingest(writer http.ResponseWriter, request *http.Request) {
 		observe.StringAttr("sender_user_id", intake.UserID),
 		observe.BoolAttr("created", created),
 	)
-	writeJSON(writer, http.StatusOK, map[string]any{
+	access.WriteJSON(writer, http.StatusOK, map[string]any{
 		"echo_id": echoID, "session_id": intake.SessionID, "message_id": intake.MessageID,
 		"sender_user_id": intake.UserID, "created": created,
 	})
-}
-
-// validate 在进入 Hub 前校验事件字段（Hub 会再次校验标准消息边界）。
-func (s *Server) validate(event Event) error {
-	switch {
-	case event.PlatformMessageID == "":
-		return errors.New("platform_message_id is required")
-	case event.MessageType == "":
-		return errors.New("message_type is required")
-	case utf8.RuneCountInString(event.Text) > maxTextRunes:
-		return fmt.Errorf("text exceeds %d characters", maxTextRunes)
-	case event.IdempotencyKey == "" || idempotency.ValidateKey(event.IdempotencyKey) != nil:
-		return errors.New("idempotency_key must be 1 to 128 safe characters")
-	default:
-		return nil
-	}
 }
 
 // toInbound 把规范化事件转换为 Hub 的标准入站消息。
@@ -154,23 +123,4 @@ func (s *Server) toInbound(platform string, event Event) access.InboundMessage {
 		OccurredAt:        event.OccurredAt,
 		IdempotencyKey:    event.IdempotencyKey,
 	}
-}
-
-// ensureJSONEOF 拒绝请求体包含多个 JSON 对象。
-func ensureJSONEOF(decoder *json.Decoder) error {
-	var extra json.RawMessage
-	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
-		if err == nil {
-			return errors.New("request body must contain exactly one JSON object")
-		}
-		return err
-	}
-	return nil
-}
-
-// writeJSON 输出 JSON 响应。
-func writeJSON(writer http.ResponseWriter, status int, value any) {
-	writer.Header().Set("Content-Type", "application/json; charset=utf-8")
-	writer.WriteHeader(status)
-	_ = json.NewEncoder(writer).Encode(value)
 }
