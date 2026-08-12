@@ -85,27 +85,24 @@ func run(input io.Reader, output io.Writer) {
 type hostStore struct{}
 
 func (hostStore) SearchStops(_ context.Context, _ string, request bus.StopSearchRequest) (bus.StopSnapshot, error) {
-	var snapshot bus.StopSnapshot
-	if err := callBusQuery("search_stops", request, &snapshot); err != nil {
-		return bus.StopSnapshot{}, err
-	}
-	return snapshot, nil
+	return query[bus.StopSnapshot]("search_stops", request)
 }
 
 func (hostStore) ListRoutes(_ context.Context, _ string, request bus.RouteListRequest) (bus.RouteSnapshot, error) {
-	var snapshot bus.RouteSnapshot
-	if err := callBusQuery("list_routes", request, &snapshot); err != nil {
-		return bus.RouteSnapshot{}, err
-	}
-	return snapshot, nil
+	return query[bus.RouteSnapshot]("list_routes", request)
 }
 
 func (hostStore) SearchJourneys(_ context.Context, _ string, request bus.SearchRequest) (bus.JourneySnapshot, error) {
-	var snapshot bus.JourneySnapshot
-	if err := callBusQuery("search_journeys", request, &snapshot); err != nil {
-		return bus.JourneySnapshot{}, err
+	return query[bus.JourneySnapshot]("search_journeys", request)
+}
+
+// query 调用宿主函数并把响应反序列化为目标快照类型。
+func query[T any](op string, args any) (T, error) {
+	var result T
+	if err := callBusQuery(op, args, &result); err != nil {
+		return result, err
 	}
-	return snapshot, nil
+	return result, nil
 }
 
 // busHostResponse 与宿主约定：宿主函数响应信封。

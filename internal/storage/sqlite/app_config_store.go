@@ -11,10 +11,6 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/appconfig"
 )
 
-type configScanner interface {
-	Scan(...any) error
-}
-
 func (s *Store) Ensure(ctx context.Context, seed appconfig.Config) (result appconfig.Config, created bool, resultErr error) {
 	started := time.Now()
 	defer func() { observeStorageOperation(ctx, "app_config_ensure", started, resultErr) }()
@@ -200,6 +196,10 @@ ON CONFLICT(app_id,revision) DO NOTHING`,
 		return fmt.Errorf("insert app config revision: %w", err)
 	}
 	return nil
+}
+
+type configScanner interface {
+	Scan(...any) error
 }
 
 func scanAppConfig(scanner configScanner) (appconfig.Config, error) {
