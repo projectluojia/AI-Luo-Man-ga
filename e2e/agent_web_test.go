@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/access"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access/web"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/agenthost"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/campus"
@@ -27,6 +28,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/health"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/session"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/subagent"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/memory"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite"
@@ -151,9 +153,9 @@ func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 	if err := subagent.Register(reg, orchestrator); err != nil {
 		t.Fatal(err)
 	}
-	access := web.NewServer(ctx, orchestrator, store, health.Combined{store, agenthost.NewHealthChecker(agentClient, "test-model")}, reg, policy, campus.AppID).Handler()
+	handler := web.NewServer(ctx, orchestrator, store, health.Combined{store, agenthost.NewHealthChecker(agentClient, "test-model")}, reg, policy, campus.AppID, access.NewHub(campus.AppID, store, nil)).Handler()
 	readinessRecorder := httptest.NewRecorder()
-	access.ServeHTTP(readinessRecorder, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	handler.ServeHTTP(readinessRecorder, httptest.NewRequest(http.MethodGet, "/readyz", nil))
 	if readinessRecorder.Code != http.StatusOK {
 		t.Fatalf("readiness status=%d body=%s logs=%s", readinessRecorder.Code, readinessRecorder.Body.String(), logs.String())
 	}
@@ -161,7 +163,7 @@ func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 	createRequest := httptest.NewRequest(http.MethodPost, "/api/v2/echoes", bytes.NewBufferString(`{"message":"有哪些校巴线路？"}`))
 	createRequest.Header.Set("Content-Type", "application/json")
 	createRequest.Header.Set("Idempotency-Key", "integration-create-echo")
-	access.ServeHTTP(createRecorder, createRequest)
+	handler.ServeHTTP(createRecorder, createRequest)
 	if createRecorder.Code != http.StatusAccepted {
 		t.Fatalf("create echo status=%d body=%s", createRecorder.Code, createRecorder.Body.String())
 	}
@@ -172,9 +174,14 @@ func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 	}
 	echoID := accepted["echo_id"]
 	eventsRecorder := httptest.NewRecorder()
-	access.ServeHTTP(eventsRecorder, httptest.NewRequest(http.MethodGet, accepted["events_url"], nil))
+	handler.ServeHTTP(eventsRecorder, httptest.NewRequest(http.MethodGet, accepted["events_url"], nil))
 	if eventsRecorder.Code != http.StatusOK || !strings.Contains(eventsRecorder.Body.String(), "event: reply.final") {
 		t.Fatalf("events status=%d body=%s logs=%s", eventsRecorder.Code, eventsRecorder.Body.String(), logs.String())
+	}
+	// 平台消息必须已持久化到会话台账（Web 匿名会话），验证"平台与 Agent 历史解耦"。
+	messages, err := store.ListMessages(ctx, campus.AppID, "web-anonymous", session.MessageQuery{Limit: 10})
+	if err != nil || len(messages) != 1 || messages[0].SenderUserID != "anonymous" || messages[0].Type != "text" {
+		t.Fatalf("会话消息未持久化或形状错误: messages=%#v err=%v", messages, err)
 	}
 	record, events, err := store.GetEcho(ctx, campus.AppID, echoID)
 	if err != nil {

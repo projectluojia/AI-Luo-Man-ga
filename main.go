@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/access"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access/web"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/agenthost"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/bootstrap"
@@ -24,6 +25,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/confirmation"
 	kernelecho "github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/health"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/identity"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime"
@@ -278,13 +280,17 @@ func run() (resultErr error) {
 		observe.Int64Attr("sweep_interval_ms", confirmationSweepInterval.Milliseconds()),
 	)
 	readiness := health.Combined{store, agenthost.NewAppHealthChecker(agentClient, store, campus.AppID)}
-	access := web.NewServer(ctx, orchestrator, store, readiness, reg, policy, campus.AppID)
-	if _, err := access.Recover(ctx); err != nil {
+	// 平台接入统一入口：标准消息 → 身份解析 → 会话/消息入库 → Echo。
+	// 当前 Web 演示无身份（匿名发送者），身份服务在携带平台身份的消息到达时才会被调用。
+	identities := identity.NewService(store)
+	platformHub := access.NewHub(campus.AppID, store, identities)
+	webAccess := web.NewServer(ctx, orchestrator, store, readiness, reg, policy, campus.AppID, platformHub)
+	if _, err := webAccess.Recover(ctx); err != nil {
 		return fmt.Errorf("recover durable runs: %w", err)
 	}
 	server := &http.Server{
 		Addr:              config.httpAddress,
-		Handler:           access.Handler(),
+		Handler:           webAccess.Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		IdleTimeout:       60 * time.Second,
@@ -302,9 +308,9 @@ func run() (resultErr error) {
 		observe.Info(ctx, "收到停止信号，正在关闭服务")
 		shutdownContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		access.StopAccepting()
+		webAccess.StopAccepting()
 		httpErr := server.Shutdown(shutdownContext)
-		runErr := access.Shutdown(shutdownContext)
+		runErr := webAccess.Shutdown(shutdownContext)
 		var runtimeErr error
 		if runtimeManager != nil {
 			runtimeErr = runtimeManager.Shutdown(shutdownContext)

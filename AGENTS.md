@@ -198,8 +198,9 @@ The App-scoped storage/public-error, durable Echo/Run state, Go trust-boundary/i
 - 确认与副作用治理（迁移 17）：持久 Confirmation 五态状态机（waiting/approved/rejected/expired/revoked），argument_digest 与范围绑定，CAS 决策、并发重复批准幂等、重启后待确认状态仍在、未知执行结果不伪报；Service 实现 `runtime.ConfirmationVerifier` 并已注入 Dispatcher（未批准 fail-closed）。
 - 后台任务与调度（迁移 18）：持久 Task 状态机（租约领取/续期/死亡恢复/有界重试/App 容量隔离/封闭类型注册表+参数 Schema 双重校验/Outbox 事件）；`main.go` 已装配调度器，首个真实消费者为确认过期清扫（`governance.confirmation.expiry`，5 分钟周期，任务自续链，启动播种一轮）。
 - 测试基建：`internal/kernel/strictschema` 共享严格 JSON Schema 编译/校验（Registry 与任务类型注册表共用，消除重复实现）；7 个 fuzz 目标（种子随 `go test` 常驻）；task.Event 与 SSE 信封两组 golden 契约。
+- 平台接入统一入口：`internal/access` 定义标准 `InboundMessage`/`OutboundMessage` 与 `Hub.Intake`（校验 → 身份解析 → 会话找到或创建 → 消息入库）。Web 适配器已接入该入口：HTTP 请求经标准消息 → 会话/消息持久化（SQLite，匿名发送者）→ Echo 创建，平台与 Agent 历史解耦；重复投递由同一幂等键在消息与 Echo 两侧去重，重放不产生重复消息或重复 Echo。身份服务已装配（匿名 Web 不触发，携带平台身份的消息到达时才解析）。
 
-该批模块的存储/服务/调度代码与测试全部合并并通过 Go 全量测试、`go vet`、`-race`、Python 测试与 e2e 集成门禁。**注意：除确认服务（已注入 Dispatcher）与任务调度器（已装配清扫消费者）外，身份与会话模块尚未接入 Web 访问流程**——多入口身份解析与标准消息适配属于下一步平台接入重构，届时才真正参与运转。
+该批模块的存储/服务/调度代码与测试全部合并并通过 Go 全量测试、`go vet`、`-race`、Python 测试与 e2e 集成门禁（e2e 断言 Web 消息已持久化到会话台账）。
 
 ## Known Production Blockers
 

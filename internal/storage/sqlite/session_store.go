@@ -634,7 +634,6 @@ func messageIdentityEqual(existing session.Message, existingContent []byte, inco
 		existing.ContentRef.Mode == incoming.ContentRef.Mode &&
 		existing.ContentRef.BlobID == incoming.ContentRef.BlobID &&
 		existing.ContentRef.Size == incoming.ContentRef.Size &&
-		existing.CreatedAt.Equal(incoming.CreatedAt) &&
 		(existing.ContentRef.Mode != session.ContentModeInline || bytes.Equal(existingContent, incomingContent))
 }
 

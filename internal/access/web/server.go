@@ -15,10 +15,13 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/access"
 	kernelecho "github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/idempotency"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/identity"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/session"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
 )
 
@@ -52,6 +55,7 @@ type Server struct {
 	registry     *registry.Registry
 	policy       runtime.AppPolicy
 	appID        string
+	platformHub  *access.Hub
 	hub          *eventHub
 	activeMu     sync.Mutex
 	active       map[echoKey]context.CancelFunc
@@ -78,6 +82,7 @@ func NewServer(
 	reg *registry.Registry,
 	policy runtime.AppPolicy,
 	appID string,
+	platformHub *access.Hub,
 ) *Server {
 	schedulerCtx, stopSchedule := context.WithCancel(ctx)
 	server := &Server{
@@ -90,6 +95,7 @@ func NewServer(
 		registry:     reg,
 		policy:       policy,
 		appID:        appID,
+		platformHub:  platformHub,
 		hub:          newEventHub(),
 		active:       make(map[echoKey]context.CancelFunc),
 		pending:      make(map[echoKey]context.Context),
@@ -233,6 +239,23 @@ func (s *Server) createEcho(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	input.IdempotencyKey = idempotencyValues[0]
+	// 平台接入统一入口：标准消息校验 → 身份解析 → 会话找到或创建 → 消息入库。
+	// 平台与 Agent 历史在此解耦：消息进会话台账（SQLite），Echo 在入库成功后创建。
+	intake, err := s.platformHub.Intake(request.Context(), access.InboundMessage{
+		AppID:             s.appID,
+		Platform:          "web",
+		PlatformMessageID: input.IdempotencyKey,
+		PlatformSessionID: access.AnonymousSessionID,
+		MessageType:       "text",
+		Text:              input.Message,
+		OccurredAt:        time.Now().UTC(),
+		IdempotencyKey:    input.IdempotencyKey,
+	})
+	if err != nil {
+		s.writeIntakeError(writer, request, err)
+		return
+	}
+	input.Message = intake.Text
 	echoID, created, err := s.orchestrator.CreateIdempotent(request.Context(), input)
 	if err != nil {
 		if errors.Is(err, kernelecho.ErrAppDisabled) {
@@ -287,6 +310,31 @@ func (s *Server) createEcho(writer http.ResponseWriter, request *http.Request) {
 		"status_url": "/api/v1/echoes/" + echoID,
 		"events_url": "/api/v1/echoes/" + echoID + "/events",
 	})
+}
+
+// writeIntakeError 把标准消息入口（Hub.Intake）的错误映射为稳定的公共 HTTP 响应。
+// 身份未绑定、被禁用或 Hub 未配置身份解析时一律 fail-closed，不泄露内部细节。
+func (s *Server) writeIntakeError(writer http.ResponseWriter, request *http.Request, err error) {
+	switch {
+	case errors.Is(err, access.ErrAppMismatch), errors.Is(err, access.ErrAnonymousOnly):
+		observe.Warn(request.Context(), "平台消息身份校验被拒绝", observe.StringAttr("reason", err.Error()))
+		writeJSON(writer, http.StatusForbidden, map[string]string{"code": "platform_identity_rejected", "message": "平台身份不被接受"})
+	case errors.Is(err, identity.ErrNotFound):
+		observe.Warn(request.Context(), "平台身份未绑定内部用户", observe.StringAttr("reason", err.Error()))
+		writeJSON(writer, http.StatusUnauthorized, map[string]string{"code": "identity_not_found", "message": "平台身份未绑定"})
+	case errors.Is(err, identity.ErrUserDisabled):
+		observe.Warn(request.Context(), "平台身份对应的用户已禁用", observe.StringAttr("reason", err.Error()))
+		writeJSON(writer, http.StatusForbidden, map[string]string{"code": "user_disabled", "message": "用户已禁用"})
+	case errors.Is(err, session.ErrMessageConflict):
+		observe.Warn(request.Context(), "平台消息去重键与既有消息冲突", observe.StringAttr("reason", err.Error()))
+		writeJSON(writer, http.StatusConflict, map[string]string{"code": "idempotency_conflict", "message": "Idempotency-Key 已用于不同的创建请求"})
+	case errors.Is(err, session.ErrInvalidMessage), errors.Is(err, session.ErrInvalidSession):
+		observe.Warn(request.Context(), "平台消息未通过标准消息校验", observe.StringAttr("reason", err.Error()))
+		writeJSON(writer, http.StatusBadRequest, map[string]string{"code": "invalid_request", "message": "标准消息校验失败"})
+	default:
+		observe.Error(request.Context(), "标准消息入库失败", err)
+		writeJSON(writer, http.StatusInternalServerError, map[string]string{"code": "internal_error", "message": "消息入库失败"})
+	}
 }
 
 func (s *Server) queueEcho(parent context.Context, echoID string) {
