@@ -226,6 +226,12 @@ The App-scoped storage/public-error, durable Echo/Run state, Go trust-boundary/i
 - HTTP 接线：外层 ServeMux 组合——`/api/v1/ingress/` 前缀交给 ingress，其余路径交给 Web Access（健康检查、Echo/SSE、演示页面）。
 - 测试：ingress 9 个用例（身份解析/去重/会话连续性/幂等冲突/未绑定与禁用/匿名/畸形事件/错误映射）+ identity-bind 幂等与冲突测试 + access 全量回归。
 
+## 2026-08-13 hosted 生产边界基线
+
+- **hosted CPU 时间预算（强制终止，非协作式）**：wazero 无指令级计数（已核实 v1.12 及其全部历史版本），进程内无法预占 guest 忙循环。因此用 wazero 公共特性 `WithCloseOnContextDone(true)`——编译器与解释器**编译期插入周期检查**，调用 context 取消/超时即关闭模块强制终止执行——叠加**每次调用执行时间预算**（`WasmHostConfig.CallTimeout`，默认 30 秒，0 不表示不限时而是取默认）。预算耗尽按 `context.DeadlineExceeded` 归类（内核既有稳定超时分类），不视为协议违例；测试用死循环 guest 工件（`testdata/busy.wasm`，Go 交叉编译）验证 300ms 预算内被强制终止，且预算经外部 Runtime Host 协议同样生效。
+- **外部 Runtime Host 进程产品接线**：`RuntimeHostBackend` 生产实现 `hostedRuntimeBackend`（宿主进程内 wazero 执行，含内存上限与执行时间预算）；`RuntimeHostProtocolServer` 服务端首次拥有真实 Backend（此前只有测试 fake）；全链路测试（真实 wazero 执行经完整协议被内核 GRPCHost 调用，含预算强制跨协议生效）；`main.go` 新增 `runtime-host` 子命令（`--install-root` + `--address`，独立信号上下文，loopback/Unix socket 强制）。**host function 是内核特权**：需要宿主函数投影的工件（内置 campus）只能内核进程内执行，外部宿主承载无宿主函数的 hosted 包——这是架构契约，不是降级路径。安装目录配置了 hosted 包而宿主地址缺失时内核拒绝就绪（fail-closed，无进程内回退）。
+- **Windows Job Object 资源限额**（替换原 fail-closed）：`process_limits_windows.go` 用 Job Object 强制 `MaxAddressBytes`（JOB_OBJECT_LIMIT_PROCESS_MEMORY，等效 RLIMIT_AS）与 `MaxCPUSeconds`（JOB_OBJECT_LIMIT_JOB_TIME + 耗尽终止动作，等效 RLIMIT_CPU）；无论限额是否为零都创建 Job 并附加 KILL_ON_JOB_CLOSE（等效 Unix 进程组清理，且内核崩溃后由 OS 兜底防孤儿）；Job 句柄由 `commandProcess.release` 持有、子进程回收后在 `finish()` 释放（提前释放会立即误杀，这是 `applyProcessLimits` 签名改为返回释放器的原因）。`max_open_files`/`max_file_bytes`：Windows 无对应进程级原语，非零值 fail-closed（正确语义而非降级）。集成测试验证 1 秒 CPU 限额下死循环子进程被系统强制终止。其余平台（macOS/BSD、Plan 9 等）维持非零限额 fail-closed。
+
 ## Known Production Blockers
 
 Unless the user explicitly reprioritizes, address these before expanding product breadth.
@@ -236,7 +242,7 @@ No unresolved item remains from the 2026-07-26 P0 audit. This is dated evidence,
 
 ### P1 — Designed But Not Yet Implemented
 
-- Hosted 包余下的生产边界：hosted 工件 CPU 指令级预算（wazero 实验特性）、外部 Runtime Host 进程形态的产品接线（`GRPCHost`/`AILUO_RUNTIME_HOST_ADDRESS` 保留为可选外部宿主）、外部 hosted 包安装目录分发在非 Unix 平台受属主校验 fail-closed 限制（内置 hosted 包如 campus 不受影响）。wazero 进程内沙箱与 campus 迁移（2026-08-12 基线）已落地。Windows 等非 Linux 平台的 isolated 资源限额仍依赖 Job Objects 等原生等价物（当前非零限额 fail-closed）。
+- Hosted 包余下的生产边界：外部 hosted 包安装目录分发在非 Unix 平台受属主校验 fail-closed 限制（内置 hosted 包如 campus 不受影响）。CPU 执行时间预算（2026-08-13 基线）、外部 Runtime Host 进程接线（`runtime-host` 子命令）与 Windows Job Object 资源限额（2026-08-13 基线）已落地；wazero 指令级计数为上游缺失能力，进程内以时间预算强制替代，更细粒度预算依赖上游提供。
 - A production database adapter if deployment requirements exceed SQLite.
 - Authorized Zhihui Luojia ingestion adapter.
 

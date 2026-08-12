@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -16,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	runtimev1 "github.com/projectluojia/AI-Luo-Man-ga/gen/runtimev1"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access/ingress"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access/web"
@@ -34,6 +36,8 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/task"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite"
+
+	"google.golang.org/grpc"
 )
 
 func main() {
@@ -53,6 +57,10 @@ func main() {
 func runMaintenanceCommand(arguments []string, output io.Writer) (bool, error) {
 	if len(arguments) == 0 {
 		return false, nil
+	}
+	// runtime-host 是长驻服务器形态：独立信号上下文，不套用维护命令的 10 分钟上限。
+	if arguments[0] == "runtime-host" {
+		return runRuntimeHostCommand(arguments[1:], output)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -175,6 +183,101 @@ func provisionIdentity(ctx context.Context, store *sqlite.Store, request identit
 		return fmt.Errorf("身份开通失败：写入 App 成员关系失败: %w", err)
 	}
 	return nil
+}
+
+// runRuntimeHostCommand 运行外部 Runtime Host 服务器：加载安装目录，为 installed
+// hosted 包提供 RuntimeHost 协议服务，直到收到停止信号。这是"外部 Runtime Host 进程"
+// 的产品形态——内核配置 AILUO_RUNTIME_HOST_ADDRESS 后经 GRPCHost 连接本服务执行
+// hosted 工件；宿主进程不可用时内核 fail-closed，不降级回进程内执行。
+func runRuntimeHostCommand(arguments []string, output io.Writer) (bool, error) {
+	flags := flag.NewFlagSet("runtime-host", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	installRoot := flags.String("install-root", "", "安装目录绝对路径")
+	address := flags.String("address", "", "监听地址（loopback 或绝对 Unix socket）")
+	if err := flags.Parse(arguments); err != nil || flags.NArg() != 0 || *installRoot == "" || *address == "" {
+		return true, fmt.Errorf("configuration error: runtime-host requires --install-root and --address")
+	}
+	if !filepath.IsAbs(*installRoot) || filepath.Clean(*installRoot) != *installRoot {
+		return true, fmt.Errorf("configuration error: --install-root must be a clean absolute path")
+	}
+	if !loader.IsLocalRuntimeAddress(*address) {
+		return true, fmt.Errorf("configuration error: --address must be loopback or an absolute unix socket")
+	}
+	return true, serveRuntimeHost(*installRoot, *address, output)
+}
+
+// serveRuntimeHost 装载 hosted 后端并监听 RuntimeHost 协议，直到信号停止。
+func serveRuntimeHost(installRoot, address string, output io.Writer) error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	ctx = observe.With(ctx, observe.Component("runtime_host"))
+	observe.Info(ctx, "正在启动 Runtime Host 服务",
+		observe.StringAttr("install_root", installRoot),
+		observe.StringAttr("address", address),
+	)
+	catalog, err := loader.NewCatalog(installRoot)
+	if err != nil {
+		return err
+	}
+	records, err := catalog.Discover(ctx)
+	if err != nil {
+		return fmt.Errorf("discover installed runtimes: %w", err)
+	}
+	hostedCount := 0
+	for _, record := range records {
+		if record.Runtime.Mode == loader.ModeHosted {
+			hostedCount++
+		}
+	}
+	if hostedCount == 0 {
+		return fmt.Errorf("runtime host: install root contains no hosted runtimes")
+	}
+	backend, err := loader.NewHostedRuntimeBackend(loader.HostedBackendConfig{ReadArtifact: catalog.ReadArtifact})
+	if err != nil {
+		return fmt.Errorf("create hosted backend: %w", err)
+	}
+	protocolServer, err := loader.NewRuntimeHostProtocolServer(loader.RuntimeHostServerConfig{
+		Mode: loader.ModeHosted, Backend: backend, MaxRuntimes: hostedCount, MaxConcurrent: 64,
+	})
+	if err != nil {
+		return fmt.Errorf("create runtime host protocol server: %w", err)
+	}
+	grpcServer := grpc.NewServer(loader.RuntimeHostGRPCServerOptions()...)
+	runtimev1.RegisterRuntimeHostServer(grpcServer, protocolServer)
+	listener, err := listenRuntimeHost(address)
+	if err != nil {
+		return err
+	}
+	defer listener.Close()
+	serveDone := make(chan error, 1)
+	go func() { serveDone <- grpcServer.Serve(listener) }()
+	_, _ = fmt.Fprintln(output, "Runtime Host 已就绪，等待内核连接")
+	select {
+	case <-ctx.Done():
+		observe.Info(ctx, "收到停止信号，正在关闭 Runtime Host")
+		grpcServer.GracefulStop()
+		return nil
+	case err := <-serveDone:
+		if err == nil {
+			return nil
+		}
+		return err
+	}
+}
+
+// listenRuntimeHost 按地址形态监听：unix: 前缀为 Unix socket，其余为 loopback TCP。
+func listenRuntimeHost(address string) (net.Listener, error) {
+	if strings.HasPrefix(address, "unix:") {
+		socketPath := strings.TrimPrefix(address, "unix:")
+		if err := os.MkdirAll(filepath.Dir(socketPath), 0o750); err != nil {
+			return nil, fmt.Errorf("create runtime host socket directory: %w", err)
+		}
+		if info, err := os.Lstat(socketPath); err == nil && info.Mode()&os.ModeSocket != 0 {
+			_ = os.Remove(socketPath)
+		}
+		return net.Listen("unix", socketPath)
+	}
+	return net.Listen("tcp", address)
 }
 
 func run() (resultErr error) {

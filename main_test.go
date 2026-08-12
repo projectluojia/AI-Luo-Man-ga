@@ -331,3 +331,17 @@ func TestMaintenanceIdentityBindRejectsConflictingBinding(t *testing.T) {
 		t.Fatalf("conflicting bind handled=%t err=%v", handled, err)
 	}
 }
+
+func TestRuntimeHostCommandRejectsInvalidArguments(t *testing.T) {
+	cases := [][]string{
+		{"runtime-host"}, // 缺必填参数
+		{"runtime-host", "--install-root", "relative", "--address", "127.0.0.1:0"},   // 相对安装目录
+		{"runtime-host", "--install-root", t.TempDir(), "--address", "0.0.0.0:7000"}, // 非 loopback 监听
+	}
+	for _, arguments := range cases {
+		handled, err := runMaintenanceCommand(arguments, &bytes.Buffer{})
+		if !handled || err == nil {
+			t.Fatalf("arguments=%v handled=%t err=%v", arguments, handled, err)
+		}
+	}
+}

@@ -67,7 +67,7 @@ type GRPCHost struct {
 
 func NewGRPCHost(config GRPCHostConfig) (*GRPCHost, error) {
 	if (config.Mode != ModeHosted && config.Mode != ModeIsolated) ||
-		!isLocalRuntimeAddress(config.Address) || config.VerifyInstalled == nil {
+		!IsLocalRuntimeAddress(config.Address) || config.VerifyInstalled == nil {
 		return nil, ErrInvalidManifest
 	}
 	if config.DialTimeout == 0 {
@@ -442,7 +442,9 @@ func hasUnknown(message proto.Message) bool {
 	return message == nil || len(message.ProtoReflect().GetUnknown()) != 0
 }
 
-func isLocalRuntimeAddress(address string) bool {
+// IsLocalRuntimeAddress 校验运行时宿主地址只能是 loopback 或绝对 Unix socket：
+// 明文 gRPC 只允许同 Deployment 本机边界，非本机地址一律拒绝。
+func IsLocalRuntimeAddress(address string) bool {
 	if strings.HasPrefix(address, "unix:") {
 		socketPath := strings.TrimPrefix(address, "unix:")
 		return strings.HasPrefix(socketPath, "/")

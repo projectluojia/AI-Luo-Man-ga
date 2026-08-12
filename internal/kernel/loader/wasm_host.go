@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"sync"
+	"time"
 
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/api"
@@ -26,6 +27,10 @@ const (
 	hostedDefaultMemoryPages = 2048
 	// hostedDefaultMaxArtifactBytes 是默认工件字节上限。
 	hostedDefaultMaxArtifactBytes = 32 << 20
+	// hostedDefaultCallTimeout 是单次 hosted 调用的默认执行时间预算。wazero 编译期
+	// 周期检查（WithCloseOnContextDone）在预算耗尽时强制终止 guest 并关闭模块，
+	// 这是进程内沙箱可强制执行的 CPU 时间边界（wazero 无指令级计数）。
+	hostedDefaultCallTimeout = 30 * time.Second
 )
 
 var (
@@ -53,6 +58,9 @@ type WasmHostConfig struct {
 	MemoryLimitPages uint32
 	// MaxArtifactBytes 是工件字节上限；0 使用默认值。
 	MaxArtifactBytes int64
+	// CallTimeout 是单次 hosted 调用的执行时间预算；预算耗尽时强制终止 guest。
+	// 0 使用默认值（30 秒）。没有"不限时"路径：每次调用必然带预算。
+	CallTimeout time.Duration
 	// HostFunctions 是投影给 guest 的宿主函数（可空）。
 	HostFunctions []HostedFunction
 }
@@ -73,6 +81,9 @@ func NewWasmHost(config WasmHostConfig) (*WasmHost, error) {
 	}
 	if config.MaxArtifactBytes <= 0 {
 		config.MaxArtifactBytes = hostedDefaultMaxArtifactBytes
+	}
+	if config.CallTimeout <= 0 {
+		config.CallTimeout = hostedDefaultCallTimeout
 	}
 	seen := make(map[string]struct{}, len(config.HostFunctions))
 	for _, fn := range config.HostFunctions {
@@ -109,7 +120,9 @@ func (h *WasmHost) Load(ctx context.Context, manifest Manifest) (Runtime, error)
 	if int64(len(artifact)) > h.config.MaxArtifactBytes {
 		return nil, ErrInvalidManifest
 	}
-	wazeroRuntime := wazero.NewRuntimeWithConfig(ctx, wazero.NewRuntimeConfigCompiler().WithMemoryLimitPages(h.config.MemoryLimitPages))
+	wazeroRuntime := wazero.NewRuntimeWithConfig(ctx, wazero.NewRuntimeConfigCompiler().
+		WithMemoryLimitPages(h.config.MemoryLimitPages).
+		WithCloseOnContextDone(true))
 	if _, err := wasi_snapshot_preview1.Instantiate(ctx, wazeroRuntime); err != nil {
 		_ = wazeroRuntime.Close(ctx)
 		return nil, errors.Join(ErrLoadFailed, err)
@@ -124,6 +137,7 @@ func (h *WasmHost) Load(ctx context.Context, manifest Manifest) (Runtime, error)
 		compiled:      compiled,
 		id:            manifest.ID,
 		version:       manifest.Version,
+		callTimeout:   h.config.CallTimeout,
 		hostFuncs:     make(map[string]func(context.Context, contracts.RequestContext, []byte) ([]byte, error), len(h.config.HostFunctions)),
 	}
 	for _, fn := range h.config.HostFunctions {
@@ -142,6 +156,7 @@ type wasmRuntime struct {
 	compiled      wazero.CompiledModule
 	id            string
 	version       string
+	callTimeout   time.Duration
 	hostFuncs     map[string]func(context.Context, contracts.RequestContext, []byte) ([]byte, error)
 	hostCalls     sync.Map // api.Module -> *hostedInvokeState
 
@@ -245,11 +260,15 @@ func (r *wasmRuntime) Invoke(ctx context.Context, request contracts.RequestConte
 		WithSysWalltime().
 		WithSysNanotime().
 		WithStartFunctions()
-	module, err := r.wazeroRuntime.InstantiateModule(ctx, r.compiled, config)
+	// 每次调用绑定执行时间预算：wazero 编译期周期检查（WithCloseOnContextDone）
+	// 在预算耗尽时强制终止 guest 并关闭模块。不存在"不限时"路径。
+	budgetContext, cancelBudget := context.WithTimeout(ctx, r.callTimeout)
+	defer cancelBudget()
+	module, err := r.wazeroRuntime.InstantiateModule(budgetContext, r.compiled, config)
 	if err != nil {
 		return nil, errors.Join(ErrRuntimeProtocol, err)
 	}
-	state := &hostedInvokeState{ctx: ctx, request: request, funcs: r.hostFuncs}
+	state := &hostedInvokeState{ctx: budgetContext, request: request, funcs: r.hostFuncs}
 	r.hostCalls.Store(module, state)
 	defer func() {
 		r.hostCalls.Delete(module)
@@ -260,10 +279,24 @@ func (r *wasmRuntime) Invoke(ctx context.Context, request contracts.RequestConte
 	if start == nil {
 		return nil, ErrRuntimeProtocol
 	}
-	if _, err := start.Call(ctx); err != nil {
+	if _, err := start.Call(budgetContext); err != nil {
 		var exit *sys.ExitError
-		if !(errors.As(err, &exit) && exit.ExitCode() == 0) {
-			// Go 编译的 wasm 以 proc_exit(0) 正常结束；其余退出码视为协议违例。
+		switch {
+		case errors.As(err, &exit) && exit.ExitCode() == 0:
+			// Go 编译的 wasm 以 proc_exit(0) 正常结束。
+		case errors.Is(err, context.DeadlineExceeded):
+			// 预算耗尽被强制终止：归类为稳定超时，不视为协议违例。
+			if ctx.Err() == nil {
+				observe.Warn(ctx, "hosted 调用超过执行时间预算，已强制终止",
+					observe.StringAttr("runtime_id", r.id),
+					observe.Int64Attr("call_timeout_ms", r.callTimeout.Milliseconds()),
+				)
+			}
+			return nil, err
+		case errors.Is(err, context.Canceled):
+			return nil, err
+		default:
+			// 其余退出码视为协议违例。
 			return nil, errors.Join(ErrRuntimeProtocol, err)
 		}
 	}

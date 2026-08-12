@@ -307,3 +307,35 @@ func TestWasmHostRejectsOversizedArtifact(t *testing.T) {
 		t.Fatalf("Load error = %v, want ErrInvalidManifest", err)
 	}
 }
+
+func TestWasmHostTerminatesRunawayGuest(t *testing.T) {
+	// 死循环 guest：不开启执行时间预算的话会永远占用 worker。
+	artifact := hostedArtifact(t, "busy.wasm")
+	host, err := loader.NewWasmHost(loader.WasmHostConfig{
+		ReadArtifact: func(_ context.Context, manifest loader.Manifest) ([]byte, error) {
+			if manifest.ID != "busy.test" {
+				return nil, loader.ErrNotFound
+			}
+			return artifact, nil
+		},
+		CallTimeout: 300 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("NewWasmHost: %v", err)
+	}
+	runtime, err := host.Load(context.Background(), loader.Manifest{
+		ID: "busy.test", Version: "1.0.0", Mode: loader.ModeHosted, LockedDigest: digest,
+	})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	defer runtime.Stop(context.Background())
+	started := time.Now()
+	_, err = runtime.Invoke(context.Background(), hostedTestRequest("busy.loop"), json.RawMessage(`{}`))
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Invoke error = %v, want context.DeadlineExceeded", err)
+	}
+	if elapsed := time.Since(started); elapsed > 5*time.Second {
+		t.Fatalf("预算终止耗时 %v，死循环未被强制终止", elapsed)
+	}
+}

@@ -817,6 +817,15 @@ func TestSchedulerCancelsQueuedAndRunningTasks(t *testing.T) {
 	waitForTask(t, store, running.AppID, running.TaskID, func(item Task) bool {
 		return item.Status == StatusRunning
 	}, 5*time.Second)
+	// 等待处理器真正进入执行（executions>=1）再取消：状态置 Running 发生在处理器
+	// 启动前，过早取消会让处理器从未执行（executions=0），测不到"取消运行中任务"。
+	executionDeadline := time.Now().Add(5 * time.Second)
+	for executions.Load() < 1 && time.Now().Before(executionDeadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if executions.Load() != 1 {
+		t.Fatalf("运行中任务未开始执行，无法验证取消传播")
+	}
 	cancelled, err = scheduler.Cancel(context.Background(), running.AppID, running.TaskID)
 	if err != nil || !cancelled {
 		t.Fatalf("取消运行中任务 cancelled=%v err=%v", cancelled, err)

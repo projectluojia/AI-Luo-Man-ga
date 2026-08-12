@@ -260,3 +260,117 @@ func TestRuntimeHostProtocolServerDrainsAndReturnsOnlyStableErrors(t *testing.T)
 		t.Fatalf("unsafe backend error=%v", err)
 	}
 }
+
+// toolRuntimeRequest 构造 tool 目标类型的受治理请求（hosted guest 按 ToolID 分发）。
+func toolRuntimeRequest() contracts.RequestContext {
+	return contracts.RequestContext{
+		AppID: "campus-services", EchoID: "echo-1", RequestID: "request-1", TraceID: "trace-1",
+		RunID: "run-1", CallID: "call-1", CallDepth: 1,
+		IdempotencyKey: "operation-1", ProtocolVersion: "1.0",
+		TargetType: "tool", ServiceID: "strings.tool", ToolID: "strings.len",
+		PermissionScope: []string{"strings.read"},
+	}
+}
+
+// TestRuntimeHostServesHostedPackageOverProtocol 验证外部 Runtime Host 产品接线：
+// 真实 hosted Backend（wazero 执行）经完整 RuntimeHost 协议被内核 GRPCHost 调用。
+// 这不是 fake——strings.tool 工件在宿主侧真实编译并以沙箱执行。
+func TestRuntimeHostServesHostedPackageOverProtocol(t *testing.T) {
+	artifact := stringToolArtifact(t)
+	backend, err := loader.NewHostedRuntimeBackend(loader.HostedBackendConfig{
+		ReadArtifact: func(_ context.Context, manifest loader.Manifest) ([]byte, error) {
+			if manifest.ID != "strings.tool" {
+				return nil, loader.ErrNotFound
+			}
+			return artifact, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	protocolServer, err := loader.NewRuntimeHostProtocolServer(loader.RuntimeHostServerConfig{
+		Mode: loader.ModeHosted, Backend: backend, MaxRuntimes: 2, MaxConcurrent: 2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dialer, _ := startRuntimeHost(t, protocolServer)
+	host, err := loader.NewGRPCHost(loader.GRPCHostConfig{
+		Mode: loader.ModeHosted, Address: "unix:/runtime-host-test.sock", Dialer: dialer,
+		VerifyInstalled: func(context.Context, loader.Manifest) error { return nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager, err := loader.New(map[string]loader.Host{loader.ModeHosted: host})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Register(runtimeManifest("strings.tool", loader.ModeHosted)); err != nil {
+		t.Fatal(err)
+	}
+	result, err := manager.Handler("strings.tool")(
+		context.Background(), toolRuntimeRequest(), json.RawMessage(`{"value":"hello"}`),
+	)
+	if err != nil {
+		t.Fatalf("invoke: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(result, &decoded); err != nil {
+		t.Fatalf("unmarshal result %q: %v", result, err)
+	}
+	if decoded["length"] != float64(5) {
+		t.Fatalf("result = %v, want length 5", decoded)
+	}
+}
+
+// TestRuntimeHostEnforcesExecutionBudgetOverProtocol 验证外部宿主同样强制执行时间预算：
+// 死循环工件经协议调用在预算内被终止，归类为稳定超时。
+func TestRuntimeHostEnforcesExecutionBudgetOverProtocol(t *testing.T) {
+	artifact := hostedArtifact(t, "busy.wasm")
+	backend, err := loader.NewHostedRuntimeBackend(loader.HostedBackendConfig{
+		ReadArtifact: func(_ context.Context, manifest loader.Manifest) ([]byte, error) {
+			if manifest.ID != "busy.host" {
+				return nil, loader.ErrNotFound
+			}
+			return artifact, nil
+		},
+		CallTimeout: 300 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	protocolServer, err := loader.NewRuntimeHostProtocolServer(loader.RuntimeHostServerConfig{
+		Mode: loader.ModeHosted, Backend: backend, MaxRuntimes: 1, MaxConcurrent: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dialer, _ := startRuntimeHost(t, protocolServer)
+	host, err := loader.NewGRPCHost(loader.GRPCHostConfig{
+		Mode: loader.ModeHosted, Address: "unix:/runtime-host-budget.sock", Dialer: dialer,
+		VerifyInstalled: func(context.Context, loader.Manifest) error { return nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager, err := loader.New(map[string]loader.Host{loader.ModeHosted: host})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Register(runtimeManifest("busy.host", loader.ModeHosted)); err != nil {
+		t.Fatal(err)
+	}
+	// 预编译（race 下首次编译可达数秒），Invoke 只测量执行与预算终止。
+	if err := manager.Warmup(context.Background(), []string{"busy.host"}, 1); err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now()
+	_, err = manager.Handler("busy.host")(context.Background(), toolRuntimeRequest(), json.RawMessage(`{}`))
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("invoke error = %v, want context.DeadlineExceeded", err)
+	}
+	if elapsed := time.Since(started); elapsed > 5*time.Second {
+		t.Fatalf("预算终止耗时 %v，死循环未被强制终止", elapsed)
+	}
+}

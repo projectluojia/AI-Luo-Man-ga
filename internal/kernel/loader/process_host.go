@@ -205,6 +205,9 @@ func (h *IsolatedProcessHost) remove(runtime *processRuntime) {
 type commandProcess struct {
 	command *exec.Cmd
 	done    chan struct{}
+	// release 是平台资源限额释放器（Windows Job Object 句柄）；其余平台为 nil。
+	// 必须在子进程回收后调用，提前释放会立即终止子进程（KILL_ON_JOB_CLOSE）。
+	release func() error
 }
 
 func startCommandProcess(ctx context.Context, spec ProcessSpec) (*commandProcess, error) {
@@ -221,13 +224,15 @@ func startCommandProcess(ctx context.Context, spec ProcessSpec) (*commandProcess
 	if err := command.Start(); err != nil {
 		return nil, err
 	}
-	// 启动后立即应用资源限额：Linux 用 prlimit，其他平台对非零限额 fail-closed。
-	if err := applyProcessLimits(command.Process, spec.Limits); err != nil {
+	// 启动后立即应用资源限额：Linux 用 prlimit，Windows 用 Job Object，
+	// 其余平台对非零限额 fail-closed。
+	release, err := applyProcessLimits(command.Process, spec.Limits)
+	if err != nil {
 		_ = command.Process.Kill()
 		_ = command.Wait()
 		return nil, err
 	}
-	process := &commandProcess{command: command, done: make(chan struct{})}
+	process := &commandProcess{command: command, done: make(chan struct{}), release: release}
 	go func() {
 		_ = command.Wait()
 		close(process.done)
@@ -381,23 +386,35 @@ func (r *processRuntime) finish() error {
 		if err := r.runtime.closeTransport(); err != nil {
 			r.stopped = true
 			r.host.remove(r)
+			r.releaseProcessLimits()
 			return ErrProcessCleanup
 		}
 	}
 	if err := removeRuntimeSocket(r.socketPath); err != nil {
 		r.stopped = true
 		r.host.remove(r)
+		r.releaseProcessLimits()
 		return ErrProcessCleanup
 	}
 	r.stopped = true
 	r.host.remove(r)
+	r.releaseProcessLimits()
 	return nil
+}
+
+// releaseProcessLimits 释放平台资源限额句柄（Windows Job Object）。进程已回收，
+// 释放句柄不会误杀子进程；提前释放会触发 KILL_ON_JOB_CLOSE 立即终止。
+func (r *processRuntime) releaseProcessLimits() {
+	if r.process.release != nil {
+		_ = r.process.release()
+		r.process.release = nil
+	}
 }
 
 func validateProcessSpec(spec ProcessSpec) error {
 	if !filepath.IsAbs(spec.Path) || filepath.Clean(spec.Path) != spec.Path ||
 		!filepath.IsAbs(spec.WorkDir) || filepath.Clean(spec.WorkDir) != spec.WorkDir ||
-		!isLocalRuntimeAddress(spec.Address) || len(spec.Args) > 128 || len(spec.Env) > 64 ||
+		!IsLocalRuntimeAddress(spec.Address) || len(spec.Args) > 128 || len(spec.Env) > 64 ||
 		!validProcessLimits(spec.Limits) {
 		return ErrInvalidProcessSpec
 	}
