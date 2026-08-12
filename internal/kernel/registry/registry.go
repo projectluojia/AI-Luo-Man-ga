@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"sort"
 	"sync"
 
@@ -469,7 +470,7 @@ func (r *Registry) ResolveTool(serviceID, toolID string) (ToolSpec, Handler, err
 	if !exists {
 		return ToolSpec{}, nil, fmt.Errorf("%w: %q", ErrServiceNotFound, serviceID)
 	}
-	if !contains(service.ToolDependencies, toolID) {
+	if !slices.Contains(service.ToolDependencies, toolID) {
 		return ToolSpec{}, nil, fmt.Errorf("%w: service %q does not declare tool %q", ErrToolNotFound, serviceID, toolID)
 	}
 	tool, exists := r.tools[toolID]
@@ -497,7 +498,7 @@ func (r *Registry) ValidateToolInput(serviceID, toolID string, payload json.RawM
 	if !serviceExists {
 		return fmt.Errorf("%w: %q", ErrServiceNotFound, serviceID)
 	}
-	if !contains(service.ToolDependencies, toolID) || !toolExists {
+	if !slices.Contains(service.ToolDependencies, toolID) || !toolExists {
 		return fmt.Errorf("%w: service %q does not declare tool %q", ErrToolNotFound, serviceID, toolID)
 	}
 	return validatePayload(tool.schema, payload)
@@ -550,13 +551,4 @@ func cloneToolSpec(spec ToolSpec) ToolSpec {
 func cloneCapabilitySpec(spec CapabilitySpec) CapabilitySpec {
 	spec.RequiredPermissions = append([]string(nil), spec.RequiredPermissions...)
 	return spec
-}
-
-func contains(items []string, target string) bool {
-	for _, item := range items {
-		if item == target {
-			return true
-		}
-	}
-	return false
 }

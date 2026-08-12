@@ -25,7 +25,6 @@ const (
 	defaultRetryMaxDelay    = 30 * time.Second
 	defaultRecoveryInterval = 5 * time.Second
 	defaultBatchSize        = 32
-	defaultOutboxCapacity   = 4096
 	defaultMaxAttempts      = 3
 	terminalWriteTimeout    = 5 * time.Second // 终态写入的脱离式超时
 )
@@ -41,8 +40,6 @@ type Config struct {
 	RecoveryInterval   time.Duration // 死亡任务恢复间隔
 	BatchSize          int           // 每次轮询/恢复的批量上限
 	DefaultMaxAttempts uint32        // 创建任务未指定 MaxAttempts 时的默认值
-	OutboxCapacity     int           // Outbox 事件队列容量
-	EventSink          EventSink     // Outbox 事件投递目标（可空）
 	Now                func() time.Time
 }
 
@@ -79,7 +76,6 @@ type Scheduler struct {
 	executions  map[string]*execution
 	workers     chan struct{}
 	appSlots    map[string]*appSlots
-	outbox      chan Event
 }
 
 // NewScheduler 创建调度器并应用默认配置。
@@ -120,9 +116,6 @@ func NewScheduler(store Store, registry *TypeRegistry, config Config) *Scheduler
 	if config.DefaultMaxAttempts > maxAttempts {
 		config.DefaultMaxAttempts = maxAttempts
 	}
-	if config.OutboxCapacity <= 0 {
-		config.OutboxCapacity = defaultOutboxCapacity
-	}
 	now := config.Now
 	if now == nil {
 		now = time.Now
@@ -149,11 +142,6 @@ func (s *Scheduler) Start(ctx context.Context) error {
 	s.workers = make(chan struct{}, s.config.MaxConcurrent)
 	s.appSlots = make(map[string]*appSlots)
 	s.executions = make(map[string]*execution)
-	s.outbox = make(chan Event, s.config.OutboxCapacity)
-	if s.config.EventSink != nil {
-		s.workerWG.Add(1)
-		go s.outboxLoop()
-	}
 	s.workerWG.Add(1)
 	go s.pollLoop()
 	observe.Info(s.runCtx, "后台任务调度器已启动",
@@ -275,11 +263,6 @@ func (s *Scheduler) dispatch(value Task, claimedAt time.Time) {
 	s.mu.Unlock()
 	s.workerWG.Add(1)
 	go s.execute(value, exec)
-	s.publishEvent(Event{
-		AppID: value.AppID, TaskID: value.TaskID, Type: EventClaimed,
-		Status: StatusRunning, Attempt: value.Attempt, TaskType: value.Type,
-		IdempotencyKey: value.IdempotencyKey,
-	})
 }
 
 func (s *Scheduler) execute(value Task, exec *execution) {
@@ -460,12 +443,6 @@ func (s *Scheduler) recoverDeadTasks() {
 			retryErr := s.store.RetryDeadTask(ctx, value, nextAvailableAt, now)
 			cancel()
 			if retryErr == nil {
-				s.publishEvent(Event{
-					AppID: value.AppID, TaskID: value.TaskID, Type: EventRecovered,
-					Status: StatusRetryScheduled, Attempt: value.Attempt + 1,
-					TaskType: value.Type, ErrorClass: ErrorClassLeaseLost,
-					IdempotencyKey: value.IdempotencyKey,
-				})
 				observe.Warn(ctx, "租约过期的后台任务已安排重新执行",
 					observe.StringAttr("app_id", value.AppID),
 					observe.StringAttr("task_id", value.TaskID),
@@ -484,12 +461,6 @@ func (s *Scheduler) recoverDeadTasks() {
 
 func (s *Scheduler) logRecoveryOutcome(ctx context.Context, value Task, transitionErr error, status string, errorClass ErrorClass) {
 	if transitionErr == nil {
-		s.publishEvent(Event{
-			AppID: value.AppID, TaskID: value.TaskID, Type: EventRecovered,
-			Status: status, Attempt: value.Attempt,
-			TaskType: value.Type, ErrorClass: errorClass,
-			IdempotencyKey: value.IdempotencyKey,
-		})
 		observe.Warn(ctx, "租约过期的后台任务已确定性终结",
 			observe.StringAttr("app_id", value.AppID),
 			observe.StringAttr("task_id", value.TaskID),
@@ -561,11 +532,6 @@ func (s *Scheduler) Create(ctx context.Context, request CreateRequest) (Task, er
 	if err := s.store.CreateTask(ctx, value); err != nil {
 		return Task{}, err
 	}
-	s.publishEvent(Event{
-		AppID: value.AppID, TaskID: value.TaskID, Type: EventCreated,
-		Status: StatusQueued, Attempt: 1, TaskType: value.Type,
-		IdempotencyKey: value.IdempotencyKey,
-	})
 	observe.Info(ctx, "后台任务已创建",
 		observe.StringAttr("app_id", value.AppID),
 		observe.StringAttr("task_id", value.TaskID),
@@ -578,17 +544,11 @@ func (s *Scheduler) Create(ctx context.Context, request CreateRequest) (Task, er
 // Cancel 取消排队、等待重试或运行中的任务。取消运行中任务会向执行者
 // 传播取消；终态写入由执行者的租约守卫保证原子性。
 func (s *Scheduler) Cancel(ctx context.Context, appID, taskID string) (bool, error) {
-	current, cancelled, err := s.store.CancelQueuedTask(ctx, appID, taskID, s.now().UTC())
+	_, cancelled, err := s.store.CancelQueuedTask(ctx, appID, taskID, s.now().UTC())
 	if err != nil {
 		return false, err
 	}
 	if cancelled {
-		s.publishEvent(Event{
-			AppID: current.AppID, TaskID: current.TaskID, Type: EventCancelled,
-			Status: StatusCancelled, Attempt: current.Attempt,
-			TaskType: current.Type, ErrorClass: ErrorClassCancelled,
-			IdempotencyKey: current.IdempotencyKey,
-		})
 		return true, nil
 	}
 	s.mu.Lock()
@@ -694,11 +654,6 @@ func (s *Scheduler) transitionSucceeded(value Task) {
 		}
 		return
 	}
-	s.publishEvent(Event{
-		AppID: value.AppID, TaskID: value.TaskID, Type: EventSucceeded,
-		Status: StatusSucceeded, Attempt: value.Attempt, TaskType: value.Type,
-		IdempotencyKey: value.IdempotencyKey,
-	})
 	observe.Info(ctx, "后台任务执行成功",
 		observe.StringAttr("app_id", value.AppID),
 		observe.StringAttr("task_id", value.TaskID),
@@ -719,11 +674,6 @@ func (s *Scheduler) transitionFailure(value Task, errorClass ErrorClass) {
 		}
 		return
 	}
-	s.publishEvent(Event{
-		AppID: value.AppID, TaskID: value.TaskID, Type: EventFailed,
-		Status: StatusFailed, Attempt: value.Attempt, TaskType: value.Type,
-		ErrorClass: errorClass, IdempotencyKey: value.IdempotencyKey,
-	})
 	observe.Warn(ctx, "后台任务已失败",
 		observe.StringAttr("app_id", value.AppID),
 		observe.StringAttr("task_id", value.TaskID),
@@ -750,11 +700,6 @@ func (s *Scheduler) transitionRetry(value Task, errorClass ErrorClass) {
 		}
 		return
 	}
-	s.publishEvent(Event{
-		AppID: value.AppID, TaskID: value.TaskID, Type: EventRetryScheduled,
-		Status: StatusRetryScheduled, Attempt: value.Attempt + 1, TaskType: value.Type,
-		ErrorClass: errorClass, IdempotencyKey: value.IdempotencyKey,
-	})
 	observe.Warn(ctx, "后台任务已安排退避重试",
 		observe.StringAttr("app_id", value.AppID),
 		observe.StringAttr("task_id", value.TaskID),
@@ -776,11 +721,6 @@ func (s *Scheduler) transitionCancelled(value Task) {
 		}
 		return
 	}
-	s.publishEvent(Event{
-		AppID: value.AppID, TaskID: value.TaskID, Type: EventCancelled,
-		Status: StatusCancelled, Attempt: value.Attempt, TaskType: value.Type,
-		ErrorClass: ErrorClassCancelled, IdempotencyKey: value.IdempotencyKey,
-	})
 }
 
 func (s *Scheduler) transitionLeaseLost(value Task) {

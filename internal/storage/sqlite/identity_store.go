@@ -380,39 +380,6 @@ WHERE app_id=? AND platform=? AND platform_space_id=? AND platform_user_id=?`,
 	return binding, nil
 }
 
-func (s *Store) ListExternalIdentities(ctx context.Context, appID, userID string) (_ []identity.ExternalIdentity, resultErr error) {
-	started := time.Now()
-	defer func() { observeStorageOperation(ctx, "identity_list_external", started, resultErr) }()
-	if err := identity.ValidateAppID(appID); err != nil || identity.ValidateUserID(userID) != nil {
-		return nil, identity.ErrInvalid
-	}
-	rows, err := s.db.QueryContext(ctx, `
-SELECT app_id,platform,platform_space_id,platform_user_id,user_id,bound_at
-FROM external_identities
-WHERE app_id=? AND user_id=? ORDER BY platform,platform_space_id,platform_user_id`, appID, userID)
-	if err != nil {
-		return nil, fmt.Errorf("query external identities: %w", err)
-	}
-	defer rows.Close()
-	bindings := make([]identity.ExternalIdentity, 0)
-	for rows.Next() {
-		var binding identity.ExternalIdentity
-		var boundAt string
-		if err := rows.Scan(&binding.AppID, &binding.Platform, &binding.PlatformSpaceID, &binding.PlatformUserID, &binding.UserID, &boundAt); err != nil {
-			return nil, fmt.Errorf("scan external identity: %w", err)
-		}
-		binding.BoundAt, err = time.Parse(time.RFC3339Nano, boundAt)
-		if err != nil {
-			return nil, fmt.Errorf("parse external identity bind time: %w", err)
-		}
-		bindings = append(bindings, binding)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate external identities: %w", err)
-	}
-	return bindings, nil
-}
-
 func (s *Store) EnsureRole(ctx context.Context, role identity.Role) (resultErr error) {
 	started := time.Now()
 	defer func() { observeStorageOperation(ctx, "identity_ensure_role", started, resultErr) }()

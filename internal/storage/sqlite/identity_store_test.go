@@ -290,15 +290,6 @@ func TestIdentityConcurrentBindIsMutuallyExclusive(t *testing.T) {
 	if ok != workers/2 || conflicts != workers/2 {
 		t.Fatalf("ok=%d conflicts=%d, want %d/%d", ok, conflicts, workers/2, workers/2)
 	}
-	for _, userID := range []string{"user-a", "user-b"} {
-		bindings, err := store.ListExternalIdentities(ctx, "app-a", userID)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(bindings) > 1 {
-			t.Fatalf("external identity bound to %d users", len(bindings))
-		}
-	}
 }
 
 // 成员直接授予随成员删除级联清除；角色权限随角色删除级联清除。

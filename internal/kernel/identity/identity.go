@@ -124,7 +124,6 @@ type Store interface {
 	BindExternalIdentity(context.Context, ExternalIdentity) error
 	UnbindExternalIdentity(context.Context, string, string, string, string) error
 	GetExternalIdentity(context.Context, string, string, string, string) (ExternalIdentity, error)
-	ListExternalIdentities(context.Context, string, string) ([]ExternalIdentity, error)
 
 	EnsureRole(context.Context, Role) error
 	DeleteRole(context.Context, string, string) error

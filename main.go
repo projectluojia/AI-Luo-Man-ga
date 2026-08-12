@@ -64,7 +64,7 @@ func runMaintenanceCommand(arguments []string, output io.Writer) (bool, error) {
 		database := flags.String("database", "", "SQLite 数据库绝对路径")
 		destination := flags.String("destination", "", "备份目标绝对路径")
 		if err := flags.Parse(arguments[1:]); err != nil || flags.NArg() != 0 || *database == "" || *destination == "" {
-			return true, errorsNew("backup requires --database and --destination absolute paths")
+			return true, fmt.Errorf("configuration error: backup requires --database and --destination absolute paths")
 		}
 		if err := sqlite.BackupDatabase(ctx, *database, *destination); err != nil {
 			return true, err
@@ -76,7 +76,7 @@ func runMaintenanceCommand(arguments []string, output io.Writer) (bool, error) {
 		flags.SetOutput(io.Discard)
 		backup := flags.String("backup", "", "备份文件绝对路径")
 		if err := flags.Parse(arguments[1:]); err != nil || flags.NArg() != 0 || *backup == "" {
-			return true, errorsNew("validate-backup requires --backup absolute path")
+			return true, fmt.Errorf("configuration error: validate-backup requires --backup absolute path")
 		}
 		if err := sqlite.ValidateBackup(ctx, *backup); err != nil {
 			return true, err
@@ -89,7 +89,7 @@ func runMaintenanceCommand(arguments []string, output io.Writer) (bool, error) {
 		backup := flags.String("backup", "", "备份文件绝对路径")
 		destination := flags.String("destination", "", "恢复目标绝对路径")
 		if err := flags.Parse(arguments[1:]); err != nil || flags.NArg() != 0 || *backup == "" || *destination == "" {
-			return true, errorsNew("restore requires --backup and --destination absolute paths")
+			return true, fmt.Errorf("configuration error: restore requires --backup and --destination absolute paths")
 		}
 		if err := sqlite.RestoreBackup(ctx, *backup, *destination); err != nil {
 			return true, err
@@ -97,7 +97,7 @@ func runMaintenanceCommand(arguments []string, output io.Writer) (bool, error) {
 		_, err := fmt.Fprintln(output, "SQLite 数据库已恢复并通过完整性校验")
 		return true, err
 	default:
-		return true, errorsNew("unknown command")
+		return true, fmt.Errorf("configuration error: unknown command")
 	}
 }
 
@@ -364,7 +364,7 @@ func loadConfig() (config, error) {
 		return config{}, err
 	}
 	if logSource {
-		return config{}, errorsNew("AILUO_LOG_SOURCE must be false because filesystem paths are not allowed in logs")
+		return config{}, fmt.Errorf("configuration error: AILUO_LOG_SOURCE must be false because filesystem paths are not allowed in logs")
 	}
 	logLevel, err := observe.ParseLevel(envOr("AILUO_LOG_LEVEL", "info"))
 	if err != nil {
@@ -391,24 +391,24 @@ func loadConfig() (config, error) {
 		runtimeHostAddress: os.Getenv("AILUO_RUNTIME_HOST_ADDRESS"),
 	}
 	if result.model == "" {
-		return config{}, errorsNew("AILUO_MODEL is required")
+		return config{}, fmt.Errorf("configuration error: AILUO_MODEL is required")
 	}
 	if result.loadDemoData && (strings.EqualFold(result.environment, "production") || strings.EqualFold(result.environment, "prod")) {
-		return config{}, errorsNew("AILUO_LOAD_DEMO_DATA must be false in production")
+		return config{}, fmt.Errorf("configuration error: AILUO_LOAD_DEMO_DATA must be false in production")
 	}
 	if result.runtimeInstallRoot != "" &&
 		(!filepath.IsAbs(result.runtimeInstallRoot) || filepath.Clean(result.runtimeInstallRoot) != result.runtimeInstallRoot) {
-		return config{}, errorsNew("AILUO_RUNTIME_INSTALL_ROOT must be a clean absolute path")
+		return config{}, fmt.Errorf("configuration error: AILUO_RUNTIME_INSTALL_ROOT must be a clean absolute path")
 	}
 	if result.manageAgent {
 		secretFile := os.Getenv("AILUO_MODEL_API_KEY_FILE")
 		rawSecretConfigured := os.Getenv("AILUO_MODEL_API_KEY") != "" || os.Getenv("OPENAI_API_KEY") != ""
 		production := strings.EqualFold(result.environment, "production") || strings.EqualFold(result.environment, "prod")
 		if production && rawSecretConfigured {
-			return config{}, errorsNew("production model credentials must use AILUO_MODEL_API_KEY_FILE")
+			return config{}, fmt.Errorf("configuration error: production model credentials must use AILUO_MODEL_API_KEY_FILE")
 		}
 		if secretFile == "" && !rawSecretConfigured {
-			return config{}, errorsNew("AILUO_MODEL_API_KEY_FILE, AILUO_MODEL_API_KEY or OPENAI_API_KEY is required when Go manages the AI Agent")
+			return config{}, fmt.Errorf("configuration error: AILUO_MODEL_API_KEY_FILE, AILUO_MODEL_API_KEY or OPENAI_API_KEY is required when Go manages the AI Agent")
 		}
 		if secretFile != "" {
 			if err := validateSecretFile(secretFile); err != nil {
@@ -456,7 +456,7 @@ func configureInstalledRuntimes(ctx context.Context, cfg config, target *registr
 	}
 	if hostedCount > 0 {
 		if cfg.runtimeHostAddress == "" {
-			return nil, errorsNew("AILUO_RUNTIME_HOST_ADDRESS is required for installed hosted runtimes")
+			return nil, fmt.Errorf("configuration error: AILUO_RUNTIME_HOST_ADDRESS is required for installed hosted runtimes")
 		}
 		host, err := loader.NewGRPCHost(loader.GRPCHostConfig{
 			Mode: loader.ModeHosted, Address: cfg.runtimeHostAddress,
@@ -526,10 +526,6 @@ func envBool(name string, fallback bool) (bool, error) {
 		return false, fmt.Errorf("configuration error: %s must be a boolean: %w", name, err)
 	}
 	return parsed, nil
-}
-
-func errorsNew(message string) error {
-	return fmt.Errorf("configuration error: %s", message)
 }
 
 func envInt(name string, fallback int) (int, error) {

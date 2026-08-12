@@ -63,17 +63,6 @@ type InboundMessage struct {
 	IdempotencyKey    string
 }
 
-// OutboundMessage 是平台无关的标准出站消息，供适配器转换为平台格式。
-type OutboundMessage struct {
-	AppID     string
-	Platform  string
-	UserID    string
-	SessionID string
-	MessageID string
-	Text      string
-	CreatedAt time.Time
-}
-
 // SessionStore 是 Hub 需要的会话/消息持久化窄端口，由 *sqlite.Store 实现。
 type SessionStore interface {
 	CreateSession(context.Context, session.Session) error

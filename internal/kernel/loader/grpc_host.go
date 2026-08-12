@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -251,7 +252,7 @@ func (r *grpcRuntime) Describe(ctx context.Context) (Description, error) {
 		return Description{}, normalizeRuntimeRPCError(err)
 	}
 	if hasUnknown(response) || response.RuntimeId != r.manifest.ID || response.Version != r.manifest.Version ||
-		response.Mode != r.manifest.Mode || !containsString(response.SupportedProtocolVersions, RuntimeHostProtocolVersion) {
+		response.Mode != r.manifest.Mode || !slices.Contains(response.SupportedProtocolVersions, RuntimeHostProtocolVersion) {
 		return Description{}, ErrRuntimeProtocol
 	}
 	return Description{ID: response.RuntimeId, Version: response.Version, Mode: response.Mode}, nil
@@ -439,15 +440,6 @@ func normalizeRuntimeRPCError(err error) error {
 
 func hasUnknown(message proto.Message) bool {
 	return message == nil || len(message.ProtoReflect().GetUnknown()) != 0
-}
-
-func containsString(values []string, expected string) bool {
-	for _, value := range values {
-		if value == expected {
-			return true
-		}
-	}
-	return false
 }
 
 func isLocalRuntimeAddress(address string) bool {

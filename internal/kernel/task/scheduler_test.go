@@ -46,7 +46,6 @@ func schedulerConfig(clock *fakeClock) Config {
 		RecoveryInterval:   20 * time.Millisecond,
 		BatchSize:          32,
 		DefaultMaxAttempts: 3,
-		OutboxCapacity:     64,
 		Now:                clock.Now,
 	}
 }
@@ -827,83 +826,5 @@ func TestSchedulerCancelsQueuedAndRunningTasks(t *testing.T) {
 	}, 5*time.Second)
 	if got := executions.Load(); got != 1 {
 		t.Fatalf("运行中任务执行次数=%d，期望 1", got)
-	}
-}
-
-type recordingSink struct {
-	mu     sync.Mutex
-	events []Event
-}
-
-func (r *recordingSink) Publish(_ context.Context, event Event) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.events = append(r.events, event)
-	return nil
-}
-
-func (r *recordingSink) all() []Event {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return append([]Event(nil), r.events...)
-}
-
-// TestSchedulerOutboxDeliversLifecycleEvents 覆盖 Outbox 事件投递职责：
-// 事件按生命周期顺序投递，只携带稳定标识与闭式状态，不携带参数正文。
-func TestSchedulerOutboxDeliversLifecycleEvents(t *testing.T) {
-	store := newMemStore()
-	clock := newFakeClock()
-	registry := NewTypeRegistry()
-	if err := registry.Register(TypeSpec{
-		TypeID: "bus.catalog.sync", ParamsSchema: json.RawMessage(testParamsSchema),
-		AllowRetry: false, Handler: func(context.Context, Task) error { return nil },
-	}); err != nil {
-		t.Fatal(err)
-	}
-	sink := &recordingSink{}
-	config := schedulerConfig(clock)
-	config.EventSink = sink
-	scheduler := NewScheduler(store, registry, config)
-	startCancel := startScheduler(t, scheduler)
-	defer startCancel()
-	defer stopScheduler(t, scheduler)
-	value, err := scheduler.Create(context.Background(), CreateRequest{
-		AppID: "campus-services", Type: "bus.catalog.sync",
-		Params: []byte(`{"batch":1}`), IdempotencyKey: "key-outbox",
-		Deadline: clock.Now().Add(time.Hour),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	waitForTask(t, store, value.AppID, value.TaskID, func(item Task) bool {
-		return item.Status == StatusSucceeded
-	}, 5*time.Second)
-	var events []Event
-	waitForCondition(t, "Outbox 事件投递", 5*time.Second, func() bool {
-		events = sink.all()
-		return len(events) >= 3
-	})
-	var types []EventType
-	for _, event := range events {
-		types = append(types, event.Type)
-		if event.AppID != "campus-services" || event.TaskID != value.TaskID ||
-			event.IdempotencyKey != "key-outbox" {
-			t.Fatalf("事件携带非法标识：%#v", event)
-		}
-		if event.Type == EventCreated && event.Status != StatusQueued {
-			t.Fatalf("创建事件状态=%q", event.Status)
-		}
-		if event.Type == EventClaimed && event.Status != StatusRunning {
-			t.Fatalf("领取事件状态=%q", event.Status)
-		}
-		if event.Type == EventSucceeded && (event.Status != StatusSucceeded || event.ErrorClass != ErrorClassNone) {
-			t.Fatalf("成功事件=%#v", event)
-		}
-	}
-	want := []EventType{EventCreated, EventClaimed, EventSucceeded}
-	for index, eventType := range want {
-		if types[index] != eventType {
-			t.Fatalf("事件顺序=%v，期望 %v", types, want)
-		}
 	}
 }
