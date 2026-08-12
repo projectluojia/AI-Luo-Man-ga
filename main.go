@@ -21,12 +21,14 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/bootstrap"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/campus"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/appconfig"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/confirmation"
 	kernelecho "github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/health"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/subagent"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/task"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite"
 )
@@ -172,7 +174,10 @@ func run() (resultErr error) {
 	if err != nil {
 		return err
 	}
-	dispatcher := runtime.NewDispatcher(reg, policy, runtime.WithMaxCallDepth(16), runtime.WithIdempotencyStore(store))
+	// 确认与副作用治理：持久确认服务注入 Dispatcher，凡声明 write/external 副作用
+	// 的 Capability 在未获批准前 fail-closed（缺确认标识或验证失败一律拒绝执行）。
+	confirmations := confirmation.NewService(store)
+	dispatcher := runtime.NewDispatcher(reg, policy, runtime.WithMaxCallDepth(16), runtime.WithIdempotencyStore(store), runtime.WithConfirmationVerifier(confirmations))
 	if err := campus.Register(reg, dispatcher, store); err != nil {
 		return fmt.Errorf("register campus service: %w", err)
 	}
@@ -248,6 +253,29 @@ func run() (resultErr error) {
 		observe.IntAttr("service_count", len(reg.Services())),
 		observe.IntAttr("tool_count", len(reg.Tools())),
 		observe.IntAttr("capability_count", len(reg.Capabilities())),
+	)
+	// 后台任务调度器：持久任务状态机以 SQLite 为唯一事实源；首个消费者是
+	// 确认过期清扫（governance.confirmation.expiry），清扫链由任务自续，启动播种一轮。
+	taskTypes := task.NewTypeRegistry()
+	taskScheduler := task.NewScheduler(store, taskTypes, task.Config{})
+	if err := registerGovernanceTaskTypes(taskTypes, confirmations, taskScheduler, confirmationSweepInterval); err != nil {
+		return fmt.Errorf("register governance task types: %w", err)
+	}
+	if err := taskScheduler.Start(ctx); err != nil {
+		return fmt.Errorf("start background task scheduler: %w", err)
+	}
+	defer func() {
+		shutdownContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		resultErr = errors.Join(resultErr, taskScheduler.Shutdown(shutdownContext))
+	}()
+	if err := seedConfirmationSweep(ctx, taskScheduler, campus.AppID, confirmationSweepInterval); err != nil {
+		return fmt.Errorf("seed confirmation sweep: %w", err)
+	}
+	observe.Info(ctx, "后台任务调度器与确认过期清扫已就绪",
+		observe.StringAttr("app_id", campus.AppID),
+		observe.StringAttr("sweep_type", confirmationSweepType),
+		observe.Int64Attr("sweep_interval_ms", confirmationSweepInterval.Milliseconds()),
 	)
 	readiness := health.Combined{store, agenthost.NewAppHealthChecker(agentClient, store, campus.AppID)}
 	access := web.NewServer(ctx, orchestrator, store, readiness, reg, policy, campus.AppID)

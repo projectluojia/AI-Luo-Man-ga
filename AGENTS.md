@@ -188,6 +188,19 @@ This baseline is valuable and must be preserved. It is not evidence that the P1 
 
 The App-scoped storage/public-error, durable Echo/Run state, Go trust-boundary/idempotency, Agent protocol/Provider reliability, campus-bus source-governance, production-operations, single-Deployment durable scheduler, Runtime Host, persistent App configuration/policy, and one-level governed Subagent baselines were implemented and reverified on 2026-07-26. This closes the audit P0 list and the corresponding initial P1 foundation slices. It does not close governed confirmation storage, multi-entry scope, authorized ingestion, the remaining Loader deployment boundaries, or the other P1 work below.
 
+## 2026-08-12 地基框架基线（PRD 模块一/六/七/十二/十三）
+
+依据 `docs/AI珞地基框架PRD.md` 实现并测试了以下地基模块（全部为独立实现、尚未涉及真实校方身份/数据授权）：
+
+- SQLite 迁移改为版本注册表机制（`registerMigration(version, sql)`），多个模块可独立注册前向迁移，当前 Schema 版本 1–18 连续。
+- 身份与授权（迁移 15）：Deployment 级 User、App 级 ExternalIdentity/AppMembership/Role/PermissionGrant/IdentityBindingRevision；外部平台 ID 永不充当内部 user_id；同一外部身份并发绑定互斥（库唯一约束+race 测试）；撤权/禁用即时生效（查询时实时计算）；身份不存在返回 ErrNotFound 不自动创建；跨 App 权限 fail-closed。
+- 会话、消息与附件（迁移 16）：Session（direct/group/system）、Message（content_ref、回复、编辑、软删除）、平台消息按 app_id+platform_message_id 去重（并发重复投递只产生一条）、历史查询约束 app_id+session_id、BlobStore 窄端口 + 安全本地文件系统实现（os.Root 沙箱、路径穿越/符号链接/超限拒绝）、消息正文不进日志与审计（redaction 负向测试）。
+- 确认与副作用治理（迁移 17）：持久 Confirmation 五态状态机（waiting/approved/rejected/expired/revoked），argument_digest 与范围绑定，CAS 决策、并发重复批准幂等、重启后待确认状态仍在、未知执行结果不伪报；Service 实现 `runtime.ConfirmationVerifier` 并已注入 Dispatcher（未批准 fail-closed）。
+- 后台任务与调度（迁移 18）：持久 Task 状态机（租约领取/续期/死亡恢复/有界重试/App 容量隔离/封闭类型注册表+参数 Schema 双重校验/Outbox 事件）；`main.go` 已装配调度器，首个真实消费者为确认过期清扫（`governance.confirmation.expiry`，5 分钟周期，任务自续链，启动播种一轮）。
+- 测试基建：`internal/kernel/strictschema` 共享严格 JSON Schema 编译/校验（Registry 与任务类型注册表共用，消除重复实现）；7 个 fuzz 目标（种子随 `go test` 常驻）；task.Event 与 SSE 信封两组 golden 契约。
+
+该批模块的存储/服务/调度代码与测试全部合并并通过 Go 全量测试、`go vet`、`-race`、Python 测试与 e2e 集成门禁。**注意：除确认服务（已注入 Dispatcher）与任务调度器（已装配清扫消费者）外，身份与会话模块尚未接入 Web 访问流程**——多入口身份解析与标准消息适配属于下一步平台接入重构，届时才真正参与运转。
+
 ## Known Production Blockers
 
 Unless the user explicitly reprioritizes, address these before expanding product breadth.
