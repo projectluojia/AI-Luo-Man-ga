@@ -21,7 +21,6 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access/ingress"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access/web"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/agenthost"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/bootstrap"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/campus"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/appconfig"
@@ -401,39 +400,72 @@ func run() (resultErr error) {
 		defer cancel()
 		resultErr = errors.Join(resultErr, runtimeManager.Shutdown(shutdownContext))
 	}()
-	var managedAgent *agenthost.Host
-	if config.manageAgent {
-		observe.Info(ctx, "正在启动 Python AI Agent 进程",
-			observe.BoolAttr("managed_process", true),
-		)
-		host, err := agenthost.Start(ctx, config.pythonPath, config.agentAddress, os.Stdout, os.Stderr)
-		if err != nil {
-			return err
-		}
-		managedAgent = host
-		defer func() {
-			stopContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			resultErr = errors.Join(resultErr, host.Stop(stopContext))
-		}()
-		go func() {
-			<-host.Done()
-			if processErr := host.Err(); processErr != nil && ctx.Err() == nil {
-				observe.Error(ctx, "Python AI Agent 进程异常退出", processErr)
-				stop()
-			}
-		}()
-	}
-	dialContext, cancelDial := context.WithTimeout(ctx, 15*time.Second)
-	defer cancelDial()
-	connection, agentClient, err := agenthost.Dial(dialContext, config.agentAddress)
+	// 内置 AI 执行者（Python Agent）以 isolated Runtime 纳管：进程启动、资源限额、
+	// 健康检查与优雅清理复用 loader 进程原语，与扩展包同构，无专用宿主代码。
+	agentHost, err := loader.NewAgentHost(loader.AgentHostConfig{
+		Resolve: func(context.Context) (loader.AgentSpec, error) {
+			return loader.AgentSpec{
+				PythonPath: config.pythonPath,
+				WorkDir:    ".",
+				Address:    config.agentAddress,
+				Limits:     loader.ProcessLimits{},
+			}, nil
+		},
+		Spawn:          config.manageAgent,
+		Model:          app.Model,
+		Stdout:         os.Stdout,
+		Stderr:         os.Stderr,
+		DialTimeout:    15 * time.Second,
+		StopGrace:      5 * time.Second,
+		TerminateGrace: 2 * time.Second,
+	})
 	if err != nil {
-		return err
+		return fmt.Errorf("create built-in agent runtime: %w", err)
+	}
+	agentManager, err := loader.New(map[string]loader.Host{loader.ModeIsolated: agentHost})
+	if err != nil {
+		return fmt.Errorf("create agent runtime loader: %w", err)
 	}
 	defer func() {
-		resultErr = errors.Join(resultErr, connection.Close())
+		shutdownContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		resultErr = errors.Join(resultErr, agentManager.Shutdown(shutdownContext))
 	}()
-	observe.Info(ctx, "已经连接 Python AI Agent")
+	if err := agentManager.Register(agentHost.Manifest()); err != nil {
+		return fmt.Errorf("register built-in agent runtime: %w", err)
+	}
+	// 启动 + 加载期健康检查（协议协商 + Provider 就绪）：失败则内核拒绝就绪。
+	if err := agentManager.Warmup(ctx, []string{loader.AgentRuntimeID}, 1); err != nil {
+		return fmt.Errorf("warm built-in agent runtime: %w", err)
+	}
+	agentLease, err := agentManager.Acquire(ctx, loader.AgentRuntimeID)
+	if err != nil {
+		return fmt.Errorf("acquire built-in agent runtime: %w", err)
+	}
+	// 租约在函数返回时先于 agentManager.Shutdown 释放（defer 逆序）。
+	defer agentLease.Release()
+	agentRuntime, ok := agentLease.Runtime().(loader.AgentClientProvider)
+	if !ok {
+		return fmt.Errorf("built-in agent runtime does not expose an agent client")
+	}
+	agentClient := agentRuntime.AgentClient()
+	if config.manageAgent {
+		// 受监督进程异常退出 → 内核 fail-closed 停止（连接模式不拥有进程）。
+		if lifecycle, ok := agentLease.Runtime().(loader.AgentProcessLifecycle); ok {
+			go func() {
+				<-lifecycle.Done()
+				if processErr := lifecycle.Err(); processErr != nil && ctx.Err() == nil {
+					observe.Error(ctx, "Python AI Agent 进程异常退出", processErr)
+					stop()
+				}
+			}()
+		}
+	}
+	observe.Info(ctx, "内置 AI 执行者（Python Agent）已经就绪",
+		observe.StringAttr("runtime_id", loader.AgentRuntimeID),
+		observe.StringAttr("address", config.agentAddress),
+		observe.BoolAttr("managed_process", config.manageAgent),
+	)
 
 	orchestrator := kernelecho.NewOrchestrator(agentClient, reg, dispatcher, policy, store, kernelecho.Config{
 		AppID:              campus.AppID,
@@ -485,7 +517,7 @@ func run() (resultErr error) {
 		observe.StringAttr("sweep_type", confirmationSweepType),
 		observe.Int64Attr("sweep_interval_ms", confirmationSweepInterval.Milliseconds()),
 	)
-	readiness := health.Combined{store, agenthost.NewAppHealthChecker(agentClient, store, campus.AppID)}
+	readiness := health.Combined{store, health.AgentAppChecker{Client: agentClient, Source: store, AppID: campus.AppID}}
 	// 平台接入统一入口：标准消息 → 身份解析 → 会话/消息入库 → Echo。
 	// 当前 Web 演示无身份（匿名发送者），身份服务在携带平台身份的消息到达时才会被调用。
 	identities := identity.NewService(store)
@@ -528,11 +560,7 @@ func run() (resultErr error) {
 			runtimeErr = runtimeManager.Shutdown(shutdownContext)
 			runtimeManager = nil
 		}
-		var agentErr error
-		if managedAgent != nil {
-			agentErr = managedAgent.Stop(shutdownContext)
-		}
-		if err := errors.Join(httpErr, runErr, runtimeErr, agentErr); err != nil {
+		if err := errors.Join(httpErr, runErr, runtimeErr); err != nil {
 			return fmt.Errorf("graceful shutdown: %w", err)
 		}
 		observe.Info(context.Background(), "AI珞（爱珞）服务已经安全关闭")
@@ -589,7 +617,7 @@ func loadConfig() (config, error) {
 	result := config{
 		httpAddress:        envOr("AILUO_HTTP_ADDRESS", "127.0.0.1:8080"),
 		agentAddress:       envOr("AILUO_AGENT_ADDRESS", "127.0.0.1:50051"),
-		pythonPath:         envOr("AILUO_PYTHON", agenthost.DefaultPythonPath(".")),
+		pythonPath:         envOr("AILUO_PYTHON", loader.DefaultAgentPythonPath(".")),
 		databasePath:       envOr("AILUO_DATABASE_PATH", "var/ailuo.db"),
 		model:              os.Getenv("AILUO_MODEL"),
 		manageAgent:        manageAgent,

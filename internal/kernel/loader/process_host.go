@@ -121,7 +121,7 @@ func (h *IsolatedProcessHost) Load(ctx context.Context, manifest Manifest) (Runt
 	if err := h.config.VerifyInstalled(ctx, manifest, spec); err != nil {
 		return nil, err
 	}
-	process, err := startCommandProcess(ctx, spec)
+	process, err := startCommandProcess(ctx, spec, io.Discard, io.Discard)
 	if err != nil {
 		return nil, ErrUnavailable
 	}
@@ -205,12 +205,16 @@ func (h *IsolatedProcessHost) remove(runtime *processRuntime) {
 type commandProcess struct {
 	command *exec.Cmd
 	done    chan struct{}
+	// waitErr 是 command.Wait 的返回；在 close(done) 前写入，channel 关闭提供 happens-before。
+	waitErr error
 	// release 是平台资源限额释放器（Windows Job Object 句柄）；其余平台为 nil。
 	// 必须在子进程回收后调用，提前释放会立即终止子进程（KILL_ON_JOB_CLOSE）。
 	release func() error
 }
 
-func startCommandProcess(ctx context.Context, spec ProcessSpec) (*commandProcess, error) {
+// startCommandProcess 启动受监督子进程并应用资源限额。stdout/stderr 决定子进程
+// 输出去向：installed 扩展默认丢弃，内置 agent 直接透传内核输出。
+func startCommandProcess(ctx context.Context, spec ProcessSpec, stdout, stderr io.Writer) (*commandProcess, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -218,8 +222,8 @@ func startCommandProcess(ctx context.Context, spec ProcessSpec) (*commandProcess
 	command.Env = append([]string(nil), spec.Env...)
 	command.Dir = spec.WorkDir
 	command.Stdin = nil
-	command.Stdout = io.Discard
-	command.Stderr = io.Discard
+	command.Stdout = stdout
+	command.Stderr = stderr
 	configureProcessGroup(command)
 	if err := command.Start(); err != nil {
 		return nil, err
@@ -234,7 +238,7 @@ func startCommandProcess(ctx context.Context, spec ProcessSpec) (*commandProcess
 	}
 	process := &commandProcess{command: command, done: make(chan struct{}), release: release}
 	go func() {
-		_ = command.Wait()
+		process.waitErr = command.Wait()
 		close(process.done)
 	}()
 	return process, nil

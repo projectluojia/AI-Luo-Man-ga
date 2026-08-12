@@ -453,6 +453,14 @@ func (l *Lease) Invoke(ctx context.Context, request contracts.RequestContext, pa
 	return result, err
 }
 
+// Runtime 返回租约持有的运行时（供调用方获取协议级客户端等）。
+func (l *Lease) Runtime() Runtime {
+	if l == nil {
+		return nil
+	}
+	return l.runtime
+}
+
 func (l *Lease) Release() {
 	if l == nil {
 		return

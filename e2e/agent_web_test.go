@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -21,12 +20,12 @@ import (
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access/web"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/agenthost"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/campus"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/campus/bus"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/campustest"
 	kernelecho "github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/health"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/session"
@@ -105,37 +104,69 @@ func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	command := exec.CommandContext(ctx, agenthost.DefaultPythonPath(root), "-m", "agent.runtime", "--listen", address)
-	command.Dir = root
-	command.Env = append(os.Environ(),
-		"AILUO_MODEL_API_KEY=test-key",
-		"AILUO_MODEL_BASE_URL="+modelServer.URL+"/v1",
-	)
-	logs := &strings.Builder{}
-	command.Stdout = logs
-	command.Stderr = logs
-	if err := command.Start(); err != nil {
-		t.Fatal(err)
-	}
-	defer func() {
-		cancel()
-		_ = command.Wait()
-	}()
-
-	dialContext, cancelDial := context.WithTimeout(ctx, 10*time.Second)
-	defer cancelDial()
-	connection, agentClient, err := agenthost.Dial(dialContext, address)
-	if err != nil {
-		t.Fatalf("dial agent: %v\n%s", err, logs.String())
-	}
-	defer connection.Close()
 
 	store, err := sqlite.Open(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
+	// 关闭顺序（defer 逆序）：租约归还 → 关闭 agent → 取消调度 → 关闭存储。
+	// 取消必须先于关库，避免调度轮询打到已关闭的存储。
 	defer store.Close()
+	defer cancel()
+	// 内置 AI 执行者经 loader AgentHost 纳管：进程启动、健康、停止与内核同构。
+	logs := &strings.Builder{}
+	agentHost, err := loader.NewAgentHost(loader.AgentHostConfig{
+		Resolve: func(context.Context) (loader.AgentSpec, error) {
+			return loader.AgentSpec{
+				PythonPath: loader.DefaultAgentPythonPath(root),
+				WorkDir:    root,
+				Address:    address,
+				Env: append(os.Environ(),
+					"AILUO_MODEL_API_KEY=test-key",
+					"AILUO_MODEL_BASE_URL="+modelServer.URL+"/v1",
+				),
+			}, nil
+		},
+		Spawn:          true,
+		Model:          "test-model",
+		Stdout:         logs,
+		Stderr:         logs,
+		DialTimeout:    10 * time.Second,
+		StopGrace:      3 * time.Second,
+		TerminateGrace: 2 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("NewAgentHost: %v", err)
+	}
+	agentManager, err := loader.New(map[string]loader.Host{loader.ModeIsolated: agentHost})
+	if err != nil {
+		t.Fatalf("new agent manager: %v", err)
+	}
+	if err := agentManager.Register(agentHost.Manifest()); err != nil {
+		t.Fatalf("register agent: %v", err)
+	}
+	if err := agentManager.Warmup(ctx, []string{loader.AgentRuntimeID}, 1); err != nil {
+		t.Fatalf("warm agent: %v\n%s", err, logs.String())
+	}
+	agentLease, err := agentManager.Acquire(ctx, loader.AgentRuntimeID)
+	if err != nil {
+		t.Fatalf("acquire agent: %v", err)
+	}
+	agentRuntime, ok := agentLease.Runtime().(loader.AgentClientProvider)
+	if !ok {
+		t.Fatal("agent runtime does not expose an agent client")
+	}
+	agentClient := agentRuntime.AgentClient()
+	// 关闭顺序（defer 逆序）：Shutdown 需等待租约排空，故租约归还最后注册、最先执行。
+	defer func() {
+		shutdownContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := agentManager.Shutdown(shutdownContext); err != nil {
+			t.Errorf("shutdown agent manager: %v", err)
+		}
+	}()
+	defer agentLease.Release()
+
 	busStore := memory.NewBusStore()
 	busStore.ReplaceCatalog(campus.AppID, nil, []bus.Route{{ID: "r1", Name: "测试线路", Direction: "去程"}})
 	reg := registry.New()
@@ -152,7 +183,7 @@ func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 	if err := subagent.Register(reg, orchestrator); err != nil {
 		t.Fatal(err)
 	}
-	handler := web.NewServer(ctx, orchestrator, store, health.Combined{store, agenthost.NewHealthChecker(agentClient, "test-model")}, reg, policy, campus.AppID, access.NewHub(campus.AppID, store, nil)).Handler()
+	handler := web.NewServer(ctx, orchestrator, store, health.Combined{store, health.AgentChecker{Client: agentClient, Model: "test-model"}}, reg, policy, campus.AppID, access.NewHub(campus.AppID, store, nil)).Handler()
 	readinessRecorder := httptest.NewRecorder()
 	handler.ServeHTTP(readinessRecorder, httptest.NewRequest(http.MethodGet, "/readyz", nil))
 	if readinessRecorder.Code != http.StatusOK {

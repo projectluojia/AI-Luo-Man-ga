@@ -226,6 +226,13 @@ The App-scoped storage/public-error, durable Echo/Run state, Go trust-boundary/i
 - HTTP 接线：外层 ServeMux 组合——`/api/v1/ingress/` 前缀交给 ingress，其余路径交给 Web Access（健康检查、Echo/SSE、演示页面）。
 - 测试：ingress 9 个用例（身份解析/去重/会话连续性/幂等冲突/未绑定与禁用/匿名/畸形事件/错误映射）+ identity-bind 幂等与冲突测试 + access 全量回归。
 
+## 2026-08-13 agent 纳管基线（isolated Runtime 同构）
+
+- **agent 不再是特殊进程**：`internal/agenthost` 已整体删除，无任何回退旧代码。内置 AI 执行者（Python Agent）改由 `internal/kernel/loader/agent_host.go` 的 `AgentHost` 以 isolated Runtime 形态纳管，与扩展包完全同构——经 `Manager.Register/Warmup/Acquire/Shutdown` 走统一生命周期，进程启动/资源限额/优雅停止/强制清理复用 loader 进程原语（`startCommandProcess`/`applyProcessLimits`/`terminateCommandProcess`/`killCommandProcess`）。
+- 装配契约：`AgentHost` 实现 `Host`（`Manifest`/`Verify`/`Load`），`Load` 生成 `agentRuntime`（`Runtime`）；`Lease.Runtime()` 暴露租约持有的运行时，装配经窄接口 `AgentClientProvider` 取 agent 协议客户端、`AgentProcessLifecycle`（`Done`/`Err`）做受监督进程崩溃监控（异常退出 → 内核 fail-closed 停止）。
+- 健康检查内聚到 `internal/kernel/health`：`AgentChecker`（协议协商 + 指定模型 Provider 就绪）、`AgentAppChecker`（读取当前 App 配置的模型与启停状态再检查），与 `Combined` 一起构成 readiness。
+- 停止语义与 isolated 扩展一致：Spawn 模式先优雅终止等待（stopGrace），超时强制清理（terminateGrace）；连接模式只关闭 gRPC 连接、不拥有进程。e2e 全链路（Go → Python Agent → 子任务 → Capability → 存储 → SSE）真实走 AgentHost Spawn 路径。
+
 ## 2026-08-13 hosted 生产边界基线
 
 - **hosted CPU 时间预算（强制终止，非协作式）**：wazero 无指令级计数（已核实 v1.12 及其全部历史版本），进程内无法预占 guest 忙循环。因此用 wazero 公共特性 `WithCloseOnContextDone(true)`——编译器与解释器**编译期插入周期检查**，调用 context 取消/超时即关闭模块强制终止执行——叠加**每次调用执行时间预算**（`WasmHostConfig.CallTimeout`，默认 30 秒，0 不表示不限时而是取默认）。预算耗尽按 `context.DeadlineExceeded` 归类（内核既有稳定超时分类），不视为协议违例；测试用死循环 guest 工件（`testdata/busy.wasm`，Go 交叉编译）验证 300ms 预算内被强制终止，且预算经外部 Runtime Host 协议同样生效。
