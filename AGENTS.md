@@ -265,6 +265,14 @@ The App-scoped storage/public-error, durable Echo/Run state, Go trust-boundary/i
 - **执行者选择是解析而非硬编码**：main.go 经 `runtimeLoader.Executor(ctx)` 获取执行者租约并按契约取客户端，不再出现 `agent.RuntimeID`/手动契约断言；catalog 构造的 installed 清单一律声明 capability 角色（runtime_host.proto 即能力执行协议，执行者会话协议由未来专门宿主承载）。升级拒绝角色变更（角色是运行时身份的一部分）。
 - 测试：executor 契约协议测试迁移 + 角色负向测试（无角色清单拒绝、能力角色缺 Invoker 加载失败、执行者角色缺契约加载失败、无/多重执行者 fail-closed、升级角色变更拒绝）+ e2e 全链路真实走 `Manager.Executor` 解析路径。
 
+## 2026-08-13 前端聊天 API 与 QQ 平台适配器基线
+
+- **产品前端聊天契约**：`internal/access/web` 新增 `POST /chat/stream`（SSE），对接独立产品仓库 LuoYing-Frontend 的流式协议（`track`/`text_delta`/`final`/`error`/`done`），内核 Echo 事件（echo.started/capability.completed/reply.delta/reply.final/run.failed）翻译为前端事件，不暴露内核事件类型。请求经受治理标准链路：严格解码（未知字段拒绝、单 JSON 对象、文本 1–4000 字符、附件非空拒绝）→ `Hub.Intake`（匿名）→ 幂等 Echo 创建 → 事件订阅 → 翻译写出。前端经 vite dev 代理 `/luoying-api` → Go（默认 8080），本仓库不搬运前端产物。
+- **共享事件中心**：`internal/access.EventHub` 按 App+Echo 键控的进程内事件订阅/发布（订阅先于调度、断线重放走存储层），由 Web 与平台适配器共享；`web.Server.Hub()` 暴露给装配。
+- **QQ 平台适配器**：`internal/access/qq`，进程内 OneBot v11 WebSocket 客户端（`gorilla/websocket` v1.5.3，stdlib 无 WS 客户端，固定版本）。消息事件规范化（array 段拼接/raw_message 剥离 CQ 码，群/私聊映射 space/user/session）→ `Hub.Intake`（平台身份经 identity-bind 解析，未绑定回发 `identity_not_found` 公共错误）→ 幂等 Echo → 订阅终态（先重放持久化事件再等实时，消除创建-订阅竞态）→ `send_group_msg`/`send_private_msg` 回发（回复剥离 CQ 注入码、超长按 4000 字符切块）。断线按 5 秒退避重连，适配器失败不影响内核就绪。装配：`AILUO_QQ_WS_URL`/`AILUO_QQ_WS_TOKEN`（ws/wss 校验，URL 缺失时不启动）。
+- 测试：前端聊天契约（事件翻译全链路、严格校验负向）+ 假 OneBot WS 服务端全链路（群消息→入站→Echo→回发、未绑定身份公共错误）+ 消息规范化/CQ 剥离/切块单测。
+- 已知边界：匿名 Web 渠道共享保留匿名会话（跨浏览器用户共享会话历史，多用户 Web 身份未实现前是既有设计状态）；QQ 群消息回复不带 @ 提及。
+
 ## Known Production Blockers
 
 Unless the user explicitly reprioritizes, address these before expanding product breadth.

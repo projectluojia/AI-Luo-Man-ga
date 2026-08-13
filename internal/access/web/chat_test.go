@@ -37,24 +37,6 @@ func TestChatStreamTranslatesEchoEvents(t *testing.T) {
 	}
 }
 
-// TestChatNonStreamReturnsFinalReply 验证非流式契约：等待终态后返回完整回复。
-func TestChatNonStreamReturnsFinalReply(t *testing.T) {
-	handler, _ := newTestServer(t, false)
-	response := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/chat", bytes.NewReader([]byte(`{"text":"你好"}`)))
-	request.Header.Set("Content-Type", "application/json")
-	handler.ServeHTTP(response, request)
-	if response.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
-	}
-	var result struct {
-		Reply string `json:"reply"`
-	}
-	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil || result.Reply != "你好" {
-		t.Fatalf("reply=%#v err=%v", result, err)
-	}
-}
-
 // TestChatStreamRejectsInvalidRequests 验证前端聊天契约的严格校验：未知字段、
 // 空消息、附件与畸形 JSON 一律拒绝，不进入标准链路。
 func TestChatStreamRejectsInvalidRequests(t *testing.T) {

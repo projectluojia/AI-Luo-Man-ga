@@ -29,17 +29,6 @@ type chatRequest struct {
 	FileIDs   []string `json:"file_ids"`
 }
 
-// chatStreamEvent 是前端流式协议的 SSE 事件载荷。
-type chatStreamEvent struct {
-	Event string `json:"event"`
-	Data  any    `json:"data"`
-}
-
-// chatResult 是前端非流式聊天接口的响应。
-type chatResult struct {
-	Reply string `json:"reply"`
-}
-
 // chatStream 提供前端流式聊天契约：POST /chat/stream。请求经标准 Intake →
 // 幂等 Echo 创建 → 事件订阅，把内核 Echo 事件翻译为前端 SSE 协议
 // （track/text_delta/final/error/done）。
@@ -99,57 +88,6 @@ func (s *Server) chatStream(writer http.ResponseWriter, request *http.Request) {
 				return
 			}
 			flusher.Flush()
-		}
-	}
-}
-
-// chatNonStream 提供前端非流式聊天契约：POST /chat，等待终态后返回完整回复。
-func (s *Server) chatNonStream(writer http.ResponseWriter, request *http.Request) {
-	req, ok := s.decodeChatRequest(writer, request)
-	if !ok {
-		return
-	}
-	echoID, created, ok := s.startChatRun(writer, request, req)
-	if !ok {
-		return
-	}
-	live, unsubscribe := s.hub.Subscribe(s.appID, echoID)
-	defer unsubscribe()
-	if created {
-		s.queueEcho(request.Context(), echoID)
-	}
-	for {
-		select {
-		case <-request.Context().Done():
-			access.WriteJSON(writer, http.StatusGatewayTimeout, map[string]string{"code": "chat_timeout", "message": "等待回复超时"})
-			return
-		case event, open := <-live:
-			if !open {
-				access.WriteJSON(writer, http.StatusInternalServerError, map[string]string{"code": "chat_failed", "message": "请求未能完成"})
-				return
-			}
-			if event.Type == "reply.final" {
-				var payload struct {
-					Text string `json:"text"`
-				}
-				if err := json.Unmarshal(event.Payload, &payload); err != nil || payload.Text == "" {
-					access.WriteJSON(writer, http.StatusInternalServerError, map[string]string{"code": "chat_failed", "message": "回复内容无效"})
-					return
-				}
-				access.WriteJSON(writer, http.StatusOK, chatResult{Reply: payload.Text})
-				return
-			}
-			if event.Type == "run.failed" {
-				message := "处理失败"
-				var payload struct {
-					Message string `json:"message"`
-				}
-				if err := json.Unmarshal(event.Payload, &payload); err == nil && payload.Message != "" {
-					message = payload.Message
-				}
-				access.WriteJSON(writer, http.StatusInternalServerError, map[string]string{"code": "chat_failed", "message": message})
-				return
-			}
 		}
 	}
 }

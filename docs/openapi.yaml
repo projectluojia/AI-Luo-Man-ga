@@ -189,6 +189,70 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+  /chat/stream:
+    post:
+      summary: Stream a product-frontend chat message (SSE)
+      description: >
+        Product frontend contract (LuoYing-Frontend). The message enters the
+        governed platform chain (standard Intake -> idempotent Echo creation ->
+        event translation) and is delivered as a text/event-stream with events
+        track, text_delta, final, error and done. The kernel echo events are
+        translated; kernel event types are not exposed.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [text]
+              properties:
+                session_id:
+                  type: string
+                  description: Platform session binding record; identity is not derived from client fields.
+                user_id:
+                  type: string
+                user_name:
+                  type: string
+                text:
+                  type: string
+                  minLength: 1
+                  maxLength: 4000
+                image_ids:
+                  type: array
+                  items:
+                    type: string
+                  description: Unsupported in the current slice; non-empty arrays are rejected.
+                file_ids:
+                  type: array
+                  items:
+                    type: string
+                  description: Unsupported in the current slice; non-empty arrays are rejected.
+      responses:
+        "200":
+          description: SSE event stream (track/text_delta/final/error/done)
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        "400":
+          description: Invalid body, message length, unknown field, or unsupported attachments.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Platform identity is not bound to an internal user.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: The service is shutting down.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /healthz:
     get:
       summary: Process liveness

@@ -140,9 +140,7 @@ func (a *Adapter) serve(ctx context.Context) error {
 		if event["echo"] != nil {
 			continue // 适配器自身的动作响应，忽略
 		}
-		messageCtx, cancelMessage := context.WithTimeout(ctx, a.cfg.RunTimeout+time.Minute)
-		a.handleEvent(messageCtx, event)
-		cancelMessage()
+		a.handleEvent(ctx, event)
 	}
 }
 
