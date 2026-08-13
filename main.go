@@ -386,8 +386,9 @@ func run() (resultErr error) {
 	reg := registry.New()
 	app, created, err := store.Ensure(ctx, appconfig.Config{
 		AppID: campus.AppID, Enabled: true, Model: config.model,
-		SystemPrompt: "你是AI珞（爱珞）校园综合服务智能体。准确理解用户问题，按需调用可用 Capability，并使用简洁中文回答。",
-		Timezone:     "Asia/Shanghai", MaxSteps: 8, MaxToolCalls: 8,
+		SystemPrompt:   defaultSystemPrompt,
+		ChannelPrompts: defaultChannelPrompts,
+		Timezone:       "Asia/Shanghai", MaxSteps: 8, MaxToolCalls: 8,
 		MaxInputTokens: 32768, MaxOutputTokens: 8192, MaxTotalTokens: 40960,
 		MaxOutputBytes: 65536, ProviderTimeout: 30 * time.Second,
 		EnabledCapabilities: []string{
@@ -583,7 +584,7 @@ func run() (resultErr error) {
 	// 自行重连，失败不影响内核就绪与退出。
 	if config.qqWSURL != "" {
 		qqAdapter, err := qq.New(qq.Config{
-			AppID: campus.AppID, WSURL: config.qqWSURL, Token: config.qqToken,
+			AppID: campus.AppID, WSURL: config.qqWSURL, Token: config.qqToken, BotQQID: config.qqBotID,
 		}, platformHub, webAccess.Hub(), orchestrator, store)
 		if err != nil {
 			return fmt.Errorf("configure QQ adapter: %w", err)
@@ -653,6 +654,7 @@ type config struct {
 	runtimeHostAddress string
 	qqWSURL            string
 	qqToken            string
+	qqBotID            string
 }
 
 func loadConfig() (config, error) {
@@ -696,6 +698,7 @@ func loadConfig() (config, error) {
 		runtimeHostAddress: os.Getenv("AILUO_RUNTIME_HOST_ADDRESS"),
 		qqWSURL:            os.Getenv("AILUO_QQ_WS_URL"),
 		qqToken:            os.Getenv("AILUO_QQ_WS_TOKEN"),
+		qqBotID:            os.Getenv("AILUO_QQ_BOT_ID"),
 	}
 	// Agent 进程规格要求绝对 Python 路径（Spawn 模式校验）；默认值与用户配置
 	// 都可能为相对路径，统一在装配前解析为绝对路径。

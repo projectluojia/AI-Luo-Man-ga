@@ -61,6 +61,7 @@ type RunRecord struct {
 	SessionID           string          `json:"session_id,omitempty"`
 	UserID              string          `json:"user_id,omitempty"`
 	MessageID           string          `json:"message_id,omitempty"`
+	Channel             string          `json:"channel,omitempty"` // 平台渠道，恢复重装配时按原渠道追加提示
 	Attempt             uint32          `json:"attempt"`
 	Status              string          `json:"status"`
 	Model               string          `json:"model"`
@@ -112,15 +113,16 @@ type Event struct {
 	CreatedAt time.Time       `json:"created_at"`
 }
 
-// RunRequest 是一次 Echo 创建请求。会话上下文（SessionID/UserID/MessageID）
-// 只能来自受治理的平台接入入口，不进入 HTTP 契约（json:"-"），客户端无法
-// 伪造或指定；由 Web/平台适配器在 Intake 成功后填充。
+// RunRequest 是一次 Echo 创建请求。会话上下文（SessionID/UserID/MessageID/
+// Channel）只能来自受治理的平台接入入口，不进入 HTTP 契约（json:"-"），
+// 客户端无法伪造或指定；由 Web/平台适配器在 Intake 成功后填充。
 type RunRequest struct {
 	Message        string `json:"message"`
 	IdempotencyKey string `json:"-"`
 	SessionID      string `json:"-"`
 	UserID         string `json:"-"`
 	MessageID      string `json:"-"`
+	Channel        string `json:"-"` // 平台渠道（web/qq 群聊/qq 私聊），用于渠道化系统提示
 }
 
 type ChildRunRequest struct {

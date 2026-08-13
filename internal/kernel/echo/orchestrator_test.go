@@ -1312,6 +1312,61 @@ func orchestratorAppConfig() appconfig.Config {
 	}
 }
 
+// TestOrchestratorAppendsChannelPromptFromPersistedConfig 验证渠道提示来自
+// 持久化 App 配置（app_config_revisions.channel_prompts），并随 Run 渠道
+// 进入装配后的系统提示；无渠道提示时行为与迁移前一致。
+func TestOrchestratorAppendsChannelPromptFromPersistedConfig(t *testing.T) {
+	listener := bufconn.Listen(1 << 20)
+	grpcServer := grpc.NewServer()
+	agentServer := &configCaptureAgent{starts: make(chan *agentv1.StartRun, 1)}
+	agentv1.RegisterAgentRuntimeServer(grpcServer, agentServer)
+	go grpcServer.Serve(listener)
+	t.Cleanup(grpcServer.Stop)
+	connection, err := grpc.DialContext(t.Context(), "bufnet",
+		grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) { return listener.Dial() }),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = connection.Close() })
+	store, err := sqlite.Open(filepath.Join(t.TempDir(), "channel-prompt.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	seed := orchestratorAppConfig()
+	seed.ChannelPrompts = map[string]string{"qq_group": "【群聊规则】禁止 Markdown，像真实群聊。", "web": "【网页规则】适合连续阅读。"}
+	if _, _, err := store.Ensure(t.Context(), seed); err != nil {
+		t.Fatal(err)
+	}
+	policy, err := appconfig.NewPersistentPolicy(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg := registry.New()
+	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{})
+	orchestrator := kernelecho.NewOrchestrator(
+		agentv1.NewAgentRuntimeClient(connection), reg, dispatcher, policy, store,
+		kernelecho.Config{AppID: campus.AppID, AppConfigSource: store, RunTimeout: 5 * time.Second, Context: newSessionSource(t, store)},
+	)
+	echoID, err := orchestrator.Run(t.Context(), kernelecho.RunRequest{
+		Message: "群聊问题", IdempotencyKey: "channel-qq-group", Channel: "qq_group",
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := <-agentServer.starts
+	if !strings.Contains(start.GetSystemPrompt(), "【群聊规则】") ||
+		strings.Contains(start.GetSystemPrompt(), "【网页规则】") {
+		t.Fatalf("群聊渠道提示未按渠道装配: %q", start.GetSystemPrompt())
+	}
+	runs, err := store.ListRuns(t.Context(), campus.AppID, echoID)
+	if err != nil || len(runs) != 1 || runs[0].Channel != "qq_group" {
+		t.Fatalf("runs=%#v err=%v", runs, err)
+	}
+}
+
 func TestOrchestratorDurablyRetriesOnlyRetryableRunAttempts(t *testing.T) {
 	listener := bufconn.Listen(1 << 20)
 	grpcServer := grpc.NewServer()

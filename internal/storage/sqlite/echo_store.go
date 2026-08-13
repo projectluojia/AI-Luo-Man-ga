@@ -153,13 +153,14 @@ INSERT INTO runs(
   max_steps,max_tool_calls,max_input_tokens,max_output_tokens,max_total_tokens,max_output_bytes,
   max_cost_microusd,provider_timeout_ms,deadline_at,available_at,last_agent_sequence,
   capability_scope,permission_scope,recoverable_state,result_message,created_at,
-  session_id,user_id,message_id,context_digest,context_sources
-) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+  session_id,user_id,message_id,context_digest,context_sources,channel
+) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		run.AppID, run.ID, run.RunGroupID, run.EchoID, parentRunID, run.OriginCallID, run.Attempt, run.Status, run.Model, run.ModelConfigVersion, run.ProtocolVersion,
 		run.MaxSteps, run.MaxToolCalls, run.MaxInputTokens, run.MaxOutputTokens, run.MaxTotalTokens, run.MaxOutputBytes,
 		run.MaxCostMicrousd, run.ProviderTimeoutMS, run.Deadline.UTC().Format(time.RFC3339Nano), run.AvailableAt.UTC().Format(time.RFC3339Nano), run.LastAgentSequence,
 		string(capabilityScope), string(permissionScope), string(run.RecoverableState), run.ResultMessage, run.CreatedAt.UTC().Format(time.RFC3339Nano),
 		run.SessionID, run.UserID, run.MessageID, run.ContextDigest, string(contextSources),
+		run.Channel,
 	); err != nil {
 		return fmt.Errorf("create run: %w", err)
 	}
@@ -1013,7 +1014,8 @@ SELECT
   deadline_at,available_at,coalesce(lease_token,''),lease_expires_at,last_agent_sequence,
   capability_scope,permission_scope,recoverable_state,result_message,
   coalesce(error_code,''),coalesce(error_message,''),created_at,started_at,completed_at,
-  coalesce(session_id,''),coalesce(user_id,''),coalesce(message_id,''),coalesce(context_digest,''),coalesce(context_sources,'{}')
+  coalesce(session_id,''),coalesce(user_id,''),coalesce(message_id,''),coalesce(context_digest,''),coalesce(context_sources,'{}'),
+  coalesce(channel,'')
 FROM runs`
 
 type rowScanner interface {
@@ -1061,6 +1063,7 @@ func queryRun(scanner rowScanner) (kernelecho.RunRecord, error) {
 		&capabilityScope, &permissionScope, &recoverableState, &run.ResultMessage,
 		&run.ErrorCode, &run.ErrorMessage, &createdAt, &startedAt, &completedAt,
 		&sessionID, &userID, &messageID, &contextDigest, &contextSources,
+		&run.Channel,
 	); err != nil {
 		return kernelecho.RunRecord{}, err
 	}

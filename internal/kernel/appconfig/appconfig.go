@@ -23,6 +23,7 @@ var (
 	stableIDPattern   = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,127}$`)
 	capabilityPattern = regexp.MustCompile(`^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$`)
 	permissionPattern = regexp.MustCompile(`^[a-z][a-z0-9]*(?:[._:-][a-z0-9]+)*$`)
+	channelPattern    = regexp.MustCompile(`^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$`)
 	modelPattern      = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$`)
 )
 
@@ -33,6 +34,7 @@ type Config struct {
 	Enabled             bool
 	Model               string
 	SystemPrompt        string
+	ChannelPrompts      map[string]string // 渠道提示段（channel → 提示）；装配时按 Run 渠道追加
 	Timezone            string
 	MaxSteps            uint32
 	MaxToolCalls        uint32
@@ -127,6 +129,7 @@ func Normalize(config Config) (Config, error) {
 	}
 	config.EnabledCapabilities = canonical(config.EnabledCapabilities)
 	config.PermissionScope = canonical(config.PermissionScope)
+	config.ChannelPrompts = canonicalChannelPrompts(config.ChannelPrompts)
 	if err := Validate(config); err != nil {
 		return Config{}, err
 	}
@@ -135,6 +138,7 @@ func Normalize(config Config) (Config, error) {
 		Enabled             bool
 		Model               string
 		SystemPrompt        string
+		ChannelPrompts      map[string]string `json:",omitempty"` // 空时省略，旧行摘要与迁移前一致
 		Timezone            string
 		MaxSteps            uint32
 		MaxToolCalls        uint32
@@ -148,7 +152,7 @@ func Normalize(config Config) (Config, error) {
 		PermissionScope     []string
 	}{
 		AppID: config.AppID, Enabled: config.Enabled, Model: config.Model,
-		SystemPrompt: config.SystemPrompt, Timezone: config.Timezone,
+		SystemPrompt: config.SystemPrompt, ChannelPrompts: config.ChannelPrompts, Timezone: config.Timezone,
 		MaxSteps: config.MaxSteps, MaxToolCalls: config.MaxToolCalls,
 		MaxInputTokens: config.MaxInputTokens, MaxOutputTokens: config.MaxOutputTokens,
 		MaxTotalTokens: config.MaxTotalTokens, MaxOutputBytes: config.MaxOutputBytes,
@@ -180,6 +184,13 @@ func Validate(config Config) error {
 		!validValues(config.EnabledCapabilities, capabilityPattern) ||
 		!validValues(config.PermissionScope, permissionPattern) {
 		return ErrInvalid
+	}
+	for channel, prompt := range config.ChannelPrompts {
+		if !channelPattern.MatchString(channel) || len(channel) > 64 ||
+			strings.TrimSpace(prompt) == "" || len(prompt) > 8<<10 || !utf8.ValidString(prompt) ||
+			strings.ContainsRune(prompt, '\x00') {
+			return ErrInvalid
+		}
 	}
 	if _, err := time.LoadLocation(config.Timezone); err != nil {
 		return ErrInvalid
@@ -231,6 +242,19 @@ func canonical(values []string) []string {
 	result := make([]string, len(values))
 	copy(result, values)
 	sort.Strings(result)
+	return result
+}
+
+// canonicalChannelPrompts 复制渠道提示映射，防止调用方后续修改影响已归一化
+// 的配置；JSON 序列化对 map 按键排序，摘要哈希因此是确定的。
+func canonicalChannelPrompts(prompts map[string]string) map[string]string {
+	if len(prompts) == 0 {
+		return nil
+	}
+	result := make(map[string]string, len(prompts))
+	for channel, prompt := range prompts {
+		result[channel] = prompt
+	}
 	return result
 }
 

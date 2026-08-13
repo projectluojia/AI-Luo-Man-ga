@@ -152,6 +152,7 @@ func (s *Server) startChatRun(writer http.ResponseWriter, request *http.Request,
 		SessionID:      intake.SessionID,
 		UserID:         intake.UserID,
 		MessageID:      intake.MessageID,
+		Channel:        "web",
 	}
 	echoID, created, err := s.orchestrator.CreateIdempotent(request.Context(), input)
 	if err != nil {

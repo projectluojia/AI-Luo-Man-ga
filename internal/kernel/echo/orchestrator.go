@@ -506,6 +506,7 @@ func (o *Orchestrator) CreateIdempotent(ctx context.Context, request RunRequest)
 		SessionID:          request.SessionID,
 		UserID:             request.UserID,
 		MessageID:          request.MessageID,
+		Channel:            request.Channel,
 		Attempt:            1,
 		Status:             RunStatusQueued,
 		Model:              app.Model,
@@ -654,9 +655,13 @@ func (o *Orchestrator) executeClaimedRun(ctx context.Context, request RunRequest
 		return errors.Join(ErrAppDisabled, o.fail(ctx, run, "app_disabled", false))
 	}
 	capabilities := o.projectCapabilities(policy, run)
-	// 上下文装配：由 Go 决定模型本次看到的内容（配置系统提示 + 当前标准消息 +
-	// 受限会话历史 + 当前 Capability 投影），Python 只接收装配完成的系统提示。
+	// 上下文装配：由 Go 决定模型本次看到的内容（配置系统提示 + 渠道提示 +
+	// 当前标准消息 + 受限会话历史 + 当前 Capability 投影），Python 只接收
+	// 装配完成的系统提示。
 	basePrompt := app.SystemPrompt + "\n只能根据 Capability 返回的数据回答，不得编造班次、站点或线路。"
+	if channelPrompt := app.ChannelPrompts[run.Channel]; channelPrompt != "" {
+		basePrompt += "\n" + channelPrompt
+	}
 	if run.ParentRunID != "" {
 		basePrompt += "\n这是受治理的子 Run。只完成父 Run 指定任务；最终结果仅返回父 Run，不直接面向用户。"
 	}

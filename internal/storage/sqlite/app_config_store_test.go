@@ -57,6 +57,35 @@ func TestAppConfigEnsureIsAppScopedAndKeepsImmutableRevisions(t *testing.T) {
 	}
 }
 
+func TestAppConfigChannelPromptsPersistAcrossEnsureAndCAS(t *testing.T) {
+	store, err := sqlite.Open(filepath.Join(t.TempDir(), "app-config-channel.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	seed := validAppConfig("app")
+	seed.ChannelPrompts = map[string]string{"qq_group": "群聊提示", "web": "网页提示"}
+	created, inserted, err := store.Ensure(t.Context(), seed)
+	if err != nil || !inserted {
+		t.Fatalf("created=%#v inserted=%t err=%v", created, inserted, err)
+	}
+	current, err := store.Current(t.Context(), "app")
+	if err != nil || current.ChannelPrompts["qq_group"] != "群聊提示" || current.ChannelPrompts["web"] != "网页提示" {
+		t.Fatalf("current channel prompts=%#v err=%v", current.ChannelPrompts, err)
+	}
+	// 渠道提示变化经 CAS 产生新修订，且 Revision 方法能取回旧修订的渠道提示。
+	replacement := current
+	replacement.ChannelPrompts = map[string]string{"qq_group": "更新后的群聊提示"}
+	updated, err := store.CompareAndSwap(t.Context(), current.Generation, replacement)
+	if err != nil || updated.Revision == current.Revision {
+		t.Fatalf("updated=%#v err=%v", updated, err)
+	}
+	old, err := store.Revision(t.Context(), "app", current.Revision)
+	if err != nil || old.ChannelPrompts["qq_group"] != "群聊提示" {
+		t.Fatalf("old channel prompts=%#v err=%v", old.ChannelPrompts, err)
+	}
+}
+
 func TestAppConfigCompareAndSwapAllowsOnlyOneConcurrentWriter(t *testing.T) {
 	store, err := sqlite.Open(filepath.Join(t.TempDir(), "app-config-cas.db"))
 	if err != nil {

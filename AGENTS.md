@@ -269,9 +269,15 @@ The App-scoped storage/public-error, durable Echo/Run state, Go trust-boundary/i
 
 - **产品前端聊天契约**：`internal/access/web` 新增 `POST /chat/stream`（SSE），对接独立产品仓库 LuoYing-Frontend 的流式协议（`track`/`text_delta`/`final`/`error`/`done`），内核 Echo 事件（echo.started/capability.completed/reply.delta/reply.final/run.failed）翻译为前端事件，不暴露内核事件类型。请求经受治理标准链路：严格解码（未知字段拒绝、单 JSON 对象、文本 1–4000 字符、附件非空拒绝）→ `Hub.Intake`（匿名）→ 幂等 Echo 创建 → 事件订阅 → 翻译写出。前端经 vite dev 代理 `/luoying-api` → Go（默认 8080），本仓库不搬运前端产物。
 - **共享事件中心**：`internal/access.EventHub` 按 App+Echo 键控的进程内事件订阅/发布（订阅先于调度、断线重放走存储层），由 Web 与平台适配器共享；`web.Server.Hub()` 暴露给装配。
-- **QQ 平台适配器**：`internal/access/qq`，进程内 OneBot v11 WebSocket 客户端（`gorilla/websocket` v1.5.3，stdlib 无 WS 客户端，固定版本）。消息事件规范化（array 段拼接/raw_message 剥离 CQ 码，群/私聊映射 space/user/session）→ `Hub.Intake`（平台身份经 identity-bind 解析，未绑定回发 `identity_not_found` 公共错误）→ 幂等 Echo → 订阅终态（先重放持久化事件再等实时，消除创建-订阅竞态）→ `send_group_msg`/`send_private_msg` 回发（回复剥离 CQ 注入码、超长按 4000 字符切块）。断线按 5 秒退避重连，适配器失败不影响内核就绪。装配：`AILUO_QQ_WS_URL`/`AILUO_QQ_WS_TOKEN`（ws/wss 校验，URL 缺失时不启动）。
-- 测试：前端聊天契约（事件翻译全链路、严格校验负向）+ 假 OneBot WS 服务端全链路（群消息→入站→Echo→回发、未绑定身份公共错误）+ 消息规范化/CQ 剥离/切块单测。
-- 已知边界：匿名 Web 渠道共享保留匿名会话（跨浏览器用户共享会话历史，多用户 Web 身份未实现前是既有设计状态）；QQ 群消息回复不带 @ 提及。
+- **QQ 平台适配器**：`internal/access/qq`，进程内 OneBot v11 WebSocket 客户端（`gorilla/websocket` v1.5.3，stdlib 无 WS 客户端，固定版本）。消息事件规范化（array 段拼接/raw_message 剥离 CQ 码，群/私聊映射 space/user/session，`at` 段识别）→ `Hub.Intake`（平台身份经 identity-bind 解析，未绑定回发 `identity_not_found` 公共错误）→ 幂等 Echo → 订阅终态（先重放持久化事件再等实时，消除创建-订阅竞态）→ `send_group_msg`/`send_private_msg` 回发（回复剥离 CQ 注入码、超长按 4000 字符切块）。群聊默认只响应 @机器人 的消息（防刷屏）；戳一戳（notice/notify/poke，`target_id` 匹配 `AILUO_QQ_BOT_ID`）随机文案回复、群聊内 `group_poke` 戳回去，纯平台事件处理不经 Echo/Agent。断线按 5 秒退避重连，适配器失败不影响内核就绪。装配：`AILUO_QQ_WS_URL`/`AILUO_QQ_WS_TOKEN`/`AILUO_QQ_BOT_ID`（ws/wss 校验，URL 缺失时不启动）。
+- 测试：前端聊天契约（事件翻译全链路、严格校验负向）+ 假 OneBot WS 服务端全链路（群消息→入站→Echo→回发、未绑定身份公共错误、@提及过滤、戳一戳群/私聊/戳他人忽略）+ 消息规范化/CQ 剥离/切块单测。
+- 已知边界：匿名 Web 渠道共享保留匿名会话（跨浏览器用户共享会话历史，多用户 Web 身份未实现前是既有设计状态）。
+
+## 2026-08-13 渠道化系统提示与默认人格基线（feat/qq-platform）
+
+- **渠道提示作为 App 配置持久化**：`appconfig.Config` 新增 `ChannelPrompts map[string]string`（渠道 → 提示段），随配置修订入库（`app_config_revisions.channel_prompts`，迁移 20）并进入摘要哈希（`Normalize` 校验渠道键 `^[a-z][a-z0-9._-]*$`、提示非空且 ≤8KiB）；`RunRequest`/`RunRecord` 新增 `Channel`（`json:"-"` 不进 HTTP 契约，Web 填 `web`、QQ 填 `qq_group`/`qq_private`，`runs.channel` 迁移 20）。orchestrator 装配时按 `run.Channel` 从持久化配置取渠道提示追加到基础提示后（子 Run 不装配渠道）；恢复/重试按 Run 记录的渠道重装配，摘要仍确定性。
+- **默认人格种子**：`seed_prompt.go` 迁移 LuoYingRebuild 人格与渠道端介绍/输出规则——基础提示（珞樱人格 + 系统指令最高优先级 + 行为准则/限定 + 通用事实）+ 三渠道提示（web/qq_group/qq_private 端介绍与输出特点）。不迁移：输出协议（executor 协议已替代 RETURN_PROTOCOL）、创建者身份硬编码（由身份系统替代，待实现）、风格系统与技能提示（无对应治理支撑）。首次播种走 `store.Ensure` 入库，之后数据库为权威（main.go 种子不覆盖既有配置）。
+- 测试：appconfig 渠道提示修订摘要（map 顺序无关/变化必改修订/非法键与空值拒绝）+ sqlite 渠道提示 Ensure/CAS/Revision 往返 + orchestrator 集成（持久化渠道提示按 Run 渠道进入装配后系统提示、渠道持久化到 runs）。
 
 ## Known Production Blockers
 
