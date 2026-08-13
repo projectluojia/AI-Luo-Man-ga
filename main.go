@@ -417,11 +417,15 @@ func run() (resultErr error) {
 	}()
 	// 内置 AI 执行者（Python Agent）以 isolated Runtime 纳管：进程启动、资源限额、
 	// 健康检查与优雅清理复用 loader 进程原语，与扩展包同构，无专用宿主代码。
+	workDir, err := filepath.Abs(".")
+	if err != nil {
+		return fmt.Errorf("resolve agent working directory: %w", err)
+	}
 	agentHost, err := loader.NewAgentHost(loader.AgentHostConfig{
 		Resolve: func(context.Context) (loader.AgentSpec, error) {
 			return loader.AgentSpec{
 				PythonPath: config.pythonPath,
-				WorkDir:    ".",
+				WorkDir:    workDir,
 				Address:    config.agentAddress,
 				Limits:     loader.ProcessLimits{},
 			}, nil
@@ -646,6 +650,13 @@ func loadConfig() (config, error) {
 		runtimeInstallRoot: os.Getenv("AILUO_RUNTIME_INSTALL_ROOT"),
 		runtimeHostAddress: os.Getenv("AILUO_RUNTIME_HOST_ADDRESS"),
 	}
+	// Agent 进程规格要求绝对 Python 路径（Spawn 模式校验）；默认值与用户配置
+	// 都可能为相对路径，统一在装配前解析为绝对路径。
+	absolutePython, err := filepath.Abs(result.pythonPath)
+	if err != nil {
+		return config{}, fmt.Errorf("configuration error: resolve python path: %w", err)
+	}
+	result.pythonPath = absolutePython
 	if result.model == "" {
 		return config{}, fmt.Errorf("configuration error: AILUO_MODEL is required")
 	}
