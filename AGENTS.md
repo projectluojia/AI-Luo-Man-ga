@@ -318,6 +318,15 @@ Do not implement the alternative Tool/package-management comparison owned by ano
 - Never commit credentials, `.env`, local databases, real campus data, caches, virtual environments, or temporary output.
 - Do not manually edit generated files.
 
+## 提交与工程规范
+
+- 提交信息遵循 Conventional Commits，类型限定 `feat`/`fix`/`docs`/`style`/`refactor`/`perf`/`test`/`build`/`ci`/`chore`/`revert`。强制点位于 PR 标题与 squash 合并消息（`.github/workflows/pr-title.yml` 校验），开发分支上的逐条提交不强制。
+- `main` 仅接受 squash 合并（`main-protection` 规则集强制），main 历史中一条 PR 对应一条提交；合并前必须通过 required status checks（核心测试 ubuntu + Linux 完整质量门禁）。
+- 提交原子性：一个 commit 是一个自洽的逻辑单元——可独立构建、独立回滚（例如迁移 + 存取代码 + 测试同处一个 commit）。scope 纯净性由 squash 消息保证，不在开发分支上硬性禁止混 scope。
+- 分支命名使用前缀：`feat/`、`fix/`、`chore/`、`docs/`、`refactor/`。
+- 依赖升级由 Renovate 管理（`renovate.json5`）：Go / Python / GitHub Actions 的 minor/patch 各自分组、每周批量；major 单独 PR；升级一律人工评审（main 规则集要求 1 人审批），不自动合并。`grpcio-tools`/`protobuf` 属代码生成工具链，排除自动更新——升级必须人工重新生成并提交生成物。
+- 修改工程配置（CI、规则集、依赖机器人、模板）时，同步更新本文件与相关文档。
+
 ## Testing And Quality Gates
 
 A happy-path test is not production evidence. Add focused negative and failure-path tests alongside implementation.
