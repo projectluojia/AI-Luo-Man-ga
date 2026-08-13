@@ -1,5 +1,5 @@
 // Package builtin 承载 campus hosted 包的嵌入工件。
-// 工件由 extensions/campus/build.ps1（或 build.sh）交叉编译后复制到此目录，
+// 工件由 internal/services/campus/guest/build.ps1（或 build.sh）交叉编译输出到此目录，
 // 随内核二进制发布，保证三平台（含 Windows）均可装载。
 package builtin
 

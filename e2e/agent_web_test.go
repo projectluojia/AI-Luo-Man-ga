@@ -20,19 +20,19 @@ import (
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access/web"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/campus"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/campus/bus"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/campustest"
 	kernelecho "github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/health"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/session"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/subagent"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/agent"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus/campustest"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/blob"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/memory"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/tools/bus"
 )
 
 func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
@@ -114,12 +114,12 @@ func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 	// 取消必须先于关库，避免调度轮询打到已关闭的存储。
 	defer store.Close()
 	defer cancel()
-	// 内置 AI 执行者经 loader AgentHost 纳管：进程启动、健康、停止与内核同构。
+	// 内置 AI 执行者经 agent 包以 isolated Runtime 纳管：进程启动、健康、停止与内核同构。
 	logs := &strings.Builder{}
-	agentHost, err := loader.NewAgentHost(loader.AgentHostConfig{
-		Resolve: func(context.Context) (loader.AgentSpec, error) {
-			return loader.AgentSpec{
-				PythonPath: loader.DefaultAgentPythonPath(root),
+	agentHost, err := agent.NewHost(agent.Config{
+		Resolve: func(context.Context) (agent.Spec, error) {
+			return agent.Spec{
+				PythonPath: agent.DefaultPythonPath(root),
 				WorkDir:    root,
 				Address:    address,
 				Env: append(os.Environ(),
@@ -139,21 +139,21 @@ func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewAgentHost: %v", err)
 	}
-	agentManager, err := loader.New(map[string]loader.Host{loader.ModeIsolated: agentHost})
+	agentManager, err := loader.New(agentHost)
 	if err != nil {
 		t.Fatalf("new agent manager: %v", err)
 	}
-	if err := agentManager.Register(agentHost.Manifest()); err != nil {
+	if err := agentManager.Register(ctx, agentHost.Manifest()); err != nil {
 		t.Fatalf("register agent: %v", err)
 	}
-	if err := agentManager.Warmup(ctx, []string{loader.AgentRuntimeID}, 1); err != nil {
+	if err := agentManager.Warmup(ctx, []string{agent.RuntimeID}, 1); err != nil {
 		t.Fatalf("warm agent: %v\n%s", err, logs.String())
 	}
-	agentLease, err := agentManager.Acquire(ctx, loader.AgentRuntimeID)
+	agentLease, err := agentManager.Acquire(ctx, agent.RuntimeID)
 	if err != nil {
 		t.Fatalf("acquire agent: %v", err)
 	}
-	agentRuntime, ok := agentLease.Runtime().(loader.AgentClientProvider)
+	agentRuntime, ok := agentLease.Runtime().(agent.ClientProvider)
 	if !ok {
 		t.Fatal("agent runtime does not expose an agent client")
 	}
@@ -173,8 +173,8 @@ func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 	reg := registry.New()
 	policy := runtime.NewStaticAppPolicy()
 	policy.Enable(campus.AppID, campus.BusRouteListCapabilityID)
-	policy.Enable(campus.AppID, subagent.CapabilityID)
-	dispatcher := runtime.NewDispatcher(reg, policy, runtime.WithIdempotencyStore(store))
+	policy.Enable(campus.AppID, agent.CapabilityID)
+	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{IdempotencyStore: store})
 	campustest.RegisterHosted(t, reg, busStore)
 	// 上下文装配使用真实会话来源（SQLite 消息存储 + 安全 Blob 存储）。
 	blobStore, err := blob.Open(filepath.Join(t.TempDir(), "blobs"), session.MaxMessageContentBytes)
@@ -192,7 +192,7 @@ func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 		MaxTotalTokens: 1500, MaxOutputBytes: 4096, ProviderTimeout: 5 * time.Second,
 		Context: sessionService,
 	})
-	if err := subagent.Register(reg, orchestrator); err != nil {
+	if err := agent.Register(reg, orchestrator); err != nil {
 		t.Fatal(err)
 	}
 	handler := web.NewServer(ctx, orchestrator, store, health.Combined{store, health.AgentChecker{Client: agentClient, Model: "test-model"}}, reg, policy, campus.AppID, access.NewHub(campus.AppID, store, nil)).Handler()
@@ -267,7 +267,7 @@ func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 		t.Fatalf("audits=%#v err=%v logs=%s", audits, err, logs.String())
 	}
 	for _, audit := range audits {
-		if audit.CapabilityID == subagent.CapabilityID &&
+		if audit.CapabilityID == agent.CapabilityID &&
 			(bytes.Contains(audit.Payload, []byte("查询校巴线路")) ||
 				!bytes.Contains(audit.Payload, []byte(`"task":"[已脱敏]"`))) {
 			t.Fatalf("Subagent task leaked into audit: %s", audit.Payload)

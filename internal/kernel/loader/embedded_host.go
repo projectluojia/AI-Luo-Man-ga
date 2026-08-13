@@ -45,6 +45,9 @@ func NewEmbeddedHost(builtins []Builtin) (*EmbeddedHost, error) {
 	return &EmbeddedHost{builtins: table}, nil
 }
 
+// Mode 返回宿主服务的运行模式：embedded 进程内。
+func (h *EmbeddedHost) Mode() string { return ModeEmbedded }
+
 // Verify 确认 manifest 精确匹配已编译进内核的内置包；任何字段不一致都拒绝加载。
 func (h *EmbeddedHost) Verify(_ context.Context, manifest Manifest) error {
 	builtin, exists := h.builtins[manifest.ID]

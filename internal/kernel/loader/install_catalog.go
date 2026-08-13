@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/jsonutil"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 )
@@ -291,7 +292,7 @@ func (c *Catalog) readRecord(ctx context.Context, directory string) (InstalledRe
 	return record, nil
 }
 
-func RegisterInstalled(manager *Manager, target *registry.Registry, records []InstalledRecord) error {
+func RegisterInstalled(ctx context.Context, manager *Manager, target *registry.Registry, records []InstalledRecord) error {
 	if manager == nil || target == nil || len(records) == 0 || len(records) > maxInstalledRuntimes {
 		return ErrInstallCatalogInvalid
 	}
@@ -318,7 +319,7 @@ func RegisterInstalled(manager *Manager, target *registry.Registry, records []In
 			Spec: record.Service, Capabilities: capabilities,
 		})
 	}
-	if err := manager.RegisterBatch(manifests); err != nil {
+	if err := manager.RegisterBatch(ctx, manifests); err != nil {
 		return err
 	}
 	if err := target.RegisterBatch(tools, services); err != nil {
@@ -428,8 +429,8 @@ func decodeStrictJSON(payload []byte, target any) error {
 	if err := decoder.Decode(target); err != nil {
 		return err
 	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return ErrInstallCatalogInvalid
+	if err := jsonutil.EnsureEOF(decoder); err != nil {
+		return errors.Join(ErrInstallCatalogInvalid, err)
 	}
 	return nil
 }

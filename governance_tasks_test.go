@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/campus"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/confirmation"
 	kernelecho "github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/task"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite"
 )
 
@@ -41,7 +41,7 @@ func openSweepFixture(t *testing.T) (*sqlite.Store, *confirmation.Service, *task
 	}); err != nil {
 		t.Fatal(err)
 	}
-	confirmations := confirmation.NewService(store)
+	confirmations := confirmation.NewService(store, confirmation.Config{})
 	types := task.NewTypeRegistry()
 	scheduler := task.NewScheduler(store, types, task.Config{})
 	if err := registerGovernanceTaskTypes(types, confirmations, scheduler, confirmationSweepInterval); err != nil {

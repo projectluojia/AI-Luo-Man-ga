@@ -7,14 +7,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/campus"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/campus/bus"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/campustest"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus/campustest"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/memory"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/tools/bus"
 )
 
 func TestHostedCampusBuiltinManifestLocksArtifact(t *testing.T) {
@@ -204,11 +204,7 @@ func newHostedDispatcherWithDepth(t *testing.T, store bus.Store, maxCallDepth ui
 		policy.Enable(appID, campus.BusRouteListCapabilityID)
 		policy.Enable(appID, campus.BusJourneySearchCapabilityID)
 	}
-	options := []runtime.DispatcherOption{}
-	if maxCallDepth > 0 {
-		options = append(options, runtime.WithMaxCallDepth(maxCallDepth))
-	}
-	return runtime.NewDispatcher(reg, policy, options...)
+	return runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{MaxCallDepth: maxCallDepth})
 }
 
 // authoritativeFreshMetadata 返回权威新鲜的快照元数据，用于不受治理干扰的行为断言。

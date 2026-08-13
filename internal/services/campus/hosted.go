@@ -6,9 +6,9 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/campus/bus"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/tools/bus"
 )
 
 // busHostQuery 是 guest 存储查询投影的载荷信封：操作标识 + 参数。
@@ -68,13 +68,13 @@ func busQueryHandler(store bus.Store) func(context.Context, contracts.RequestCon
 			return nil, fmt.Errorf("unknown bus query op: %s", query.Op)
 		}
 		if queryErr != nil {
-			return marshalBusHostResponse(busHostResponse{OK: false, Code: busHostErrorCode(queryErr), Message: queryErr.Error()})
+			return json.Marshal(busHostResponse{OK: false, Code: busHostErrorCode(queryErr), Message: queryErr.Error()})
 		}
 		resultBytes, err := json.Marshal(result)
 		if err != nil {
 			return nil, fmt.Errorf("marshal bus host query result: %w", err)
 		}
-		return marshalBusHostResponse(busHostResponse{OK: true, Result: resultBytes})
+		return json.Marshal(busHostResponse{OK: true, Result: resultBytes})
 	}
 }
 
@@ -93,9 +93,4 @@ func busHostErrorCode(err error) string {
 	default:
 		return "internal"
 	}
-}
-
-// marshalBusHostResponse 序列化宿主函数响应信封。
-func marshalBusHostResponse(response busHostResponse) ([]byte, error) {
-	return json.Marshal(response)
 }

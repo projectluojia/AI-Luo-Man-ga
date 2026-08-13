@@ -5,8 +5,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/campus/builtin"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus/builtin"
 )
 
 // hostedVersion 是 campus hosted 包的内置版本。

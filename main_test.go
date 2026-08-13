@@ -128,12 +128,12 @@ func TestConfigureInstalledRuntimesAllowsEmptySecureCatalog(t *testing.T) {
 	if err := os.Chmod(root, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	manager, err := configureInstalledRuntimes(t.Context(), config{runtimeInstallRoot: root}, registry.New())
+	hosts, records, pinned, err := configureInstalledRuntimes(t.Context(), config{runtimeInstallRoot: root})
 	if err != nil {
 		t.Fatalf("configure empty catalog: %v", err)
 	}
-	if manager != nil {
-		t.Fatal("empty catalog created a runtime manager")
+	if len(hosts) != 0 || len(records) != 0 || len(pinned) != 0 {
+		t.Fatal("empty catalog must return no hosts/records")
 	}
 }
 
@@ -142,28 +142,35 @@ func TestConfigureInstalledRuntimesRegistersHostedCatalogAndRequiresAddress(t *t
 		t.Skip("非 Unix 平台显式关闭安装目录属主校验")
 	}
 	root := writeMainInstalledFixture(t)
-	if _, err := configureInstalledRuntimes(t.Context(), config{
+	if _, _, _, err := configureInstalledRuntimes(t.Context(), config{
 		runtimeInstallRoot: root,
-	}, registry.New()); err == nil || !strings.Contains(err.Error(), "AILUO_RUNTIME_HOST_ADDRESS") {
+	}); err == nil || !strings.Contains(err.Error(), "AILUO_RUNTIME_HOST_ADDRESS") {
 		t.Fatalf("missing hosted address error=%v", err)
 	}
 
-	target := registry.New()
-	manager, err := configureInstalledRuntimes(t.Context(), config{
+	hosts, records, pinned, err := configureInstalledRuntimes(t.Context(), config{
 		runtimeInstallRoot: root,
 		runtimeHostAddress: "unix:" + filepath.Join(root, "host.sock"),
-	}, target)
+	})
 	if err != nil {
 		t.Fatalf("configure hosted catalog: %v", err)
 	}
-	if manager == nil {
-		t.Fatal("hosted catalog did not create a runtime manager")
+	if len(hosts) != 1 || len(records) != 1 || len(pinned) != 1 {
+		t.Fatalf("hosts=%d records=%d pinned=%d", len(hosts), len(records), len(pinned))
+	}
+	target := registry.New()
+	manager, err := loader.New(hosts...)
+	if err != nil {
+		t.Fatalf("create runtime loader: %v", err)
 	}
 	t.Cleanup(func() {
 		if err := manager.Shutdown(t.Context()); err != nil {
 			t.Errorf("shutdown runtime manager: %v", err)
 		}
 	})
+	if err := loader.RegisterInstalled(t.Context(), manager, target, records); err != nil {
+		t.Fatalf("register installed runtimes: %v", err)
+	}
 	if _, _, err := target.ResolveCapability("main.extension.query"); err != nil {
 		t.Fatalf("installed capability not registered: %v", err)
 	}

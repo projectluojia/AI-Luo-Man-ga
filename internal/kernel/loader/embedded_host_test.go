@@ -31,7 +31,7 @@ func newEmbeddedManager(t *testing.T, builtins ...loader.Builtin) *loader.Manage
 	if err != nil {
 		t.Fatalf("NewEmbeddedHost: %v", err)
 	}
-	manager, err := loader.New(map[string]loader.Host{loader.ModeEmbedded: host})
+	manager, err := loader.New(host)
 	if err != nil {
 		t.Fatalf("loader.New: %v", err)
 	}
@@ -119,7 +119,7 @@ func TestEmbeddedRuntimeLoadsOnceAndServesInProcess(t *testing.T) {
 	})
 	manager := newEmbeddedManager(t, builtin)
 	ctx := context.Background()
-	if err := manager.Register(builtin.Manifest); err != nil {
+	if err := manager.Register(context.Background(), builtin.Manifest); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
@@ -172,16 +172,14 @@ func TestEmbeddedRuntimeLoadsOnceAndServesInProcess(t *testing.T) {
 
 func TestEmbeddedVerifyFailsFastBeforeExecution(t *testing.T) {
 	manager := newEmbeddedManager(t, embeddedBuiltin("embedded.test", "1.0.0", nil))
-	// 注册的 manifest 与内置包版本不一致：Verify 失败，EnsureLoaded 快速失败，不执行任何代码。
+	// 注册的 manifest 与内置包版本不一致：注册期 Verify 绑定宿主即 fail-closed，
+	// 任何字段不一致都不会进入加载阶段。
 	mismatched := embeddedBuiltin("embedded.test", "2.0.0", nil).Manifest
-	if err := manager.Register(mismatched); err != nil {
-		t.Fatalf("Register: %v", err)
+	if err := manager.Register(context.Background(), mismatched); err == nil {
+		t.Fatal("mismatched manifest must fail at registration")
 	}
-	if err := manager.EnsureLoaded(context.Background(), "embedded.test"); !errors.Is(err, loader.ErrLoadFailed) {
-		t.Fatalf("EnsureLoaded error = %v, want ErrLoadFailed", err)
-	}
-	if _, err := manager.Acquire(context.Background(), "embedded.test"); !errors.Is(err, loader.ErrLoadFailed) {
-		t.Fatalf("Acquire error = %v, want ErrLoadFailed", err)
+	if _, err := manager.Acquire(context.Background(), "embedded.test"); !errors.Is(err, loader.ErrNotFound) {
+		t.Fatalf("Acquire error = %v, want ErrNotFound", err)
 	}
 }
 
@@ -190,7 +188,7 @@ func TestEmbeddedPinnedUnloadRejectedAndShutdownForcesCleanup(t *testing.T) {
 	builtin.Manifest.Pin = true
 	manager := newEmbeddedManager(t, builtin)
 	ctx := context.Background()
-	if err := manager.Register(builtin.Manifest); err != nil {
+	if err := manager.Register(context.Background(), builtin.Manifest); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	if err := manager.EnsureLoaded(ctx, "embedded.pin"); err != nil {
@@ -211,12 +209,13 @@ func TestEmbeddedRejectsUnsupportedUpgradeManifest(t *testing.T) {
 	// 与"锁定的 manifest 必须精确匹配内置包"的规则一致。
 	manager := newEmbeddedManager(t, embeddedBuiltin("embedded.upgrade", "1.0.0", nil))
 	ctx := context.Background()
-	if err := manager.Register(embeddedBuiltin("embedded.upgrade", "1.0.0", nil).Manifest); err != nil {
+	if err := manager.Register(context.Background(), embeddedBuiltin("embedded.upgrade", "1.0.0", nil).Manifest); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	next := embeddedBuiltin("embedded.upgrade", "2.0.0", nil).Manifest
-	if err := manager.Upgrade(ctx, next); !errors.Is(err, loader.ErrLoadFailed) {
-		t.Fatalf("Upgrade error = %v, want ErrLoadFailed", err)
+	// 新版本不匹配任何内置包：Upgrade 在注册前就因无可承载宿主被拒绝（fail-closed）。
+	if err := manager.Upgrade(ctx, next); !errors.Is(err, loader.ErrUnsupportedMode) {
+		t.Fatalf("Upgrade error = %v, want ErrUnsupportedMode", err)
 	}
 	snapshot, err := manager.Snapshot("embedded.upgrade")
 	if err != nil {

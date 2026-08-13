@@ -89,6 +89,9 @@ func NewGRPCHost(config GRPCHostConfig) (*GRPCHost, error) {
 	return &GRPCHost{config: config, invocations: make(chan struct{}, config.MaxConcurrent)}, nil
 }
 
+// Mode 返回宿主服务的运行模式（构造时配置）。
+func (h *GRPCHost) Mode() string { return h.config.Mode }
+
 func (h *GRPCHost) Verify(ctx context.Context, manifest Manifest) error {
 	if manifest.Mode != h.config.Mode {
 		return ErrUnsupportedMode

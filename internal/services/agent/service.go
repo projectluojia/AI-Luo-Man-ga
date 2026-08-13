@@ -1,23 +1,19 @@
-package subagent
+package agent
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/jsonutil"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 )
 
-const (
-	ServiceID    = "agent"
-	CapabilityID = echo.SubagentCapabilityID
-)
-
+// inputSchemaJSON 是 agent.run 的严格输入 Schema：任务正文与可选的 Capability
+// 白名单（child Run 的接受期能力上界，只允许收窄）。
 const inputSchemaJSON = `{
   "$schema":"https://json-schema.org/draft/2020-12/schema",
   "type":"object",
@@ -34,6 +30,7 @@ const inputSchemaJSON = `{
   }
 }`
 
+// Runner 是 Agent Service 的 child Run 执行方（由内核 Orchestrator 实现）。
 type Runner interface {
 	RunChild(context.Context, echo.ChildRunRequest) (echo.ChildRunResult, error)
 }
@@ -43,18 +40,16 @@ type input struct {
 	CapabilityIDs []string `json:"capability_ids"`
 }
 
+// Register 把 Agent Service 注册进 Registry：ServiceID=agent、对外核心能力
+// agent.run。该能力是外部副作用：必须携带幂等键并经 Dispatcher 治理后才执行；
+// 运行方（Runner）由内核在 Orchestrator 构建后注入。
 func Register(reg *registry.Registry, runner Runner) error {
 	if reg == nil || runner == nil {
 		return registry.ErrInvalidSpec
 	}
 	handler := func(ctx context.Context, request contracts.RequestContext, payload json.RawMessage) (json.RawMessage, error) {
-		decoder := json.NewDecoder(bytes.NewReader(payload))
-		decoder.DisallowUnknownFields()
 		var value input
-		if err := decoder.Decode(&value); err != nil {
-			return nil, errors.Join(registry.ErrSchemaValidation, err)
-		}
-		if err := ensureEOF(decoder); err != nil {
+		if err := jsonutil.DecodeStrict(payload, &value); err != nil {
 			return nil, errors.Join(registry.ErrSchemaValidation, err)
 		}
 		result, err := runner.RunChild(ctx, echo.ChildRunRequest{
@@ -96,14 +91,4 @@ func Register(reg *registry.Registry, runner Runner) error {
 			},
 		},
 	})
-}
-
-func ensureEOF(decoder *json.Decoder) error {
-	var trailing any
-	if err := decoder.Decode(&trailing); errors.Is(err, io.EOF) {
-		return nil
-	} else if err != nil {
-		return err
-	}
-	return registry.ErrSchemaValidation
 }

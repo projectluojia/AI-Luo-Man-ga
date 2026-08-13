@@ -1,6 +1,6 @@
 //go:build wasip1
 
-// campus 是校园服务的 hosted 包形态：复用 internal/campus/bus 的业务逻辑与治理，
+// campus 是校园服务的 hosted 包形态：复用 internal/tools/bus 的业务逻辑与治理，
 // 数据访问经宿主函数 ailuo.bus.query 投影到 Go 托管的权威存储（App 隔离在宿主侧强制）。
 // 仅参与 wasm32-wasi 交叉编译（build.ps1 / build.sh）；宿主编译时该目录被忽略。
 package main
@@ -14,9 +14,9 @@ import (
 	"os"
 	"unsafe"
 
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/campus/bus"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/tools/bus"
 )
 
 //go:wasmimport ailuo.bus query

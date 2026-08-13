@@ -21,8 +21,6 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access/ingress"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access/web"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/bootstrap"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/campus"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/appconfig"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/confirmation"
 	kernelecho "github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
@@ -32,9 +30,11 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/session"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/subagent"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/task"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/agent"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus/demo"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/blob"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite"
 
@@ -333,7 +333,7 @@ func run() (resultErr error) {
 		return fmt.Errorf("create session service: %w", err)
 	}
 	if config.loadDemoData {
-		if err := bootstrap.LoadDemoBusData(ctx, store, time.Now()); err != nil {
+		if err := demo.LoadBusData(ctx, store, time.Now()); err != nil {
 			return fmt.Errorf("load demo bus data: %w", err)
 		}
 		observe.Warn(ctx, "已载入非权威校巴演示数据",
@@ -353,7 +353,7 @@ func run() (resultErr error) {
 			campus.BusStopSearchCapabilityID,
 			campus.BusRouteListCapabilityID,
 			campus.BusJourneySearchCapabilityID,
-			subagent.CapabilityID,
+			agent.CapabilityID,
 		},
 	})
 	if err != nil {
@@ -371,59 +371,26 @@ func run() (resultErr error) {
 	}
 	// 确认与副作用治理：持久确认服务注入 Dispatcher，凡声明 write/external 副作用
 	// 的 Capability 在未获批准前 fail-closed（缺确认标识或验证失败一律拒绝执行）。
-	confirmations := confirmation.NewService(store)
-	dispatcher := runtime.NewDispatcher(reg, policy, runtime.WithMaxCallDepth(16), runtime.WithIdempotencyStore(store), runtime.WithConfirmationVerifier(confirmations))
-	// 校园服务以 hosted 包形态装配：内置 wasm 工件在进程内沙箱执行，
-	// 权威存储经宿主函数投影（App 隔离在宿主侧强制），Dispatcher 治理保持不变。
-	campusHost, err := loader.NewWasmHost(loader.WasmHostConfig{
-		ReadArtifact:  campus.ReadArtifact,
-		HostFunctions: campus.HostedFunctions(store),
+	confirmations := confirmation.NewService(store, confirmation.Config{})
+	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{
+		MaxCallDepth:         16,
+		IdempotencyStore:     store,
+		ConfirmationVerifier: confirmations,
 	})
+	// 统一 Loader：所有运行模式共享一个 Manager，清单在注册时按 Verify 精确绑定
+	// 到唯一宿主。内置 campus（hosted 沙箱）、内置 agent（isolated 进程）与
+	// installed 包（hosted/isolated）同池管理，不再按包分叉多个 Loader。
+	campusHost, err := campus.Host(store)
 	if err != nil {
 		return fmt.Errorf("create campus hosted boundary: %w", err)
 	}
-	campusManager, err := loader.New(map[string]loader.Host{loader.ModeHosted: campusHost})
-	if err != nil {
-		return fmt.Errorf("create campus runtime loader: %w", err)
-	}
-	defer func() {
-		shutdownContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		resultErr = errors.Join(resultErr, campusManager.Shutdown(shutdownContext))
-	}()
-	if err := loader.RegisterInstalled(campusManager, reg, []loader.InstalledRecord{{
-		Runtime:      campus.Manifest(),
-		Tools:        campus.ToolSpecs(),
-		Service:      campus.ServiceSpec(),
-		Capabilities: campus.CapabilitySpecs(),
-	}}); err != nil {
-		return fmt.Errorf("register campus hosted package: %w", err)
-	}
-	// campus 是 pin 的内置包：启动预热，编译失败则内核拒绝就绪（fail-closed）。
-	if err := campusManager.Warmup(ctx, []string{campus.ServiceID}, 1); err != nil {
-		return fmt.Errorf("warm campus hosted package: %w", err)
-	}
-	runtimeManager, err := configureInstalledRuntimes(ctx, config, reg)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if runtimeManager == nil {
-			return
-		}
-		shutdownContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		resultErr = errors.Join(resultErr, runtimeManager.Shutdown(shutdownContext))
-	}()
-	// 内置 AI 执行者（Python Agent）以 isolated Runtime 纳管：进程启动、资源限额、
-	// 健康检查与优雅清理复用 loader 进程原语，与扩展包同构，无专用宿主代码。
 	workDir, err := filepath.Abs(".")
 	if err != nil {
 		return fmt.Errorf("resolve agent working directory: %w", err)
 	}
-	agentHost, err := loader.NewAgentHost(loader.AgentHostConfig{
-		Resolve: func(context.Context) (loader.AgentSpec, error) {
-			return loader.AgentSpec{
+	agentHost, err := agent.NewHost(agent.Config{
+		Resolve: func(context.Context) (agent.Spec, error) {
+			return agent.Spec{
 				PythonPath: config.pythonPath,
 				WorkDir:    workDir,
 				Address:    config.agentAddress,
@@ -441,36 +408,56 @@ func run() (resultErr error) {
 	if err != nil {
 		return fmt.Errorf("create built-in agent runtime: %w", err)
 	}
-	agentManager, err := loader.New(map[string]loader.Host{loader.ModeIsolated: agentHost})
+	installedHosts, installedRecords, pinnedInstalled, err := configureInstalledRuntimes(ctx, config)
 	if err != nil {
-		return fmt.Errorf("create agent runtime loader: %w", err)
+		return err
+	}
+	hosts := make([]loader.Host, 0, 2+len(installedHosts))
+	hosts = append(hosts, campusHost, agentHost)
+	hosts = append(hosts, installedHosts...)
+	runtimeLoader, err := loader.New(hosts...)
+	if err != nil {
+		return fmt.Errorf("create runtime loader: %w", err)
 	}
 	defer func() {
 		shutdownContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		resultErr = errors.Join(resultErr, agentManager.Shutdown(shutdownContext))
+		resultErr = errors.Join(resultErr, runtimeLoader.Shutdown(shutdownContext))
 	}()
-	if err := agentManager.Register(agentHost.Manifest()); err != nil {
+	// 内置包与 installed 包统一注册：先注册 campus（含 Tool/Service/Capability），
+	// 再注册 installed 目录，最后注册内置 agent 的运行时清单（其 Service agent.run
+	// 依赖 Orchestrator，在内核装配完成后单独注册）。
+	if err := loader.RegisterInstalled(ctx, runtimeLoader, reg, []loader.InstalledRecord{campus.Record()}); err != nil {
+		return fmt.Errorf("register campus hosted package: %w", err)
+	}
+	if len(installedRecords) > 0 {
+		if err := loader.RegisterInstalled(ctx, runtimeLoader, reg, installedRecords); err != nil {
+			return fmt.Errorf("register installed runtimes: %w", err)
+		}
+	}
+	if err := runtimeLoader.Register(ctx, agentHost.Manifest()); err != nil {
 		return fmt.Errorf("register built-in agent runtime: %w", err)
 	}
-	// 启动 + 加载期健康检查（协议协商 + Provider 就绪）：失败则内核拒绝就绪。
-	if err := agentManager.Warmup(ctx, []string{loader.AgentRuntimeID}, 1); err != nil {
-		return fmt.Errorf("warm built-in agent runtime: %w", err)
+	// 预热全部 pin 的内置包（campus/agent）与 installed pin 运行时：编译/启动失败
+	// 则内核拒绝就绪（fail-closed）。
+	pinnedRuntimes := append([]string{campus.ServiceID, agent.RuntimeID}, pinnedInstalled...)
+	if err := runtimeLoader.Warmup(ctx, pinnedRuntimes, min(len(pinnedRuntimes), 4)); err != nil {
+		return fmt.Errorf("warm pinned runtimes: %w", err)
 	}
-	agentLease, err := agentManager.Acquire(ctx, loader.AgentRuntimeID)
+	agentLease, err := runtimeLoader.Acquire(ctx, agent.RuntimeID)
 	if err != nil {
 		return fmt.Errorf("acquire built-in agent runtime: %w", err)
 	}
-	// 租约在函数返回时先于 agentManager.Shutdown 释放（defer 逆序）。
+	// 租约在函数返回时先于 runtimeLoader.Shutdown 释放（defer 逆序）。
 	defer agentLease.Release()
-	agentRuntime, ok := agentLease.Runtime().(loader.AgentClientProvider)
+	agentRuntime, ok := agentLease.Runtime().(agent.ClientProvider)
 	if !ok {
 		return fmt.Errorf("built-in agent runtime does not expose an agent client")
 	}
 	agentClient := agentRuntime.AgentClient()
 	if config.manageAgent {
 		// 受监督进程异常退出 → 内核 fail-closed 停止（连接模式不拥有进程）。
-		if lifecycle, ok := agentLease.Runtime().(loader.AgentProcessLifecycle); ok {
+		if lifecycle, ok := agentLease.Runtime().(agent.ProcessLifecycle); ok {
 			go func() {
 				<-lifecycle.Done()
 				if processErr := lifecycle.Err(); processErr != nil && ctx.Err() == nil {
@@ -481,7 +468,7 @@ func run() (resultErr error) {
 		}
 	}
 	observe.Info(ctx, "内置 AI 执行者（Python Agent）已经就绪",
-		observe.StringAttr("runtime_id", loader.AgentRuntimeID),
+		observe.StringAttr("runtime_id", agent.RuntimeID),
 		observe.StringAttr("address", config.agentAddress),
 		observe.BoolAttr("managed_process", config.manageAgent),
 	)
@@ -506,7 +493,7 @@ func run() (resultErr error) {
 		MaxRunAttempts:     3,
 		QueueCapacity:      128,
 	})
-	if err := subagent.Register(reg, orchestrator); err != nil {
+	if err := agent.Register(reg, orchestrator); err != nil {
 		return fmt.Errorf("register governed Subagent service: %w", err)
 	}
 	observe.Info(ctx, "校园服务与受治理子 Run Capability 注册完成",
@@ -575,12 +562,7 @@ func run() (resultErr error) {
 		webAccess.StopAccepting()
 		httpErr := server.Shutdown(shutdownContext)
 		runErr := webAccess.Shutdown(shutdownContext)
-		var runtimeErr error
-		if runtimeManager != nil {
-			runtimeErr = runtimeManager.Shutdown(shutdownContext)
-			runtimeManager = nil
-		}
-		if err := errors.Join(httpErr, runErr, runtimeErr); err != nil {
+		if err := errors.Join(httpErr, runErr); err != nil {
 			return fmt.Errorf("graceful shutdown: %w", err)
 		}
 		observe.Info(context.Background(), "AI珞（爱珞）服务已经安全关闭")
@@ -637,7 +619,7 @@ func loadConfig() (config, error) {
 	result := config{
 		httpAddress:        envOr("AILUO_HTTP_ADDRESS", "127.0.0.1:8080"),
 		agentAddress:       envOr("AILUO_AGENT_ADDRESS", "127.0.0.1:50051"),
-		pythonPath:         envOr("AILUO_PYTHON", loader.DefaultAgentPythonPath(".")),
+		pythonPath:         envOr("AILUO_PYTHON", agent.DefaultPythonPath(".")),
 		databasePath:       envOr("AILUO_DATABASE_PATH", "var/ailuo.db"),
 		model:              os.Getenv("AILUO_MODEL"),
 		manageAgent:        manageAgent,
@@ -686,25 +668,28 @@ func loadConfig() (config, error) {
 	return result, nil
 }
 
-func configureInstalledRuntimes(ctx context.Context, cfg config, target *registry.Registry) (*loader.Manager, error) {
+// configureInstalledRuntimes 发现安装目录中的 installed 包，返回加入统一 Loader
+// 的宿主、待注册记录与 pin 运行时标识。安装目录未配置时返回空切片（统一 Loader
+// 只装配内置包）；配置了安装目录但没有 hosted 宿主地址时 fail-closed。
+func configureInstalledRuntimes(ctx context.Context, cfg config) ([]loader.Host, []loader.InstalledRecord, []string, error) {
 	if cfg.runtimeInstallRoot == "" {
-		return nil, nil
+		return nil, nil, nil, nil
 	}
 	catalog, err := loader.NewCatalog(cfg.runtimeInstallRoot)
 	if err != nil {
-		return nil, fmt.Errorf("create installed runtime catalog: %w", err)
+		return nil, nil, nil, fmt.Errorf("create installed runtime catalog: %w", err)
 	}
 	records, err := catalog.Discover(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("discover installed runtimes: %w", err)
+		return nil, nil, nil, fmt.Errorf("discover installed runtimes: %w", err)
 	}
 	if len(records) == 0 {
 		observe.Info(ctx, "运行时安装目录校验完成",
 			observe.IntAttr("runtime_count", 0),
 		)
-		return nil, nil
+		return nil, nil, nil, nil
 	}
-	hosts := make(map[string]loader.Host, 2)
+	hosts := make([]loader.Host, 0, 2)
 	hostedCount := 0
 	isolatedCount := 0
 	pinnedIDs := make([]string, 0, len(records))
@@ -715,7 +700,7 @@ func configureInstalledRuntimes(ctx context.Context, cfg config, target *registr
 		case loader.ModeIsolated:
 			isolatedCount++
 		default:
-			return nil, loader.ErrUnsupportedMode
+			return nil, nil, nil, loader.ErrUnsupportedMode
 		}
 		if record.Runtime.Pin {
 			pinnedIDs = append(pinnedIDs, record.Runtime.ID)
@@ -723,7 +708,7 @@ func configureInstalledRuntimes(ctx context.Context, cfg config, target *registr
 	}
 	if hostedCount > 0 {
 		if cfg.runtimeHostAddress == "" {
-			return nil, fmt.Errorf("configuration error: AILUO_RUNTIME_HOST_ADDRESS is required for installed hosted runtimes")
+			return nil, nil, nil, fmt.Errorf("configuration error: AILUO_RUNTIME_HOST_ADDRESS is required for installed hosted runtimes")
 		}
 		host, err := loader.NewGRPCHost(loader.GRPCHostConfig{
 			Mode: loader.ModeHosted, Address: cfg.runtimeHostAddress,
@@ -733,9 +718,9 @@ func configureInstalledRuntimes(ctx context.Context, cfg config, target *registr
 			MaxConcurrent:   64,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("configure hosted runtime boundary: %w", err)
+			return nil, nil, nil, fmt.Errorf("configure hosted runtime boundary: %w", err)
 		}
-		hosts[loader.ModeHosted] = host
+		hosts = append(hosts, host)
 	}
 	if isolatedCount > 0 {
 		host, err := loader.NewIsolatedProcessHost(loader.IsolatedProcessHostConfig{
@@ -746,34 +731,17 @@ func configureInstalledRuntimes(ctx context.Context, cfg config, target *registr
 			TerminateGrace:   2 * time.Second,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("configure isolated runtime boundary: %w", err)
+			return nil, nil, nil, fmt.Errorf("configure isolated runtime boundary: %w", err)
 		}
-		hosts[loader.ModeIsolated] = host
+		hosts = append(hosts, host)
 	}
-	manager, err := loader.New(hosts)
-	if err != nil {
-		return nil, fmt.Errorf("create runtime loader: %w", err)
-	}
-	if err := loader.RegisterInstalled(manager, target, records); err != nil {
-		shutdownContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		return nil, errors.Join(fmt.Errorf("register installed runtimes: %w", err), manager.Shutdown(shutdownContext))
-	}
-	if len(pinnedIDs) > 0 {
-		concurrency := min(len(pinnedIDs), 4)
-		if err := manager.Warmup(ctx, pinnedIDs, concurrency); err != nil {
-			shutdownContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
-			return nil, errors.Join(fmt.Errorf("warm installed runtimes: %w", err), manager.Shutdown(shutdownContext))
-		}
-	}
-	observe.Info(ctx, "已安装运行时恢复完成",
+	observe.Info(ctx, "已安装运行时发现完成",
 		observe.IntAttr("runtime_count", len(records)),
 		observe.IntAttr("hosted_count", hostedCount),
 		observe.IntAttr("isolated_count", isolatedCount),
 		observe.IntAttr("pinned_count", len(pinnedIDs)),
 	)
-	return manager, nil
+	return hosts, records, pinnedIDs, nil
 }
 
 func envOr(name, fallback string) string {

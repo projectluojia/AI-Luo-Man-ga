@@ -1,4 +1,4 @@
-package loader_test
+package agent_test
 
 import (
 	"context"
@@ -10,7 +10,9 @@ import (
 
 	agentv1 "github.com/projectluojia/AI-Luo-Man-ga/gen/agentv1"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/agentprotocol"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/agent"
 
 	"google.golang.org/grpc"
 )
@@ -28,10 +30,10 @@ func (s *fakeAgentServer) Health(context.Context, *agentv1.HealthRequest) (*agen
 	}, nil
 }
 
-// TestAgentHostLoadsConnectedAgent 验证内置 agent 以 isolated Runtime 纳管：
+// TestHostLoadsConnectedAgent 验证内置 agent 以 isolated Runtime 纳管：
 // 连接模式（内核不拥有进程）下 Load → 加载期健康检查 → 客户端暴露 → Invoke 拒绝
 // （agent 是 Capability 消费者）→ Stop 关闭连接。
-func TestAgentHostLoadsConnectedAgent(t *testing.T) {
+func TestHostLoadsConnectedAgent(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -41,9 +43,9 @@ func TestAgentHostLoadsConnectedAgent(t *testing.T) {
 	go func() { _ = server.Serve(listener) }()
 	defer server.Stop()
 
-	host, err := loader.NewAgentHost(loader.AgentHostConfig{
-		Resolve: func(context.Context) (loader.AgentSpec, error) {
-			return loader.AgentSpec{Address: listener.Addr().String()}, nil
+	host, err := agent.NewHost(agent.Config{
+		Resolve: func(context.Context) (agent.Spec, error) {
+			return agent.Spec{Address: listener.Addr().String()}, nil
 		},
 		Spawn:          false,
 		Model:          "test-model",
@@ -54,29 +56,29 @@ func TestAgentHostLoadsConnectedAgent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manager, err := loader.New(map[string]loader.Host{loader.ModeIsolated: host})
+	manager, err := loader.New(host)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := manager.Register(host.Manifest()); err != nil {
+	if err := manager.Register(context.Background(), host.Manifest()); err != nil {
 		t.Fatal(err)
 	}
-	if err := manager.Warmup(context.Background(), []string{loader.AgentRuntimeID}, 1); err != nil {
+	if err := manager.Warmup(context.Background(), []string{agent.RuntimeID}, 1); err != nil {
 		t.Fatalf("warmup: %v", err)
 	}
-	lease, err := manager.Acquire(context.Background(), loader.AgentRuntimeID)
+	lease, err := manager.Acquire(context.Background(), agent.RuntimeID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	runtime := lease.Runtime()
-	if _, ok := runtime.(loader.AgentClientProvider); !ok {
+	if _, ok := runtime.(agent.ClientProvider); !ok {
 		t.Fatal("agent runtime does not expose an agent client")
 	}
 	if _, err := runtime.Describe(context.Background()); err != nil {
 		t.Fatalf("describe: %v", err)
 	}
 	// agent 不服务请求/响应能力调用。
-	if _, err := runtime.Invoke(context.Background(), hostedTestRequest("agent.call"), json.RawMessage(`{}`)); !errors.Is(err, loader.ErrUnsupportedMode) {
+	if _, err := runtime.Invoke(context.Background(), testRequest("agent.call"), json.RawMessage(`{}`)); !errors.Is(err, loader.ErrUnsupportedMode) {
 		t.Fatalf("invoke error = %v, want ErrUnsupportedMode", err)
 	}
 	// 释放租约后再关闭 manager：Shutdown 等待 inFlight 归零。
@@ -88,16 +90,23 @@ func TestAgentHostLoadsConnectedAgent(t *testing.T) {
 	}
 }
 
-// TestAgentHostRejectsInvalidConfiguration 验证非法配置 fail-closed。
-func TestAgentHostRejectsInvalidConfiguration(t *testing.T) {
-	if _, err := loader.NewAgentHost(loader.AgentHostConfig{}); err == nil {
+// TestHostRejectsInvalidConfiguration 验证非法配置 fail-closed。
+func TestHostRejectsInvalidConfiguration(t *testing.T) {
+	if _, err := agent.NewHost(agent.Config{}); err == nil {
 		t.Fatal("nil resolve must fail")
 	}
-	if _, err := loader.NewAgentHost(loader.AgentHostConfig{
-		Resolve: func(context.Context) (loader.AgentSpec, error) {
-			return loader.AgentSpec{}, nil
+	if _, err := agent.NewHost(agent.Config{
+		Resolve: func(context.Context) (agent.Spec, error) {
+			return agent.Spec{}, nil
 		},
 	}); err == nil {
 		t.Fatal("missing model must fail")
+	}
+}
+
+func testRequest(toolID string) contracts.RequestContext {
+	return contracts.RequestContext{
+		AppID: "app.campus", EchoID: "echo-1", RequestID: "request-1",
+		ToolID: toolID,
 	}
 }

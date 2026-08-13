@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/jsonutil"
 	kernelecho "github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/identity"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
@@ -76,7 +77,7 @@ func (s *Server) ingest(writer http.ResponseWriter, request *http.Request) {
 		access.WriteJSON(writer, http.StatusBadRequest, map[string]string{"code": "invalid_request", "message": "请求体不是有效的 JSON 对象"})
 		return
 	}
-	if err := access.EnsureJSONEOF(decoder); err != nil {
+	if err := jsonutil.EnsureEOF(decoder); err != nil {
 		observe.Warn(request.Context(), "平台事件请求体包含多余内容", observe.StringAttr("reason", err.Error()))
 		access.WriteJSON(writer, http.StatusBadRequest, map[string]string{"code": "invalid_request", "message": "请求体只能包含一个 JSON 对象"})
 		return

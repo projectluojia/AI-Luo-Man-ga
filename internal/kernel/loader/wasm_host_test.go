@@ -93,7 +93,7 @@ func TestWasmHostRejectsInvalidConfiguration(t *testing.T) {
 
 func TestWasmHostServesStringToolsThroughLoader(t *testing.T) {
 	host := newStringToolHost(t)
-	manager, err := loader.New(map[string]loader.Host{loader.ModeHosted: host})
+	manager, err := loader.New(host)
 	if err != nil {
 		t.Fatalf("loader.New: %v", err)
 	}
@@ -101,7 +101,7 @@ func TestWasmHostServesStringToolsThroughLoader(t *testing.T) {
 	manifest := loader.Manifest{
 		ID: "strings.tool", Version: "1.0.0", Mode: loader.ModeHosted, LockedDigest: digest,
 	}
-	if err := manager.Register(manifest); err != nil {
+	if err := manager.Register(ctx, manifest); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	if err := manager.EnsureLoaded(ctx, "strings.tool"); err != nil {

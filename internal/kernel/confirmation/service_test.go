@@ -56,7 +56,7 @@ func openService(t *testing.T) (*confirmation.Service, *sqlite.Store, *fakeClock
 	})
 	seedEchoRun(t, store, "app", "echo", "run")
 	clock := newFakeClock()
-	return confirmation.NewService(store, confirmation.WithClock(clock.current)), store, clock
+	return confirmation.NewService(store, confirmation.Config{Now: clock.current}), store, clock
 }
 
 func seedEchoRun(t *testing.T, store *sqlite.Store, appID, echoID, runID string) {
@@ -162,7 +162,7 @@ func TestServiceConfirmationSurvivesStoreReopen(t *testing.T) {
 	}
 	seedEchoRun(t, store, "app", "echo", "run")
 	clock := newFakeClock()
-	service := confirmation.NewService(store, confirmation.WithClock(clock.current))
+	service := confirmation.NewService(store, confirmation.Config{Now: clock.current})
 	record := requestConfirmation(t, service, "app", "echo", "run", "call-1",
 		confirmation.RequestSpec{
 			CapabilityID: "campus.bus.notify", TargetType: confirmation.TargetTypeCapability,
@@ -180,7 +180,7 @@ func TestServiceConfirmationSurvivesStoreReopen(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer reopened.Close()
-	serviceAfter := confirmation.NewService(reopened, confirmation.WithClock(clock.current))
+	serviceAfter := confirmation.NewService(reopened, confirmation.Config{Now: clock.current})
 	resolved, err := serviceAfter.Resolve(context.Background(), "app", record.ConfirmationID)
 	if err != nil {
 		t.Fatalf("resolve after reopen: %v", err)
@@ -703,10 +703,10 @@ func TestDispatcherExecutesApprovedSideEffectExactlyOnce(t *testing.T) {
 		executions++
 		return json.RawMessage(`{"sent":true}`), nil
 	})
-	dispatcher := runtime.NewDispatcher(reg, policy,
-		runtime.WithIdempotencyStore(store),
-		runtime.WithConfirmationVerifier(service),
-	)
+	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{
+		IdempotencyStore:     store,
+		ConfirmationVerifier: service,
+	})
 
 	request := validRequest("run")
 	request.ConfirmationID = record.ConfirmationID
@@ -763,10 +763,10 @@ func TestDispatcherRejectsUnapprovedConfirmation(t *testing.T) {
 		t.Error("unapproved capability must never execute")
 		return json.RawMessage(`{}`), nil
 	})
-	dispatcher := runtime.NewDispatcher(reg, policy,
-		runtime.WithIdempotencyStore(store),
-		runtime.WithConfirmationVerifier(service),
-	)
+	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{
+		IdempotencyStore:     store,
+		ConfirmationVerifier: service,
+	})
 
 	for name, confirmationID := range map[string]string{
 		"等待中":    waiting.ConfirmationID,

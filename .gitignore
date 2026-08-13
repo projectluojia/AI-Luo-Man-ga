@@ -18,3 +18,5 @@ dist/
 .review-gocache/
 .codegraph/
 .uv-cache/
+
+server.log

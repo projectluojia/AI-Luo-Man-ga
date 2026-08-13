@@ -121,11 +121,11 @@ func TestRuntimeHostProtocolServerRoundTrip(t *testing.T) {
 	dialer, _ := startRuntimeHost(t, protocolServer)
 	var verifies atomic.Int32
 	host := newRuntimeGRPCHost(t, loader.ModeHosted, dialer, &verifies)
-	manager, err := loader.New(map[string]loader.Host{loader.ModeHosted: host})
+	manager, err := loader.New(host)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := manager.Register(runtimeManifest("hosted.server", loader.ModeHosted)); err != nil {
+	if err := manager.Register(context.Background(), runtimeManifest("hosted.server", loader.ModeHosted)); err != nil {
 		t.Fatal(err)
 	}
 	result, err := manager.Handler("hosted.server")(
@@ -302,11 +302,11 @@ func TestRuntimeHostServesHostedPackageOverProtocol(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manager, err := loader.New(map[string]loader.Host{loader.ModeHosted: host})
+	manager, err := loader.New(host)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := manager.Register(runtimeManifest("strings.tool", loader.ModeHosted)); err != nil {
+	if err := manager.Register(context.Background(), runtimeManifest("strings.tool", loader.ModeHosted)); err != nil {
 		t.Fatal(err)
 	}
 	result, err := manager.Handler("strings.tool")(
@@ -354,11 +354,11 @@ func TestRuntimeHostEnforcesExecutionBudgetOverProtocol(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manager, err := loader.New(map[string]loader.Host{loader.ModeHosted: host})
+	manager, err := loader.New(host)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := manager.Register(runtimeManifest("busy.host", loader.ModeHosted)); err != nil {
+	if err := manager.Register(context.Background(), runtimeManifest("busy.host", loader.ModeHosted)); err != nil {
 		t.Fatal(err)
 	}
 	// 预编译（race 下首次编译可达数秒），Invoke 只测量执行与预算终止。

@@ -1,5 +1,7 @@
 // Package campustest 提供校园服务 hosted 装配的共享测试辅助，
-// 供 campus、echo、e2e 等包以真实 hosted 链路验证能力。
+// 供 campus、echo、e2e 等包以真实 hosted 链路验证能力。装配入口（宿主构造与
+// 安装清单）由 campus 包单一提供（campus.Host/campus.Record），本包只负责
+// 测试专属的 Loader 生命周期与预热。
 package campustest
 
 import (
@@ -7,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/campus"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/campus/bus"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/tools/bus"
 )
 
 // RegisterHosted 以 hosted 包形态装配校园服务：内置 wasm 工件经进程内沙箱执行，
@@ -18,14 +20,11 @@ import (
 // 避免占用 Run 的 deadline）。
 func RegisterHosted(t testing.TB, target *registry.Registry, store bus.Store) {
 	t.Helper()
-	host, err := loader.NewWasmHost(loader.WasmHostConfig{
-		ReadArtifact:  campus.ReadArtifact,
-		HostFunctions: campus.HostedFunctions(store),
-	})
+	host, err := campus.Host(store)
 	if err != nil {
-		t.Fatalf("NewWasmHost: %v", err)
+		t.Fatalf("campus.Host: %v", err)
 	}
-	manager, err := loader.New(map[string]loader.Host{loader.ModeHosted: host})
+	manager, err := loader.New(host)
 	if err != nil {
 		t.Fatalf("loader.New: %v", err)
 	}
@@ -36,13 +35,7 @@ func RegisterHosted(t testing.TB, target *registry.Registry, store bus.Store) {
 			t.Errorf("loader shutdown: %v", err)
 		}
 	})
-	record := loader.InstalledRecord{
-		Runtime:      campus.Manifest(),
-		Tools:        campus.ToolSpecs(),
-		Service:      campus.ServiceSpec(),
-		Capabilities: campus.CapabilitySpecs(),
-	}
-	if err := loader.RegisterInstalled(manager, target, []loader.InstalledRecord{record}); err != nil {
+	if err := loader.RegisterInstalled(context.Background(), manager, target, []loader.InstalledRecord{campus.Record()}); err != nil {
 		t.Fatalf("RegisterInstalled: %v", err)
 	}
 	warmupContext, cancel := context.WithTimeout(context.Background(), 60*time.Second)

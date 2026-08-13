@@ -14,9 +14,6 @@ import (
 	"time"
 
 	agentv1 "github.com/projectluojia/AI-Luo-Man-ga/gen/agentv1"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/campus"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/campus/bus"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/campustest"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/agentprotocol"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/appconfig"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
@@ -24,10 +21,13 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/session"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/subagent"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/agent"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus/campustest"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/blob"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/memory"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/tools/bus"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -142,7 +142,7 @@ func (a *cancellingNestedAgent) Run(stream agentv1.AgentRuntime_RunServer) error
 	if err := stream.Send(&agentv1.AgentFrame{
 		EchoId: start.EchoId, RunId: start.RunId, Sequence: 2,
 		Body: &agentv1.AgentFrame_CapabilityCall{CapabilityCall: &agentv1.CapabilityCall{
-			CallId: "delegate-call", CapabilityId: subagent.CapabilityID,
+			CallId: "delegate-call", CapabilityId: agent.CapabilityID,
 			PayloadJson: []byte(`{"task":"等待取消","capability_ids":["campus.bus.routes.list"]}`),
 		}},
 	}); err != nil {
@@ -196,7 +196,7 @@ func (a *nestedRunAgent) Run(stream agentv1.AgentRuntime_RunServer) error {
 	if err := stream.Send(&agentv1.AgentFrame{
 		EchoId: startFrame.EchoId, RunId: startFrame.RunId, Sequence: 3,
 		Body: &agentv1.AgentFrame_CapabilityCall{CapabilityCall: &agentv1.CapabilityCall{
-			CallId: "nested-delegate-call", CapabilityId: subagent.CapabilityID, PayloadJson: []byte(`{"task":"越权嵌套"}`),
+			CallId: "nested-delegate-call", CapabilityId: agent.CapabilityID, PayloadJson: []byte(`{"task":"越权嵌套"}`),
 		}},
 	}); err != nil {
 		return err
@@ -220,7 +220,7 @@ func (a *nestedRunAgent) Run(stream agentv1.AgentRuntime_RunServer) error {
 func (a *nestedRunAgent) runRoot(stream agentv1.AgentRuntime_RunServer, start *agentv1.AgentFrame) error {
 	hasSubagent := false
 	for _, capability := range start.GetStartRun().GetCapabilities() {
-		if capability.GetId() == subagent.CapabilityID {
+		if capability.GetId() == agent.CapabilityID {
 			hasSubagent = true
 		}
 	}
@@ -233,7 +233,7 @@ func (a *nestedRunAgent) runRoot(stream agentv1.AgentRuntime_RunServer, start *a
 	if err := stream.Send(&agentv1.AgentFrame{
 		EchoId: start.EchoId, RunId: start.RunId, Sequence: 2,
 		Body: &agentv1.AgentFrame_CapabilityCall{CapabilityCall: &agentv1.CapabilityCall{
-			CallId: "delegate-call", CapabilityId: subagent.CapabilityID,
+			CallId: "delegate-call", CapabilityId: agent.CapabilityID,
 			PayloadJson: []byte(`{"task":"只查询线路并总结","capability_ids":["campus.bus.routes.list"]}`),
 		}},
 	}); err != nil {
@@ -743,7 +743,7 @@ func TestOrchestratorRunsAgentCapabilityLoop(t *testing.T) {
 	reg := registry.New()
 	policy := runtime.NewStaticAppPolicy()
 	policy.Enable(campus.AppID, campus.BusRouteListCapabilityID)
-	dispatcher := runtime.NewDispatcher(reg, policy)
+	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{})
 	campustest.RegisterHosted(t, reg, busStore)
 	orchestrator := kernelecho.NewOrchestrator(
 		agentv1.NewAgentRuntimeClient(connection), reg, dispatcher, policy, store,
@@ -782,8 +782,8 @@ func TestOrchestratorRunsAgentCapabilityLoop(t *testing.T) {
 func TestOrchestratorAssemblesSessionContextIntoRun(t *testing.T) {
 	listener := bufconn.Listen(1 << 20)
 	grpcServer := grpc.NewServer()
-	agent := &configCaptureAgent{starts: make(chan *agentv1.StartRun, 1)}
-	agentv1.RegisterAgentRuntimeServer(grpcServer, agent)
+	agentServer := &configCaptureAgent{starts: make(chan *agentv1.StartRun, 1)}
+	agentv1.RegisterAgentRuntimeServer(grpcServer, agentServer)
 	go grpcServer.Serve(listener)
 	defer grpcServer.Stop()
 	connection, err := grpc.DialContext(t.Context(), "bufnet",
@@ -824,7 +824,7 @@ func TestOrchestratorAssemblesSessionContextIntoRun(t *testing.T) {
 	reg := registry.New()
 	policy := runtime.NewStaticAppPolicy()
 	policy.Enable(campus.AppID, campus.BusRouteListCapabilityID)
-	dispatcher := runtime.NewDispatcher(reg, policy)
+	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{})
 	campustest.RegisterHosted(t, reg, memory.NewBusStore())
 	orchestrator := kernelecho.NewOrchestrator(
 		agentv1.NewAgentRuntimeClient(connection), reg, dispatcher, policy, store,
@@ -841,7 +841,7 @@ func TestOrchestratorAssemblesSessionContextIntoRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	start := <-agent.starts
+	start := <-agentServer.starts
 	if !strings.Contains(start.GetSystemPrompt(), "第一条历史") || !strings.Contains(start.GetSystemPrompt(), "第二条历史") {
 		t.Fatalf("StartRun 系统提示缺少会话历史: %q", start.GetSystemPrompt())
 	}
@@ -880,8 +880,8 @@ func TestOrchestratorAssemblesSessionContextIntoRun(t *testing.T) {
 func TestOrchestratorRunsOneGovernedChildWithNarrowedProjection(t *testing.T) {
 	listener := bufconn.Listen(1 << 20)
 	grpcServer := grpc.NewServer()
-	agent := &nestedRunAgent{testing: t}
-	agentv1.RegisterAgentRuntimeServer(grpcServer, agent)
+	agentServer := &nestedRunAgent{testing: t}
+	agentv1.RegisterAgentRuntimeServer(grpcServer, agentServer)
 	go grpcServer.Serve(listener)
 	defer grpcServer.Stop()
 	ctx := context.Background()
@@ -904,8 +904,8 @@ func TestOrchestratorRunsOneGovernedChildWithNarrowedProjection(t *testing.T) {
 	reg := registry.New()
 	policy := runtime.NewStaticAppPolicy()
 	policy.Enable(campus.AppID, campus.BusRouteListCapabilityID)
-	policy.Enable(campus.AppID, subagent.CapabilityID)
-	dispatcher := runtime.NewDispatcher(reg, policy, runtime.WithIdempotencyStore(store))
+	policy.Enable(campus.AppID, agent.CapabilityID)
+	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{IdempotencyStore: store})
 	campustest.RegisterHosted(t, reg, busStore)
 	orchestrator := kernelecho.NewOrchestrator(
 		agentv1.NewAgentRuntimeClient(connection), reg, dispatcher, policy, store,
@@ -916,7 +916,7 @@ func TestOrchestratorRunsOneGovernedChildWithNarrowedProjection(t *testing.T) {
 			Context: newSessionSource(t, store),
 		},
 	)
-	if err := subagent.Register(reg, orchestrator); err != nil {
+	if err := agent.Register(reg, orchestrator); err != nil {
 		t.Fatal(err)
 	}
 	var delivered []kernelecho.Event
@@ -967,7 +967,7 @@ func TestOrchestratorRunsOneGovernedChildWithNarrowedProjection(t *testing.T) {
 	}
 	delegationAudits := 0
 	for _, audit := range audits {
-		if audit.CapabilityID != subagent.CapabilityID {
+		if audit.CapabilityID != agent.CapabilityID {
 			continue
 		}
 		delegationAudits++
@@ -987,8 +987,8 @@ func TestOrchestratorRunsOneGovernedChildWithNarrowedProjection(t *testing.T) {
 func TestParentCancellationPropagatesAndPersistsChildThenRootTerminalState(t *testing.T) {
 	listener := bufconn.Listen(1 << 20)
 	grpcServer := grpc.NewServer()
-	agent := &cancellingNestedAgent{childStarted: make(chan struct{})}
-	agentv1.RegisterAgentRuntimeServer(grpcServer, agent)
+	agentServer := &cancellingNestedAgent{childStarted: make(chan struct{})}
+	agentv1.RegisterAgentRuntimeServer(grpcServer, agentServer)
 	go grpcServer.Serve(listener)
 	defer grpcServer.Stop()
 	connection, err := grpc.DialContext(context.Background(), "bufnet",
@@ -1007,8 +1007,8 @@ func TestParentCancellationPropagatesAndPersistsChildThenRootTerminalState(t *te
 	reg := registry.New()
 	policy := runtime.NewStaticAppPolicy()
 	policy.Enable(campus.AppID, campus.BusRouteListCapabilityID)
-	policy.Enable(campus.AppID, subagent.CapabilityID)
-	dispatcher := runtime.NewDispatcher(reg, policy, runtime.WithIdempotencyStore(store))
+	policy.Enable(campus.AppID, agent.CapabilityID)
+	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{IdempotencyStore: store})
 	campustest.RegisterHosted(t, reg, memory.NewBusStore())
 	orchestrator := kernelecho.NewOrchestrator(
 		agentv1.NewAgentRuntimeClient(connection), reg, dispatcher, policy, store,
@@ -1019,12 +1019,12 @@ func TestParentCancellationPropagatesAndPersistsChildThenRootTerminalState(t *te
 			Context: newSessionSource(t, store),
 		},
 	)
-	if err := subagent.Register(reg, orchestrator); err != nil {
+	if err := agent.Register(reg, orchestrator); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
-		<-agent.childStarted
+		<-agentServer.childStarted
 		cancel()
 	}()
 	echoID, err := orchestrator.Run(ctx, kernelecho.RunRequest{
@@ -1051,8 +1051,8 @@ func TestParentCancellationPropagatesAndPersistsChildThenRootTerminalState(t *te
 func TestOrchestratorRecoversHistoricalAppConfigRevision(t *testing.T) {
 	listener := bufconn.Listen(1 << 20)
 	grpcServer := grpc.NewServer()
-	agent := &configCaptureAgent{starts: make(chan *agentv1.StartRun, 1)}
-	agentv1.RegisterAgentRuntimeServer(grpcServer, agent)
+	agentServer := &configCaptureAgent{starts: make(chan *agentv1.StartRun, 1)}
+	agentv1.RegisterAgentRuntimeServer(grpcServer, agentServer)
 	go grpcServer.Serve(listener)
 	t.Cleanup(grpcServer.Stop)
 	connection, err := grpc.DialContext(t.Context(), "bufnet",
@@ -1077,7 +1077,7 @@ func TestOrchestratorRecoversHistoricalAppConfigRevision(t *testing.T) {
 		t.Fatal(err)
 	}
 	reg := registry.New()
-	dispatcher := runtime.NewDispatcher(reg, policy)
+	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{})
 	orchestrator := kernelecho.NewOrchestrator(
 		agentv1.NewAgentRuntimeClient(connection), reg, dispatcher, policy, store,
 		kernelecho.Config{AppID: campus.AppID, AppConfigSource: store, RunTimeout: 5 * time.Second, Context: newSessionSource(t, store)},
@@ -1101,7 +1101,7 @@ func TestOrchestratorRecoversHistoricalAppConfigRevision(t *testing.T) {
 	if err := orchestrator.RunExisting(t.Context(), echoID, kernelecho.RunRequest{}, nil); err != nil {
 		t.Fatal(err)
 	}
-	start := <-agent.starts
+	start := <-agentServer.starts
 	if start.GetModel() != historical.Model ||
 		start.GetTimezone() != historical.Timezone ||
 		start.GetMaxSteps() != historical.MaxSteps ||
@@ -1180,7 +1180,7 @@ func TestOrchestratorRevalidatesCapabilityPolicyAfterProjection(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = connection.Close() })
-	dispatcher := runtime.NewDispatcher(reg, policy)
+	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{})
 	orchestrator := kernelecho.NewOrchestrator(
 		agentv1.NewAgentRuntimeClient(connection), reg, dispatcher, policy, store,
 		kernelecho.Config{AppID: campus.AppID, AppConfigSource: store, RunTimeout: 5 * time.Second, Context: newSessionSource(t, store)},
@@ -1279,7 +1279,7 @@ func TestOrchestratorAcceptedRunScopeCannotExpandAfterGrant(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = connection.Close() })
-	dispatcher := runtime.NewDispatcher(reg, policy)
+	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{})
 	orchestrator := kernelecho.NewOrchestrator(
 		agentv1.NewAgentRuntimeClient(connection), reg, dispatcher, policy, store,
 		kernelecho.Config{AppID: campus.AppID, AppConfigSource: store, RunTimeout: 5 * time.Second, Context: newSessionSource(t, store)},
@@ -1315,8 +1315,8 @@ func orchestratorAppConfig() appconfig.Config {
 func TestOrchestratorDurablyRetriesOnlyRetryableRunAttempts(t *testing.T) {
 	listener := bufconn.Listen(1 << 20)
 	grpcServer := grpc.NewServer()
-	agent := &retryOnceAgent{}
-	agentv1.RegisterAgentRuntimeServer(grpcServer, agent)
+	agentServer := &retryOnceAgent{}
+	agentv1.RegisterAgentRuntimeServer(grpcServer, agentServer)
 	go grpcServer.Serve(listener)
 	defer grpcServer.Stop()
 	connection, err := grpc.DialContext(context.Background(), "bufnet",
@@ -1335,7 +1335,7 @@ func TestOrchestratorDurablyRetriesOnlyRetryableRunAttempts(t *testing.T) {
 	reg := registry.New()
 	policy := runtime.NewStaticAppPolicy()
 	orchestrator := kernelecho.NewOrchestrator(
-		agentv1.NewAgentRuntimeClient(connection), reg, runtime.NewDispatcher(reg, policy), policy, store,
+		agentv1.NewAgentRuntimeClient(connection), reg, runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{}), policy, store,
 		kernelecho.Config{
 			AppID: campus.AppID, Model: "test-model", SystemPrompt: "test", Timezone: "Asia/Shanghai",
 			MaxSteps: 4, RunTimeout: time.Second, MaxRunAttempts: 2,
@@ -1413,7 +1413,7 @@ func TestOrchestratorRenewsActiveRunLease(t *testing.T) {
 	reg := registry.New()
 	policy := runtime.NewStaticAppPolicy()
 	orchestrator := kernelecho.NewOrchestrator(
-		agentv1.NewAgentRuntimeClient(connection), reg, runtime.NewDispatcher(reg, policy), policy, store,
+		agentv1.NewAgentRuntimeClient(connection), reg, runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{}), policy, store,
 		kernelecho.Config{
 			AppID: campus.AppID, Model: "test-model", SystemPrompt: "test", Timezone: "Asia/Shanghai",
 			MaxSteps: 4, RunTimeout: 2 * time.Second, LeaseDuration: 150 * time.Millisecond,
@@ -1474,7 +1474,7 @@ func TestOrchestratorDoesNotAutomaticallyRetryAfterSideEffect(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	dispatcher := runtime.NewDispatcher(reg, policy, runtime.WithIdempotencyStore(store))
+	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{IdempotencyStore: store})
 	orchestrator := kernelecho.NewOrchestrator(
 		agentv1.NewAgentRuntimeClient(connection), reg, dispatcher, policy, store,
 		kernelecho.Config{
@@ -1522,7 +1522,7 @@ func TestOrchestratorRejectsDuplicateAgentCallBeforeSecondEffect(t *testing.T) {
 	reg := registry.New()
 	policy := runtime.NewStaticAppPolicy()
 	policy.Enable(campus.AppID, campus.BusRouteListCapabilityID)
-	dispatcher := runtime.NewDispatcher(reg, policy, runtime.WithIdempotencyStore(store))
+	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{IdempotencyStore: store})
 	campustest.RegisterHosted(t, reg, busStore)
 	orchestrator := kernelecho.NewOrchestrator(
 		agentv1.NewAgentRuntimeClient(connection), reg, dispatcher, policy, store,
@@ -1572,7 +1572,7 @@ func TestOrchestratorRejectsFramesAfterTerminalWithoutPublishingFinal(t *testing
 	reg := registry.New()
 	policy := runtime.NewStaticAppPolicy()
 	orchestrator := kernelecho.NewOrchestrator(
-		agentv1.NewAgentRuntimeClient(connection), reg, runtime.NewDispatcher(reg, policy), policy, store,
+		agentv1.NewAgentRuntimeClient(connection), reg, runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{}), policy, store,
 		kernelecho.Config{AppID: campus.AppID, Model: "test-model", SystemPrompt: "test", Timezone: "Asia/Shanghai", MaxSteps: 4, RunTimeout: 5 * time.Second, Context: newSessionSource(t, store)},
 	)
 	echoID, err := orchestrator.Run(ctx, kernelecho.RunRequest{Message: "late", IdempotencyKey: "late-run"}, nil)
@@ -1617,7 +1617,7 @@ func TestOrchestratorRejectsSuccessfulTerminalWithoutUsage(t *testing.T) {
 	reg := registry.New()
 	policy := runtime.NewStaticAppPolicy()
 	orchestrator := kernelecho.NewOrchestrator(
-		agentv1.NewAgentRuntimeClient(connection), reg, runtime.NewDispatcher(reg, policy), policy, store,
+		agentv1.NewAgentRuntimeClient(connection), reg, runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{}), policy, store,
 		kernelecho.Config{AppID: campus.AppID, Model: "test-model", SystemPrompt: "test", Timezone: "Asia/Shanghai", MaxSteps: 4, RunTimeout: 5 * time.Second, Context: newSessionSource(t, store)},
 	)
 	echoID, err := orchestrator.Run(ctx, kernelecho.RunRequest{Message: "usage", IdempotencyKey: "missing-usage-run"}, nil)
@@ -1670,7 +1670,7 @@ func TestOrchestratorDoesNotExposeAgentOrCapabilityInternalErrors(t *testing.T) 
 	orchestrator := kernelecho.NewOrchestrator(
 		agentv1.NewAgentRuntimeClient(connection),
 		reg,
-		runtime.NewDispatcher(reg, policy),
+		runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{}),
 		policy,
 		store,
 		kernelecho.Config{

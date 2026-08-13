@@ -1,16 +1,19 @@
-package bootstrap
+// Package demo 提供 campus 服务的演示数据播种：非权威、显式标记、仅开发环境
+// 通过内核配置启用，永不进入生产数据面。
+package demo
 
 import (
 	"context"
 	"fmt"
 	"time"
 
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/campus"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/campus/bus"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/tools/bus"
 )
 
-func LoadDemoBusData(ctx context.Context, store *sqlite.Store, now time.Time) error {
+// LoadBusData 载入校巴演示快照（非权威）：八天班次、显式标记来源与有效期。
+func LoadBusData(ctx context.Context, store *sqlite.Store, now time.Time) error {
 	location, err := time.LoadLocation("Asia/Shanghai")
 	if err != nil {
 		return err
