@@ -20,6 +20,7 @@ import (
 	runtimev1 "github.com/projectluojia/AI-Luo-Man-ga/gen/runtimev1"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access/ingress"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/access/qq"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access/web"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/appconfig"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/confirmation"
@@ -538,6 +539,25 @@ func run() (resultErr error) {
 	if _, err := webAccess.Recover(ctx); err != nil {
 		return fmt.Errorf("recover durable runs: %w", err)
 	}
+	// QQ 平台适配器（可选）：OneBot v11 WebSocket 客户端，配置 AILUO_QQ_WS_URL
+	// 时启动。消息经标准 Intake 入站，回复经共享事件中心回发；适配器断线
+	// 自行重连，失败不影响内核就绪与退出。
+	if config.qqWSURL != "" {
+		qqAdapter, err := qq.New(qq.Config{
+			AppID: campus.AppID, WSURL: config.qqWSURL, Token: config.qqToken,
+		}, platformHub, webAccess.Hub(), orchestrator, store)
+		if err != nil {
+			return fmt.Errorf("configure QQ adapter: %w", err)
+		}
+		go func() {
+			if err := qqAdapter.Run(ctx); err != nil {
+				observe.Error(ctx, "QQ 适配器退出", err)
+			}
+		}()
+		observe.Info(ctx, "QQ 平台适配器已启动",
+			observe.StringAttr("ws_url", config.qqWSURL),
+		)
+	}
 	outer := http.NewServeMux()
 	outer.Handle("/api/v1/ingress/", ingressServer.Handler())
 	outer.Handle("/", webAccess.Handler())
@@ -592,6 +612,8 @@ type config struct {
 	logMaxValueLength  int
 	runtimeInstallRoot string
 	runtimeHostAddress string
+	qqWSURL            string
+	qqToken            string
 }
 
 func loadConfig() (config, error) {
@@ -633,6 +655,8 @@ func loadConfig() (config, error) {
 		logMaxValueLength:  logMaxValueLength,
 		runtimeInstallRoot: os.Getenv("AILUO_RUNTIME_INSTALL_ROOT"),
 		runtimeHostAddress: os.Getenv("AILUO_RUNTIME_HOST_ADDRESS"),
+		qqWSURL:            os.Getenv("AILUO_QQ_WS_URL"),
+		qqToken:            os.Getenv("AILUO_QQ_WS_TOKEN"),
 	}
 	// Agent 进程规格要求绝对 Python 路径（Spawn 模式校验）；默认值与用户配置
 	// 都可能为相对路径，统一在装配前解析为绝对路径。
@@ -650,6 +674,9 @@ func loadConfig() (config, error) {
 	if result.runtimeInstallRoot != "" &&
 		(!filepath.IsAbs(result.runtimeInstallRoot) || filepath.Clean(result.runtimeInstallRoot) != result.runtimeInstallRoot) {
 		return config{}, fmt.Errorf("configuration error: AILUO_RUNTIME_INSTALL_ROOT must be a clean absolute path")
+	}
+	if result.qqWSURL != "" && !strings.HasPrefix(result.qqWSURL, "ws://") && !strings.HasPrefix(result.qqWSURL, "wss://") {
+		return config{}, fmt.Errorf("configuration error: AILUO_QQ_WS_URL must be a ws:// or wss:// address")
 	}
 	if result.manageAgent {
 		secretFile := os.Getenv("AILUO_MODEL_API_KEY_FILE")

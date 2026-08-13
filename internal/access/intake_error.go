@@ -10,32 +10,37 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
 )
 
-// WriteIntakeError 把 Hub.Intake 的错误映射为稳定的 HTTP 响应。
-// 供 Web 适配器与平台 ingress 入口共用，保证跨入口的公共错误契约一致。
-func WriteIntakeError(writer http.ResponseWriter, request *http.Request, err error) {
+// IntakePublicError 把 Hub.Intake 的错误映射为稳定的公共错误（HTTP 状态、
+// 错误码与安全中文消息）。Web 适配器、平台 ingress 与进程内平台适配器
+// （QQ 等）共用，保证跨入口的公共错误契约一致，不泄露内部细节。
+func IntakePublicError(err error) (status int, code, message string) {
 	switch {
 	case errors.Is(err, ErrAppMismatch), errors.Is(err, ErrAnonymousOnly):
-		observe.Warn(request.Context(), "平台消息身份校验被拒绝", observe.StringAttr("reason", err.Error()))
-		writeError(writer, http.StatusForbidden, "platform_identity_rejected", "平台身份不被接受")
+		return http.StatusForbidden, "platform_identity_rejected", "平台身份不被接受"
 	case errors.Is(err, identity.ErrNotFound):
-		observe.Warn(request.Context(), "平台身份未绑定内部用户", observe.StringAttr("reason", err.Error()))
-		writeError(writer, http.StatusUnauthorized, "identity_not_found", "平台身份未绑定")
+		return http.StatusUnauthorized, "identity_not_found", "平台身份未绑定"
 	case errors.Is(err, identity.ErrUserDisabled):
-		observe.Warn(request.Context(), "平台身份对应的用户已禁用", observe.StringAttr("reason", err.Error()))
-		writeError(writer, http.StatusForbidden, "user_disabled", "用户已禁用")
+		return http.StatusForbidden, "user_disabled", "用户已禁用"
 	case errors.Is(err, session.ErrMessageConflict):
-		observe.Warn(request.Context(), "平台消息去重键与既有消息冲突", observe.StringAttr("reason", err.Error()))
-		writeError(writer, http.StatusConflict, "idempotency_conflict", "Idempotency-Key 已用于不同的创建请求")
+		return http.StatusConflict, "idempotency_conflict", "Idempotency-Key 已用于不同的创建请求"
 	case errors.Is(err, identity.ErrInvalid):
-		observe.Warn(request.Context(), "平台身份标识未通过规范校验", observe.StringAttr("reason", err.Error()))
-		writeError(writer, http.StatusBadRequest, "invalid_platform_identity", "平台身份标识非法")
+		return http.StatusBadRequest, "invalid_platform_identity", "平台身份标识非法"
 	case errors.Is(err, session.ErrInvalidMessage), errors.Is(err, session.ErrInvalidSession):
-		observe.Warn(request.Context(), "平台消息未通过标准消息校验", observe.StringAttr("reason", err.Error()))
-		writeError(writer, http.StatusBadRequest, "invalid_request", "标准消息校验失败")
+		return http.StatusBadRequest, "invalid_request", "标准消息校验失败"
 	default:
-		observe.Error(request.Context(), "标准消息入库失败", err)
-		writeError(writer, http.StatusInternalServerError, "internal_error", "消息入库失败")
+		return http.StatusInternalServerError, "internal_error", "消息入库失败"
 	}
+}
+
+// WriteIntakeError 把 Hub.Intake 的错误写为稳定的 HTTP 响应。
+func WriteIntakeError(writer http.ResponseWriter, request *http.Request, err error) {
+	status, code, message := IntakePublicError(err)
+	if status >= 500 {
+		observe.Error(request.Context(), "标准消息入库失败", err)
+	} else {
+		observe.Warn(request.Context(), "平台消息入库被拒绝", observe.StringAttr("reason", err.Error()))
+	}
+	writeError(writer, status, code, message)
 }
 
 // writeError 输出稳定的 JSON 错误响应。
