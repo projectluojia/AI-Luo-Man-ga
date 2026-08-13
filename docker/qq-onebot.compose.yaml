@@ -1,0 +1,25 @@
+# QQ OneBot v11 服务端（NapCat）容器编排。
+# 内核 QQ 适配器（internal/access/qq）是 OneBot v11 正向 WebSocket 客户端，
+# 连接本容器暴露的 3001 端口；登录与 WS 配置在 NapCat WebUI（6099）完成。
+# 用法：
+#   docker compose -f docker/qq-onebot.compose.yaml up -d
+#   # 浏览器打开 http://127.0.0.1:6099 登录 QQ 账号
+#   # 内核启动环境变量：AILUO_QQ_WS_URL=ws://127.0.0.1:3001 AILUO_QQ_WS_TOKEN=<WS_TOKEN>
+services:
+  napcat:
+    image: mlikiowa/napcat-docker:latest
+    container_name: ailuo-qq-onebot
+    restart: unless-stopped
+    environment:
+      - NAPCAT_UID=0
+      - NAPCAT_GID=0
+      - WEBUI_TOKEN=ailuo-qq
+    ports:
+      - "3001:3001" # OneBot v11 正向 WebSocket（适配器连接）
+      - "6099:6099" # NapCat WebUI（登录 QQ 与配置）
+    volumes:
+      - napcat-config:/app/napcat/config
+      - napcat-qq-data:/app/.config/QQ # QQ 登录态与数据（持久化后重启无需重新扫码）
+volumes:
+  napcat-config:
+  napcat-qq-data:

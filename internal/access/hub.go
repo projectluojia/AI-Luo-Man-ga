@@ -51,6 +51,7 @@ type AttachmentRef struct {
 type InboundMessage struct {
 	AppID             string
 	Platform          string
+	PlatformChannel   string // 平台渠道标识（QQ: group/private）；无渠道概念的平台留空
 	PlatformSpaceID   string
 	PlatformUserID    string // 平台侧不透明标识；空表示无身份渠道（匿名）
 	PlatformMessageID string // 平台消息标识，按 app_id+platform_message_id 去重

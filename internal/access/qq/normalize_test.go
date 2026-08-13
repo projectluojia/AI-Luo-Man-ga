@@ -6,6 +6,7 @@ import (
 )
 
 type inboundExpect struct {
+	channel string
 	space   string
 	user    string
 	session string
@@ -21,22 +22,22 @@ func TestNormalizeEvent(t *testing.T) {
 		{
 			name:    "group message",
 			payload: `{"post_type":"message","message_type":"group","group_id":111,"user_id":222,"message_id":"m1","message":[{"type":"text","data":{"text":"你好"}}]}`,
-			want:    &inboundExpect{space: "111", user: "222", session: "111", text: "你好"},
+			want:    &inboundExpect{channel: "group", space: "111", user: "222", session: "111", text: "你好"},
 		},
 		{
 			name:    "private message with numbers",
 			payload: `{"post_type":"message","message_type":"private","user_id":333,"message_id":"m2","message":[{"type":"text","data":{"text":"在吗"}}]}`,
-			want:    &inboundExpect{user: "333", session: "333", text: "在吗"},
+			want:    &inboundExpect{channel: "private", space: "private", user: "333", session: "333", text: "在吗"},
 		},
 		{
 			name:    "text segments concatenated",
 			payload: `{"post_type":"message","message_type":"private","user_id":1,"message_id":"m3","message":[{"type":"text","data":{"text":"A"}},{"type":"face","data":{"id":1}},{"type":"text","data":{"text":"B"}}]}`,
-			want:    &inboundExpect{user: "1", session: "1", text: "AB"},
+			want:    &inboundExpect{channel: "private", space: "private", user: "1", session: "1", text: "AB"},
 		},
 		{
 			name:    "raw message fallback strips cq codes",
 			payload: `{"post_type":"message","message_type":"private","user_id":1,"message_id":"m4","raw_message":"你好[CQ:face,id=1]"}`,
-			want:    &inboundExpect{user: "1", session: "1", text: "你好"},
+			want:    &inboundExpect{channel: "private", space: "private", user: "1", session: "1", text: "你好"},
 		},
 		{
 			name:    "notice event skipped",
@@ -71,7 +72,8 @@ func TestNormalizeEvent(t *testing.T) {
 			if got == nil {
 				t.Fatal("got nil, want normalized message")
 			}
-			if got.Platform != "qq" || got.PlatformSpaceID != test.want.space ||
+			if got.Platform != "qq" || got.PlatformChannel != test.want.channel ||
+				got.PlatformSpaceID != test.want.space ||
 				got.PlatformUserID != test.want.user || got.PlatformSessionID != test.want.session ||
 				got.Text != test.want.text || got.IdempotencyKey != got.PlatformMessageID {
 				t.Fatalf("got %#v", got)

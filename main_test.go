@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,6 +16,50 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite"
 )
+
+func TestLoadDotEnvLoadsMissingKeysAndSkipsComments(t *testing.T) {
+	t.Chdir(t.TempDir())
+	if err := os.WriteFile(".env", []byte("# 注释行\nAILUO_DOTENV_A=value-1\n\nAILUO_DOTENV_B=\"quoted value\"\nAILUO_DOTENV_C='single quoted'\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"AILUO_DOTENV_A", "AILUO_DOTENV_B", "AILUO_DOTENV_C"} {
+		if err := os.Unsetenv(key); err != nil { // 清空，保证 .env 补足
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() {
+		for _, key := range []string{"AILUO_DOTENV_A", "AILUO_DOTENV_B", "AILUO_DOTENV_C"} {
+			os.Unsetenv(key)
+		}
+	})
+	loadDotEnv()
+	if got := os.Getenv("AILUO_DOTENV_A"); got != "value-1" {
+		t.Fatalf("A=%q", got)
+	}
+	if got := os.Getenv("AILUO_DOTENV_B"); got != "quoted value" {
+		t.Fatalf("B=%q", got)
+	}
+	if got := os.Getenv("AILUO_DOTENV_C"); got != "single quoted" {
+		t.Fatalf("C=%q", got)
+	}
+}
+
+func TestLoadDotEnvKeepsExistingEnvironmentPriority(t *testing.T) {
+	t.Chdir(t.TempDir())
+	if err := os.WriteFile(".env", []byte("AILUO_DOTENV_PRIORITY=from-file\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AILUO_DOTENV_PRIORITY", "from-env")
+	loadDotEnv()
+	if got := os.Getenv("AILUO_DOTENV_PRIORITY"); got != "from-env" {
+		t.Fatalf("priority=%q, want from-env", got)
+	}
+}
+
+func TestLoadDotEnvSkipsMissingFile(t *testing.T) {
+	t.Chdir(t.TempDir())
+	loadDotEnv() // .env 不存在必须静默返回，不崩溃
+}
 
 func TestLoadConfigRequiresModel(t *testing.T) {
 	t.Setenv("AILUO_MODEL", "")
@@ -328,6 +373,32 @@ func TestMaintenanceIdentityBindRejectsInvalidArguments(t *testing.T) {
 		if !handled || err == nil {
 			t.Fatalf("arguments=%v handled=%t err=%v", arguments, handled, err)
 		}
+	}
+}
+
+func TestMaintenanceIdentityUnbind(t *testing.T) {
+	database := filepath.Join(t.TempDir(), "identity.db")
+	bind := []string{"identity-bind", "--database", database, "--user", "user-qq-1", "--platform", "qq", "--space", "private", "--platform-user", "openid-qq-1"}
+	if handled, err := runMaintenanceCommand(bind, &bytes.Buffer{}); err != nil || !handled {
+		t.Fatalf("bind handled=%t err=%v", handled, err)
+	}
+	unbind := []string{"identity-unbind", "--database", database, "--platform", "qq", "--space", "private", "--platform-user", "openid-qq-1"}
+	output := &bytes.Buffer{}
+	if handled, err := runMaintenanceCommand(unbind, output); err != nil || !handled || !strings.Contains(output.String(), "身份解绑完成") {
+		t.Fatalf("unbind handled=%t output=%q err=%v", handled, output.String(), err)
+	}
+	store, err := sqlite.Open(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if _, err := identity.NewService(store).ResolveIdentity(t.Context(), "campus-services", "qq", "private", "openid-qq-1"); !errors.Is(err, identity.ErrNotFound) {
+		t.Fatalf("resolve after unbind error=%v, want ErrNotFound", err)
+	}
+	// 再次解绑：身份不存在返回 ErrNotFound，命令仍明确报错。
+	handled, err := runMaintenanceCommand(unbind, &bytes.Buffer{})
+	if !handled || err == nil {
+		t.Fatalf("second unbind handled=%t err=%v", handled, err)
 	}
 }
 

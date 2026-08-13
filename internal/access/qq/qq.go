@@ -235,7 +235,8 @@ func terminalReply(event kernelecho.Event) *string {
 	return nil
 }
 
-// reply 把回复文本发送到消息来源（群消息回群，私聊回用户）。
+// reply 把回复文本发送到消息来源（群消息回群，私聊回用户），按
+// PlatformChannel 选择 OneBot 动作，不依赖空间 ID 是否为空。
 func (a *Adapter) reply(ctx context.Context, inbound *access.InboundMessage, text string) {
 	text = sanitizeReply(text)
 	if text == "" {
@@ -244,7 +245,7 @@ func (a *Adapter) reply(ctx context.Context, inbound *access.InboundMessage, tex
 	for _, chunk := range splitReply(text) {
 		var action string
 		params := map[string]any{"message": chunk}
-		if inbound.PlatformSpaceID != "" {
+		if inbound.PlatformChannel == "group" {
 			action = "send_group_msg"
 			params["group_id"] = onebotInt(inbound.PlatformSpaceID)
 		} else {
@@ -321,12 +322,15 @@ func normalizeEvent(appID string, raw map[string]any) *access.InboundMessage {
 	if userID == "" || messageID == "" {
 		return nil
 	}
-	var spaceID, sessionID string
+	var spaceID, channel, sessionID string
 	switch str(raw, "message_type") {
 	case "group":
 		spaceID = str(raw, "group_id")
+		channel = "group"
 		sessionID = spaceID
 	case "private":
+		spaceID = "private" // 私聊无群号，用固定占位保证身份键合法（qq/private/QQ号）
+		channel = "private"
 		sessionID = userID
 	default:
 		return nil
@@ -338,6 +342,7 @@ func normalizeEvent(appID string, raw map[string]any) *access.InboundMessage {
 	return &access.InboundMessage{
 		AppID:             appID,
 		Platform:          "qq",
+		PlatformChannel:   channel,
 		PlatformSpaceID:   spaceID,
 		PlatformUserID:    userID,
 		PlatformMessageID: messageID,

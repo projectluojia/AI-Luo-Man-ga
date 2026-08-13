@@ -40,10 +40,12 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/blob"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite"
 
+	"github.com/joho/godotenv"
 	"google.golang.org/grpc"
 )
 
 func main() {
+	loadDotEnv()
 	handled, err := runMaintenanceCommand(os.Args[1:], os.Stdout)
 	if err == nil && handled {
 		return
@@ -53,6 +55,18 @@ func main() {
 	}
 	if err != nil {
 		observe.Error(context.Background(), "AI珞（爱珞）服务异常退出", err)
+		os.Exit(1)
+	}
+}
+
+// loadDotEnv 从工作目录读取 .env 并载入进程环境：已存在的环境变量优先，
+// 缺失项才由 .env 补足；.env 不存在时静默跳过（显式环境变量仍然可用）。
+func loadDotEnv() {
+	if err := godotenv.Load(); err != nil {
+		if os.IsNotExist(err) {
+			return
+		}
+		observe.Error(context.Background(), "读取 .env 失败", err)
 		os.Exit(1)
 	}
 }
@@ -148,6 +162,31 @@ func runMaintenanceCommand(arguments []string, output io.Writer) (bool, error) {
 			return true, err
 		}
 		_, err = fmt.Fprintf(output, "身份开通完成：user_id=%s app=%s 绑定平台=%s 角色=%d\n", *userID, *appID, *platform, len(roleIDs))
+		return true, err
+	case "identity-unbind":
+		flags := flag.NewFlagSet("identity-unbind", flag.ContinueOnError)
+		flags.SetOutput(io.Discard)
+		database := flags.String("database", "", "SQLite 数据库绝对路径")
+		appID := flags.String("app", campus.AppID, "App 标识")
+		platform := flags.String("platform", "", "外部平台标识")
+		space := flags.String("space", "", "外部平台空间标识")
+		platformUser := flags.String("platform-user", "", "外部平台用户标识")
+		if err := flags.Parse(arguments[1:]); err != nil || flags.NArg() != 0 || *database == "" || *platform == "" || *space == "" || *platformUser == "" {
+			return true, fmt.Errorf("configuration error: identity-unbind requires --database, --platform, --space and --platform-user")
+		}
+		if !filepath.IsAbs(*database) {
+			return true, fmt.Errorf("configuration error: identity-unbind requires an absolute --database path")
+		}
+		store, err := sqlite.Open(*database)
+		if err != nil {
+			return true, err
+		}
+		unbindErr := identity.NewService(store).UnbindExternalIdentity(ctx, *appID, *platform, *space, *platformUser)
+		closeErr := store.Close()
+		if err := errors.Join(unbindErr, closeErr); err != nil {
+			return true, err
+		}
+		_, err = fmt.Fprintf(output, "身份解绑完成：app=%s 平台=%s space=%s platform_user=%s\n", *appID, *platform, *space, *platformUser)
 		return true, err
 	default:
 		return true, fmt.Errorf("configuration error: unknown command")
