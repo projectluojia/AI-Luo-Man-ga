@@ -1,8 +1,10 @@
-// Package agent 以 Service 形态纳管内置 AI 执行者（Python Agent），与 campus
-// 等业务 Service 同级：运行实现经 internal/kernel/loader 的 Host 接口以
-// isolated Runtime 形态受监督（进程启动、资源限额、健康检查与优雅清理复用
-// loader 进程原语），对外核心能力为 agent.run（受治理的 child Run/Subagent）。
-// loader 不包含任何 agent 特化代码，装配只在本包与内核接线点（main/e2e）出现。
+// Package agent 以插件形态提供内置 AI 执行者（Python Agent）：运行实现经
+// internal/kernel/loader 的 Host 接口以 isolated Runtime 形态受监督（进程
+// 启动、资源限额、健康检查与优雅清理复用 loader 进程原语），经 agent.Record
+// 与 campus/installed 包同一 RegisterInstalled 路径注册。内核只通过
+// agentprotocol 契约使用它（ClientProvider/ProcessLifecycle），不依赖本包。
+// 对外核心能力为 agent.run（受治理的 child Run/Subagent），由 Register 在
+// 内核 Orchestrator 装配完成后单独注册。
 package agent
 
 import (
@@ -11,9 +13,9 @@ import (
 	"path/filepath"
 	"runtime"
 
-	agentv1 "github.com/projectluojia/AI-Luo-Man-ga/gen/agentv1"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/agentprotocol"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
 )
 
 const (
@@ -45,13 +47,10 @@ func DefaultPythonPath(projectRoot string) string {
 	return filepath.Join(projectRoot, "agent", ".venv", "bin", "python")
 }
 
-// ClientProvider 是持有 agent 协议客户端的运行时的窄接口，供内核装配断言。
-type ClientProvider interface {
-	AgentClient() agentv1.AgentRuntimeClient
-}
-
-// ProcessLifecycle 是 agent 运行时的进程生命周期窄接口，供内核装配做崩溃监控。
-type ProcessLifecycle interface {
-	Done() <-chan struct{}
-	Err() error
+// Record 返回内置 agent 运行时的安装清单（单一来源：与宿主清单一致），
+// 供统一 Loader 以与 campus/installed 相同的 RegisterInstalled 路径注册。
+// Agent Service（agent.run）依赖内核 Orchestrator，由 Register 在装配完成后
+// 单独注册，因此本记录只携带 Runtime 清单。
+func Record(host *Host) loader.InstalledRecord {
+	return loader.InstalledRecord{Runtime: host.Manifest()}
 }

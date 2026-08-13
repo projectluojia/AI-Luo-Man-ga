@@ -20,6 +20,7 @@ import (
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access/web"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/agentprotocol"
 	kernelecho "github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/health"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
@@ -143,21 +144,25 @@ func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new agent manager: %v", err)
 	}
-	if err := agentManager.Register(ctx, agentHost.Manifest()); err != nil {
+	reg := registry.New()
+	// 内置 agent 经与内核 main 相同的插件路径注册：agent.Record(host) 携带运行时
+	// 清单，RegisterInstalled 统一注册；预热清单由 Pinned() 从各清单声明推导。
+	if err := loader.RegisterInstalled(ctx, agentManager, reg, []loader.InstalledRecord{agent.Record(agentHost)}); err != nil {
 		t.Fatalf("register agent: %v", err)
 	}
-	if err := agentManager.Warmup(ctx, []string{agent.RuntimeID}, 1); err != nil {
+	if err := agentManager.Warmup(ctx, agentManager.Pinned(), 1); err != nil {
 		t.Fatalf("warm agent: %v\n%s", err, logs.String())
 	}
 	agentLease, err := agentManager.Acquire(ctx, agent.RuntimeID)
 	if err != nil {
 		t.Fatalf("acquire agent: %v", err)
 	}
-	agentRuntime, ok := agentLease.Runtime().(agent.ClientProvider)
+	agentRuntime := agentLease.Runtime()
+	clientProvider, ok := agentRuntime.(agentprotocol.ClientProvider)
 	if !ok {
 		t.Fatal("agent runtime does not expose an agent client")
 	}
-	agentClient := agentRuntime.AgentClient()
+	agentClient := clientProvider.AgentClient()
 	// 关闭顺序（defer 逆序）：Shutdown 需等待租约排空，故租约归还最后注册、最先执行。
 	defer func() {
 		shutdownContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -170,7 +175,6 @@ func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 
 	busStore := memory.NewBusStore()
 	busStore.ReplaceCatalog(campus.AppID, nil, []bus.Route{{ID: "r1", Name: "测试线路", Direction: "去程"}})
-	reg := registry.New()
 	policy := runtime.NewStaticAppPolicy()
 	policy.Enable(campus.AppID, campus.BusRouteListCapabilityID)
 	policy.Enable(campus.AppID, agent.CapabilityID)

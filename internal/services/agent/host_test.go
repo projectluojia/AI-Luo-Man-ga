@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
+	"reflect"
 	"testing"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/agentprotocol"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/agent"
 
 	"google.golang.org/grpc"
@@ -71,7 +73,7 @@ func TestHostLoadsConnectedAgent(t *testing.T) {
 		t.Fatal(err)
 	}
 	runtime := lease.Runtime()
-	if _, ok := runtime.(agent.ClientProvider); !ok {
+	if _, ok := runtime.(agentprotocol.ClientProvider); !ok {
 		t.Fatal("agent runtime does not expose an agent client")
 	}
 	if _, err := runtime.Describe(context.Background()); err != nil {
@@ -108,5 +110,40 @@ func testRequest(toolID string) contracts.RequestContext {
 	return contracts.RequestContext{
 		AppID: "app.campus", EchoID: "echo-1", RequestID: "request-1",
 		ToolID: toolID,
+	}
+}
+
+// TestRecordRegistersViaInstalledPath 验证插件注册路径：agent.Record(host) 携带
+// 宿主清单（单一来源），经 RegisterInstalled 以与 campus/installed 相同的机制
+// 注册，预热清单由 Pinned() 从清单声明推导。运行时不加载（连接模式拨号会失败），
+// 本测试只验证注册与 pin 推导。
+func TestRecordRegistersViaInstalledPath(t *testing.T) {
+	host, err := agent.NewHost(agent.Config{
+		Resolve: func(context.Context) (agent.Spec, error) {
+			return agent.Spec{Address: "127.0.0.1:1"}, nil
+		},
+		Spawn: false, Model: "test-model",
+		DialTimeout: 5 * time.Second, StopGrace: time.Second, TerminateGrace: time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := agent.Record(host)
+	if !reflect.DeepEqual(record.Runtime, host.Manifest()) {
+		t.Fatalf("record runtime = %#v, want host manifest %#v", record.Runtime, host.Manifest())
+	}
+	if record.Runtime.ID != agent.RuntimeID || record.Runtime.Mode != loader.ModeIsolated || !record.Runtime.Pin {
+		t.Fatalf("record runtime = %#v", record.Runtime)
+	}
+	manager, err := loader.New(host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := loader.RegisterInstalled(context.Background(), manager, registry.New(), []loader.InstalledRecord{record}); err != nil {
+		t.Fatalf("RegisterInstalled: %v", err)
+	}
+	pinned := manager.Pinned()
+	if len(pinned) != 1 || pinned[0] != agent.RuntimeID {
+		t.Fatalf("pinned = %v, want [%s]", pinned, agent.RuntimeID)
 	}
 }

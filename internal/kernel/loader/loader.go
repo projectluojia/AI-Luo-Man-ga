@@ -170,6 +170,23 @@ func (m *Manager) selectHost(ctx context.Context, manifest Manifest) (Host, erro
 	}
 }
 
+// Pinned 返回全部已注册且清单声明 Pin=true 的运行时标识（排序），供启动预热
+// 使用。pin 由各清单声明（内置包与 installed 包统一），内核装配不再按包
+// 硬编码预热清单。
+func (m *Manager) Pinned() []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	ids := make([]string, 0, len(m.entries))
+	for id, item := range m.entries {
+		if item.manifest.Pin {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+// Register 注册单个运行时清单，按 Verify 绑定唯一宿主。
 func (m *Manager) Register(ctx context.Context, manifest Manifest) error {
 	return m.RegisterBatch(ctx, []Manifest{manifest})
 }

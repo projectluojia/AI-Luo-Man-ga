@@ -21,6 +21,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access/ingress"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access/web"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/agentprotocol"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/appconfig"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/confirmation"
 	kernelecho "github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
@@ -408,7 +409,7 @@ func run() (resultErr error) {
 	if err != nil {
 		return fmt.Errorf("create built-in agent runtime: %w", err)
 	}
-	installedHosts, installedRecords, pinnedInstalled, err := configureInstalledRuntimes(ctx, config)
+	installedHosts, installedRecords, err := configureInstalledRuntimes(ctx, config)
 	if err != nil {
 		return err
 	}
@@ -424,40 +425,41 @@ func run() (resultErr error) {
 		defer cancel()
 		resultErr = errors.Join(resultErr, runtimeLoader.Shutdown(shutdownContext))
 	}()
-	// 内置包与 installed 包统一注册：先注册 campus（含 Tool/Service/Capability），
-	// 再注册 installed 目录，最后注册内置 agent 的运行时清单（其 Service agent.run
-	// 依赖 Orchestrator，在内核装配完成后单独注册）。
-	if err := loader.RegisterInstalled(ctx, runtimeLoader, reg, []loader.InstalledRecord{campus.Record()}); err != nil {
-		return fmt.Errorf("register campus hosted package: %w", err)
+	// 内置包与 installed 包统一注册：campus 与内置 agent 各以安装清单形式经同一
+	// RegisterInstalled 路径注册（agent 记录只携带运行时清单，其 Service agent.run
+	// 依赖 Orchestrator，在内核装配完成后单独注册），随后注册 installed 目录。
+	if err := loader.RegisterInstalled(ctx, runtimeLoader, reg, []loader.InstalledRecord{campus.Record(), agent.Record(agentHost)}); err != nil {
+		return fmt.Errorf("register built-in packages: %w", err)
 	}
 	if len(installedRecords) > 0 {
 		if err := loader.RegisterInstalled(ctx, runtimeLoader, reg, installedRecords); err != nil {
 			return fmt.Errorf("register installed runtimes: %w", err)
 		}
 	}
-	if err := runtimeLoader.Register(ctx, agentHost.Manifest()); err != nil {
-		return fmt.Errorf("register built-in agent runtime: %w", err)
-	}
-	// 预热全部 pin 的内置包（campus/agent）与 installed pin 运行时：编译/启动失败
-	// 则内核拒绝就绪（fail-closed）。
-	pinnedRuntimes := append([]string{campus.ServiceID, agent.RuntimeID}, pinnedInstalled...)
+	// 预热全部声明 pin 的运行时（内置 campus/agent 与 installed pin）：编译/启动
+	// 失败则内核拒绝就绪（fail-closed）。预热清单由各清单声明推导，不再硬编码。
+	pinnedRuntimes := runtimeLoader.Pinned()
 	if err := runtimeLoader.Warmup(ctx, pinnedRuntimes, min(len(pinnedRuntimes), 4)); err != nil {
 		return fmt.Errorf("warm pinned runtimes: %w", err)
 	}
+	// 内核按契约使用 agent 服务：从租约运行时获取 agent 协议客户端（执行 Run 的
+	// 唯一使用点）。任何实现 agentprotocol 契约的运行时都可充当该角色，内核不
+	// 依赖具体语言或实现。
 	agentLease, err := runtimeLoader.Acquire(ctx, agent.RuntimeID)
 	if err != nil {
 		return fmt.Errorf("acquire built-in agent runtime: %w", err)
 	}
 	// 租约在函数返回时先于 runtimeLoader.Shutdown 释放（defer 逆序）。
 	defer agentLease.Release()
-	agentRuntime, ok := agentLease.Runtime().(agent.ClientProvider)
+	agentRuntime := agentLease.Runtime()
+	clientProvider, ok := agentRuntime.(agentprotocol.ClientProvider)
 	if !ok {
-		return fmt.Errorf("built-in agent runtime does not expose an agent client")
+		return fmt.Errorf("agent runtime does not expose an agent client")
 	}
-	agentClient := agentRuntime.AgentClient()
+	agentClient := clientProvider.AgentClient()
 	if config.manageAgent {
 		// 受监督进程异常退出 → 内核 fail-closed 停止（连接模式不拥有进程）。
-		if lifecycle, ok := agentLease.Runtime().(agent.ProcessLifecycle); ok {
+		if lifecycle, ok := agentRuntime.(agentprotocol.ProcessLifecycle); ok {
 			go func() {
 				<-lifecycle.Done()
 				if processErr := lifecycle.Err(); processErr != nil && ctx.Err() == nil {
@@ -669,30 +671,31 @@ func loadConfig() (config, error) {
 }
 
 // configureInstalledRuntimes 发现安装目录中的 installed 包，返回加入统一 Loader
-// 的宿主、待注册记录与 pin 运行时标识。安装目录未配置时返回空切片（统一 Loader
-// 只装配内置包）；配置了安装目录但没有 hosted 宿主地址时 fail-closed。
-func configureInstalledRuntimes(ctx context.Context, cfg config) ([]loader.Host, []loader.InstalledRecord, []string, error) {
+// 的宿主与待注册记录。安装目录未配置时返回空切片（统一 Loader 只装配内置包）；
+// 配置了安装目录但没有 hosted 宿主地址时 fail-closed。pin 运行时由各清单声明，
+// 预热清单由 runtimeLoader.Pinned() 统一推导，本函数不再返回。
+func configureInstalledRuntimes(ctx context.Context, cfg config) ([]loader.Host, []loader.InstalledRecord, error) {
 	if cfg.runtimeInstallRoot == "" {
-		return nil, nil, nil, nil
+		return nil, nil, nil
 	}
 	catalog, err := loader.NewCatalog(cfg.runtimeInstallRoot)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("create installed runtime catalog: %w", err)
+		return nil, nil, fmt.Errorf("create installed runtime catalog: %w", err)
 	}
 	records, err := catalog.Discover(ctx)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("discover installed runtimes: %w", err)
+		return nil, nil, fmt.Errorf("discover installed runtimes: %w", err)
 	}
 	if len(records) == 0 {
 		observe.Info(ctx, "运行时安装目录校验完成",
 			observe.IntAttr("runtime_count", 0),
 		)
-		return nil, nil, nil, nil
+		return nil, nil, nil
 	}
 	hosts := make([]loader.Host, 0, 2)
 	hostedCount := 0
 	isolatedCount := 0
-	pinnedIDs := make([]string, 0, len(records))
+	pinnedCount := 0
 	for _, record := range records {
 		switch record.Runtime.Mode {
 		case loader.ModeHosted:
@@ -700,15 +703,15 @@ func configureInstalledRuntimes(ctx context.Context, cfg config) ([]loader.Host,
 		case loader.ModeIsolated:
 			isolatedCount++
 		default:
-			return nil, nil, nil, loader.ErrUnsupportedMode
+			return nil, nil, loader.ErrUnsupportedMode
 		}
 		if record.Runtime.Pin {
-			pinnedIDs = append(pinnedIDs, record.Runtime.ID)
+			pinnedCount++
 		}
 	}
 	if hostedCount > 0 {
 		if cfg.runtimeHostAddress == "" {
-			return nil, nil, nil, fmt.Errorf("configuration error: AILUO_RUNTIME_HOST_ADDRESS is required for installed hosted runtimes")
+			return nil, nil, fmt.Errorf("configuration error: AILUO_RUNTIME_HOST_ADDRESS is required for installed hosted runtimes")
 		}
 		host, err := loader.NewGRPCHost(loader.GRPCHostConfig{
 			Mode: loader.ModeHosted, Address: cfg.runtimeHostAddress,
@@ -718,7 +721,7 @@ func configureInstalledRuntimes(ctx context.Context, cfg config) ([]loader.Host,
 			MaxConcurrent:   64,
 		})
 		if err != nil {
-			return nil, nil, nil, fmt.Errorf("configure hosted runtime boundary: %w", err)
+			return nil, nil, fmt.Errorf("configure hosted runtime boundary: %w", err)
 		}
 		hosts = append(hosts, host)
 	}
@@ -731,7 +734,7 @@ func configureInstalledRuntimes(ctx context.Context, cfg config) ([]loader.Host,
 			TerminateGrace:   2 * time.Second,
 		})
 		if err != nil {
-			return nil, nil, nil, fmt.Errorf("configure isolated runtime boundary: %w", err)
+			return nil, nil, fmt.Errorf("configure isolated runtime boundary: %w", err)
 		}
 		hosts = append(hosts, host)
 	}
@@ -739,9 +742,9 @@ func configureInstalledRuntimes(ctx context.Context, cfg config) ([]loader.Host,
 		observe.IntAttr("runtime_count", len(records)),
 		observe.IntAttr("hosted_count", hostedCount),
 		observe.IntAttr("isolated_count", isolatedCount),
-		observe.IntAttr("pinned_count", len(pinnedIDs)),
+		observe.IntAttr("pinned_count", pinnedCount),
 	)
-	return hosts, records, pinnedIDs, nil
+	return hosts, records, nil
 }
 
 func envOr(name, fallback string) string {

@@ -315,12 +315,19 @@ func RegisterInstalled(ctx context.Context, manager *Manager, target *registry.R
 				Handler registry.Handler
 			}{Spec: spec, Handler: handler}
 		}
-		services = append(services, registry.ServiceRegistration{
-			Spec: record.Service, Capabilities: capabilities,
-		})
+		// 运行时专用记录（如内置 agent：Service 依赖内核 Orchestrator，装配完成后
+		// 单独注册）不携带 Service 规格，只注册运行时清单。
+		if record.Service.ID != "" {
+			services = append(services, registry.ServiceRegistration{
+				Spec: record.Service, Capabilities: capabilities,
+			})
+		}
 	}
 	if err := manager.RegisterBatch(ctx, manifests); err != nil {
 		return err
+	}
+	if len(tools) == 0 && len(services) == 0 {
+		return nil // 记录只声明运行时清单（如内置 agent），无 Registry 规格
 	}
 	if err := target.RegisterBatch(tools, services); err != nil {
 		return errors.Join(err, manager.rollbackRegistered(manifests))

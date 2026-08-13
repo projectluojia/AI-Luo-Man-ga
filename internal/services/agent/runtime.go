@@ -8,6 +8,7 @@ import (
 	"time"
 
 	agentv1 "github.com/projectluojia/AI-Luo-Man-ga/gen/agentv1"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/agentprotocol"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/health"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
@@ -96,7 +97,7 @@ func (r *Runtime) Err() error {
 }
 
 var (
-	_ loader.Runtime   = (*Runtime)(nil)
-	_ ClientProvider   = (*Runtime)(nil)
-	_ ProcessLifecycle = (*Runtime)(nil)
+	_ loader.Runtime                 = (*Runtime)(nil)
+	_ agentprotocol.ClientProvider   = (*Runtime)(nil)
+	_ agentprotocol.ProcessLifecycle = (*Runtime)(nil)
 )

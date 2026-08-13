@@ -128,11 +128,11 @@ func TestConfigureInstalledRuntimesAllowsEmptySecureCatalog(t *testing.T) {
 	if err := os.Chmod(root, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	hosts, records, pinned, err := configureInstalledRuntimes(t.Context(), config{runtimeInstallRoot: root})
+	hosts, records, err := configureInstalledRuntimes(t.Context(), config{runtimeInstallRoot: root})
 	if err != nil {
 		t.Fatalf("configure empty catalog: %v", err)
 	}
-	if len(hosts) != 0 || len(records) != 0 || len(pinned) != 0 {
+	if len(hosts) != 0 || len(records) != 0 {
 		t.Fatal("empty catalog must return no hosts/records")
 	}
 }
@@ -142,21 +142,21 @@ func TestConfigureInstalledRuntimesRegistersHostedCatalogAndRequiresAddress(t *t
 		t.Skip("非 Unix 平台显式关闭安装目录属主校验")
 	}
 	root := writeMainInstalledFixture(t)
-	if _, _, _, err := configureInstalledRuntimes(t.Context(), config{
+	if _, _, err := configureInstalledRuntimes(t.Context(), config{
 		runtimeInstallRoot: root,
 	}); err == nil || !strings.Contains(err.Error(), "AILUO_RUNTIME_HOST_ADDRESS") {
 		t.Fatalf("missing hosted address error=%v", err)
 	}
 
-	hosts, records, pinned, err := configureInstalledRuntimes(t.Context(), config{
+	hosts, records, err := configureInstalledRuntimes(t.Context(), config{
 		runtimeInstallRoot: root,
 		runtimeHostAddress: "unix:" + filepath.Join(root, "host.sock"),
 	})
 	if err != nil {
 		t.Fatalf("configure hosted catalog: %v", err)
 	}
-	if len(hosts) != 1 || len(records) != 1 || len(pinned) != 1 {
-		t.Fatalf("hosts=%d records=%d pinned=%d", len(hosts), len(records), len(pinned))
+	if len(hosts) != 1 || len(records) != 1 {
+		t.Fatalf("hosts=%d records=%d", len(hosts), len(records))
 	}
 	target := registry.New()
 	manager, err := loader.New(hosts...)
@@ -170,6 +170,11 @@ func TestConfigureInstalledRuntimesRegistersHostedCatalogAndRequiresAddress(t *t
 	})
 	if err := loader.RegisterInstalled(t.Context(), manager, target, records); err != nil {
 		t.Fatalf("register installed runtimes: %v", err)
+	}
+	// pin 运行时由各清单声明推导（Pinned()），装配不再单独返回。
+	pinned := manager.Pinned()
+	if len(pinned) != 1 || pinned[0] != records[0].Runtime.ID {
+		t.Fatalf("pinned=%v", pinned)
 	}
 	if _, _, err := target.ResolveCapability("main.extension.query"); err != nil {
 		t.Fatalf("installed capability not registered: %v", err)
