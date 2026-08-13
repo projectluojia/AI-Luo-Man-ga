@@ -58,11 +58,16 @@ type RunRecord struct {
 	EchoID              string          `json:"echo_id"`
 	ParentRunID         string          `json:"parent_run_id,omitempty"`
 	OriginCallID        string          `json:"origin_call_id,omitempty"`
+	SessionID           string          `json:"session_id,omitempty"`
+	UserID              string          `json:"user_id,omitempty"`
+	MessageID           string          `json:"message_id,omitempty"`
 	Attempt             uint32          `json:"attempt"`
 	Status              string          `json:"status"`
 	Model               string          `json:"model"`
 	ModelConfigVersion  string          `json:"model_config_version"`
 	ProtocolVersion     string          `json:"protocol_version"`
+	ContextDigest       string          `json:"context_digest,omitempty"`
+	ContextSources      json.RawMessage `json:"-"`
 	MaxSteps            uint32          `json:"max_steps"`
 	MaxToolCalls        uint32          `json:"max_tool_calls"`
 	MaxInputTokens      uint64          `json:"max_input_tokens"`
@@ -107,9 +112,15 @@ type Event struct {
 	CreatedAt time.Time       `json:"created_at"`
 }
 
+// RunRequest 是一次 Echo 创建请求。会话上下文（SessionID/UserID/MessageID）
+// 只能来自受治理的平台接入入口，不进入 HTTP 契约（json:"-"），客户端无法
+// 伪造或指定；由 Web/平台适配器在 Intake 成功后填充。
 type RunRequest struct {
 	Message        string `json:"message"`
 	IdempotencyKey string `json:"-"`
+	SessionID      string `json:"-"`
+	UserID         string `json:"-"`
+	MessageID      string `json:"-"`
 }
 
 type ChildRunRequest struct {
@@ -150,6 +161,8 @@ type Store interface {
 	RenewRunLease(ctx context.Context, run RunRecord, renewedAt, leaseExpiresAt time.Time) error
 	AdvanceRunAgentSequence(ctx context.Context, run RunRecord, sequence uint64) error
 	AdvanceRunAgentSequenceWithUsage(ctx context.Context, run RunRecord, sequence, inputTokens, outputTokens, totalTokens, costMicrousd uint64, providerRetries uint32) error
+	// SetRunContext 固化 Run 的上下文摘要与来源版本（每次执行只可设置一次）。
+	SetRunContext(ctx context.Context, run RunRecord, digest string, sources json.RawMessage) error
 	CancelQueuedRun(ctx context.Context, appID, echoID string, completedAt time.Time) (bool, error)
 	RetryRun(ctx context.Context, current, next RunRecord, failure publicerror.Error, completedAt time.Time) error
 	CompleteRun(ctx context.Context, run RunRecord, runStatus, echoStatus, finalMessage string, failure publicerror.Error, completedAt time.Time) error

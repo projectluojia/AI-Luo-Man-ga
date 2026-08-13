@@ -30,6 +30,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/session"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/subagent"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/blob"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/memory"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite"
 )
@@ -175,10 +176,21 @@ func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 	policy.Enable(campus.AppID, subagent.CapabilityID)
 	dispatcher := runtime.NewDispatcher(reg, policy, runtime.WithIdempotencyStore(store))
 	campustest.RegisterHosted(t, reg, busStore)
+	// 上下文装配使用真实会话来源（SQLite 消息存储 + 安全 Blob 存储）。
+	blobStore, err := blob.Open(filepath.Join(t.TempDir(), "blobs"), session.MaxMessageContentBytes)
+	if err != nil {
+		t.Fatalf("open blob store: %v", err)
+	}
+	defer blobStore.Close()
+	sessionService, err := session.NewService(store, blobStore)
+	if err != nil {
+		t.Fatalf("new session service: %v", err)
+	}
 	orchestrator := kernelecho.NewOrchestrator(agentClient, reg, dispatcher, policy, store, kernelecho.Config{
 		AppID: campus.AppID, Model: "test-model", SystemPrompt: "test", Timezone: "Asia/Shanghai",
 		MaxSteps: 4, MaxToolCalls: 8, MaxInputTokens: 1000, MaxOutputTokens: 500,
 		MaxTotalTokens: 1500, MaxOutputBytes: 4096, ProviderTimeout: 5 * time.Second,
+		Context: sessionService,
 	})
 	if err := subagent.Register(reg, orchestrator); err != nil {
 		t.Fatal(err)

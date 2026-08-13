@@ -253,7 +253,12 @@ func (s *Server) createEcho(writer http.ResponseWriter, request *http.Request) {
 		s.writeIntakeError(writer, request, err)
 		return
 	}
+	// 会话上下文只来自受治理的 Intake 结果，覆盖客户端请求体中的任何同名字段
+	// （RunRequest 的会话字段不进入 HTTP 契约，客户端无法伪造会话归属）。
 	input.Message = intake.Text
+	input.SessionID = intake.SessionID
+	input.UserID = intake.UserID
+	input.MessageID = intake.MessageID
 	echoID, created, err := s.orchestrator.CreateIdempotent(request.Context(), input)
 	if err != nil {
 		access.WriteEchoError(writer, request, err)

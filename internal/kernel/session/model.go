@@ -361,6 +361,9 @@ type MessageEdit struct {
 type MessageQuery struct {
 	// SenderUserID 可选：仅返回该发送者的消息。
 	SenderUserID string
+	// Descending 为 true 时按时间倒序返回（最新在前），供上下文装配按预算
+	// 读取最近历史；为 false 时按时间升序返回。
+	Descending bool
 	// Limit 单次查询的最大返回条数，必须位于 [1, MaxHistoryQueryLimit]。
 	Limit int
 }

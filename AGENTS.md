@@ -239,6 +239,15 @@ The App-scoped storage/public-error, durable Echo/Run state, Go trust-boundary/i
 - **外部 Runtime Host 进程产品接线**：`RuntimeHostBackend` 生产实现 `hostedRuntimeBackend`（宿主进程内 wazero 执行，含内存上限与执行时间预算）；`RuntimeHostProtocolServer` 服务端首次拥有真实 Backend（此前只有测试 fake）；全链路测试（真实 wazero 执行经完整协议被内核 GRPCHost 调用，含预算强制跨协议生效）；`main.go` 新增 `runtime-host` 子命令（`--install-root` + `--address`，独立信号上下文，loopback/Unix socket 强制）。**host function 是内核特权**：需要宿主函数投影的工件（内置 campus）只能内核进程内执行，外部宿主承载无宿主函数的 hosted 包——这是架构契约，不是降级路径。安装目录配置了 hosted 包而宿主地址缺失时内核拒绝就绪（fail-closed，无进程内回退）。
 - **Windows Job Object 资源限额**（替换原 fail-closed）：`process_limits_windows.go` 用 Job Object 强制 `MaxAddressBytes`（JOB_OBJECT_LIMIT_PROCESS_MEMORY，等效 RLIMIT_AS）与 `MaxCPUSeconds`（JOB_OBJECT_LIMIT_JOB_TIME + 耗尽终止动作，等效 RLIMIT_CPU）；无论限额是否为零都创建 Job 并附加 KILL_ON_JOB_CLOSE（等效 Unix 进程组清理，且内核崩溃后由 OS 兜底防孤儿）；Job 句柄由 `commandProcess.release` 持有、子进程回收后在 `finish()` 释放（提前释放会立即误杀，这是 `applyProcessLimits` 签名改为返回释放器的原因）。`max_open_files`/`max_file_bytes`：Windows 无对应进程级原语，非零值 fail-closed（正确语义而非降级）。集成测试验证 1 秒 CPU 限额下死循环子进程被系统强制终止。其余平台（macOS/BSD、Plan 9 等）维持非零限额 fail-closed。
 
+## 2026-08-13 上下文与记忆装配基线（feat/context-assembly）
+
+- **新模块 `internal/kernel/contextasm`**：由 Go 决定模型本次看到什么，Python 只接收装配完成的系统提示，不持有会话数据库凭据。按 Run 构造确定性上下文快照——配置系统提示修订 + 当前标准消息 + 受限会话历史 + 当前 Capability 投影；知识库证据与授权长期记忆分属独立模块，本包不为其预留空壳端口。
+- **预算与裁剪**：条目数（默认 20）、单条字符（2000）、总字符（12000）、时间范围（默认不限）、提示总字节（默认 24 KiB，不超过协议 32 KiB 上限）五类预算；裁剪策略固定保留最新、丢弃最旧，超龄消息直接排除；日志与事件只记录条数/字符/裁剪数，正文永不进入日志、审计载荷或公共 API（正文只以 sha256 摘要进入来源版本）。
+- **确定性快照与来源版本固化**：摘要（sha256）覆盖 App、配置修订、基础系统提示、时区、当前消息、历史条目（message_id+正文摘要+时间）与排序后的 Capability 投影，墙钟时间不进入摘要——相同配置修订与数据版本必然产生相同摘要。迁移 19 为 `runs` 增加 `session_id/user_id/message_id/context_digest/context_sources`；执行开始时 `SetRunContext` 一次性固化（set-once，重试新 attempt 重置并重新装配）。`run.context` SSE 事件携带摘要与数量（不含正文）。
+- **会话上下文归属**：`RunRequest` 新增会话字段但 `json:"-"`（不进入 HTTP 契约），Web/ingress 在受治理 Intake 成功后填充，客户端无法伪造会话归属；重试自动携带会话上下文（恢复时按原会话重新装配）。子 Run 是干净工作区（不携带会话、不装配历史），但同样固化自身上下文摘要。
+- **错误契约**：历史读取失败映射 `context_unavailable`（可重试，无副作用前自动重试）；基础提示单独超出预算映射 `context_budget_exceeded`（配置错误，不可重试）。装配器是强制接线：`NewOrchestrator` 缺少会话历史来源时显式终止，无静默降级。
+- 测试：contextasm 单测（确定性/预算裁剪/App 隔离/删除消息/Blob 正文/非文本占位/无会话/超预算失败/错误路径）+ orchestrator 集成测试（历史进入系统提示、当前消息排除、摘要与来源版本持久化、run.context 事件、子 Run 干净工作区）+ sqlite 迁移 19 与 SetRunContext set-once 测试。
+
 ## Known Production Blockers
 
 Unless the user explicitly reprioritizes, address these before expanding product breadth.

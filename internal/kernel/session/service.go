@@ -84,6 +84,12 @@ func (s *Service) EditMessage(ctx context.Context, edit MessageEdit, content []b
 	return s.store.EditMessage(ctx, edit, inlineContent(edit.NewContentRef, content))
 }
 
+// ListMessages 按 App 与 Session 约束读取受限历史（供上下文装配读取最近消息）。
+// 返回未删除消息的元数据；正文按消息的 ContentRef 通过 MessageContent 读取。
+func (s *Service) ListMessages(ctx context.Context, appID, sessionID string, query MessageQuery) ([]Message, error) {
+	return s.store.ListMessages(ctx, appID, sessionID, query)
+}
+
 // MessageContent 按消息的 ContentRef 装配正文（上下文装配原语）。
 // 已删除消息不可读取正文；Blob 模式返回内容与声明的 Size 不一致时拒绝。
 func (s *Service) MessageContent(ctx context.Context, message Message) ([]byte, error) {

@@ -31,9 +31,11 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/session"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/subagent"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/task"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/blob"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite"
 
 	"google.golang.org/grpc"
@@ -317,6 +319,19 @@ func run() (resultErr error) {
 		resultErr = errors.Join(resultErr, store.Close())
 	}()
 	observe.Info(ctx, "统一数据库已经就绪")
+	// 会话正文与附件 Blob 存储：与数据库同目录的 blobs 子目录。
+	// 上下文装配经 session.Service 统一读取内联与 Blob 模式的消息正文。
+	blobStore, err := blob.Open(filepath.Join(filepath.Dir(config.databasePath), "blobs"), session.MaxMessageContentBytes)
+	if err != nil {
+		return fmt.Errorf("open blob storage: %w", err)
+	}
+	defer func() {
+		resultErr = errors.Join(resultErr, blobStore.Close())
+	}()
+	sessionService, err := session.NewService(store, blobStore)
+	if err != nil {
+		return fmt.Errorf("create session service: %w", err)
+	}
 	if config.loadDemoData {
 		if err := bootstrap.LoadDemoBusData(ctx, store, time.Now()); err != nil {
 			return fmt.Errorf("load demo bus data: %w", err)
@@ -482,6 +497,7 @@ func run() (resultErr error) {
 		ProviderTimeout:    app.ProviderTimeout,
 		ModelConfigVersion: app.Revision,
 		AppConfigSource:    store,
+		Context:            sessionService,
 		RunTimeout:         90 * time.Second,
 		MaxRunAttempts:     3,
 		QueueCapacity:      128,

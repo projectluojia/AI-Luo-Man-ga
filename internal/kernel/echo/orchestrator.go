@@ -18,6 +18,7 @@ import (
 	agentv1 "github.com/projectluojia/AI-Luo-Man-ga/gen/agentv1"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/agentprotocol"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/appconfig"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contextasm"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/idempotency"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/publicerror"
@@ -63,6 +64,8 @@ type Config struct {
 	ModelConfigVersion string
 	PermissionScope    []string
 	AppConfigSource    appconfig.Source
+	Context            contextasm.HistorySource
+	ContextBudget      contextasm.Budget
 }
 
 type Orchestrator struct {
@@ -72,6 +75,7 @@ type Orchestrator struct {
 	policy      runtime.AppPolicy
 	store       Store
 	idempotency *idempotency.Manager
+	context     *contextasm.Assembler
 	config      Config
 	now         func() time.Time
 }
@@ -163,6 +167,11 @@ func NewOrchestrator(
 		})
 		config.ModelConfigVersion = fmt.Sprintf("%x", sha256.Sum256(configBytes))
 	}
+	assembler, err := contextasm.New(config.Context, config.ContextBudget)
+	if err != nil {
+		// 装配期编程错误：上下文来源缺失或预算非法必须显式终止，不做静默降级。
+		panic(fmt.Sprintf("orchestrator context assembly misconfigured: %v", err))
+	}
 	return &Orchestrator{
 		agent:       agent,
 		registry:    reg,
@@ -170,6 +179,7 @@ func NewOrchestrator(
 		policy:      policy,
 		store:       store,
 		idempotency: idempotency.NewManager(store),
+		context:     assembler,
 		config:      config,
 		now:         time.Now,
 	}
@@ -494,6 +504,9 @@ func (o *Orchestrator) CreateIdempotent(ctx context.Context, request RunRequest)
 		RunGroupID:         runID,
 		AppID:              o.config.AppID,
 		EchoID:             echoID,
+		SessionID:          request.SessionID,
+		UserID:             request.UserID,
+		MessageID:          request.MessageID,
 		Attempt:            1,
 		Status:             RunStatusQueued,
 		Model:              app.Model,
@@ -642,6 +655,46 @@ func (o *Orchestrator) executeClaimedRun(ctx context.Context, request RunRequest
 		return errors.Join(ErrAppDisabled, o.fail(ctx, run, "app_disabled", false))
 	}
 	capabilities := o.projectCapabilities(policy, run)
+	// 上下文装配：由 Go 决定模型本次看到的内容（配置系统提示 + 当前标准消息 +
+	// 受限会话历史 + 当前 Capability 投影），Python 只接收装配完成的系统提示。
+	basePrompt := app.SystemPrompt + "\n只能根据 Capability 返回的数据回答，不得编造班次、站点或线路。"
+	if run.ParentRunID != "" {
+		basePrompt += "\n这是受治理的子 Run。只完成父 Run 指定任务；最终结果仅返回父 Run，不直接面向用户。"
+	}
+	snapshot, err := o.context.Assemble(runContext, contextasm.Input{
+		AppID:            o.config.AppID,
+		SessionID:        run.SessionID,
+		CurrentMessageID: run.MessageID,
+		ConfigRevision:   run.ModelConfigVersion,
+		SystemPrompt:     basePrompt,
+		Timezone:         app.Timezone,
+		Capabilities:     capabilityVersions(capabilities),
+		InputMessage:     request.Message,
+		Now:              o.now().UTC(),
+	})
+	if err != nil {
+		observe.Error(ctx, "装配 Run 上下文快照失败", err)
+		return errors.Join(err, o.fail(ctx, run, "context_unavailable", true))
+	}
+	if err := o.store.SetRunContext(runContext, run, snapshot.Digest, snapshot.SourcesJSON()); err != nil {
+		observe.Error(ctx, "固化 Run 上下文来源版本失败", err)
+		return errors.Join(err, o.fail(ctx, run, "internal_error", true))
+	}
+	if err := emitEvent("run.context", map[string]any{
+		"digest":           snapshot.Digest,
+		"config_revision":  run.ModelConfigVersion,
+		"history_count":    len(snapshot.History.Entries),
+		"history_chars":    snapshot.History.TotalChars,
+		"history_trimmed":  snapshot.History.Trimmed,
+		"capability_count": len(capabilities),
+	}); err != nil {
+		return errors.Join(err, o.fail(ctx, run, "event_delivery_failed", true))
+	}
+	observe.Info(ctx, "Run 上下文快照已装配",
+		observe.StringAttr("context_digest", snapshot.Digest),
+		observe.IntAttr("history_count", len(snapshot.History.Entries)),
+		observe.IntAttr("history_trimmed", snapshot.History.Trimmed),
+	)
 	stream, err := o.agent.Run(runContext)
 	if err != nil {
 		observe.Error(ctx, "创建 Python Agent 双向流失败", err)
@@ -649,15 +702,7 @@ func (o *Orchestrator) executeClaimedRun(ctx context.Context, request RunRequest
 		return errors.Join(runErr, o.fail(ctx, run, "agent_unavailable", true))
 	}
 	defer stream.CloseSend()
-	systemPrompt := fmt.Sprintf(
-		"%s\n当前系统时间：%s（%s）。只能根据 Capability 返回的数据回答，不得编造班次、站点或线路。",
-		app.SystemPrompt,
-		o.now().Format(time.RFC3339),
-		app.Timezone,
-	)
-	if run.ParentRunID != "" {
-		systemPrompt += "\n这是受治理的子 Run。只完成父 Run 指定任务；最终结果仅返回父 Run，不直接面向用户。"
-	}
+	systemPrompt := snapshot.SystemPrompt
 	startFrame := &agentv1.AgentFrame{
 		EchoId:   echoID,
 		RunId:    runID,
@@ -1018,6 +1063,16 @@ func (o *Orchestrator) projectCapabilities(policy appconfig.PolicySnapshot, run 
 	return projected
 }
 
+// capabilityVersions 把当前投影的 Capability 转换为 "id@version" 列表，
+// 作为上下文装配的 Capability 来源（装配器内排序后固化版本）。
+func capabilityVersions(capabilities []*agentv1.Capability) []string {
+	versions := make([]string, 0, len(capabilities))
+	for _, capability := range capabilities {
+		versions = append(versions, capability.Id+"@"+capability.Version)
+	}
+	return versions
+}
+
 func (o *Orchestrator) invokeCapability(ctx context.Context, run RunRecord, call *agentv1.CapabilityCall) *agentv1.CapabilityResult {
 	runID := run.ID
 	if call == nil || call.CallId == "" || len(call.CallId) > 128 || idempotency.ValidateKey(call.CallId) != nil {
@@ -1246,6 +1301,8 @@ func (o *Orchestrator) retryRun(ctx context.Context, run RunRecord, failure publ
 	next.LeaseExpiresAt = nil
 	next.LastAgentSequence = 0
 	next.RecoverableState = json.RawMessage(`{}`)
+	next.ContextDigest = ""
+	next.ContextSources = json.RawMessage(`{}`)
 	next.ErrorCode = ""
 	next.ErrorMessage = ""
 	next.CreatedAt = completedAt

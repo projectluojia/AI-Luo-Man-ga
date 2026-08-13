@@ -88,6 +88,7 @@ func (s *Server) ingest(writer http.ResponseWriter, request *http.Request) {
 	}
 	echoID, created, err := s.echoes.CreateIdempotent(request.Context(), kernelecho.RunRequest{
 		Message: intake.Text, IdempotencyKey: event.IdempotencyKey,
+		SessionID: intake.SessionID, UserID: intake.UserID, MessageID: intake.MessageID,
 	})
 	if err != nil {
 		access.WriteEchoError(writer, request, err)
