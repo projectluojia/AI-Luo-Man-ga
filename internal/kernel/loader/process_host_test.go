@@ -164,7 +164,8 @@ func TestIsolatedProcessHostRunsOutsideKernelAndShutsDownGracefully(t *testing.T
 		decoded["app_id"] != "campus-services" || decoded["call_id"] != "call-1" {
 		t.Fatalf("result=%s err=%v", result, err)
 	}
-	if resolves.Load() != 2 || verifies.Load() != 2 {
+	// 三层校验：注册期 selectHost、加载期 loadRuntime、执行前 Load 内部 TOCTOU 防御各一次。
+	if resolves.Load() != 3 || verifies.Load() != 3 {
 		t.Fatalf("resolves=%d verifies=%d", resolves.Load(), verifies.Load())
 	}
 	shutdownContext, cancel := context.WithTimeout(context.Background(), 3*time.Second)
