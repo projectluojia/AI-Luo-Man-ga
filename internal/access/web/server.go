@@ -115,6 +115,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/echoes/{echo_id}", s.getEcho)
 	mux.HandleFunc("DELETE /api/v1/echoes/{echo_id}", s.cancelEcho)
 	mux.HandleFunc("GET /api/v1/echoes/{echo_id}/events", s.echoEvents)
+	// 产品前端聊天契约（LuoYing-Frontend）：流式与非流式两种形态，均走
+	// 标准 Intake → Echo → 事件翻译链路，不直接暴露内核事件类型。
+	mux.HandleFunc("POST /chat/stream", s.chatStream)
+	mux.HandleFunc("POST /chat", s.chatNonStream)
 	static, _ := fs.Sub(staticFiles, "static")
 	mux.Handle("GET /", http.FileServer(http.FS(static)))
 	return observe.HTTPMiddleware("web_access", access.SecurityHeaders(mux))
