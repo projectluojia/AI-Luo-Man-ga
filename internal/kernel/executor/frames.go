@@ -16,7 +16,6 @@ type (
 	Frame_FinalMessage     = agentv1.AgentFrame_FinalMessage
 	Frame_RunFailure       = agentv1.AgentFrame_RunFailure
 	Frame_RunUsage         = agentv1.AgentFrame_RunUsage
-	Frame_CancelRun        = agentv1.AgentFrame_CancelRun
 
 	StartRun         = agentv1.StartRun
 	Capability       = agentv1.Capability

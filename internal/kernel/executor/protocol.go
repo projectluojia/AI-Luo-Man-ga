@@ -25,7 +25,6 @@ const (
 	MaxReplyDeltaBytes        = 16 << 10
 	MaxFinalMessageBytes      = 64 << 10
 	MaxFailureMessageBytes    = 1024
-	MaxCancelReasonBytes      = 1024
 	MaxIdentifierBytes        = 128
 	MaxDescriptionBytes       = 4096
 	MaxNameBytes              = 256
@@ -218,17 +217,6 @@ func ValidateCapabilityResultFrame(frame *Frame, echoID, runID string, expectedS
 		!validToken(result.ErrorCode, 64) ||
 		!codePattern.MatchString(result.ErrorCode) ||
 		!validText(result.ErrorMessage, 1, MaxFailureMessageBytes) {
-		return ErrInvalidFrame
-	}
-	return nil
-}
-
-func ValidateCancelFrame(frame *Frame, echoID, runID string, expectedSequence uint64) error {
-	if err := validateEnvelope(frame, echoID, runID, expectedSequence); err != nil {
-		return err
-	}
-	cancel := frame.GetCancelRun()
-	if cancel == nil || !validText(cancel.Reason, 1, MaxCancelReasonBytes) {
 		return ErrInvalidFrame
 	}
 	return nil
