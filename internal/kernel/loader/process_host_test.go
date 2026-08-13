@@ -141,11 +141,11 @@ func TestIsolatedProcessHostRunsOutsideKernelAndShutsDownGracefully(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	manager, err := loader.New(map[string]loader.Host{loader.ModeIsolated: host})
+	manager, err := loader.New(host)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := manager.Register(runtimeManifest("isolated.real", loader.ModeIsolated)); err != nil {
+	if err := manager.Register(context.Background(), runtimeManifest("isolated.real", loader.ModeIsolated)); err != nil {
 		t.Fatal(err)
 	}
 	result, err := manager.Handler("isolated.real")(
@@ -203,11 +203,11 @@ func TestIsolatedProcessHostEnforcesFileSizeLimit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manager, err := loader.New(map[string]loader.Host{loader.ModeIsolated: host})
+	manager, err := loader.New(host)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := manager.Register(runtimeManifest("isolated.limit", loader.ModeIsolated)); err != nil {
+	if err := manager.Register(context.Background(), runtimeManifest("isolated.limit", loader.ModeIsolated)); err != nil {
 		t.Fatal(err)
 	}
 	_, err = manager.Handler("isolated.limit")(
@@ -257,11 +257,11 @@ func TestIsolatedProcessHostForcesBoundedExitAfterStopGrace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manager, err := loader.New(map[string]loader.Host{loader.ModeIsolated: host})
+	manager, err := loader.New(host)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := manager.Register(runtimeManifest("isolated.force", loader.ModeIsolated)); err != nil {
+	if err := manager.Register(context.Background(), runtimeManifest("isolated.force", loader.ModeIsolated)); err != nil {
 		t.Fatal(err)
 	}
 	if err := manager.EnsureLoaded(context.Background(), "isolated.force"); err != nil {
