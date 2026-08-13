@@ -1,4 +1,4 @@
-package agentprotocol
+package executor
 
 import (
 	"encoding/json"
@@ -9,8 +9,6 @@ import (
 
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
-
-	agentv1 "github.com/projectluojia/AI-Luo-Man-ga/gen/agentv1"
 )
 
 const (
@@ -39,12 +37,12 @@ const (
 )
 
 var (
-	ErrVersionMismatch = errors.New("agent protocol version mismatch")
-	ErrInvalidFrame    = errors.New("invalid agent protocol frame")
-	ErrSequence        = errors.New("agent protocol frame sequence violation")
-	ErrFrameTooLarge   = errors.New("agent protocol frame exceeds size limit")
-	ErrUnexpectedFrame = errors.New("unexpected agent protocol frame type")
-	ErrDuplicateCall   = errors.New("duplicate agent capability call id")
+	ErrVersionMismatch = errors.New("executor protocol version mismatch")
+	ErrInvalidFrame    = errors.New("invalid executor protocol frame")
+	ErrSequence        = errors.New("executor protocol frame sequence violation")
+	ErrFrameTooLarge   = errors.New("executor protocol frame exceeds size limit")
+	ErrUnexpectedFrame = errors.New("unexpected executor protocol frame type")
+	ErrDuplicateCall   = errors.New("duplicate executor capability call id")
 )
 
 var (
@@ -63,7 +61,7 @@ func Supports(versions []string) bool {
 	return false
 }
 
-func ValidateStartFrame(frame *agentv1.AgentFrame) error {
+func ValidateStartFrame(frame *Frame) error {
 	if err := validateEnvelope(frame, frame.GetEchoId(), frame.GetRunId(), 1); err != nil {
 		return err
 	}
@@ -115,7 +113,7 @@ func ValidateStartFrame(frame *agentv1.AgentFrame) error {
 }
 
 func ValidateRunUsage(
-	usage *agentv1.RunUsage,
+	usage *RunUsage,
 	previousInput uint64,
 	previousOutput uint64,
 	previousTotal uint64,
@@ -148,11 +146,11 @@ func ValidateRunUsage(
 	return nil
 }
 
-func ValidateInboundEnvelope(frame *agentv1.AgentFrame, echoID, runID string, expectedSequence uint64) error {
+func ValidateInboundEnvelope(frame *Frame, echoID, runID string, expectedSequence uint64) error {
 	return validateEnvelope(frame, echoID, runID, expectedSequence)
 }
 
-func ValidateRunAccepted(frame *agentv1.AgentFrame) error {
+func ValidateRunAccepted(frame *Frame) error {
 	accepted := frame.GetRunAccepted()
 	if accepted == nil {
 		return ErrUnexpectedFrame
@@ -163,7 +161,7 @@ func ValidateRunAccepted(frame *agentv1.AgentFrame) error {
 	return nil
 }
 
-func ValidateCapabilityCall(call *agentv1.CapabilityCall) error {
+func ValidateCapabilityCall(call *CapabilityCall) error {
 	if call == nil ||
 		!validToken(call.CallId, MaxIdentifierBytes) ||
 		!validToken(call.CapabilityId, MaxIdentifierBytes) ||
@@ -175,21 +173,21 @@ func ValidateCapabilityCall(call *agentv1.CapabilityCall) error {
 	return nil
 }
 
-func ValidateReplyDelta(delta *agentv1.ReplyDelta) error {
+func ValidateReplyDelta(delta *ReplyDelta) error {
 	if delta == nil || !validText(delta.Text, 1, MaxReplyDeltaBytes) {
 		return ErrInvalidFrame
 	}
 	return nil
 }
 
-func ValidateFinalMessage(message *agentv1.FinalMessage) error {
+func ValidateFinalMessage(message *FinalMessage) error {
 	if message == nil || !validText(message.Text, 1, MaxFinalMessageBytes) {
 		return ErrInvalidFrame
 	}
 	return nil
 }
 
-func ValidateRunFailure(failure *agentv1.RunFailure) error {
+func ValidateRunFailure(failure *RunFailure) error {
 	if failure == nil ||
 		!validToken(failure.Code, 64) ||
 		!codePattern.MatchString(failure.Code) ||
@@ -199,7 +197,7 @@ func ValidateRunFailure(failure *agentv1.RunFailure) error {
 	return nil
 }
 
-func ValidateCapabilityResultFrame(frame *agentv1.AgentFrame, echoID, runID string, expectedSequence uint64) error {
+func ValidateCapabilityResultFrame(frame *Frame, echoID, runID string, expectedSequence uint64) error {
 	if err := validateEnvelope(frame, echoID, runID, expectedSequence); err != nil {
 		return err
 	}
@@ -225,7 +223,7 @@ func ValidateCapabilityResultFrame(frame *agentv1.AgentFrame, echoID, runID stri
 	return nil
 }
 
-func ValidateCancelFrame(frame *agentv1.AgentFrame, echoID, runID string, expectedSequence uint64) error {
+func ValidateCancelFrame(frame *Frame, echoID, runID string, expectedSequence uint64) error {
 	if err := validateEnvelope(frame, echoID, runID, expectedSequence); err != nil {
 		return err
 	}
@@ -236,7 +234,7 @@ func ValidateCancelFrame(frame *agentv1.AgentFrame, echoID, runID string, expect
 	return nil
 }
 
-func validateEnvelope(frame *agentv1.AgentFrame, echoID, runID string, expectedSequence uint64) error {
+func validateEnvelope(frame *Frame, echoID, runID string, expectedSequence uint64) error {
 	if frame == nil {
 		return ErrInvalidFrame
 	}

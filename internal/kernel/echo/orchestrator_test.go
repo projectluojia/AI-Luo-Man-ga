@@ -14,10 +14,10 @@ import (
 	"time"
 
 	agentv1 "github.com/projectluojia/AI-Luo-Man-ga/gen/agentv1"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/agentprotocol"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/appconfig"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	kernelecho "github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/executor"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/session"
@@ -259,7 +259,7 @@ func (a *nestedRunAgent) runRoot(stream agentv1.AgentRuntime_RunServer, start *a
 func acceptedFrame(start *agentv1.AgentFrame, sequence uint64) *agentv1.AgentFrame {
 	return &agentv1.AgentFrame{
 		EchoId: start.EchoId, RunId: start.RunId, Sequence: sequence,
-		Body: &agentv1.AgentFrame_RunAccepted{RunAccepted: &agentv1.RunAccepted{ProtocolVersion: agentprotocol.Version}},
+		Body: &agentv1.AgentFrame_RunAccepted{RunAccepted: &agentv1.RunAccepted{ProtocolVersion: executor.Version}},
 	}
 }
 
@@ -284,7 +284,7 @@ func (a *retryOnceAgent) Run(stream agentv1.AgentRuntime_RunServer) error {
 	}
 	if err := stream.Send(&agentv1.AgentFrame{
 		EchoId: start.EchoId, RunId: start.RunId, Sequence: 1,
-		Body: &agentv1.AgentFrame_RunAccepted{RunAccepted: &agentv1.RunAccepted{ProtocolVersion: agentprotocol.Version}},
+		Body: &agentv1.AgentFrame_RunAccepted{RunAccepted: &agentv1.RunAccepted{ProtocolVersion: executor.Version}},
 	}); err != nil {
 		return err
 	}
@@ -323,7 +323,7 @@ func (a *slowSuccessAgent) Run(stream agentv1.AgentRuntime_RunServer) error {
 	for _, frame := range []*agentv1.AgentFrame{
 		{
 			EchoId: start.EchoId, RunId: start.RunId, Sequence: 1,
-			Body: &agentv1.AgentFrame_RunAccepted{RunAccepted: &agentv1.RunAccepted{ProtocolVersion: agentprotocol.Version}},
+			Body: &agentv1.AgentFrame_RunAccepted{RunAccepted: &agentv1.RunAccepted{ProtocolVersion: executor.Version}},
 		},
 		{
 			EchoId: start.EchoId, RunId: start.RunId, Sequence: 2,
@@ -351,7 +351,7 @@ func (a *sideEffectFailureAgent) Run(stream agentv1.AgentRuntime_RunServer) erro
 	for _, frame := range []*agentv1.AgentFrame{
 		{
 			EchoId: start.EchoId, RunId: start.RunId, Sequence: 1,
-			Body: &agentv1.AgentFrame_RunAccepted{RunAccepted: &agentv1.RunAccepted{ProtocolVersion: agentprotocol.Version}},
+			Body: &agentv1.AgentFrame_RunAccepted{RunAccepted: &agentv1.RunAccepted{ProtocolVersion: executor.Version}},
 		},
 		{
 			EchoId: start.EchoId, RunId: start.RunId, Sequence: 2,
@@ -384,7 +384,7 @@ func (a *configCaptureAgent) Run(stream agentv1.AgentRuntime_RunServer) error {
 	for _, frame := range []*agentv1.AgentFrame{
 		{
 			EchoId: start.EchoId, RunId: start.RunId, Sequence: 1,
-			Body: &agentv1.AgentFrame_RunAccepted{RunAccepted: &agentv1.RunAccepted{ProtocolVersion: agentprotocol.Version}},
+			Body: &agentv1.AgentFrame_RunAccepted{RunAccepted: &agentv1.RunAccepted{ProtocolVersion: executor.Version}},
 		},
 		{
 			EchoId: start.EchoId, RunId: start.RunId, Sequence: 2,
@@ -420,7 +420,7 @@ func (a *revokingPolicyAgent) Run(stream agentv1.AgentRuntime_RunServer) error {
 	}
 	if err := stream.Send(&agentv1.AgentFrame{
 		EchoId: start.EchoId, RunId: start.RunId, Sequence: 1,
-		Body: &agentv1.AgentFrame_RunAccepted{RunAccepted: &agentv1.RunAccepted{ProtocolVersion: agentprotocol.Version}},
+		Body: &agentv1.AgentFrame_RunAccepted{RunAccepted: &agentv1.RunAccepted{ProtocolVersion: executor.Version}},
 	}); err != nil {
 		return err
 	}
@@ -530,7 +530,7 @@ func (a *missingUsageAgent) Run(stream agentv1.AgentRuntime_RunServer) error {
 	}
 	if err := stream.Send(&agentv1.AgentFrame{
 		EchoId: start.EchoId, RunId: start.RunId, Sequence: 1,
-		Body: &agentv1.AgentFrame_RunAccepted{RunAccepted: &agentv1.RunAccepted{ProtocolVersion: agentprotocol.Version}},
+		Body: &agentv1.AgentFrame_RunAccepted{RunAccepted: &agentv1.RunAccepted{ProtocolVersion: executor.Version}},
 	}); err != nil {
 		return err
 	}
@@ -547,7 +547,7 @@ func (a *duplicateCallAgent) Run(stream agentv1.AgentRuntime_RunServer) error {
 	}
 	if err := stream.Send(&agentv1.AgentFrame{
 		EchoId: start.EchoId, RunId: start.RunId, Sequence: 1,
-		Body: &agentv1.AgentFrame_RunAccepted{RunAccepted: &agentv1.RunAccepted{ProtocolVersion: agentprotocol.Version}},
+		Body: &agentv1.AgentFrame_RunAccepted{RunAccepted: &agentv1.RunAccepted{ProtocolVersion: executor.Version}},
 	}); err != nil {
 		return err
 	}
@@ -585,7 +585,7 @@ func (a *lateFrameAgent) Run(stream agentv1.AgentRuntime_RunServer) error {
 	frames := []*agentv1.AgentFrame{
 		{
 			EchoId: start.EchoId, RunId: start.RunId, Sequence: 1,
-			Body: &agentv1.AgentFrame_RunAccepted{RunAccepted: &agentv1.RunAccepted{ProtocolVersion: agentprotocol.Version}},
+			Body: &agentv1.AgentFrame_RunAccepted{RunAccepted: &agentv1.RunAccepted{ProtocolVersion: executor.Version}},
 		},
 		{
 			EchoId: start.EchoId, RunId: start.RunId, Sequence: 2,
@@ -617,7 +617,7 @@ func (a *boundaryAgent) Run(stream agentv1.AgentRuntime_RunServer) error {
 	}
 	if err := stream.Send(&agentv1.AgentFrame{
 		EchoId: start.EchoId, RunId: start.RunId, Sequence: 1,
-		Body: &agentv1.AgentFrame_RunAccepted{RunAccepted: &agentv1.RunAccepted{ProtocolVersion: agentprotocol.Version}},
+		Body: &agentv1.AgentFrame_RunAccepted{RunAccepted: &agentv1.RunAccepted{ProtocolVersion: executor.Version}},
 	}); err != nil {
 		return err
 	}
@@ -655,7 +655,7 @@ func (f *fakeAgent) Run(stream agentv1.AgentRuntime_RunServer) error {
 	}
 	if err := stream.Send(&agentv1.AgentFrame{
 		EchoId: start.EchoId, RunId: start.RunId, Sequence: 1,
-		Body: &agentv1.AgentFrame_RunAccepted{RunAccepted: &agentv1.RunAccepted{ProtocolVersion: agentprotocol.Version}},
+		Body: &agentv1.AgentFrame_RunAccepted{RunAccepted: &agentv1.RunAccepted{ProtocolVersion: executor.Version}},
 	}); err != nil {
 		return err
 	}
@@ -1529,7 +1529,7 @@ func TestOrchestratorRejectsDuplicateAgentCallBeforeSecondEffect(t *testing.T) {
 		kernelecho.Config{AppID: campus.AppID, Model: "test-model", SystemPrompt: "test", Timezone: "Asia/Shanghai", MaxSteps: 4, RunTimeout: 5 * time.Second, Context: newSessionSource(t, store)},
 	)
 	echoID, err := orchestrator.Run(ctx, kernelecho.RunRequest{Message: "duplicate", IdempotencyKey: "duplicate-run"}, nil)
-	if !errors.Is(err, agentprotocol.ErrDuplicateCall) {
+	if !errors.Is(err, executor.ErrDuplicateCall) {
 		t.Fatalf("run error=%v, want ErrDuplicateCall", err)
 	}
 	if busStore.routeCalls.Load() != 1 {
@@ -1576,7 +1576,7 @@ func TestOrchestratorRejectsFramesAfterTerminalWithoutPublishingFinal(t *testing
 		kernelecho.Config{AppID: campus.AppID, Model: "test-model", SystemPrompt: "test", Timezone: "Asia/Shanghai", MaxSteps: 4, RunTimeout: 5 * time.Second, Context: newSessionSource(t, store)},
 	)
 	echoID, err := orchestrator.Run(ctx, kernelecho.RunRequest{Message: "late", IdempotencyKey: "late-run"}, nil)
-	if !errors.Is(err, agentprotocol.ErrUnexpectedFrame) {
+	if !errors.Is(err, executor.ErrUnexpectedFrame) {
 		t.Fatalf("run error=%v, want ErrUnexpectedFrame", err)
 	}
 	record, events, getErr := store.GetEcho(ctx, campus.AppID, echoID)
@@ -1621,7 +1621,7 @@ func TestOrchestratorRejectsSuccessfulTerminalWithoutUsage(t *testing.T) {
 		kernelecho.Config{AppID: campus.AppID, Model: "test-model", SystemPrompt: "test", Timezone: "Asia/Shanghai", MaxSteps: 4, RunTimeout: 5 * time.Second, Context: newSessionSource(t, store)},
 	)
 	echoID, err := orchestrator.Run(ctx, kernelecho.RunRequest{Message: "usage", IdempotencyKey: "missing-usage-run"}, nil)
-	if !errors.Is(err, agentprotocol.ErrUnexpectedFrame) {
+	if !errors.Is(err, executor.ErrUnexpectedFrame) {
 		t.Fatalf("run error=%v, want ErrUnexpectedFrame", err)
 	}
 	record, events, getErr := store.GetEcho(ctx, campus.AppID, echoID)

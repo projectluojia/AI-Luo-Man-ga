@@ -241,9 +241,12 @@ func (c *Catalog) readRecord(ctx context.Context, directory string) (InstalledRe
 	if installed.Runtime.IdleTTLMS > uint64((30*24*time.Hour)/time.Millisecond) {
 		return InstalledRecord{}, ErrInstallCatalogInvalid
 	}
+	// installed 包一律是能力提供者角色：其线协议（runtime_host.proto）是
+	// 请求/响应的能力执行协议；执行者角色需要执行者会话协议，由未来
+	// 专门的宿主承载，不允许以 installed 清单伪装。
 	runtimeManifest := Manifest{
 		ID: installed.Runtime.ID, Version: installed.Runtime.Version, Mode: installed.Runtime.Mode,
-		LockedDigest: lock.ArtifactSHA256, Pin: installed.Runtime.Pin,
+		Role: RoleCapability, LockedDigest: lock.ArtifactSHA256, Pin: installed.Runtime.Pin,
 		IdleTTL: time.Duration(installed.Runtime.IdleTTLMS) * time.Millisecond,
 	}
 	if err := validateManifest(runtimeManifest); err != nil {
@@ -586,7 +589,8 @@ func hashInstalledArtifact(ctx context.Context, path string) (string, error) {
 
 func sameRuntimeManifest(left, right Manifest) bool {
 	return left.ID == right.ID && left.Version == right.Version && left.Mode == right.Mode &&
-		left.LockedDigest == right.LockedDigest && left.Pin == right.Pin && left.IdleTTL == right.IdleTTL
+		left.Role == right.Role && left.LockedDigest == right.LockedDigest &&
+		left.Pin == right.Pin && left.IdleTTL == right.IdleTTL
 }
 
 func cloneProcessSpec(spec ProcessSpec) ProcessSpec {

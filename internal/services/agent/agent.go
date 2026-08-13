@@ -2,7 +2,7 @@
 // internal/kernel/loader 的 Host 接口以 isolated Runtime 形态受监督（进程
 // 启动、资源限额、健康检查与优雅清理复用 loader 进程原语），经 agent.Record
 // 与 campus/installed 包同一 RegisterInstalled 路径注册。内核只通过
-// agentprotocol 契约使用它（ClientProvider/ProcessLifecycle），不依赖本包。
+// internal/kernel/executor 契约使用它（ClientProvider/ProcessLifecycle），不依赖本包。
 // 对外核心能力为 agent.run（受治理的 child Run/Subagent），由 Register 在
 // 内核 Orchestrator 装配完成后单独注册。
 package agent
@@ -13,8 +13,8 @@ import (
 	"path/filepath"
 	"runtime"
 
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/agentprotocol"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/executor"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
 )
 
@@ -34,7 +34,7 @@ const (
 // runtimeDigest 锁定内置 agent 的运行时契约（进程模块 + 协议版本）：
 // 协议升级会自然改变 digest，防止与旧协议误配。
 var runtimeDigest = func() string {
-	sum := sha256.Sum256([]byte("ailuo.agent built-in isolated agent runtime\nprotocol " + agentprotocol.Version))
+	sum := sha256.Sum256([]byte("ailuo.agent built-in isolated agent runtime\nprotocol " + executor.Version))
 	return hex.EncodeToString(sum[:])
 }()
 

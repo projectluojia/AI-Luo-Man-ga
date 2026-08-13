@@ -230,9 +230,9 @@ The App-scoped storage/public-error, durable Echo/Run state, Go trust-boundary/i
 
 - **agent 是与其他 Service 同级的 `internal/services/agent` 包，且以插件形态注册**：运行实现（`agent.Host`/`agent.Runtime`，implements `loader.Host`/`loader.Runtime`）与能力面注册（`agent.Register`：ServiceID=`agent`、核心能力 `agent.run`）同包内聚；`internal/kernel/loader` 不包含任何 agent 特化代码（`loader/agent_host.go` 与 `internal/kernel/subagent` 已删除）。Python Agent 进程经 isolated Runtime 形态受监督：进程启动、资源限额、优雅停止与强制清理复用 loader 导出的进程原语（`StartProcess`/`Process` 的 `Reap`/`Terminate`/`Kill`/`Release` 与 `ValidProcessDuration`/`ValidProcessLimits`）。
 - **统一 Loader（共享 Manager）**：`loader.New(hosts ...Host)` 支持同一运行模式多个宿主（内置 campus 的 WasmHost、内置 agent 的 isolated 宿主、installed 的 GRPCHost/IsolatedProcessHost 同池），每个宿主经 `Mode()` 声明模式；清单注册时按 `Verify` 精确绑定唯一宿主（零匹配/歧义匹配都在注册期 fail-closed），绑定结果固化在条目上，加载期不再重新选择。main.go 只装配一个 `runtimeLoader`：内置包与 installed 包统一 `RegisterInstalled`、统一 `Warmup`、统一 `Shutdown`，不再按包分叉多个 Manager。
-- **agent 插件化（Go 核心不写死 agent，只使用 agent 服务）**：`agent.Record(host)` 返回安装清单（单一来源：与宿主清单一致），与 `campus.Record()` 同一 `RegisterInstalled` 调用注册；agent 记录只携带运行时清单（`agent.run` 依赖 Orchestrator，由 `agent.Register` 在装配完成后单独注册），`RegisterInstalled` 对运行时专用记录跳过空 Registry 批注册。预热清单由各清单的 `Pin` 声明经 `runtimeLoader.Pinned()` 统一推导，不再硬编码运行时标识。内核契约迁入 `internal/kernel/agentprotocol`：`ClientProvider`（`AgentClient()` 取 agent 协议客户端）与 `ProcessLifecycle`（`Done`/`Err` 崩溃监控），任何实现该契约的运行时都可充当内核 AI 执行者——换语言 agent = 新 Host + Record + 实现契约，内核零改动。
+- **agent 插件化（Go 核心不写死 agent，只使用执行者契约）**：`agent.Record(host)` 返回安装清单（单一来源：与宿主清单一致），与 `campus.Record()` 同一 `RegisterInstalled` 调用注册；agent 记录只携带运行时清单（`agent.run` 依赖 Orchestrator，由 `agent.Register` 在装配完成后单独注册），`RegisterInstalled` 对运行时专用记录跳过空 Registry 批注册。预热清单由各清单的 `Pin` 声明经 `runtimeLoader.Pinned()` 统一推导，不再硬编码运行时标识。内核契约迁入 `internal/kernel/executor`：`Client`（`Run`/`Health`，线协议生成类型经别名暴露）、`ClientProvider`（`Client()` 取执行者协议客户端）与 `ProcessLifecycle`（`Done`/`Err` 崩溃监控），任何实现该契约的运行时都可充当内核 AI 执行者——换语言执行者 = 新 Host + Record + 实现契约，内核零改动。
 - **配置无 `With*` 选项函数**：`runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{...})` 与 `confirmation.NewService(store, confirmation.Config{...})` 使用显式 Config 结构体，无函数式选项、无分叉默认逻辑。
-- 健康检查内聚到 `internal/kernel/health`：`AgentChecker`（协议协商 + 指定模型 Provider 就绪）、`AgentAppChecker`（读取当前 App 配置的模型与启停状态再检查），与 `Combined` 一起构成 readiness。
+- 健康检查内聚到 `internal/kernel/health`：`ExecutorChecker`（协议协商 + 指定模型 Provider 就绪）、`ExecutorAppChecker`（读取当前 App 配置的模型与启停状态再检查），与 `Combined` 一起构成 readiness。
 - 停止语义与 isolated 扩展一致：Spawn 模式先优雅终止等待（stopGrace），超时强制清理（terminateGrace）；连接模式只关闭 gRPC 连接、不拥有进程。e2e 全链路（Go → Python Agent → 子任务 → Capability → 存储 → SSE）真实走 `agent.Host` Spawn 路径。
 
 ## 2026-08-13 最终仓库结构与 tools 共享基线
@@ -257,6 +257,13 @@ The App-scoped storage/public-error, durable Echo/Run state, Go trust-boundary/i
 - **会话上下文归属**：`RunRequest` 新增会话字段但 `json:"-"`（不进入 HTTP 契约），Web/ingress 在受治理 Intake 成功后填充，客户端无法伪造会话归属；重试自动携带会话上下文（恢复时按原会话重新装配）。子 Run 是干净工作区（不携带会话、不装配历史），但同样固化自身上下文摘要。
 - **错误契约**：历史读取失败映射 `context_unavailable`（可重试，无副作用前自动重试）；基础提示单独超出预算映射 `context_budget_exceeded`（配置错误，不可重试）。装配器是强制接线：`NewOrchestrator` 缺少会话历史来源时显式终止，无静默降级。
 - 测试：contextasm 单测（确定性/预算裁剪/App 隔离/删除消息/Blob 正文/非文本占位/无会话/超预算失败/错误路径）+ orchestrator 集成测试（历史进入系统提示、当前消息排除、摘要与来源版本持久化、run.context 事件、子 Run 干净工作区）+ sqlite 迁移 19 与 SetRunContext set-once 测试。
+
+## 2026-08-13 执行者契约与角色轴基线（feat/executor-contract）
+
+- **执行者是内核一等角色，agent 只是其一实现**：`internal/kernel/agentprotocol` 迁名为 `internal/kernel/executor`——内核唯一执行者契约。`executor.Client`（`Run` 双向流 + `Health`）是内核消费执行者的协议客户端面，`ClientProvider`/`ProcessLifecycle` 是运行时契约；agentv1 生成类型经别名（`Frame`/`StartRun`/`CapabilityCall` 等）只从契约包暴露，内核逻辑（orchestrator/health/contextasm/sqlite）不再直接引用生成包。任何能驱动受治理 Run 会话的实现（LLM 智能体、规划器、工作流、远程服务、其他语言）都可充当执行者；Python agent 只是第一个实现。
+- **角色轴进入 Loader 清单**：`Manifest.Role`（`capability` 能力提供者 / `executor` 执行者）注册期校验；`Runtime` 接口只保留生命周期面（Describe/Start/Health/Stop），能力执行面拆为独立 `Invoker` 接口，执行者面为 `executor.ClientProvider`——角色与执行面一致性在加载期强制（能力提供者必须实现 Invoker，执行者必须实现契约），`ErrUnsupportedMode` 路径消除（agent 不再有"不适用"的 Invoke）。`Manager.Handler` 只服务能力提供者；`Manager.Executor(ctx)` 解析本 Deployment 唯一执行者运行时（零/多个 fail-closed），`Lease.ID()` 暴露清单标识。
+- **执行者选择是解析而非硬编码**：main.go 经 `runtimeLoader.Executor(ctx)` 获取执行者租约并按契约取客户端，不再出现 `agent.RuntimeID`/手动契约断言；catalog 构造的 installed 清单一律声明 capability 角色（runtime_host.proto 即能力执行协议，执行者会话协议由未来专门宿主承载）。升级拒绝角色变更（角色是运行时身份的一部分）。
+- 测试：executor 契约协议测试迁移 + 角色负向测试（无角色清单拒绝、能力角色缺 Invoker 加载失败、执行者角色缺契约加载失败、无/多重执行者 fail-closed、升级角色变更拒绝）+ e2e 全链路真实走 `Manager.Executor` 解析路径。
 
 ## Known Production Blockers
 

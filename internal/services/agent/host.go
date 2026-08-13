@@ -8,7 +8,7 @@ import (
 	"time"
 
 	agentv1 "github.com/projectluojia/AI-Luo-Man-ga/gen/agentv1"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/agentprotocol"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/executor"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
 
 	"google.golang.org/grpc"
@@ -72,7 +72,7 @@ func NewHost(config Config) (*Host, error) {
 		config: config,
 		manifest: loader.Manifest{
 			ID: RuntimeID, Version: runtimeVersion, Mode: loader.ModeIsolated,
-			LockedDigest: runtimeDigest, Pin: true,
+			Role: loader.RoleExecutor, LockedDigest: runtimeDigest, Pin: true,
 		},
 	}, nil
 }
@@ -152,7 +152,7 @@ func validateSpec(spec Spec, spawn bool) error {
 	return nil
 }
 
-// dial 连接 agent 协议（agent.proto），与 isolated 扩展的 runtime_host.proto
+// dial 连接执行者协议（agent.proto），与能力提供者扩展的 runtime_host.proto
 // 不同。进程退出（Spawn 模式）会取消拨号，避免连接永不返回。
 func dial(ctx context.Context, address string, process *loader.Process, dialTimeout time.Duration) (*grpc.ClientConn, agentv1.AgentRuntimeClient, error) {
 	dialContext, cancel := context.WithTimeout(ctx, dialTimeout)
@@ -173,8 +173,8 @@ func dial(ctx context.Context, address string, process *loader.Process, dialTime
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithBlock(),
 		grpc.WithDefaultCallOptions(
-			grpc.MaxCallRecvMsgSize(agentprotocol.MaxGRPCMessageBytes),
-			grpc.MaxCallSendMsgSize(agentprotocol.MaxGRPCMessageBytes),
+			grpc.MaxCallRecvMsgSize(executor.MaxGRPCMessageBytes),
+			grpc.MaxCallSendMsgSize(executor.MaxGRPCMessageBytes),
 		),
 	)
 	if process != nil {

@@ -30,7 +30,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/agentprotocol"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/executor"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/session"
 )
 
@@ -458,7 +458,7 @@ func validateBudget(budget Budget) error {
 	if budget.MaxMessages < 1 || budget.MaxMessages > 1000 ||
 		budget.MaxCharsPerMsg < 1 || budget.MaxCharsPerMsg > 64<<10 ||
 		budget.MaxTotalChars < 1 || budget.MaxTotalChars > 1<<20 ||
-		budget.MaxPromptBytes < 1 || budget.MaxPromptBytes > agentprotocol.MaxSystemPromptBytes ||
+		budget.MaxPromptBytes < 1 || budget.MaxPromptBytes > executor.MaxSystemPromptBytes ||
 		(budget.MaxAge != 0 && budget.MaxAge < time.Second) {
 		return errors.New("invalid context assembly budget")
 	}

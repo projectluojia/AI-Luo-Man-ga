@@ -18,12 +18,12 @@ var campusWASMDigest = func() string {
 	return hex.EncodeToString(sum[:])
 }()
 
-// Manifest 返回 campus hosted 包的内置清单；digest 锁定嵌入工件，
-// 保证装载的永远是随内核发布的构建产物。
+// Manifest 返回 campus hosted 包的内置清单（能力提供者角色）；digest 锁定
+// 嵌入工件，保证装载的永远是随内核发布的构建产物。
 func Manifest() loader.Manifest {
 	return loader.Manifest{
 		ID: ServiceID, Version: hostedVersion, Mode: loader.ModeHosted,
-		LockedDigest: campusWASMDigest, Pin: true,
+		Role: loader.RoleCapability, LockedDigest: campusWASMDigest, Pin: true,
 	}
 }
 

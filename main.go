@@ -21,10 +21,10 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access/ingress"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access/web"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/agentprotocol"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/appconfig"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/confirmation"
 	kernelecho "github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/executor"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/health"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/identity"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
@@ -442,40 +442,40 @@ func run() (resultErr error) {
 	if err := runtimeLoader.Warmup(ctx, pinnedRuntimes, min(len(pinnedRuntimes), 4)); err != nil {
 		return fmt.Errorf("warm pinned runtimes: %w", err)
 	}
-	// 内核按契约使用 agent 服务：从租约运行时获取 agent 协议客户端（执行 Run 的
-	// 唯一使用点）。任何实现 agentprotocol 契约的运行时都可充当该角色，内核不
-	// 依赖具体语言或实现。
-	agentLease, err := runtimeLoader.Acquire(ctx, agent.RuntimeID)
+	// 内核按执行者契约使用 AI 执行者：Manager 按清单角色解析本 Deployment
+	// 唯一执行者运行时并返回租约。任何实现 executor 契约的运行时（LLM 智能体、
+	// 规划器、其他语言实现）都可充当该角色，内核不依赖具体实现或语言。
+	executorLease, err := runtimeLoader.Executor(ctx)
 	if err != nil {
-		return fmt.Errorf("acquire built-in agent runtime: %w", err)
+		return fmt.Errorf("resolve AI executor runtime: %w", err)
 	}
 	// 租约在函数返回时先于 runtimeLoader.Shutdown 释放（defer 逆序）。
-	defer agentLease.Release()
-	agentRuntime := agentLease.Runtime()
-	clientProvider, ok := agentRuntime.(agentprotocol.ClientProvider)
+	defer executorLease.Release()
+	executorRuntime := executorLease.Runtime()
+	clientProvider, ok := executorRuntime.(executor.ClientProvider)
 	if !ok {
-		return fmt.Errorf("agent runtime does not expose an agent client")
+		return fmt.Errorf("executor runtime does not expose an executor client")
 	}
-	agentClient := clientProvider.AgentClient()
+	executorClient := clientProvider.Client()
 	if config.manageAgent {
 		// 受监督进程异常退出 → 内核 fail-closed 停止（连接模式不拥有进程）。
-		if lifecycle, ok := agentRuntime.(agentprotocol.ProcessLifecycle); ok {
+		if lifecycle, ok := executorRuntime.(executor.ProcessLifecycle); ok {
 			go func() {
 				<-lifecycle.Done()
 				if processErr := lifecycle.Err(); processErr != nil && ctx.Err() == nil {
-					observe.Error(ctx, "Python AI Agent 进程异常退出", processErr)
+					observe.Error(ctx, "AI 执行者进程异常退出", processErr)
 					stop()
 				}
 			}()
 		}
 	}
-	observe.Info(ctx, "内置 AI 执行者（Python Agent）已经就绪",
-		observe.StringAttr("runtime_id", agent.RuntimeID),
+	observe.Info(ctx, "内置 AI 执行者已经就绪",
+		observe.StringAttr("runtime_id", executorLease.ID()),
 		observe.StringAttr("address", config.agentAddress),
 		observe.BoolAttr("managed_process", config.manageAgent),
 	)
 
-	orchestrator := kernelecho.NewOrchestrator(agentClient, reg, dispatcher, policy, store, kernelecho.Config{
+	orchestrator := kernelecho.NewOrchestrator(executorClient, reg, dispatcher, policy, store, kernelecho.Config{
 		AppID:              campus.AppID,
 		Model:              app.Model,
 		SystemPrompt:       app.SystemPrompt,
@@ -526,7 +526,7 @@ func run() (resultErr error) {
 		observe.StringAttr("sweep_type", confirmationSweepType),
 		observe.Int64Attr("sweep_interval_ms", confirmationSweepInterval.Milliseconds()),
 	)
-	readiness := health.Combined{store, health.AgentAppChecker{Client: agentClient, Source: store, AppID: campus.AppID}}
+	readiness := health.Combined{store, health.ExecutorAppChecker{Client: executorClient, Source: store, AppID: campus.AppID}}
 	// 平台接入统一入口：标准消息 → 身份解析 → 会话/消息入库 → Echo。
 	// 当前 Web 演示无身份（匿名发送者），身份服务在携带平台身份的消息到达时才会被调用。
 	identities := identity.NewService(store)

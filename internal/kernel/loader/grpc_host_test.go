@@ -135,7 +135,7 @@ func newRuntimeGRPCHost(t *testing.T, mode string, dialer func(context.Context, 
 
 func runtimeManifest(id, mode string) loader.Manifest {
 	return loader.Manifest{
-		ID: id, Version: "1.2.3", Mode: mode, LockedDigest: digest,
+		ID: id, Version: "1.2.3", Mode: mode, Role: loader.RoleCapability, LockedDigest: digest,
 	}
 }
 

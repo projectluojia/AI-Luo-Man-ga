@@ -20,8 +20,8 @@ import (
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access/web"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/agentprotocol"
 	kernelecho "github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/executor"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/health"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
@@ -153,16 +153,16 @@ func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 	if err := agentManager.Warmup(ctx, agentManager.Pinned(), 1); err != nil {
 		t.Fatalf("warm agent: %v\n%s", err, logs.String())
 	}
-	agentLease, err := agentManager.Acquire(ctx, agent.RuntimeID)
+	agentLease, err := agentManager.Executor(ctx)
 	if err != nil {
-		t.Fatalf("acquire agent: %v", err)
+		t.Fatalf("resolve executor: %v", err)
 	}
 	agentRuntime := agentLease.Runtime()
-	clientProvider, ok := agentRuntime.(agentprotocol.ClientProvider)
+	clientProvider, ok := agentRuntime.(executor.ClientProvider)
 	if !ok {
-		t.Fatal("agent runtime does not expose an agent client")
+		t.Fatal("executor runtime does not expose an executor client")
 	}
-	agentClient := clientProvider.AgentClient()
+	agentClient := clientProvider.Client()
 	// 关闭顺序（defer 逆序）：Shutdown 需等待租约排空，故租约归还最后注册、最先执行。
 	defer func() {
 		shutdownContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -199,7 +199,7 @@ func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 	if err := agent.Register(reg, orchestrator); err != nil {
 		t.Fatal(err)
 	}
-	handler := web.NewServer(ctx, orchestrator, store, health.Combined{store, health.AgentChecker{Client: agentClient, Model: "test-model"}}, reg, policy, campus.AppID, access.NewHub(campus.AppID, store, nil)).Handler()
+	handler := web.NewServer(ctx, orchestrator, store, health.Combined{store, health.ExecutorChecker{Client: agentClient, Model: "test-model"}}, reg, policy, campus.AppID, access.NewHub(campus.AppID, store, nil)).Handler()
 	readinessRecorder := httptest.NewRecorder()
 	handler.ServeHTTP(readinessRecorder, httptest.NewRequest(http.MethodGet, "/readyz", nil))
 	if readinessRecorder.Code != http.StatusOK {

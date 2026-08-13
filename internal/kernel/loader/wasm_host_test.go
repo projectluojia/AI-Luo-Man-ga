@@ -99,7 +99,7 @@ func TestWasmHostServesStringToolsThroughLoader(t *testing.T) {
 	}
 	ctx := context.Background()
 	manifest := loader.Manifest{
-		ID: "strings.tool", Version: "1.0.0", Mode: loader.ModeHosted, LockedDigest: digest,
+		ID: "strings.tool", Version: "1.0.0", Mode: loader.ModeHosted, Role: loader.RoleCapability, LockedDigest: digest,
 	}
 	if err := manager.Register(ctx, manifest); err != nil {
 		t.Fatalf("Register: %v", err)
@@ -188,15 +188,19 @@ func TestWasmHostHostFunctionProjectionBindsGovernedContext(t *testing.T) {
 		t.Fatalf("NewWasmHost: %v", err)
 	}
 	runtime, err := host.Load(context.Background(), loader.Manifest{
-		ID: "hostfn.test", Version: "1.0.0", Mode: loader.ModeHosted, LockedDigest: digest,
+		ID: "hostfn.test", Version: "1.0.0", Mode: loader.ModeHosted, Role: loader.RoleCapability, LockedDigest: digest,
 	})
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
 	defer runtime.Stop(context.Background())
+	invoker, ok := runtime.(loader.Invoker)
+	if !ok {
+		t.Fatal("hosted runtime must implement the capability Invoker")
+	}
 
 	payload := json.RawMessage(`{"echo":42}`)
-	result, err := runtime.Invoke(context.Background(), hostedTestRequest("hostfn.echo"), payload)
+	result, err := invoker.Invoke(context.Background(), hostedTestRequest("hostfn.echo"), payload)
 	if err != nil {
 		t.Fatalf("Invoke: %v", err)
 	}
@@ -228,12 +232,16 @@ func TestWasmHostConcurrentInvocationsAreIsolated(t *testing.T) {
 		t.Fatalf("NewWasmHost: %v", err)
 	}
 	runtime, err := host.Load(context.Background(), loader.Manifest{
-		ID: "hostfn.conc", Version: "1.0.0", Mode: loader.ModeHosted, LockedDigest: digest,
+		ID: "hostfn.conc", Version: "1.0.0", Mode: loader.ModeHosted, Role: loader.RoleCapability, LockedDigest: digest,
 	})
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
 	defer runtime.Stop(context.Background())
+	invoker, ok := runtime.(loader.Invoker)
+	if !ok {
+		t.Fatal("hosted runtime must implement the capability Invoker")
+	}
 
 	const workers = 8
 	var group sync.WaitGroup
@@ -246,7 +254,7 @@ func TestWasmHostConcurrentInvocationsAreIsolated(t *testing.T) {
 			request := hostedTestRequest("hostfn.echo")
 			request.AppID = appID
 			payload := json.RawMessage(fmt.Sprintf(`{"worker":%d}`, index))
-			result, err := runtime.Invoke(context.Background(), request, payload)
+			result, err := invoker.Invoke(context.Background(), request, payload)
 			if err != nil {
 				failures <- err
 				return
@@ -281,7 +289,7 @@ func TestWasmHostEnforcesMemoryLimit(t *testing.T) {
 		t.Fatalf("NewWasmHost: %v", err)
 	}
 	manifest := loader.Manifest{
-		ID: "strings.memlimit", Version: "1.0.0", Mode: loader.ModeHosted, LockedDigest: digest,
+		ID: "strings.memlimit", Version: "1.0.0", Mode: loader.ModeHosted, Role: loader.RoleCapability, LockedDigest: digest,
 	}
 	// 编译阶段强制线性内存上限：超限工件无法加载。
 	if _, err := host.Load(context.Background(), manifest); !errors.Is(err, loader.ErrLoadFailed) {
@@ -298,7 +306,7 @@ func TestWasmHostRejectsOversizedArtifact(t *testing.T) {
 		t.Fatalf("NewWasmHost: %v", err)
 	}
 	manifest := loader.Manifest{
-		ID: "oversized.test", Version: "1.0.0", Mode: loader.ModeHosted, LockedDigest: digest,
+		ID: "oversized.test", Version: "1.0.0", Mode: loader.ModeHosted, Role: loader.RoleCapability, LockedDigest: digest,
 	}
 	if err := host.Verify(context.Background(), manifest); !errors.Is(err, loader.ErrInvalidManifest) {
 		t.Fatalf("Verify error = %v, want ErrInvalidManifest", err)
@@ -324,14 +332,18 @@ func TestWasmHostTerminatesRunawayGuest(t *testing.T) {
 		t.Fatalf("NewWasmHost: %v", err)
 	}
 	runtime, err := host.Load(context.Background(), loader.Manifest{
-		ID: "busy.test", Version: "1.0.0", Mode: loader.ModeHosted, LockedDigest: digest,
+		ID: "busy.test", Version: "1.0.0", Mode: loader.ModeHosted, Role: loader.RoleCapability, LockedDigest: digest,
 	})
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
 	defer runtime.Stop(context.Background())
+	invoker, ok := runtime.(loader.Invoker)
+	if !ok {
+		t.Fatal("hosted runtime must implement the capability Invoker")
+	}
 	started := time.Now()
-	_, err = runtime.Invoke(context.Background(), hostedTestRequest("busy.loop"), json.RawMessage(`{}`))
+	_, err = invoker.Invoke(context.Background(), hostedTestRequest("busy.loop"), json.RawMessage(`{}`))
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("Invoke error = %v, want context.DeadlineExceeded", err)
 	}

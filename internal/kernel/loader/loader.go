@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/executor"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
 )
@@ -20,6 +21,13 @@ const (
 	ModeEmbedded = "embedded"
 	ModeHosted   = "hosted"
 	ModeIsolated = "isolated"
+
+	// RoleCapability 是能力提供者角色：经 Dispatcher 被内核调用（Invoke），
+	// 实现 Invoker 接口。installed 包与内置 campus 均属此类。
+	RoleCapability = "capability"
+	// RoleExecutor 是 AI 执行者角色：驱动受治理 Run 会话、反向消费内核投影的
+	// 能力，实现 internal/kernel/executor 契约，不注册任何被调能力。
+	RoleExecutor = "executor"
 
 	StateRegistered = "registered"
 	StateLoading    = "loading"
@@ -53,6 +61,7 @@ type Manifest struct {
 	ID           string
 	Version      string
 	Mode         string
+	Role         string
 	LockedDigest string
 	Pin          bool
 	IdleTTL      time.Duration
@@ -64,12 +73,20 @@ type Description struct {
 	Mode    string
 }
 
+// Runtime 是已加载运行时的生命周期面，全部角色共有。能力面按角色拆分：
+// 能力提供者实现 Invoker（被 Dispatcher 调用），AI 执行者实现
+// internal/kernel/executor.ClientProvider（驱动 Run 会话），角色由清单声明、
+// 加载期校验，不存在"不适用"的运行时方法。
 type Runtime interface {
 	Describe(context.Context) (Description, error)
 	Start(context.Context) error
 	Health(context.Context) error
-	Invoke(context.Context, contracts.RequestContext, json.RawMessage) (json.RawMessage, error)
 	Stop(context.Context) error
+}
+
+// Invoker 是能力提供者角色的执行面：以治理上下文执行一次调用。
+type Invoker interface {
+	Invoke(context.Context, contracts.RequestContext, json.RawMessage) (json.RawMessage, error)
 }
 
 // Host 只从已经安装并锁定的本地单元加载实现；校验失败时不得执行 Load。
@@ -342,6 +359,10 @@ func (m *Manager) Upgrade(ctx context.Context, manifest Manifest) error {
 	if current.manifest.Version == manifest.Version && current.manifest.LockedDigest == manifest.LockedDigest {
 		return ErrDuplicateID
 	}
+	// 角色是运行时身份的一部分：升级不允许改变角色。
+	if current.manifest.Role != manifest.Role {
+		return ErrDescribeMismatch
+	}
 	host, err := m.selectHost(ctx, manifest)
 	if err != nil {
 		return err
@@ -436,6 +457,17 @@ func loadRuntime(ctx context.Context, host Host, manifest Manifest) loadResult {
 	if description.ID != manifest.ID || description.Version != manifest.Version || description.Mode != manifest.Mode {
 		return stopAfterLoadFailure(ctx, runtime, ErrDescribeMismatch)
 	}
+	// 角色与执行面一致性在加载期强制：能力提供者必须实现 Invoker；执行者
+	// 必须实现 internal/kernel/executor 契约（ClientProvider）。
+	if manifest.Role == RoleCapability {
+		if _, ok := runtime.(Invoker); !ok {
+			return stopAfterLoadFailure(ctx, runtime, ErrInvalidManifest)
+		}
+	} else {
+		if _, ok := runtime.(executor.ClientProvider); !ok {
+			return stopAfterLoadFailure(ctx, runtime, ErrInvalidManifest)
+		}
+	}
 	if err := runtime.Start(ctx); err != nil {
 		return stopAfterLoadFailure(ctx, runtime, err)
 	}
@@ -458,6 +490,7 @@ func stopAfterLoadFailure(ctx context.Context, runtime Runtime, primary error) l
 type Lease struct {
 	entry   *entry
 	runtime Runtime
+	invoker Invoker
 	now     func() time.Time
 	once    sync.Once
 }
@@ -489,20 +522,31 @@ func (m *Manager) Acquire(ctx context.Context, id string) (*Lease, error) {
 		m.mu.RUnlock()
 		return nil, ErrUnavailable
 	}
+	var invoker Invoker
+	if item.manifest.Role == RoleCapability {
+		// 能力提供者的 Invoker 由加载期校验保证；取不到视为内部违例。
+		var ok bool
+		invoker, ok = item.runtime.(Invoker)
+		if !ok {
+			item.mu.Unlock()
+			m.mu.RUnlock()
+			return nil, ErrUnavailable
+		}
+	}
 	item.inFlight++
 	item.lastUsedAt = m.now().UTC()
 	loadedRuntime := item.runtime
 	item.mu.Unlock()
 	m.mu.RUnlock()
 	observe.DefaultMetrics().RuntimeCallStarted()
-	return &Lease{entry: item, runtime: loadedRuntime, now: m.now}, nil
+	return &Lease{entry: item, runtime: loadedRuntime, invoker: invoker, now: m.now}, nil
 }
 
 func (l *Lease) Invoke(ctx context.Context, request contracts.RequestContext, payload json.RawMessage) (json.RawMessage, error) {
-	if l == nil || l.runtime == nil {
+	if l == nil || l.runtime == nil || l.invoker == nil {
 		return nil, ErrUnavailable
 	}
-	result, err := l.runtime.Invoke(ctx, request, payload)
+	result, err := l.invoker.Invoke(ctx, request, payload)
 	if errors.Is(err, ErrUnavailable) || errors.Is(err, ErrRuntimeProtocol) {
 		l.entry.mu.Lock()
 		if l.entry.state == StateReady && l.entry.runtime == l.runtime {
@@ -534,6 +578,16 @@ func (l *Lease) Release() {
 	})
 }
 
+// ID 返回租约持有运行时的清单标识。
+func (l *Lease) ID() string {
+	if l == nil || l.entry == nil {
+		return ""
+	}
+	return l.entry.manifest.ID
+}
+
+// Handler 返回能力提供者角色的 Dispatcher 路由入口；执行者角色不注册任何
+// 被调能力，构造路由时直接拒绝（角色在注册期已校验，此检查是防御性边界）。
 func (m *Manager) Handler(id string) registry.Handler {
 	return func(ctx context.Context, request contracts.RequestContext, payload json.RawMessage) (json.RawMessage, error) {
 		lease, err := m.Acquire(ctx, id)
@@ -542,6 +596,30 @@ func (m *Manager) Handler(id string) registry.Handler {
 		}
 		defer lease.Release()
 		return lease.Invoke(ctx, request, payload)
+	}
+}
+
+// Executor 解析本 Deployment 唯一的执行者运行时（清单声明 RoleExecutor），
+// 返回其租约；零个或多个执行者都 fail-closed，避免装配期不确定路由。调用方
+// 负责 Release，并按 internal/kernel/executor 契约取用客户端。
+func (m *Manager) Executor(ctx context.Context) (*Lease, error) {
+	m.mu.RLock()
+	var id string
+	matches := 0
+	for _, item := range m.entries {
+		if item.manifest.Role == RoleExecutor {
+			matches++
+			id = item.manifest.ID
+		}
+	}
+	m.mu.RUnlock()
+	switch matches {
+	case 1:
+		return m.Acquire(ctx, id)
+	case 0:
+		return nil, fmt.Errorf("%w: no executor runtime is registered", ErrNotFound)
+	default:
+		return nil, fmt.Errorf("%w: %d executor runtimes are registered, expected exactly one", ErrInvalidManifest, matches)
 	}
 }
 
@@ -800,6 +878,7 @@ func (m *Manager) resolve(id string) (*entry, error) {
 func validateManifest(manifest Manifest) error {
 	if !stableIDPattern.MatchString(manifest.ID) || !versionPattern.MatchString(manifest.Version) ||
 		(manifest.Mode != ModeEmbedded && manifest.Mode != ModeHosted && manifest.Mode != ModeIsolated) ||
+		(manifest.Role != RoleCapability && manifest.Role != RoleExecutor) ||
 		manifest.IdleTTL < 0 || len(manifest.LockedDigest) != 64 {
 		return ErrInvalidManifest
 	}

@@ -20,7 +20,7 @@ func embeddedBuiltin(id, version string, invoke func(context.Context, contracts.
 		}
 	}
 	return loader.Builtin{
-		Manifest: loader.Manifest{ID: id, Version: version, Mode: loader.ModeEmbedded, LockedDigest: digest},
+		Manifest: loader.Manifest{ID: id, Version: version, Mode: loader.ModeEmbedded, Role: loader.RoleCapability, LockedDigest: digest},
 		Invoke:   invoke,
 	}
 }
@@ -46,22 +46,22 @@ func TestEmbeddedHostRejectsInvalidBuiltins(t *testing.T) {
 		want     error
 	}{
 		{name: "nil invoke", builtins: []loader.Builtin{{
-			Manifest: loader.Manifest{ID: "a.test", Version: "1.0.0", Mode: loader.ModeEmbedded, LockedDigest: digest},
+			Manifest: loader.Manifest{ID: "a.test", Version: "1.0.0", Mode: loader.ModeEmbedded, Role: loader.RoleCapability, LockedDigest: digest},
 		}}, want: loader.ErrUnavailable},
 		{name: "wrong mode", builtins: []loader.Builtin{{
-			Manifest: loader.Manifest{ID: "a.test", Version: "1.0.0", Mode: loader.ModeHosted, LockedDigest: digest},
+			Manifest: loader.Manifest{ID: "a.test", Version: "1.0.0", Mode: loader.ModeHosted, Role: loader.RoleCapability, LockedDigest: digest},
 			Invoke: func(context.Context, contracts.RequestContext, json.RawMessage) (json.RawMessage, error) {
 				return nil, nil
 			},
 		}}, want: loader.ErrUnsupportedMode},
 		{name: "bad digest", builtins: []loader.Builtin{{
-			Manifest: loader.Manifest{ID: "a.test", Version: "1.0.0", Mode: loader.ModeEmbedded, LockedDigest: "short"},
+			Manifest: loader.Manifest{ID: "a.test", Version: "1.0.0", Mode: loader.ModeEmbedded, Role: loader.RoleCapability, LockedDigest: "short"},
 			Invoke: func(context.Context, contracts.RequestContext, json.RawMessage) (json.RawMessage, error) {
 				return nil, nil
 			},
 		}}, want: loader.ErrInvalidManifest},
 		{name: "bad id", builtins: []loader.Builtin{{
-			Manifest: loader.Manifest{ID: "UPPER.test", Version: "1.0.0", Mode: loader.ModeEmbedded, LockedDigest: digest},
+			Manifest: loader.Manifest{ID: "UPPER.test", Version: "1.0.0", Mode: loader.ModeEmbedded, Role: loader.RoleCapability, LockedDigest: digest},
 			Invoke: func(context.Context, contracts.RequestContext, json.RawMessage) (json.RawMessage, error) {
 				return nil, nil
 			},
@@ -83,7 +83,7 @@ func TestEmbeddedHostVerifyMatchesLockedManifest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewEmbeddedHost: %v", err)
 	}
-	base := loader.Manifest{ID: "embedded.test", Version: "1.0.0", Mode: loader.ModeEmbedded, LockedDigest: digest}
+	base := loader.Manifest{ID: "embedded.test", Version: "1.0.0", Mode: loader.ModeEmbedded, Role: loader.RoleCapability, LockedDigest: digest}
 	if err := host.Verify(context.Background(), base); err != nil {
 		t.Fatalf("Verify(valid) = %v, want nil", err)
 	}

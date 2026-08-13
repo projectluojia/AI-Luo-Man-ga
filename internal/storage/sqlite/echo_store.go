@@ -11,8 +11,8 @@ import (
 	"sort"
 	"time"
 
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/agentprotocol"
 	kernelecho "github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/executor"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/idempotency"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/publicerror"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/session"
@@ -618,7 +618,7 @@ func (s *Store) CompleteChildRun(ctx context.Context, run kernelecho.RunRecord, 
 		return kernelecho.ErrInvalidTransition
 	}
 	if runStatus == kernelecho.RunStatusSucceeded {
-		if resultMessage == "" || len(resultMessage) > agentprotocol.MaxFinalMessageBytes {
+		if resultMessage == "" || len(resultMessage) > executor.MaxFinalMessageBytes {
 			return kernelecho.ErrInvalidRunRecord
 		}
 		failure = publicerror.Error{}
@@ -1095,7 +1095,7 @@ func queryRun(scanner rowScanner) (kernelecho.RunRecord, error) {
 	if len(capabilityScope) > 65536 || len(permissionScope) > 65536 ||
 		json.Unmarshal([]byte(capabilityScope), &run.CapabilityScope) != nil ||
 		json.Unmarshal([]byte(permissionScope), &run.PermissionScope) != nil ||
-		!validCanonicalScope(run.CapabilityScope, agentprotocol.MaxCapabilities, capabilityIDPattern) ||
+		!validCanonicalScope(run.CapabilityScope, executor.MaxCapabilities, capabilityIDPattern) ||
 		!validCanonicalScope(run.PermissionScope, 256, permissionIDPattern) {
 		return kernelecho.RunRecord{}, kernelecho.ErrInvalidRunRecord
 	}
@@ -1142,17 +1142,17 @@ func validateNewRun(echo kernelecho.Record, run kernelecho.RunRecord) error {
 		!runIdentifierPattern.MatchString(run.ID) || !runIdentifierPattern.MatchString(run.RunGroupID) ||
 		run.AppID != echo.AppID || run.EchoID != echo.ID ||
 		run.Attempt == 0 || run.Status != kernelecho.RunStatusQueued || run.Model == "" || run.ModelConfigVersion == "" ||
-		run.ProtocolVersion == "" || run.MaxSteps == 0 || run.MaxSteps > agentprotocol.MaxProtocolSteps ||
-		run.MaxToolCalls == 0 || run.MaxToolCalls > agentprotocol.MaxToolCalls ||
-		run.MaxInputTokens == 0 || run.MaxInputTokens > agentprotocol.MaxTokenBudget ||
-		run.MaxOutputTokens == 0 || run.MaxOutputTokens > agentprotocol.MaxTokenBudget ||
-		run.MaxTotalTokens == 0 || run.MaxTotalTokens > agentprotocol.MaxTokenBudget ||
-		run.MaxOutputBytes == 0 || run.MaxOutputBytes > agentprotocol.MaxFinalMessageBytes ||
-		run.MaxCostMicrousd > agentprotocol.MaxCostMicrousd ||
+		run.ProtocolVersion == "" || run.MaxSteps == 0 || run.MaxSteps > executor.MaxProtocolSteps ||
+		run.MaxToolCalls == 0 || run.MaxToolCalls > executor.MaxToolCalls ||
+		run.MaxInputTokens == 0 || run.MaxInputTokens > executor.MaxTokenBudget ||
+		run.MaxOutputTokens == 0 || run.MaxOutputTokens > executor.MaxTokenBudget ||
+		run.MaxTotalTokens == 0 || run.MaxTotalTokens > executor.MaxTokenBudget ||
+		run.MaxOutputBytes == 0 || run.MaxOutputBytes > executor.MaxFinalMessageBytes ||
+		run.MaxCostMicrousd > executor.MaxCostMicrousd ||
 		run.MaxInputTokens > math.MaxInt64 || run.MaxOutputTokens > math.MaxInt64 ||
 		run.MaxTotalTokens > math.MaxInt64 || run.MaxOutputBytes > math.MaxInt64 ||
 		run.MaxCostMicrousd > math.MaxInt64 ||
-		run.ProviderTimeoutMS < 100 || run.ProviderTimeoutMS > agentprotocol.MaxProviderTimeoutMS ||
+		run.ProviderTimeoutMS < 100 || run.ProviderTimeoutMS > executor.MaxProviderTimeoutMS ||
 		run.UsedInputTokens != 0 || run.UsedOutputTokens != 0 || run.UsedTotalTokens != 0 || run.UsedCostMicrousd != 0 ||
 		run.UsedProviderRetries != 0 ||
 		run.CreatedAt.IsZero() || run.AvailableAt.IsZero() || run.AvailableAt.Before(run.CreatedAt) || !run.Deadline.After(run.AvailableAt) ||
@@ -1164,7 +1164,7 @@ func validateNewRun(echo kernelecho.Record, run kernelecho.RunRecord) error {
 		(run.MessageID != "" && !session.ValidStableID(run.MessageID)) ||
 		run.ContextDigest != "" || // 上下文在执行开始时由 SetRunContext 一次性固化
 		(len(run.ContextSources) != 0 && !json.Valid(run.ContextSources)) ||
-		!validCanonicalScope(run.CapabilityScope, agentprotocol.MaxCapabilities, capabilityIDPattern) ||
+		!validCanonicalScope(run.CapabilityScope, executor.MaxCapabilities, capabilityIDPattern) ||
 		!validCanonicalScope(run.PermissionScope, 256, permissionIDPattern) {
 		return kernelecho.ErrInvalidRunRecord
 	}

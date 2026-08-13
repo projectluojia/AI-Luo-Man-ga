@@ -15,11 +15,10 @@ import (
 	"github.com/google/uuid"
 	"google.golang.org/protobuf/proto"
 
-	agentv1 "github.com/projectluojia/AI-Luo-Man-ga/gen/agentv1"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/agentprotocol"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/appconfig"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contextasm"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/executor"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/idempotency"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/publicerror"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
@@ -69,7 +68,7 @@ type Config struct {
 }
 
 type Orchestrator struct {
-	agent       agentv1.AgentRuntimeClient
+	agent       executor.Client
 	registry    *registry.Registry
 	dispatcher  *runtime.Dispatcher
 	policy      runtime.AppPolicy
@@ -81,7 +80,7 @@ type Orchestrator struct {
 }
 
 func NewOrchestrator(
-	agent agentv1.AgentRuntimeClient,
+	agent executor.Client,
 	reg *registry.Registry,
 	dispatcher *runtime.Dispatcher,
 	policy runtime.AppPolicy,
@@ -104,7 +103,7 @@ func NewOrchestrator(
 		config.MaxTotalTokens = 40960
 	}
 	if config.MaxOutputBytes == 0 {
-		config.MaxOutputBytes = agentprotocol.MaxFinalMessageBytes
+		config.MaxOutputBytes = executor.MaxFinalMessageBytes
 	}
 	if config.ProviderTimeout == 0 {
 		config.ProviderTimeout = 30 * time.Second
@@ -511,7 +510,7 @@ func (o *Orchestrator) CreateIdempotent(ctx context.Context, request RunRequest)
 		Status:             RunStatusQueued,
 		Model:              app.Model,
 		ModelConfigVersion: app.Revision,
-		ProtocolVersion:    agentprotocol.Version,
+		ProtocolVersion:    executor.Version,
 		MaxSteps:           app.MaxSteps,
 		MaxToolCalls:       app.MaxToolCalls,
 		MaxInputTokens:     app.MaxInputTokens,
@@ -579,7 +578,7 @@ func (o *Orchestrator) executeClaimedRun(ctx context.Context, request RunRequest
 	}
 	defer observe.DefaultMetrics().RunStopped()
 	app, configErr := o.appConfigRevision(ctx, run.ModelConfigVersion)
-	if configErr != nil || !runMatchesAppConfig(run, app) || run.ProtocolVersion != agentprotocol.Version {
+	if configErr != nil || !runMatchesAppConfig(run, app) || run.ProtocolVersion != executor.Version {
 		completeErr := o.completeRun(ctx, run, RunStatusFailed, StatusFailed, "", publicerror.Echo("recovery_failed"))
 		return errors.Join(ErrRunConfigUnavailable, configErr, completeErr)
 	}
@@ -601,7 +600,7 @@ func (o *Orchestrator) executeClaimedRun(ctx context.Context, request RunRequest
 	leaseFailure := make(chan error, 1)
 	go o.renewLease(leaseContext, cancel, run, leaseFailure)
 	defer stopLease()
-	observe.Info(ctx, "开始执行 Agent Run",
+	observe.Info(ctx, "开始执行 Run",
 		observe.StringAttr("model", run.Model),
 		observe.StringAttr("model_config_version", run.ModelConfigVersion),
 		observe.IntAttr("attempt", int(run.Attempt)),
@@ -697,17 +696,17 @@ func (o *Orchestrator) executeClaimedRun(ctx context.Context, request RunRequest
 	)
 	stream, err := o.agent.Run(runContext)
 	if err != nil {
-		observe.Error(ctx, "创建 Python Agent 双向流失败", err)
+		observe.Error(ctx, "创建执行者会话流失败", err)
 		runErr := fmt.Errorf("open agent stream: %w", err)
 		return errors.Join(runErr, o.fail(ctx, run, "agent_unavailable", true))
 	}
 	defer stream.CloseSend()
 	systemPrompt := snapshot.SystemPrompt
-	startFrame := &agentv1.AgentFrame{
+	startFrame := &executor.Frame{
 		EchoId:   echoID,
 		RunId:    runID,
 		Sequence: 1,
-		Body: &agentv1.AgentFrame_StartRun{StartRun: &agentv1.StartRun{
+		Body: &executor.Frame_StartRun{StartRun: &executor.StartRun{
 			AppId:             o.config.AppID,
 			InputMessage:      request.Message,
 			Timezone:          app.Timezone,
@@ -715,7 +714,7 @@ func (o *Orchestrator) executeClaimedRun(ctx context.Context, request RunRequest
 			Model:             run.Model,
 			SystemPrompt:      systemPrompt,
 			MaxSteps:          run.MaxSteps,
-			ProtocolVersion:   agentprotocol.Version,
+			ProtocolVersion:   executor.Version,
 			MaxToolCalls:      run.MaxToolCalls,
 			MaxInputTokens:    run.MaxInputTokens,
 			MaxOutputTokens:   run.MaxOutputTokens,
@@ -728,19 +727,19 @@ func (o *Orchestrator) executeClaimedRun(ctx context.Context, request RunRequest
 			ParentRunId:       run.ParentRunID,
 		}},
 	}
-	if err := agentprotocol.ValidateStartFrame(startFrame); err != nil {
-		observe.Error(ctx, "Agent Run 启动帧未通过本地协议校验", err)
+	if err := executor.ValidateStartFrame(startFrame); err != nil {
+		observe.Error(ctx, "Run 启动帧未通过本地协议校验", err)
 		return errors.Join(err, o.fail(ctx, run, "protocol_violation", true))
 	}
 	if err := stream.Send(startFrame); err != nil {
-		observe.Error(ctx, "发送 Agent Run 输入失败", err)
+		observe.Error(ctx, "发送 Run 输入失败", err)
 		runErr := fmt.Errorf("start agent run: %w", err)
 		return errors.Join(runErr, o.fail(ctx, run, "agent_start_failed", true))
 	}
 	if err := emitEvent("run.started", map[string]any{"run_id": runID, "model": run.Model, "attempt": run.Attempt}); err != nil {
 		return errors.Join(err, o.fail(ctx, run, "event_delivery_failed", true))
 	}
-	observe.Info(ctx, "Agent Run 输入已经发送",
+	observe.Info(ctx, "Run 输入已经发送",
 		observe.IntAttr("capability_count", len(capabilities)),
 	)
 
@@ -764,11 +763,11 @@ func (o *Orchestrator) executeClaimedRun(ctx context.Context, request RunRequest
 					return errors.Join(renewalErr, o.fail(ctx, run, "lease_lost", automaticRetrySafe))
 				default:
 				}
-				observe.Warn(ctx, "Agent Run 已取消", observe.Duration(runStarted))
+				observe.Warn(ctx, "Run 已取消", observe.Duration(runStarted))
 				return errors.Join(context.Canceled, o.completeRun(ctx, run, RunStatusCancelled, StatusCancelled, "", publicerror.Echo("cancelled")))
 			}
 			if errors.Is(runContext.Err(), context.DeadlineExceeded) {
-				observe.Error(ctx, "Agent Run 执行超时", context.DeadlineExceeded, observe.Duration(runStarted))
+				observe.Error(ctx, "Run 执行超时", context.DeadlineExceeded, observe.Duration(runStarted))
 				return errors.Join(context.DeadlineExceeded, o.completeRun(ctx, run, RunStatusTimedOut, StatusFailed, "", publicerror.Echo("deadline_exceeded")))
 			}
 			if errors.Is(receiveErr, io.EOF) && finalMessage != "" {
@@ -782,7 +781,7 @@ func (o *Orchestrator) executeClaimedRun(ctx context.Context, request RunRequest
 				if childResult != nil {
 					*childResult = finalMessage
 				}
-				observe.Info(ctx, "Agent Run 执行完成",
+				observe.Info(ctx, "Run 执行完成",
 					observe.IntAttr("reply_length", utf8.RuneCountInString(finalMessage)),
 					observe.Duration(runStarted),
 				)
@@ -804,69 +803,69 @@ func (o *Orchestrator) executeClaimedRun(ctx context.Context, request RunRequest
 			if errors.Is(receiveErr, io.EOF) {
 				receiveErr = ErrNoFinalMessage
 			}
-			observe.Error(ctx, "接收 Python Agent 事件失败", receiveErr, observe.Duration(runStarted))
+			observe.Error(ctx, "接收执行者事件失败", receiveErr, observe.Duration(runStarted))
 			runErr := fmt.Errorf("receive agent frame: %w", receiveErr)
 			return errors.Join(runErr, o.fail(ctx, run, "agent_stream_failed", automaticRetrySafe))
 		}
 		if finalMessage != "" || terminalFailure != nil {
-			err = agentprotocol.ErrUnexpectedFrame
-			observe.Error(ctx, "Python Agent 在终态帧后继续发送数据", err)
+			err = executor.ErrUnexpectedFrame
+			observe.Error(ctx, "执行者在终态帧后继续发送数据", err)
 			return errors.Join(err, o.fail(ctx, run, "protocol_violation", automaticRetrySafe))
 		}
-		if err := agentprotocol.ValidateInboundEnvelope(frame, echoID, runID, expectedAgentSequence); err != nil {
-			observe.Error(ctx, "Python Agent 帧信封违反协议", err,
+		if err := executor.ValidateInboundEnvelope(frame, echoID, runID, expectedAgentSequence); err != nil {
+			observe.Error(ctx, "执行者帧信封违反协议", err,
 				observe.Int64Attr("expected_sequence", int64(expectedAgentSequence)),
 			)
 			return errors.Join(err, o.fail(ctx, run, "protocol_violation", automaticRetrySafe))
 		}
 		switch body := frame.Body.(type) {
-		case *agentv1.AgentFrame_RunAccepted:
+		case *executor.Frame_RunAccepted:
 			if handshakeAccepted {
-				err = agentprotocol.ErrUnexpectedFrame
+				err = executor.ErrUnexpectedFrame
 				break
 			}
-			err = agentprotocol.ValidateRunAccepted(frame)
-		case *agentv1.AgentFrame_CapabilityCall:
+			err = executor.ValidateRunAccepted(frame)
+		case *executor.Frame_CapabilityCall:
 			if !handshakeAccepted {
-				err = agentprotocol.ErrUnexpectedFrame
+				err = executor.ErrUnexpectedFrame
 				break
 			}
-			if err = agentprotocol.ValidateCapabilityCall(body.CapabilityCall); err != nil {
+			if err = executor.ValidateCapabilityCall(body.CapabilityCall); err != nil {
 				break
 			}
 			if _, exists := seenCallIDs[body.CapabilityCall.CallId]; exists {
-				err = agentprotocol.ErrDuplicateCall
+				err = executor.ErrDuplicateCall
 				break
 			}
 			seenCallIDs[body.CapabilityCall.CallId] = struct{}{}
-		case *agentv1.AgentFrame_ReplyDelta:
+		case *executor.Frame_ReplyDelta:
 			if !handshakeAccepted {
-				err = agentprotocol.ErrUnexpectedFrame
+				err = executor.ErrUnexpectedFrame
 				break
 			}
-			err = agentprotocol.ValidateReplyDelta(body.ReplyDelta)
-		case *agentv1.AgentFrame_FinalMessage:
+			err = executor.ValidateReplyDelta(body.ReplyDelta)
+		case *executor.Frame_FinalMessage:
 			if !handshakeAccepted {
-				err = agentprotocol.ErrUnexpectedFrame
+				err = executor.ErrUnexpectedFrame
 				break
 			}
 			if !usageReported {
-				err = agentprotocol.ErrUnexpectedFrame
+				err = executor.ErrUnexpectedFrame
 				break
 			}
-			err = agentprotocol.ValidateFinalMessage(body.FinalMessage)
-		case *agentv1.AgentFrame_RunFailure:
+			err = executor.ValidateFinalMessage(body.FinalMessage)
+		case *executor.Frame_RunFailure:
 			if !handshakeAccepted {
-				err = agentprotocol.ErrUnexpectedFrame
+				err = executor.ErrUnexpectedFrame
 				break
 			}
-			err = agentprotocol.ValidateRunFailure(body.RunFailure)
-		case *agentv1.AgentFrame_RunUsage:
+			err = executor.ValidateRunFailure(body.RunFailure)
+		case *executor.Frame_RunUsage:
 			if !handshakeAccepted {
-				err = agentprotocol.ErrUnexpectedFrame
+				err = executor.ErrUnexpectedFrame
 				break
 			}
-			err = agentprotocol.ValidateRunUsage(
+			err = executor.ValidateRunUsage(
 				body.RunUsage,
 				run.UsedInputTokens,
 				run.UsedOutputTokens,
@@ -879,10 +878,10 @@ func (o *Orchestrator) executeClaimedRun(ctx context.Context, request RunRequest
 				run.MaxCostMicrousd,
 			)
 		default:
-			err = agentprotocol.ErrUnexpectedFrame
+			err = executor.ErrUnexpectedFrame
 		}
 		if err != nil {
-			observe.Error(ctx, "Python Agent 帧载荷或顺序违反协议", err,
+			observe.Error(ctx, "执行者帧载荷或顺序违反协议", err,
 				observe.Int64Attr("agent_sequence", int64(frame.Sequence)),
 			)
 			return errors.Join(err, o.fail(ctx, run, "protocol_violation", automaticRetrySafe))
@@ -933,12 +932,12 @@ func (o *Orchestrator) executeClaimedRun(ctx context.Context, request RunRequest
 		expectedAgentSequence++
 
 		switch body := frame.Body.(type) {
-		case *agentv1.AgentFrame_RunAccepted:
+		case *executor.Frame_RunAccepted:
 			handshakeAccepted = true
-			observe.Info(ctx, "Agent 协议版本握手完成",
+			observe.Info(ctx, "执行者协议版本握手完成",
 				observe.StringAttr("protocol_version", body.RunAccepted.ProtocolVersion),
 			)
-		case *agentv1.AgentFrame_CapabilityCall:
+		case *executor.Frame_CapabilityCall:
 			if spec, _, resolveErr := o.registry.ResolveCapability(body.CapabilityCall.CapabilityId); resolveErr == nil &&
 				(spec.SideEffect == registry.SideEffectWrite || spec.SideEffect == registry.SideEffectExternal) {
 				automaticRetrySafe = false
@@ -956,20 +955,20 @@ func (o *Orchestrator) executeClaimedRun(ctx context.Context, request RunRequest
 				return errors.Join(context.DeadlineExceeded, o.completeRun(ctx, run, RunStatusTimedOut, StatusFailed, "", publicerror.Echo("deadline_exceeded")))
 			}
 			kernelSequence++
-			resultFrame := &agentv1.AgentFrame{
+			resultFrame := &executor.Frame{
 				EchoId:   echoID,
 				RunId:    runID,
 				Sequence: kernelSequence,
-				Body:     &agentv1.AgentFrame_CapabilityResult{CapabilityResult: result},
+				Body:     &executor.Frame_CapabilityResult{CapabilityResult: result},
 			}
-			if err := agentprotocol.ValidateCapabilityResultFrame(resultFrame, echoID, runID, kernelSequence); err != nil {
+			if err := executor.ValidateCapabilityResultFrame(resultFrame, echoID, runID, kernelSequence); err != nil {
 				observe.Error(ctx, "CapabilityResult 未通过本地协议校验", err,
 					observe.StringAttr("call_id", result.CallId),
 				)
 				return errors.Join(err, o.fail(ctx, run, "protocol_violation", automaticRetrySafe))
 			}
 			if err := stream.Send(resultFrame); err != nil {
-				observe.Error(ctx, "向 Python Agent 返回 Capability 结果失败", err,
+				observe.Error(ctx, "向执行者返回 Capability 结果失败", err,
 					observe.StringAttr("call_id", result.CallId),
 				)
 				runErr := fmt.Errorf("send capability result: %w", err)
@@ -982,7 +981,7 @@ func (o *Orchestrator) executeClaimedRun(ctx context.Context, request RunRequest
 			}); err != nil {
 				return errors.Join(err, o.fail(ctx, run, "event_delivery_failed", automaticRetrySafe))
 			}
-		case *agentv1.AgentFrame_ReplyDelta:
+		case *executor.Frame_ReplyDelta:
 			if !firstTokenObserved {
 				observe.DefaultMetrics().ObserveFirstToken(time.Since(runStarted))
 				firstTokenObserved = true
@@ -993,23 +992,23 @@ func (o *Orchestrator) executeClaimedRun(ctx context.Context, request RunRequest
 			if err := emitEvent("reply.delta", map[string]string{"text": body.ReplyDelta.Text}); err != nil {
 				return errors.Join(err, o.fail(ctx, run, "event_delivery_failed", automaticRetrySafe))
 			}
-		case *agentv1.AgentFrame_FinalMessage:
+		case *executor.Frame_FinalMessage:
 			if !firstTokenObserved {
 				observe.DefaultMetrics().ObserveFirstToken(time.Since(runStarted))
 				firstTokenObserved = true
 			}
 			finalMessage = body.FinalMessage.Text
-		case *agentv1.AgentFrame_RunFailure:
+		case *executor.Frame_RunFailure:
 			public := publicerror.Agent(body.RunFailure.Code, body.RunFailure.Retryable)
 			runErr := fmt.Errorf("%w: code=%s", ErrAgentRunFailed, public.Code)
-			observe.Error(ctx, "Python Agent 报告运行失败", runErr,
+			observe.Error(ctx, "执行者报告运行失败", runErr,
 				observe.StringAttr("error_code", public.Code),
 				observe.BoolAttr("retryable", public.Retryable),
 				observe.Duration(runStarted),
 			)
 			terminalFailure = &public
 			terminalRunErr = runErr
-		case *agentv1.AgentFrame_RunUsage:
+		case *executor.Frame_RunUsage:
 			observe.DefaultMetrics().AddModelUsage(
 				inputTokenDelta,
 				outputTokenDelta,
@@ -1029,9 +1028,9 @@ func (o *Orchestrator) executeClaimedRun(ctx context.Context, request RunRequest
 	}
 }
 
-func (o *Orchestrator) projectCapabilities(policy appconfig.PolicySnapshot, run RunRecord) []*agentv1.Capability {
+func (o *Orchestrator) projectCapabilities(policy appconfig.PolicySnapshot, run RunRecord) []*executor.Capability {
 	all := o.registry.Capabilities()
-	projected := make([]*agentv1.Capability, 0, len(all))
+	projected := make([]*executor.Capability, 0, len(all))
 	scope := make(map[string]struct{}, len(run.CapabilityScope))
 	for _, capabilityID := range run.CapabilityScope {
 		scope[capabilityID] = struct{}{}
@@ -1052,7 +1051,7 @@ func (o *Orchestrator) projectCapabilities(policy appconfig.PolicySnapshot, run 
 		if _, err := registry.NarrowPermissions(run.PermissionScope, capability.RequiredPermissions); err != nil {
 			continue
 		}
-		projected = append(projected, &agentv1.Capability{
+		projected = append(projected, &executor.Capability{
 			Id:              capability.ID,
 			Version:         capability.Version,
 			Name:            capability.Name,
@@ -1065,7 +1064,7 @@ func (o *Orchestrator) projectCapabilities(policy appconfig.PolicySnapshot, run 
 
 // capabilityVersions 把当前投影的 Capability 转换为 "id@version" 列表，
 // 作为上下文装配的 Capability 来源（装配器内排序后固化版本）。
-func capabilityVersions(capabilities []*agentv1.Capability) []string {
+func capabilityVersions(capabilities []*executor.Capability) []string {
 	versions := make([]string, 0, len(capabilities))
 	for _, capability := range capabilities {
 		versions = append(versions, capability.Id+"@"+capability.Version)
@@ -1073,11 +1072,11 @@ func capabilityVersions(capabilities []*agentv1.Capability) []string {
 	return versions
 }
 
-func (o *Orchestrator) invokeCapability(ctx context.Context, run RunRecord, call *agentv1.CapabilityCall) *agentv1.CapabilityResult {
+func (o *Orchestrator) invokeCapability(ctx context.Context, run RunRecord, call *executor.CapabilityCall) *executor.CapabilityResult {
 	runID := run.ID
 	if call == nil || call.CallId == "" || len(call.CallId) > 128 || idempotency.ValidateKey(call.CallId) != nil {
 		public := publicerror.Agent("protocol_violation", false)
-		return &agentv1.CapabilityResult{
+		return &executor.CapabilityResult{
 			CallId:       call.GetCallId(),
 			CapabilityId: call.GetCapabilityId(),
 			ErrorCode:    public.Code,
@@ -1101,21 +1100,21 @@ func (o *Orchestrator) invokeCapability(ctx context.Context, run RunRecord, call
 			observe.StringAttr("capability_id", call.CapabilityId),
 			observe.StringAttr("error_code", public.Code),
 		)
-		return &agentv1.CapabilityResult{
+		return &executor.CapabilityResult{
 			CallId:       call.CallId,
 			CapabilityId: call.CapabilityId,
 			ErrorCode:    public.Code,
 			ErrorMessage: public.Message,
 		}
 	}
-	var result agentv1.CapabilityResult
+	var result executor.CapabilityResult
 	if err := proto.Unmarshal(encoded, &result); err != nil {
 		public := publicerror.Echo("protocol_violation")
 		observe.Error(ctx, "读取持久化 CapabilityCall 幂等结果失败", err,
 			observe.StringAttr("call_id", call.CallId),
 			observe.StringAttr("capability_id", call.CapabilityId),
 		)
-		return &agentv1.CapabilityResult{
+		return &executor.CapabilityResult{
 			CallId:       call.CallId,
 			CapabilityId: call.CapabilityId,
 			ErrorCode:    public.Code,
@@ -1131,7 +1130,7 @@ func (o *Orchestrator) invokeCapability(ctx context.Context, run RunRecord, call
 	return &result
 }
 
-func (o *Orchestrator) invokeCapabilityOnce(ctx context.Context, run RunRecord, call *agentv1.CapabilityCall) *agentv1.CapabilityResult {
+func (o *Orchestrator) invokeCapabilityOnce(ctx context.Context, run RunRecord, call *executor.CapabilityCall) *executor.CapabilityResult {
 	started := o.now()
 	echoID := run.EchoID
 	runID := run.ID
@@ -1144,21 +1143,21 @@ func (o *Orchestrator) invokeCapabilityOnce(ctx context.Context, run RunRecord, 
 	policy, err := o.policy.Snapshot(ctx, o.config.AppID)
 	if err != nil {
 		public := publicerror.Capability(errors.Join(runtime.ErrAppPolicyUnavailable, err))
-		return &agentv1.CapabilityResult{
+		return &executor.CapabilityResult{
 			CallId: call.CallId, CapabilityId: call.CapabilityId,
 			ErrorCode: public.Code, ErrorMessage: public.Message,
 		}
 	}
 	if err := policy.Verify(o.config.AppID); err != nil {
 		public := publicerror.Capability(errors.Join(runtime.ErrAppPolicyUnavailable, err))
-		return &agentv1.CapabilityResult{
+		return &executor.CapabilityResult{
 			CallId: call.CallId, CapabilityId: call.CapabilityId,
 			ErrorCode: public.Code, ErrorMessage: public.Message,
 		}
 	}
 	if !policy.Enabled {
 		public := publicerror.Capability(runtime.ErrCapabilityDisabled)
-		return &agentv1.CapabilityResult{
+		return &executor.CapabilityResult{
 			CallId: call.CallId, CapabilityId: call.CapabilityId,
 			ErrorCode: public.Code, ErrorMessage: public.Message,
 		}
@@ -1186,11 +1185,11 @@ func (o *Orchestrator) invokeCapabilityOnce(ctx context.Context, run RunRecord, 
 		CallID:          call.CallId,
 		Deadline:        deadline,
 		IdempotencyKey:  call.CallId,
-		ProtocolVersion: agentprotocol.Version,
+		ProtocolVersion: executor.Version,
 		PermissionScope: permissionScope,
 	}
 	payload, err := o.dispatcher.InvokeCapability(ctx, request, call.CapabilityId, call.PayloadJson)
-	result := &agentv1.CapabilityResult{
+	result := &executor.CapabilityResult{
 		CallId:       call.CallId,
 		CapabilityId: call.CapabilityId,
 		Success:      err == nil,
@@ -1231,9 +1230,9 @@ func (o *Orchestrator) invokeCapabilityOnce(ctx context.Context, run RunRecord, 
 	return result
 }
 
-func (o *Orchestrator) rejectedCapability(ctx context.Context, run RunRecord, call *agentv1.CapabilityCall, started time.Time, cause error) *agentv1.CapabilityResult {
+func (o *Orchestrator) rejectedCapability(ctx context.Context, run RunRecord, call *executor.CapabilityCall, started time.Time, cause error) *executor.CapabilityResult {
 	public := publicerror.Capability(cause)
-	result := &agentv1.CapabilityResult{
+	result := &executor.CapabilityResult{
 		CallId: call.CallId, CapabilityId: call.CapabilityId,
 		ErrorCode: public.Code, ErrorMessage: public.Message,
 	}

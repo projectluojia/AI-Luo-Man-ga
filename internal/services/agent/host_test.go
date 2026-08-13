@@ -10,8 +10,8 @@ import (
 	"time"
 
 	agentv1 "github.com/projectluojia/AI-Luo-Man-ga/gen/agentv1"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/agentprotocol"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/executor"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/agent"
@@ -19,7 +19,7 @@ import (
 	"google.golang.org/grpc"
 )
 
-// fakeAgentServer 是 agent 协议的测试实现：健康就绪，Run 未实现（本测试只验证
+// fakeAgentServer 是执行者协议的测试实现：健康就绪，Run 未实现（本测试只验证
 // 加载、健康、客户端暴露与停止生命周期）。
 type fakeAgentServer struct {
 	agentv1.UnimplementedAgentRuntimeServer
@@ -28,13 +28,13 @@ type fakeAgentServer struct {
 func (s *fakeAgentServer) Health(context.Context, *agentv1.HealthRequest) (*agentv1.HealthResponse, error) {
 	return &agentv1.HealthResponse{
 		Ready: true, Provider: "test",
-		SupportedProtocolVersions: []string{agentprotocol.Version},
+		SupportedProtocolVersions: []string{executor.Version},
 	}, nil
 }
 
-// TestHostLoadsConnectedAgent 验证内置 agent 以 isolated Runtime 纳管：
-// 连接模式（内核不拥有进程）下 Load → 加载期健康检查 → 客户端暴露 → Invoke 拒绝
-// （agent 是 Capability 消费者）→ Stop 关闭连接。
+// TestHostLoadsConnectedAgent 验证内置执行者以 isolated Runtime 纳管：
+// 连接模式（内核不拥有进程）下 Load → 加载期健康检查 → 执行者客户端暴露 →
+// 不实现能力 Invoker（执行者角色没有能力执行面）→ Stop 关闭连接。
 func TestHostLoadsConnectedAgent(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -73,15 +73,22 @@ func TestHostLoadsConnectedAgent(t *testing.T) {
 		t.Fatal(err)
 	}
 	runtime := lease.Runtime()
-	if _, ok := runtime.(agentprotocol.ClientProvider); !ok {
-		t.Fatal("agent runtime does not expose an agent client")
+	clientProvider, ok := runtime.(executor.ClientProvider)
+	if !ok {
+		t.Fatal("executor runtime does not expose an executor client")
+	}
+	if clientProvider.Client() == nil {
+		t.Fatal("executor client is nil")
+	}
+	if _, ok := runtime.(loader.Invoker); ok {
+		t.Fatal("executor runtime must not implement the capability Invoker")
 	}
 	if _, err := runtime.Describe(context.Background()); err != nil {
 		t.Fatalf("describe: %v", err)
 	}
-	// agent 不服务请求/响应能力调用。
-	if _, err := runtime.Invoke(context.Background(), testRequest("agent.call"), json.RawMessage(`{}`)); !errors.Is(err, loader.ErrUnsupportedMode) {
-		t.Fatalf("invoke error = %v, want ErrUnsupportedMode", err)
+	// 执行者租约没有能力执行面：直接 Invoke 是误用，防御性拒绝。
+	if _, err := lease.Invoke(context.Background(), testRequest("agent.call"), json.RawMessage(`{}`)); !errors.Is(err, loader.ErrUnavailable) {
+		t.Fatalf("invoke error = %v, want ErrUnavailable", err)
 	}
 	// 释放租约后再关闭 manager：Shutdown 等待 inFlight 归零。
 	lease.Release()
@@ -132,7 +139,8 @@ func TestRecordRegistersViaInstalledPath(t *testing.T) {
 	if !reflect.DeepEqual(record.Runtime, host.Manifest()) {
 		t.Fatalf("record runtime = %#v, want host manifest %#v", record.Runtime, host.Manifest())
 	}
-	if record.Runtime.ID != agent.RuntimeID || record.Runtime.Mode != loader.ModeIsolated || !record.Runtime.Pin {
+	if record.Runtime.ID != agent.RuntimeID || record.Runtime.Mode != loader.ModeIsolated ||
+		record.Runtime.Role != loader.RoleExecutor || !record.Runtime.Pin {
 		t.Fatalf("record runtime = %#v", record.Runtime)
 	}
 	manager, err := loader.New(host)
