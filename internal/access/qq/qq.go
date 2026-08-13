@@ -37,6 +37,7 @@ type Config struct {
 	AppID          string
 	WSURL          string
 	Token          string
+	BotQQID        string // 机器人 QQ 号：戳一戳识别 target_id、@提及匹配
 	DialTimeout    time.Duration
 	ReconnectDelay time.Duration
 	RunTimeout     time.Duration
@@ -140,6 +141,10 @@ func (a *Adapter) serve(ctx context.Context) error {
 		if event["echo"] != nil {
 			continue // 适配器自身的动作响应，忽略
 		}
+		if str(event, "post_type") == "notice" {
+			a.handleNotice(ctx, event)
+			continue
+		}
 		a.handleEvent(ctx, event)
 	}
 }
@@ -147,9 +152,12 @@ func (a *Adapter) serve(ctx context.Context) error {
 // handleEvent 处理一条 OneBot 消息事件：标准入站 → 幂等 Echo 创建 → 等待
 // 终态回复 → 回发。未绑定身份等入站失败回发公共错误，不泄露内部细节。
 func (a *Adapter) handleEvent(ctx context.Context, raw map[string]any) {
-	inbound := normalizeEvent(a.cfg.AppID, raw)
+	inbound, mentioned := normalizeEvent(a.cfg.AppID, raw)
 	if inbound == nil {
 		return
+	}
+	if inbound.PlatformChannel == "group" && !mentioned {
+		return // 群聊默认只响应 @提及，避免刷屏
 	}
 	intake, err := a.hub.Intake(ctx, *inbound)
 	if err != nil {
@@ -163,6 +171,7 @@ func (a *Adapter) handleEvent(ctx context.Context, raw map[string]any) {
 		SessionID:      intake.SessionID,
 		UserID:         intake.UserID,
 		MessageID:      intake.MessageID,
+		Channel:        "qq_" + inbound.PlatformChannel, // qq_group / qq_private
 	})
 	if err != nil {
 		observe.Error(ctx, "QQ 消息创建 Echo 失败", err,
@@ -312,15 +321,16 @@ func splitReply(text string) []string {
 }
 
 // normalizeEvent 把 OneBot v11 消息事件规范化为标准入站消息；非消息事件、
-// 无文本或缺失标识的消息返回 nil（忽略）。
-func normalizeEvent(appID string, raw map[string]any) *access.InboundMessage {
+// 无文本或缺失标识的消息返回 (nil, false)（忽略）。第二个返回值表示消息
+// 是否 @了 bot（array 模式的 at 段匹配，或 raw_message 含对应 CQ 码）。
+func normalizeEvent(appID string, raw map[string]any) (*access.InboundMessage, bool) {
 	if str(raw, "post_type") != "message" {
-		return nil
+		return nil, false
 	}
 	userID := str(raw, "user_id")
 	messageID := str(raw, "message_id")
 	if userID == "" || messageID == "" {
-		return nil
+		return nil, false
 	}
 	var spaceID, channel, sessionID string
 	switch str(raw, "message_type") {
@@ -333,11 +343,11 @@ func normalizeEvent(appID string, raw map[string]any) *access.InboundMessage {
 		channel = "private"
 		sessionID = userID
 	default:
-		return nil
+		return nil, false
 	}
-	text := extractText(raw)
+	text, mentioned := extractText(raw)
 	if text == "" {
-		return nil
+		return nil, false
 	}
 	return &access.InboundMessage{
 		AppID:             appID,
@@ -351,28 +361,33 @@ func normalizeEvent(appID string, raw map[string]any) *access.InboundMessage {
 		Text:              text,
 		OccurredAt:        time.Now().UTC(),
 		IdempotencyKey:    messageID,
-	}
+	}, mentioned
 }
 
 // extractText 从消息事件提取纯文本：优先拼接 array 模式的 text 段，退化时
-// 从 raw_message 剥离 CQ 码。
-func extractText(raw map[string]any) string {
+// 从 raw_message 剥离 CQ 码。同时返回是否包含 at 段（任意用户）。
+func extractText(raw map[string]any) (text string, mentioned bool) {
 	if segments, ok := raw["message"].([]any); ok {
 		var builder strings.Builder
 		for _, segment := range segments {
 			seg, ok := segment.(map[string]any)
-			if !ok || str(seg, "type") != "text" {
+			if !ok {
 				continue
 			}
-			if data, ok := seg["data"].(map[string]any); ok {
-				builder.WriteString(str(data, "text"))
+			switch str(seg, "type") {
+			case "text":
+				if data, ok := seg["data"].(map[string]any); ok {
+					builder.WriteString(str(data, "text"))
+				}
+			case "at":
+				mentioned = true
 			}
 		}
 		if text := strings.TrimSpace(builder.String()); text != "" {
-			return text
+			return text, mentioned
 		}
 	}
-	return strings.TrimSpace(cqCodePattern.ReplaceAllString(str(raw, "raw_message"), ""))
+	return strings.TrimSpace(cqCodePattern.ReplaceAllString(str(raw, "raw_message"), "")), mentioned
 }
 
 // str 从 JSON 值读取字符串字段（OneBot 的群号/QQ 号可能是数字）。

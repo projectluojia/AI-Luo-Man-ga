@@ -154,7 +154,7 @@ func TestQQAdapterIntakesAndReplies(t *testing.T) {
 		t.Fatal("adapter did not connect")
 	}
 
-	bot.sendEvent(t, `{"post_type":"message","message_type":"group","group_id":12345,"user_id":67890,"message_id":"qq-msg-1","raw_message":"有哪些线路","message":[{"type":"text","data":{"text":"有哪些线路"}}]}`)
+	bot.sendEvent(t, `{"post_type":"message","message_type":"group","group_id":12345,"user_id":67890,"message_id":"qq-msg-1","message":[{"type":"at","data":{"qq":"2647414417"}},{"type":"text","data":{"text":"有哪些线路"}}]}`)
 
 	select {
 	case <-orchestrator.created:

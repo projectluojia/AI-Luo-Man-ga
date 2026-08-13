@@ -6,11 +6,12 @@ import (
 )
 
 type inboundExpect struct {
-	channel string
-	space   string
-	user    string
-	session string
-	text    string
+	channel   string
+	space     string
+	user      string
+	session   string
+	text      string
+	mentioned bool
 }
 
 func TestNormalizeEvent(t *testing.T) {
@@ -40,6 +41,16 @@ func TestNormalizeEvent(t *testing.T) {
 			want:    &inboundExpect{channel: "private", space: "private", user: "1", session: "1", text: "你好"},
 		},
 		{
+			name:    "group at mention flagged",
+			payload: `{"post_type":"message","message_type":"group","group_id":111,"user_id":222,"message_id":"m7","message":[{"type":"at","data":{"qq":"2647414417"}},{"type":"text","data":{"text":"有哪些线路"}}]}`,
+			want:    &inboundExpect{channel: "group", space: "111", user: "222", session: "111", text: "有哪些线路", mentioned: true},
+		},
+		{
+			name:    "group at only no text skipped",
+			payload: `{"post_type":"message","message_type":"group","group_id":111,"user_id":222,"message_id":"m8","message":[{"type":"at","data":{"qq":"2647414417"}}]}`,
+			want:    nil,
+		},
+		{
 			name:    "notice event skipped",
 			payload: `{"post_type":"notice","notice_type":"poke"}`,
 			want:    nil,
@@ -62,7 +73,7 @@ func TestNormalizeEvent(t *testing.T) {
 			if err := json.Unmarshal([]byte(test.payload), &raw); err != nil {
 				t.Fatal(err)
 			}
-			got := normalizeEvent("campus-services", raw)
+			got, mentioned := normalizeEvent("campus-services", raw)
 			if test.want == nil {
 				if got != nil {
 					t.Fatalf("got %#v, want nil", got)
@@ -75,8 +86,9 @@ func TestNormalizeEvent(t *testing.T) {
 			if got.Platform != "qq" || got.PlatformChannel != test.want.channel ||
 				got.PlatformSpaceID != test.want.space ||
 				got.PlatformUserID != test.want.user || got.PlatformSessionID != test.want.session ||
-				got.Text != test.want.text || got.IdempotencyKey != got.PlatformMessageID {
-				t.Fatalf("got %#v", got)
+				got.Text != test.want.text || got.IdempotencyKey != got.PlatformMessageID ||
+				mentioned != test.want.mentioned {
+				t.Fatalf("got %#v mentioned=%t", got, mentioned)
 			}
 		})
 	}
