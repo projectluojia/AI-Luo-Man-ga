@@ -153,20 +153,12 @@ func validateSpec(spec Spec, spawn bool) error {
 }
 
 // dial 连接执行者协议（agent.proto），与能力提供者扩展的 runtime_host.proto
-// 不同。进程退出（Spawn 模式）会取消拨号，避免连接永不返回。
+// 不同。Spawn 模式下进程退出（启动失败）会取消拨号，避免连接永不返回。
 func dial(ctx context.Context, address string, process *loader.Process, dialTimeout time.Duration) (*grpc.ClientConn, agentv1.AgentRuntimeClient, error) {
-	dialContext, cancel := context.WithTimeout(ctx, dialTimeout)
+	watchContext, stopWatch := loader.ProcessWatchContext(ctx, process)
+	defer stopWatch()
+	dialContext, cancel := context.WithTimeout(watchContext, dialTimeout)
 	defer cancel()
-	monitorDone := make(chan struct{})
-	if process != nil {
-		go func() {
-			select {
-			case <-process.Done():
-				cancel()
-			case <-monitorDone:
-			}
-		}()
-	}
 	connection, err := grpc.DialContext(
 		dialContext,
 		address,
@@ -177,9 +169,6 @@ func dial(ctx context.Context, address string, process *loader.Process, dialTime
 			grpc.MaxCallSendMsgSize(executor.MaxGRPCMessageBytes),
 		),
 	)
-	if process != nil {
-		close(monitorDone)
-	}
 	if err != nil {
 		return nil, nil, err
 	}

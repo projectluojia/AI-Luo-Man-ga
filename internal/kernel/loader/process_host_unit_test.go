@@ -2,6 +2,7 @@ package loader
 
 import (
 	"context"
+	"errors"
 	"io"
 	"os"
 	"os/signal"
@@ -9,6 +10,39 @@ import (
 	"testing"
 	"time"
 )
+
+func TestProcessWatchContextCancelsWhenProcessExits(t *testing.T) {
+	process := &Process{done: make(chan struct{})}
+	derived, stop := ProcessWatchContext(context.Background(), process)
+	defer stop()
+	if err := derived.Err(); err != nil {
+		t.Fatalf("derived context 初始已取消: %v", err)
+	}
+	close(process.done)
+	select {
+	case <-derived.Done():
+	case <-time.After(time.Second):
+		t.Fatal("进程退出未取消派生上下文")
+	}
+}
+
+func TestProcessWatchContextStopReleasesAndIsIdempotent(t *testing.T) {
+	process := &Process{done: make(chan struct{})}
+	derived, stop := ProcessWatchContext(context.Background(), process)
+	stop()
+	stop() // 幂等：重复调用不得 panic
+	if err := derived.Err(); !errors.Is(err, context.Canceled) {
+		t.Fatalf("stop 后错误=%v, want context.Canceled", err)
+	}
+}
+
+func TestProcessWatchContextNilProcessIsPlainContext(t *testing.T) {
+	derived, stop := ProcessWatchContext(context.Background(), nil)
+	stop()
+	if err := derived.Err(); !errors.Is(err, context.Canceled) {
+		t.Fatalf("stop 后错误=%v, want context.Canceled", err)
+	}
+}
 
 func TestValidateProcessSpecRejectsUnsafeExecutionInputs(t *testing.T) {
 	executable, err := os.Executable()

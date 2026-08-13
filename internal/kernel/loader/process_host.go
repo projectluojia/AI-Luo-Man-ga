@@ -150,18 +150,10 @@ func (h *IsolatedProcessHost) Load(ctx context.Context, manifest Manifest) (Runt
 		h.remove(wrapped)
 		return nil, errors.Join(err, cleanupErr)
 	}
-	dialContext, cancelDial := context.WithCancel(ctx)
-	monitorDone := make(chan struct{})
-	go func() {
-		select {
-		case <-process.done:
-			cancelDial()
-		case <-monitorDone:
-		}
-	}()
-	loaded, err := grpcHost.Load(dialContext, manifest)
-	close(monitorDone)
-	cancelDial()
+	// 进程在加载完成前退出（启动失败）时取消加载，避免拨号/生命周期调用永不返回。
+	watchContext, stopWatch := ProcessWatchContext(ctx, process)
+	loaded, err := grpcHost.Load(watchContext, manifest)
+	stopWatch()
 	if err != nil {
 		if process.Exited() {
 			err = ErrUnavailable
@@ -203,6 +195,32 @@ func (h *IsolatedProcessHost) remove(runtime *processRuntime) {
 	h.mu.Lock()
 	delete(h.runtimes, runtime)
 	h.mu.Unlock()
+}
+
+// ProcessWatchContext 派生一个在受监督进程退出时自动取消的上下文，供 Spawn
+// 模式加载使用：进程在拨号/加载完成前退出（启动即失败）时立即失败，避免
+// 连接或加载永不返回。stop 停止监控并释放派生上下文（幂等），调用方须在
+// 完成后调用。process 为 nil（连接模式，不拥有进程）时等价于普通派生上下文。
+func ProcessWatchContext(ctx context.Context, process *Process) (derived context.Context, stop func()) {
+	derived, cancel := context.WithCancel(ctx)
+	if process == nil {
+		return derived, cancel
+	}
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-process.Done():
+			cancel()
+		case <-done:
+		}
+	}()
+	var stopOnce sync.Once
+	return derived, func() {
+		stopOnce.Do(func() {
+			close(done)
+			cancel()
+		})
+	}
 }
 
 // Process 是受监督子进程：启动时应用资源限额，退出经 done channel 通知，
