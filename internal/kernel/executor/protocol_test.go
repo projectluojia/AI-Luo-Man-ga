@@ -29,7 +29,7 @@ func TestStartFrameContract(t *testing.T) {
 		{
 			name: "version mismatch",
 			mutate: func(frame *executor.Frame) {
-				frame.GetStartRun().ProtocolVersion = "3.0"
+				frame.GetStartRun().ProtocolVersion = "4.0"
 			},
 			target: executor.ErrVersionMismatch,
 		},

@@ -1,11 +1,13 @@
 syntax = "proto3";
 
-package ailuo.agent.v1;
+package ailuo.executor.v1;
 
-option go_package = "github.com/projectluojia/AI-Luo-Man-ga/gen/agentv1;agentv1";
+option go_package = "github.com/projectluojia/AI-Luo-Man-ga/gen/executorv1;executorv1";
 
-service AgentRuntime {
-  rpc Run(stream AgentFrame) returns (stream AgentFrame);
+// ExecutorRuntime 是内核 AI 执行者会话协议：内核与执行者（LLM 智能体、
+// 规划器、工作流引擎等任何可驱动受治理 Run 会话的实现）之间协商执行。
+service ExecutorRuntime {
+  rpc Run(stream ExecutorFrame) returns (stream ExecutorFrame);
   rpc Health(HealthRequest) returns (HealthResponse);
 }
 
@@ -21,7 +23,7 @@ message HealthResponse {
   string status_code = 4;
 }
 
-message AgentFrame {
+message ExecutorFrame {
   string echo_id = 1;
   string run_id = 2;
   uint64 sequence = 3;

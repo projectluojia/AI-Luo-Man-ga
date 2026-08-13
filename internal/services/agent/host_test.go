@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	agentv1 "github.com/projectluojia/AI-Luo-Man-ga/gen/agentv1"
+	executorv1 "github.com/projectluojia/AI-Luo-Man-ga/gen/executorv1"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/executor"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
@@ -22,11 +22,11 @@ import (
 // fakeAgentServer 是执行者协议的测试实现：健康就绪，Run 未实现（本测试只验证
 // 加载、健康、客户端暴露与停止生命周期）。
 type fakeAgentServer struct {
-	agentv1.UnimplementedAgentRuntimeServer
+	executorv1.UnimplementedExecutorRuntimeServer
 }
 
-func (s *fakeAgentServer) Health(context.Context, *agentv1.HealthRequest) (*agentv1.HealthResponse, error) {
-	return &agentv1.HealthResponse{
+func (s *fakeAgentServer) Health(context.Context, *executorv1.HealthRequest) (*executorv1.HealthResponse, error) {
+	return &executorv1.HealthResponse{
 		Ready: true, Provider: "test",
 		SupportedProtocolVersions: []string{executor.Version},
 	}, nil
@@ -41,7 +41,7 @@ func TestHostLoadsConnectedAgent(t *testing.T) {
 		t.Fatal(err)
 	}
 	server := grpc.NewServer()
-	agentv1.RegisterAgentRuntimeServer(server, &fakeAgentServer{})
+	executorv1.RegisterExecutorRuntimeServer(server, &fakeAgentServer{})
 	go func() { _ = server.Serve(listener) }()
 	defer server.Stop()
 

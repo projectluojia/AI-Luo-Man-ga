@@ -62,7 +62,7 @@ App 的启停状态、模型、系统提示、时区、运行预算、Capability
 - `GET /readyz`：检查是否仍接收工作、SQLite 与实际模型 Provider 就绪状态。
 - `GET /metrics`：Prometheus 文本指标；不包含 App、Echo、Run、调用标识或业务正文。
 
-完整契约见 `docs/openapi.yaml`；Agent 跨进程契约见 `proto/agent.proto`，扩展 Runtime Host 契约见 `proto/runtime_host.proto`。生成后的 Go/Python 文件是提交构件，不得手工修改。
+完整契约见 `docs/openapi.yaml`；执行者跨进程契约见 `proto/executor.proto`，扩展 Runtime Host 契约见 `proto/runtime_host.proto`。生成后的 Go/Python 文件是提交构件，不得手工修改。
 
 ## 验证
 

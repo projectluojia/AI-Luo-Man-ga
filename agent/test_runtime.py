@@ -5,9 +5,9 @@ import json
 import unittest
 from typing import Any, AsyncIterator
 
-from agent.generated import agent_pb2
+from agent.generated import executor_pb2
 from agent.model import ModelEvent, ModelProvider, ModelUsage, TextDelta, ToolCall, TurnCompleted
-from agent.runtime import AgentRuntime, PROTOCOL_VERSION, _is_loopback_address
+from agent.runtime import ExecutorRuntime, PROTOCOL_VERSION, _is_loopback_address
 
 
 class RuntimeModel(ModelProvider):
@@ -60,22 +60,22 @@ class RuntimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(_is_loopback_address("192.0.2.10:50051"))
 
     async def test_health_requires_protocol_and_real_model_readiness(self) -> None:
-        runtime = AgentRuntime(RuntimeModel())
-        healthy = await runtime.Health(agent_pb2.HealthRequest(
+        runtime = ExecutorRuntime(RuntimeModel())
+        healthy = await runtime.Health(executor_pb2.HealthRequest(
             accepted_protocol_versions=[PROTOCOL_VERSION],
             model="test-model",
         ), None)
         self.assertTrue(healthy.ready)
         self.assertEqual(healthy.supported_protocol_versions, [PROTOCOL_VERSION])
 
-        mismatch = await runtime.Health(agent_pb2.HealthRequest(
-            accepted_protocol_versions=["3.0"],
+        mismatch = await runtime.Health(executor_pb2.HealthRequest(
+            accepted_protocol_versions=["4.0"],
             model="test-model",
         ), None)
         self.assertFalse(mismatch.ready)
         self.assertEqual(mismatch.status_code, "protocol_version_mismatch")
 
-        unavailable = await runtime.Health(agent_pb2.HealthRequest(
+        unavailable = await runtime.Health(executor_pb2.HealthRequest(
             accepted_protocol_versions=[PROTOCOL_VERSION],
             model="missing-model",
         ), None)
@@ -83,17 +83,17 @@ class RuntimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(unavailable.status_code, "provider_unavailable")
 
     async def test_grpc_frames_wrap_real_model_loop(self) -> None:
-        requests: asyncio.Queue[agent_pb2.AgentFrame] = asyncio.Queue()
+        requests: asyncio.Queue[executor_pb2.ExecutorFrame] = asyncio.Queue()
 
         async def request_iterator():
             while True:
                 yield await requests.get()
 
-        await requests.put(agent_pb2.AgentFrame(
+        await requests.put(executor_pb2.ExecutorFrame(
             echo_id="echo",
             run_id="run",
             sequence=1,
-            start_run=agent_pb2.StartRun(
+            start_run=executor_pb2.StartRun(
                 app_id="campus-services",
                 input_message="有哪些线路",
                 timezone="Asia/Shanghai",
@@ -109,7 +109,7 @@ class RuntimeTest(unittest.IsolatedAsyncioTestCase):
                 provider_timeout_ms=5000,
                 trace_id="11111111111111111111111111111111",
                 parent_span_id="2222222222222222",
-                capabilities=[agent_pb2.Capability(
+                capabilities=[executor_pb2.Capability(
                     id="campus.bus.routes.list",
                     version="1.0.0",
                     name="线路",
@@ -118,7 +118,7 @@ class RuntimeTest(unittest.IsolatedAsyncioTestCase):
                 )],
             ),
         ))
-        output = AgentRuntime(RuntimeModel()).Run(request_iterator(), None)
+        output = ExecutorRuntime(RuntimeModel()).Run(request_iterator(), None)
         accepted = await anext(output)
         self.assertEqual(accepted.sequence, 1)
         self.assertEqual(accepted.run_accepted.protocol_version, PROTOCOL_VERSION)
@@ -128,11 +128,11 @@ class RuntimeTest(unittest.IsolatedAsyncioTestCase):
         call_frame = await anext(output)
         self.assertEqual(call_frame.sequence, 3)
         self.assertEqual(call_frame.capability_call.capability_id, "campus.bus.routes.list")
-        await requests.put(agent_pb2.AgentFrame(
+        await requests.put(executor_pb2.ExecutorFrame(
             echo_id="echo",
             run_id="run",
             sequence=2,
-            capability_result=agent_pb2.CapabilityResult(
+            capability_result=executor_pb2.CapabilityResult(
                 call_id=call_frame.capability_call.call_id,
                 capability_id="campus.bus.routes.list",
                 success=True,
@@ -151,14 +151,14 @@ class RuntimeTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_rejects_protocol_mismatch_before_model_execution(self) -> None:
         async def request_iterator():
-            yield agent_pb2.AgentFrame(
+            yield executor_pb2.ExecutorFrame(
                 echo_id="echo",
                 run_id="run",
                 sequence=1,
-                start_run=agent_pb2.StartRun(protocol_version="3.0"),
+                start_run=executor_pb2.StartRun(protocol_version="4.0"),
             )
 
-        output = AgentRuntime(RuntimeModel()).Run(request_iterator(), None)
+        output = ExecutorRuntime(RuntimeModel()).Run(request_iterator(), None)
         failure = await anext(output)
         self.assertEqual(failure.sequence, 1)
         self.assertEqual(failure.run_failure.code, "protocol_version_mismatch")
@@ -166,13 +166,13 @@ class RuntimeTest(unittest.IsolatedAsyncioTestCase):
     async def test_rejects_unknown_protobuf_fields(self) -> None:
         frame = self._start_frame()
         encoded = frame.SerializeToString() + b"\x98\x06\x01"
-        frame_with_unknown = agent_pb2.AgentFrame()
+        frame_with_unknown = executor_pb2.ExecutorFrame()
         frame_with_unknown.ParseFromString(encoded)
 
         async def request_iterator():
             yield frame_with_unknown
 
-        output = AgentRuntime(RuntimeModel()).Run(request_iterator(), None)
+        output = ExecutorRuntime(RuntimeModel()).Run(request_iterator(), None)
         failure = await anext(output)
         self.assertEqual(failure.sequence, 1)
         self.assertEqual(failure.run_failure.code, "invalid_request")
@@ -184,7 +184,7 @@ class RuntimeTest(unittest.IsolatedAsyncioTestCase):
         async def request_iterator():
             yield frame
 
-        output = AgentRuntime(RuntimeModel()).Run(request_iterator(), None)
+        output = ExecutorRuntime(RuntimeModel()).Run(request_iterator(), None)
         failure = await anext(output)
         self.assertEqual(failure.sequence, 1)
         self.assertEqual(failure.run_failure.code, "invalid_request")
@@ -196,7 +196,7 @@ class RuntimeTest(unittest.IsolatedAsyncioTestCase):
         async def request_iterator():
             yield frame
 
-        output = AgentRuntime(RuntimeModel()).Run(request_iterator(), None)
+        output = ExecutorRuntime(RuntimeModel()).Run(request_iterator(), None)
         accepted = await anext(output)
         self.assertEqual(accepted.run_accepted.protocol_version, PROTOCOL_VERSION)
         await output.aclose()
@@ -210,27 +210,27 @@ class RuntimeTest(unittest.IsolatedAsyncioTestCase):
                 async def request_iterator():
                     yield frame
 
-                output = AgentRuntime(RuntimeModel()).Run(request_iterator(), None)
+                output = ExecutorRuntime(RuntimeModel()).Run(request_iterator(), None)
                 failure = await anext(output)
                 self.assertEqual(failure.run_failure.code, "invalid_request")
 
     async def test_rejects_result_sequence_gap(self) -> None:
-        requests: asyncio.Queue[agent_pb2.AgentFrame] = asyncio.Queue()
+        requests: asyncio.Queue[executor_pb2.ExecutorFrame] = asyncio.Queue()
 
         async def request_iterator():
             while True:
                 yield await requests.get()
 
         await requests.put(self._start_frame())
-        output = AgentRuntime(RuntimeModel()).Run(request_iterator(), None)
+        output = ExecutorRuntime(RuntimeModel()).Run(request_iterator(), None)
         await anext(output)
         await anext(output)
         call = await anext(output)
-        await requests.put(agent_pb2.AgentFrame(
+        await requests.put(executor_pb2.ExecutorFrame(
             echo_id="echo",
             run_id="run",
             sequence=3,
-            capability_result=agent_pb2.CapabilityResult(
+            capability_result=executor_pb2.CapabilityResult(
                 call_id=call.capability_call.call_id,
                 capability_id=call.capability_call.capability_id,
                 success=True,
@@ -243,11 +243,11 @@ class RuntimeTest(unittest.IsolatedAsyncioTestCase):
 
     @staticmethod
     def _start_frame():
-        return agent_pb2.AgentFrame(
+        return executor_pb2.ExecutorFrame(
             echo_id="echo",
             run_id="run",
             sequence=1,
-            start_run=agent_pb2.StartRun(
+            start_run=executor_pb2.StartRun(
                 app_id="campus-services",
                 input_message="有哪些线路",
                 timezone="Asia/Shanghai",
@@ -263,7 +263,7 @@ class RuntimeTest(unittest.IsolatedAsyncioTestCase):
                 provider_timeout_ms=5000,
                 trace_id="11111111111111111111111111111111",
                 parent_span_id="2222222222222222",
-                capabilities=[agent_pb2.Capability(
+                capabilities=[executor_pb2.Capability(
                     id="campus.bus.routes.list",
                     version="1.0.0",
                     name="线路",

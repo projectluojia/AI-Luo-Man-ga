@@ -5,8 +5,8 @@ UV ?= uv
 PYTHON := $(UV) run --project agent --locked python
 
 generate:
-	PATH="$$(go env GOPATH)/bin:$$PATH" protoc --go_out=. --go_opt=module=github.com/projectluojia/AI-Luo-Man-ga --go-grpc_out=. --go-grpc_opt=module=github.com/projectluojia/AI-Luo-Man-ga proto/agent.proto proto/runtime_host.proto
-	$(PYTHON) -m grpc_tools.protoc -I proto --python_out=agent/generated --grpc_python_out=agent/generated proto/agent.proto
+	PATH="$$(go env GOPATH)/bin:$$PATH" protoc --go_out=. --go_opt=module=github.com/projectluojia/AI-Luo-Man-ga --go-grpc_out=. --go-grpc_opt=module=github.com/projectluojia/AI-Luo-Man-ga proto/executor.proto proto/runtime_host.proto
+	$(PYTHON) -m grpc_tools.protoc -I proto --python_out=agent/generated --grpc_python_out=agent/generated proto/executor.proto
 
 setup-agent:
 	$(UV) sync --project agent --locked

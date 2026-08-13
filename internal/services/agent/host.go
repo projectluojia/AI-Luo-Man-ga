@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"time"
 
-	agentv1 "github.com/projectluojia/AI-Luo-Man-ga/gen/agentv1"
+	executorv1 "github.com/projectluojia/AI-Luo-Man-ga/gen/executorv1"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/executor"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
 
@@ -152,9 +152,9 @@ func validateSpec(spec Spec, spawn bool) error {
 	return nil
 }
 
-// dial 连接执行者协议（agent.proto），与能力提供者扩展的 runtime_host.proto
+// dial 连接执行者协议（executor.proto），与能力提供者扩展的 runtime_host.proto
 // 不同。Spawn 模式下进程退出（启动失败）会取消拨号，避免连接永不返回。
-func dial(ctx context.Context, address string, process *loader.Process, dialTimeout time.Duration) (*grpc.ClientConn, agentv1.AgentRuntimeClient, error) {
+func dial(ctx context.Context, address string, process *loader.Process, dialTimeout time.Duration) (*grpc.ClientConn, executorv1.ExecutorRuntimeClient, error) {
 	watchContext, stopWatch := loader.ProcessWatchContext(ctx, process)
 	defer stopWatch()
 	dialContext, cancel := context.WithTimeout(watchContext, dialTimeout)
@@ -172,7 +172,7 @@ func dial(ctx context.Context, address string, process *loader.Process, dialTime
 	if err != nil {
 		return nil, nil, err
 	}
-	return connection, agentv1.NewAgentRuntimeClient(connection), nil
+	return connection, executorv1.NewExecutorRuntimeClient(connection), nil
 }
 
 // reap 在加载失败时回收 agent 进程：强制终止、等待退出并释放限额。

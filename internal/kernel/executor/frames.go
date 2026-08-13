@@ -1,30 +1,30 @@
 // frames.go 把执行者线协议的生成类型以中性名称暴露给内核逻辑：内核代码只
-// 依赖本契约包，不直接引用生成包（agentv1）。线协议升级时只有本包需要调整。
+// 依赖本契约包，不直接引用生成包（executorv1）。线协议升级时只有本包需要调整。
 package executor
 
 import (
-	agentv1 "github.com/projectluojia/AI-Luo-Man-ga/gen/agentv1"
+	executorv1 "github.com/projectluojia/AI-Luo-Man-ga/gen/executorv1"
 )
 
 type (
-	Frame                  = agentv1.AgentFrame
-	Frame_StartRun         = agentv1.AgentFrame_StartRun
-	Frame_RunAccepted      = agentv1.AgentFrame_RunAccepted
-	Frame_CapabilityCall   = agentv1.AgentFrame_CapabilityCall
-	Frame_CapabilityResult = agentv1.AgentFrame_CapabilityResult
-	Frame_ReplyDelta       = agentv1.AgentFrame_ReplyDelta
-	Frame_FinalMessage     = agentv1.AgentFrame_FinalMessage
-	Frame_RunFailure       = agentv1.AgentFrame_RunFailure
-	Frame_RunUsage         = agentv1.AgentFrame_RunUsage
+	Frame                  = executorv1.ExecutorFrame
+	Frame_StartRun         = executorv1.ExecutorFrame_StartRun
+	Frame_RunAccepted      = executorv1.ExecutorFrame_RunAccepted
+	Frame_CapabilityCall   = executorv1.ExecutorFrame_CapabilityCall
+	Frame_CapabilityResult = executorv1.ExecutorFrame_CapabilityResult
+	Frame_ReplyDelta       = executorv1.ExecutorFrame_ReplyDelta
+	Frame_FinalMessage     = executorv1.ExecutorFrame_FinalMessage
+	Frame_RunFailure       = executorv1.ExecutorFrame_RunFailure
+	Frame_RunUsage         = executorv1.ExecutorFrame_RunUsage
 
-	StartRun         = agentv1.StartRun
-	Capability       = agentv1.Capability
-	CapabilityCall   = agentv1.CapabilityCall
-	CapabilityResult = agentv1.CapabilityResult
-	ReplyDelta       = agentv1.ReplyDelta
-	FinalMessage     = agentv1.FinalMessage
-	RunFailure       = agentv1.RunFailure
-	RunUsage         = agentv1.RunUsage
-	HealthRequest    = agentv1.HealthRequest
-	HealthResponse   = agentv1.HealthResponse
+	StartRun         = executorv1.StartRun
+	Capability       = executorv1.Capability
+	CapabilityCall   = executorv1.CapabilityCall
+	CapabilityResult = executorv1.CapabilityResult
+	ReplyDelta       = executorv1.ReplyDelta
+	FinalMessage     = executorv1.FinalMessage
+	RunFailure       = executorv1.RunFailure
+	RunUsage         = executorv1.RunUsage
+	HealthRequest    = executorv1.HealthRequest
+	HealthResponse   = executorv1.HealthResponse
 )

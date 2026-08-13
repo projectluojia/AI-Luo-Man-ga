@@ -3,7 +3,7 @@
 import grpc
 import warnings
 
-import agent_pb2 as agent__pb2
+import executor_pb2 as executor__pb2
 
 GRPC_GENERATED_VERSION = '1.83.0'
 GRPC_VERSION = grpc.__version__
@@ -18,15 +18,17 @@ except ImportError:
 if _version_not_supported:
     raise RuntimeError(
         f'The grpc package installed is at version {GRPC_VERSION},'
-        + ' but the generated code in agent_pb2_grpc.py depends on'
+        + ' but the generated code in executor_pb2_grpc.py depends on'
         + f' grpcio>={GRPC_GENERATED_VERSION}.'
         + f' Please upgrade your grpc module to grpcio>={GRPC_GENERATED_VERSION}'
         + f' or downgrade your generated code using grpcio-tools<={GRPC_VERSION}.'
     )
 
 
-class AgentRuntimeStub:
-    """Missing associated documentation comment in .proto file."""
+class ExecutorRuntimeStub:
+    """ExecutorRuntime 是内核 AI 执行者会话协议：内核与执行者（LLM 智能体、
+    规划器、工作流引擎等任何可驱动受治理 Run 会话的实现）之间协商执行。
+    """
 
     def __init__(self, channel):
         """Constructor.
@@ -35,19 +37,21 @@ class AgentRuntimeStub:
             channel: A grpc.Channel.
         """
         self.Run = channel.stream_stream(
-                '/ailuo.agent.v1.AgentRuntime/Run',
-                request_serializer=agent__pb2.AgentFrame.SerializeToString,
-                response_deserializer=agent__pb2.AgentFrame.FromString,
+                '/ailuo.executor.v1.ExecutorRuntime/Run',
+                request_serializer=executor__pb2.ExecutorFrame.SerializeToString,
+                response_deserializer=executor__pb2.ExecutorFrame.FromString,
                 _registered_method=True)
         self.Health = channel.unary_unary(
-                '/ailuo.agent.v1.AgentRuntime/Health',
-                request_serializer=agent__pb2.HealthRequest.SerializeToString,
-                response_deserializer=agent__pb2.HealthResponse.FromString,
+                '/ailuo.executor.v1.ExecutorRuntime/Health',
+                request_serializer=executor__pb2.HealthRequest.SerializeToString,
+                response_deserializer=executor__pb2.HealthResponse.FromString,
                 _registered_method=True)
 
 
-class AgentRuntimeServicer:
-    """Missing associated documentation comment in .proto file."""
+class ExecutorRuntimeServicer:
+    """ExecutorRuntime 是内核 AI 执行者会话协议：内核与执行者（LLM 智能体、
+    规划器、工作流引擎等任何可驱动受治理 Run 会话的实现）之间协商执行。
+    """
 
     def Run(self, request_iterator, context):
         """Missing associated documentation comment in .proto file."""
@@ -62,28 +66,30 @@ class AgentRuntimeServicer:
         raise NotImplementedError('Method not implemented!')
 
 
-def add_AgentRuntimeServicer_to_server(servicer, server):
+def add_ExecutorRuntimeServicer_to_server(servicer, server):
     rpc_method_handlers = {
             'Run': grpc.stream_stream_rpc_method_handler(
                     servicer.Run,
-                    request_deserializer=agent__pb2.AgentFrame.FromString,
-                    response_serializer=agent__pb2.AgentFrame.SerializeToString,
+                    request_deserializer=executor__pb2.ExecutorFrame.FromString,
+                    response_serializer=executor__pb2.ExecutorFrame.SerializeToString,
             ),
             'Health': grpc.unary_unary_rpc_method_handler(
                     servicer.Health,
-                    request_deserializer=agent__pb2.HealthRequest.FromString,
-                    response_serializer=agent__pb2.HealthResponse.SerializeToString,
+                    request_deserializer=executor__pb2.HealthRequest.FromString,
+                    response_serializer=executor__pb2.HealthResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
-            'ailuo.agent.v1.AgentRuntime', rpc_method_handlers)
+            'ailuo.executor.v1.ExecutorRuntime', rpc_method_handlers)
     server.add_generic_rpc_handlers((generic_handler,))
-    server.add_registered_method_handlers('ailuo.agent.v1.AgentRuntime', rpc_method_handlers)
+    server.add_registered_method_handlers('ailuo.executor.v1.ExecutorRuntime', rpc_method_handlers)
 
 
  # This class is part of an EXPERIMENTAL API.
-class AgentRuntime:
-    """Missing associated documentation comment in .proto file."""
+class ExecutorRuntime:
+    """ExecutorRuntime 是内核 AI 执行者会话协议：内核与执行者（LLM 智能体、
+    规划器、工作流引擎等任何可驱动受治理 Run 会话的实现）之间协商执行。
+    """
 
     @staticmethod
     def Run(request_iterator,
@@ -99,9 +105,9 @@ class AgentRuntime:
         return grpc.experimental.stream_stream(
             request_iterator,
             target,
-            '/ailuo.agent.v1.AgentRuntime/Run',
-            agent__pb2.AgentFrame.SerializeToString,
-            agent__pb2.AgentFrame.FromString,
+            '/ailuo.executor.v1.ExecutorRuntime/Run',
+            executor__pb2.ExecutorFrame.SerializeToString,
+            executor__pb2.ExecutorFrame.FromString,
             options,
             channel_credentials,
             insecure,
@@ -126,9 +132,9 @@ class AgentRuntime:
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/ailuo.agent.v1.AgentRuntime/Health',
-            agent__pb2.HealthRequest.SerializeToString,
-            agent__pb2.HealthResponse.FromString,
+            '/ailuo.executor.v1.ExecutorRuntime/Health',
+            executor__pb2.HealthRequest.SerializeToString,
+            executor__pb2.HealthResponse.FromString,
             options,
             channel_credentials,
             insecure,

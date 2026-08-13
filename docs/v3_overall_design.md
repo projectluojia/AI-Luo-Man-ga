@@ -707,7 +707,7 @@ Invoke
 - 本机优先绝对 Unix Socket，也可使用 loopback；当前实现拒绝 Runtime Host 的非本机明文地址，尚不支持跨机器 Runtime Host。
 - 连接复用；不为每次调用新建连接。
 
-Agent 流使用 `proto/agent.proto`；Service/Tool Runtime Host 使用 `proto/runtime_host.proto`。两者都是独立版本化契约，不能用其中一个的版本字段替代另一个的协商与校验。
+执行者流使用 `proto/executor.proto`；Service/Tool Runtime Host 使用 `proto/runtime_host.proto`。两者都是独立版本化契约，不能用其中一个的版本字段替代另一个的协商与校验。
 
 不自行设计底层高速协议。异步后台任务第一阶段不强制引入外部消息中间件；普通同步调用与 Agent 流不因引入队列而全部改走队列。
 

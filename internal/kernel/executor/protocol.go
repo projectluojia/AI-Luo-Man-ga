@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	Version = "2.0"
+	Version = "3.0"
 
 	MaxGRPCMessageBytes       = 512 << 10
 	MaxFrameBytes             = 300 << 10

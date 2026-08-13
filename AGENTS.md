@@ -133,7 +133,7 @@ The ordinary Go kernel, Web Access, SQLite, and Python Agent development path mu
 - Go and Python negotiate or validate protocol compatibility before a Run; a hard-coded unused version field is insufficient.
 - Validate frame ordering, identity, sequence, payload size, unknown event types, duplicate calls, late results, and terminal behavior on both sides of gRPC.
 - OpenAPI documents actual request and response schemas, error codes, headers, SSE event envelopes, status behavior, and compatibility expectations.
-- Generated Protobuf files are committed build artifacts in this repository. Never edit them manually. When `proto/agent.proto` changes, regenerate both Go and Python outputs and include them with tests.
+- Generated Protobuf files are committed build artifacts in this repository. Never edit them manually. When `proto/executor.proto` changes, regenerate both Go and Python outputs and include them with tests.
 - Registry registration validates IDs, semantic versions, schemas, side-effect values, dependency declarations, and permission declarations atomically.
 
 ## Observability And Comments
@@ -260,10 +260,15 @@ The App-scoped storage/public-error, durable Echo/Run state, Go trust-boundary/i
 
 ## 2026-08-13 执行者契约与角色轴基线（feat/executor-contract）
 
-- **执行者是内核一等角色，agent 只是其一实现**：`internal/kernel/agentprotocol` 迁名为 `internal/kernel/executor`——内核唯一执行者契约。`executor.Client`（`Run` 双向流 + `Health`）是内核消费执行者的协议客户端面，`ClientProvider`/`ProcessLifecycle` 是运行时契约；agentv1 生成类型经别名（`Frame`/`StartRun`/`CapabilityCall` 等）只从契约包暴露，内核逻辑（orchestrator/health/contextasm/sqlite）不再直接引用生成包。任何能驱动受治理 Run 会话的实现（LLM 智能体、规划器、工作流、远程服务、其他语言）都可充当执行者；Python agent 只是第一个实现。
+- **执行者是内核一等角色，agent 只是其一实现**：`internal/kernel/agentprotocol` 迁名为 `internal/kernel/executor`——内核唯一执行者契约。`executor.Client`（`Run` 双向流 + `Health`）是内核消费执行者的协议客户端面，`ClientProvider`/`ProcessLifecycle` 是运行时契约；executorv1 生成类型经别名（`Frame`/`StartRun`/`CapabilityCall` 等）只从契约包暴露，内核逻辑（orchestrator/health/contextasm/sqlite）不再直接引用生成包。任何能驱动受治理 Run 会话的实现（LLM 智能体、规划器、工作流、远程服务、其他语言）都可充当执行者；Python agent 只是第一个实现。
 - **角色轴进入 Loader 清单**：`Manifest.Role`（`capability` 能力提供者 / `executor` 执行者）注册期校验；`Runtime` 接口只保留生命周期面（Describe/Start/Health/Stop），能力执行面拆为独立 `Invoker` 接口，执行者面为 `executor.ClientProvider`——角色与执行面一致性在加载期强制（能力提供者必须实现 Invoker，执行者必须实现契约），`ErrUnsupportedMode` 路径消除（agent 不再有"不适用"的 Invoke）。`Manager.Handler` 只服务能力提供者；`Manager.Executor(ctx)` 解析本 Deployment 唯一执行者运行时（零/多个 fail-closed），`Lease.ID()` 暴露清单标识。
 - **执行者选择是解析而非硬编码**：main.go 经 `runtimeLoader.Executor(ctx)` 获取执行者租约并按契约取客户端，不再出现 `agent.RuntimeID`/手动契约断言；catalog 构造的 installed 清单一律声明 capability 角色（runtime_host.proto 即能力执行协议，执行者会话协议由未来专门宿主承载）。升级拒绝角色变更（角色是运行时身份的一部分）。
 - 测试：executor 契约协议测试迁移 + 角色负向测试（无角色清单拒绝、能力角色缺 Invoker 加载失败、执行者角色缺契约加载失败、无/多重执行者 fail-closed、升级角色变更拒绝）+ e2e 全链路真实走 `Manager.Executor` 解析路径。
+
+## 2026-08-13 执行者协议中性化（proto 去 agent 特化）
+
+- **线协议契约改名**：`proto/agent.proto` → `proto/executor.proto`（package `ailuo.agent.v1` → `ailuo.executor.v1`，service `AgentRuntime` → `ExecutorRuntime`，消息 `AgentFrame` → `ExecutorFrame`），Go 生成包 `gen/agentv1` → `gen/executorv1`（`executorv1` 别名），Python 生成 `agent_pb2*` → `executor_pb2*`、实现类 `AgentRuntime` → `ExecutorRuntime`。协议逻辑版本 2.0 → 3.0（双端一致，服务全名变更属破坏性，明确不保留旧兼容）。生成工具链：protoc 35.1（grpc_tools 内置）+ `protoc-gen-go`/`protoc-gen-go-grpc`（go install），Makefile `generate` 目标已更新；生成文件仍为提交构件。
+- **残留清理**：`agent/generated/__init__.py`、Makefile、README/docs 引用同步；全仓无 agentv1/agent.proto/agent_pb2 残留（staticcheck U1000 零未用代码）。`RuntimeID = "ailuo.agent"` 保留——这是该具体实现（Python Agent 运行时）的稳定标识，非协议名。
 
 ## 2026-08-13 前端聊天 API 与 QQ 平台适配器基线
 
