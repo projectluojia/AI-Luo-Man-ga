@@ -76,14 +76,17 @@ func NewIsolatedProcessHost(config IsolatedProcessHostConfig) (*IsolatedProcessH
 	if config.TerminateGrace == 0 {
 		config.TerminateGrace = 2 * time.Second
 	}
-	if !validProcessDuration(config.DialTimeout) || !validProcessDuration(config.StopGrace) ||
-		!validProcessDuration(config.TerminateGrace) {
+	if !ValidProcessDuration(config.DialTimeout) || !ValidProcessDuration(config.StopGrace) ||
+		!ValidProcessDuration(config.TerminateGrace) {
 		return nil, ErrInvalidManifest
 	}
 	return &IsolatedProcessHost{
 		config: config, runtimes: make(map[*processRuntime]struct{}),
 	}, nil
 }
+
+// Mode 返回宿主服务的运行模式：isolated 本机进程。
+func (h *IsolatedProcessHost) Mode() string { return ModeIsolated }
 
 func (h *IsolatedProcessHost) Verify(ctx context.Context, manifest Manifest) error {
 	if manifest.Mode != ModeIsolated {
@@ -121,7 +124,7 @@ func (h *IsolatedProcessHost) Load(ctx context.Context, manifest Manifest) (Runt
 	if err := h.config.VerifyInstalled(ctx, manifest, spec); err != nil {
 		return nil, err
 	}
-	process, err := startCommandProcess(ctx, spec, io.Discard, io.Discard)
+	process, err := StartProcess(ctx, spec, io.Discard, io.Discard)
 	if err != nil {
 		return nil, ErrUnavailable
 	}
@@ -160,7 +163,7 @@ func (h *IsolatedProcessHost) Load(ctx context.Context, manifest Manifest) (Runt
 	close(monitorDone)
 	cancelDial()
 	if err != nil {
-		if process.exited() {
+		if process.Exited() {
 			err = ErrUnavailable
 		}
 		cleanupErr := wrapped.cleanupAfterLoad(ctx)
@@ -202,7 +205,10 @@ func (h *IsolatedProcessHost) remove(runtime *processRuntime) {
 	h.mu.Unlock()
 }
 
-type commandProcess struct {
+// Process 是受监督子进程：启动时应用资源限额，退出经 done channel 通知，
+// 清理（优雅终止 → 强制终止）与限额释放封装为原语，供 isolated 形态的
+// 内置 Agent 与 installed 扩展 Runtime 共用。
+type Process struct {
 	command *exec.Cmd
 	done    chan struct{}
 	// waitErr 是 command.Wait 的返回；在 close(done) 前写入，channel 关闭提供 happens-before。
@@ -212,9 +218,9 @@ type commandProcess struct {
 	release func() error
 }
 
-// startCommandProcess 启动受监督子进程并应用资源限额。stdout/stderr 决定子进程
+// StartProcess 启动受监督子进程并应用资源限额。stdout/stderr 决定子进程
 // 输出去向：installed 扩展默认丢弃，内置 agent 直接透传内核输出。
-func startCommandProcess(ctx context.Context, spec ProcessSpec, stdout, stderr io.Writer) (*commandProcess, error) {
+func StartProcess(ctx context.Context, spec ProcessSpec, stdout, stderr io.Writer) (*Process, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -236,7 +242,7 @@ func startCommandProcess(ctx context.Context, spec ProcessSpec, stdout, stderr i
 		_ = command.Wait()
 		return nil, err
 	}
-	process := &commandProcess{command: command, done: make(chan struct{}), release: release}
+	process := &Process{command: command, done: make(chan struct{}), release: release}
 	go func() {
 		process.waitErr = command.Wait()
 		close(process.done)
@@ -244,7 +250,18 @@ func startCommandProcess(ctx context.Context, spec ProcessSpec, stdout, stderr i
 	return process, nil
 }
 
-func (p *commandProcess) exited() bool {
+// Done 返回子进程退出通知 channel（进程退出时关闭；连接模式下为 nil）。
+func (p *Process) Done() <-chan struct{} {
+	return p.done
+}
+
+// Err 返回 command.Wait 的错误；仅子进程退出后有意义。
+func (p *Process) Err() error {
+	return p.waitErr
+}
+
+// Exited 报告子进程是否已经退出。
+func (p *Process) Exited() bool {
 	select {
 	case <-p.done:
 		return true
@@ -253,7 +270,8 @@ func (p *commandProcess) exited() bool {
 	}
 }
 
-func (p *commandProcess) wait(ctx context.Context, grace time.Duration) bool {
+// Wait 在宽限期内等待子进程退出；已退出立即返回 true。
+func (p *Process) Wait(ctx context.Context, grace time.Duration) bool {
 	timer := time.NewTimer(grace)
 	defer timer.Stop()
 	select {
@@ -266,9 +284,53 @@ func (p *commandProcess) wait(ctx context.Context, grace time.Duration) bool {
 	}
 }
 
+// Terminate 优雅终止子进程（Unix 进程组 SIGTERM；其余平台发送中断信号）。
+func (p *Process) Terminate() error {
+	return terminateCommandProcess(p.command.Process)
+}
+
+// Kill 强制终止子进程（Unix 进程组 SIGKILL；其余平台直接 Kill）。
+func (p *Process) Kill() error {
+	return killCommandProcess(p.command.Process)
+}
+
+// Reap 回收受监督子进程：先优雅终止并在 stopGrace 内等待退出，未退出则强制
+// 终止并在 terminateGrace 内等待。进程已退出或回收成功后释放平台资源限额；
+// 限额句柄绝不在子进程存活期间释放（Windows KILL_ON_JOB_CLOSE 会立即终止）。
+// 清理等待从调用方 context 解耦（不因调用方取消而中止），总上限为
+// stopGrace+terminateGrace+1s。
+func (p *Process) Reap(ctx context.Context, stopGrace, terminateGrace time.Duration) error {
+	if p.Exited() {
+		p.Release()
+		return nil
+	}
+	cleanupContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), stopGrace+terminateGrace+time.Second)
+	defer cancel()
+	if err := p.Terminate(); err == nil && p.Wait(cleanupContext, stopGrace) {
+		p.Release()
+		return nil
+	}
+	if err := p.Kill(); err != nil && !p.Exited() {
+		return ErrProcessCleanup
+	}
+	if !p.Wait(cleanupContext, terminateGrace) {
+		return ErrProcessCleanup
+	}
+	p.Release()
+	return nil
+}
+
+// Release 释放平台资源限额句柄；仅在子进程已回收后调用，重复调用安全。
+func (p *Process) Release() {
+	if p.release != nil {
+		_ = p.release()
+		p.release = nil
+	}
+}
+
 type processRuntime struct {
 	runtime        *grpcRuntime
-	process        *commandProcess
+	process        *Process
 	host           *IsolatedProcessHost
 	socketPath     string
 	stopGrace      time.Duration
@@ -279,28 +341,28 @@ type processRuntime struct {
 }
 
 func (r *processRuntime) Describe(ctx context.Context) (Description, error) {
-	if r.process.exited() {
+	if r.process.Exited() {
 		return Description{}, ErrUnavailable
 	}
 	return r.runtime.Describe(ctx)
 }
 
 func (r *processRuntime) Start(ctx context.Context) error {
-	if r.process.exited() {
+	if r.process.Exited() {
 		return ErrUnavailable
 	}
 	return r.runtime.Start(ctx)
 }
 
 func (r *processRuntime) Health(ctx context.Context) error {
-	if r.process.exited() {
+	if r.process.Exited() {
 		return ErrUnavailable
 	}
 	return r.runtime.Health(ctx)
 }
 
 func (r *processRuntime) Invoke(ctx context.Context, request contracts.RequestContext, payload json.RawMessage) (json.RawMessage, error) {
-	if r.process.exited() {
+	if r.process.Exited() {
 		return nil, ErrUnavailable
 	}
 	return r.runtime.Invoke(ctx, request, payload)
@@ -312,11 +374,11 @@ func (r *processRuntime) Stop(ctx context.Context) error {
 	if r.stopped {
 		return nil
 	}
-	if r.process.exited() {
+	if r.process.Exited() {
 		return r.finish()
 	}
 	stopErr := r.runtime.Stop(ctx)
-	if stopErr == nil && r.process.wait(ctx, r.stopGrace) {
+	if stopErr == nil && r.process.Wait(ctx, r.stopGrace) {
 		return r.finish()
 	}
 	cleanupContext, cancel := context.WithTimeout(
@@ -349,19 +411,19 @@ func (r *processRuntime) forceCleanupLocked(ctx context.Context) error {
 			cleanupFailed = true
 		}
 	}
-	if r.process.exited() {
+	if r.process.Exited() {
 		return r.completeProcessCleanup(cleanupFailed)
 	}
-	if err := terminateCommandProcess(r.process.command.Process); err != nil && !r.process.exited() {
+	if err := r.process.Terminate(); err != nil && !r.process.Exited() {
 		return ErrProcessCleanup
 	}
-	if r.process.wait(ctx, r.terminateGrace) {
+	if r.process.Wait(ctx, r.terminateGrace) {
 		return r.completeProcessCleanup(cleanupFailed)
 	}
-	if err := killCommandProcess(r.process.command.Process); err != nil && !r.process.exited() {
+	if err := r.process.Kill(); err != nil && !r.process.Exited() {
 		return ErrProcessCleanup
 	}
-	if !r.process.wait(ctx, r.stopGrace) {
+	if !r.process.Wait(ctx, r.stopGrace) {
 		return ErrProcessCleanup
 	}
 	return r.completeProcessCleanup(cleanupFailed)
@@ -409,17 +471,14 @@ func (r *processRuntime) finish() error {
 // releaseProcessLimits 释放平台资源限额句柄（Windows Job Object）。进程已回收，
 // 释放句柄不会误杀子进程；提前释放会触发 KILL_ON_JOB_CLOSE 立即终止。
 func (r *processRuntime) releaseProcessLimits() {
-	if r.process.release != nil {
-		_ = r.process.release()
-		r.process.release = nil
-	}
+	r.process.Release()
 }
 
 func validateProcessSpec(spec ProcessSpec) error {
 	if !filepath.IsAbs(spec.Path) || filepath.Clean(spec.Path) != spec.Path ||
 		!filepath.IsAbs(spec.WorkDir) || filepath.Clean(spec.WorkDir) != spec.WorkDir ||
 		!IsLocalRuntimeAddress(spec.Address) || len(spec.Args) > 128 || len(spec.Env) > 64 ||
-		!validProcessLimits(spec.Limits) {
+		!ValidProcessLimits(spec.Limits) {
 		return ErrInvalidProcessSpec
 	}
 	info, err := os.Lstat(spec.Path)
@@ -486,7 +545,8 @@ func forbiddenProcessEnvironment(name string) bool {
 	return false
 }
 
-func validProcessDuration(value time.Duration) bool {
+// ValidProcessDuration 校验进程生命周期宽限期的合理范围。
+func ValidProcessDuration(value time.Duration) bool {
 	return value >= 100*time.Millisecond && value <= time.Minute
 }
 
@@ -498,8 +558,8 @@ const (
 	maxProcessLimitFile    = uint64(1 << 40)
 )
 
-// validProcessLimits 校验限额在合理性上限内。
-func validProcessLimits(limits ProcessLimits) bool {
+// ValidProcessLimits 校验限额在合理性上限内。
+func ValidProcessLimits(limits ProcessLimits) bool {
 	return limits.MaxAddressBytes <= maxProcessLimitAddress &&
 		limits.MaxCPUSeconds <= maxProcessLimitCPU &&
 		limits.MaxOpenFiles <= maxProcessLimitFiles &&

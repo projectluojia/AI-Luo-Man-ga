@@ -2,7 +2,9 @@ package loader
 
 import (
 	"context"
+	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"testing"
 	"time"
@@ -59,8 +61,8 @@ func TestValidProcessLimits(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := validProcessLimits(tc.limits); got != tc.want {
-				t.Fatalf("validProcessLimits(%+v) = %v, want %v", tc.limits, got, tc.want)
+			if got := ValidProcessLimits(tc.limits); got != tc.want {
+				t.Fatalf("ValidProcessLimits(%+v) = %v, want %v", tc.limits, got, tc.want)
 			}
 		})
 	}
@@ -89,4 +91,46 @@ func TestIsolatedProcessHostValidatesConfigurationAndMode(t *testing.T) {
 	if err := host.Verify(context.Background(), Manifest{Mode: ModeHosted}); err != ErrUnsupportedMode {
 		t.Fatalf("mode error=%v", err)
 	}
+}
+
+// TestProcessReapStopsStubbornChild 验证 Reap 原语：先优雅终止（辅助进程忽略
+// 中断信号），宽限未退出则强制终止，最终进程已回收且限额已释放。
+func TestProcessReapStopsStubbornChild(t *testing.T) {
+	t.Parallel()
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	process, err := StartProcess(context.Background(), ProcessSpec{
+		Path:    executable,
+		Args:    []string{"-test.run=TestReapHelperChild"},
+		Env:     append(os.Environ(), "AILUO_REAP_HELPER=1"),
+		WorkDir: t.TempDir(),
+	}, io.Discard, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-process.Done():
+		t.Fatal("helper exited before Reap")
+	case <-time.After(300 * time.Millisecond):
+	}
+	if err := process.Reap(context.Background(), 300*time.Millisecond, 3*time.Second); err != nil {
+		t.Fatalf("Reap: %v", err)
+	}
+	if !process.Exited() {
+		t.Fatal("child still alive after Reap")
+	}
+	// Reap 已释放限额：重复释放安全。
+	process.Release()
+}
+
+// TestReapHelperChild 是 Reap 测试的辅助子进程：忽略中断信号并长时间驻留，
+// 供父进程验证优雅终止失败后的强制终止路径。
+func TestReapHelperChild(t *testing.T) {
+	if os.Getenv("AILUO_REAP_HELPER") != "1" {
+		t.Skip("helper process")
+	}
+	signal.Ignore(os.Interrupt)
+	time.Sleep(time.Hour)
 }

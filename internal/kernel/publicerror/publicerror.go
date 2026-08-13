@@ -206,6 +206,10 @@ func Echo(code string) Error {
 		return Error{Code: "app_policy_unavailable", Message: "当前 App 策略暂时不可用", Retryable: true}
 	case "app_disabled":
 		return Error{Code: "app_disabled", Message: "当前 App 已停用"}
+	case "context_unavailable":
+		return Error{Code: "context_unavailable", Message: "Run 上下文暂时不可用", Retryable: true}
+	case "context_budget_exceeded":
+		return Error{Code: "context_budget_exceeded", Message: "Run 上下文超出装配预算"}
 	case "event_delivery_failed":
 		return Error{Code: "event_persistence_failed", Message: "Echo 事件持久化失败", Retryable: true}
 	default:

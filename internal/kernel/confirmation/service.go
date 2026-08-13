@@ -19,19 +19,17 @@ type Service struct {
 	now   func() time.Time
 }
 
-// Option 用于在测试中注入确定性的时间来源等依赖。
-type Option func(*Service)
-
-// WithClock 覆盖服务的当前时间来源。
-func WithClock(now func() time.Time) Option {
-	return func(s *Service) { s.now = now }
+// Config 携带确认服务的可注入依赖；零值使用生产默认。
+type Config struct {
+	// Now 覆盖服务的当前时间来源（测试注入确定性时钟）；nil 使用 time.Now。
+	Now func() time.Time
 }
 
 // NewService 基于持久化 Store 构建确认服务。
-func NewService(store Store, options ...Option) *Service {
+func NewService(store Store, config Config) *Service {
 	service := &Service{store: store, now: time.Now}
-	for _, option := range options {
-		option(service)
+	if config.Now != nil {
+		service.now = config.Now
 	}
 	return service
 }
@@ -258,7 +256,7 @@ func (s *Service) Resolve(ctx context.Context, appID, confirmationID string) (Co
 }
 
 // 编译期断言：Service 必须持续实现 runtime.ConfirmationVerifier，
-// 供 Dispatcher 通过 WithConfirmationVerifier 注入后统一收敛为 ErrConfirmationRequired。
+// 供 Dispatcher 注入后统一收敛为 ErrConfirmationRequired。
 var _ runtime.ConfirmationVerifier = (*Service)(nil)
 
 // VerifyConfirmation 实现 runtime.ConfirmationVerifier，供 Dispatcher 注入。

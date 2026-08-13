@@ -73,7 +73,11 @@ type Runtime interface {
 }
 
 // Host 只从已经安装并锁定的本地单元加载实现；校验失败时不得执行 Load。
+// Mode 声明宿主服务的运行模式；一个宿主只服务一种模式，同一模式允许多个宿主
+// （如内置 campus 的进程内 WasmHost 与 installed hosted 的 GRPCHost），
+// 清单在注册时按 Verify 精确绑定到唯一宿主。
 type Host interface {
+	Mode() string
 	Verify(context.Context, Manifest) error
 	Load(context.Context, Manifest) (Runtime, error)
 }
@@ -94,6 +98,9 @@ type Snapshot struct {
 
 type entry struct {
 	manifest Manifest
+	// host 是注册时按 Verify 精确绑定、能加载该清单的宿主；同一模式存在多个
+	// 宿主时，绑定结果在注册期一次性确定并固化，加载期不再重新选择。
+	host Host
 
 	mu         sync.Mutex
 	state      string
@@ -107,51 +114,86 @@ type Manager struct {
 	mu        sync.RWMutex
 	entries   map[string]*entry
 	retired   []*entry
-	hosts     map[string]Host
+	hosts     map[string][]Host
 	accepting bool
 	now       func() time.Time
 }
 
-func New(hosts map[string]Host) (*Manager, error) {
-	copied := make(map[string]Host, len(hosts))
-	for mode, host := range hosts {
-		if mode != ModeEmbedded && mode != ModeHosted && mode != ModeIsolated {
-			return nil, ErrUnsupportedMode
-		}
+// New 构造统一 Loader：一个 Manager 持有全部运行模式的宿主，模式内部允许
+// 多个宿主（内置包与 installed 包共享同一 Loader，不再按包分叉多个 Manager）。
+func New(hosts ...Host) (*Manager, error) {
+	if len(hosts) == 0 {
+		return nil, ErrUnavailable
+	}
+	grouped := make(map[string][]Host)
+	for _, host := range hosts {
 		if host == nil {
 			return nil, ErrUnavailable
 		}
-		copied[mode] = host
+		mode := host.Mode()
+		if mode != ModeEmbedded && mode != ModeHosted && mode != ModeIsolated {
+			return nil, ErrUnsupportedMode
+		}
+		grouped[mode] = append(grouped[mode], host)
 	}
 	return &Manager{
 		entries:   make(map[string]*entry),
-		hosts:     copied,
+		hosts:     grouped,
 		accepting: true,
 		now:       time.Now,
 	}, nil
 }
 
-func (m *Manager) Register(manifest Manifest) error {
-	return m.RegisterBatch([]Manifest{manifest})
+// selectHost 按清单 Verify 绑定唯一宿主：同一模式存在多个宿主时，恰好一个
+// 宿主通过 Verify 才接受注册；零匹配（本 Deployment 无法承载）或歧义匹配
+// （≥2）都在注册期 fail-closed，避免加载期出现不确定路由。
+func (m *Manager) selectHost(ctx context.Context, manifest Manifest) (Host, error) {
+	candidates := m.hosts[manifest.Mode]
+	if len(candidates) == 0 {
+		return nil, ErrUnsupportedMode
+	}
+	var matched Host
+	matches := 0
+	for _, host := range candidates {
+		if err := host.Verify(ctx, manifest); err == nil {
+			matched = host
+			matches++
+		}
+	}
+	switch matches {
+	case 1:
+		return matched, nil
+	case 0:
+		return nil, fmt.Errorf("%w: no host serves runtime manifest %q", ErrUnsupportedMode, manifest.ID)
+	default:
+		return nil, fmt.Errorf("%w: %d hosts serve runtime manifest %q", ErrInvalidManifest, matches, manifest.ID)
+	}
 }
 
-// RegisterBatch 在发布任何运行时前完成整批校验，避免启动恢复留下部分目录。
-func (m *Manager) RegisterBatch(manifests []Manifest) error {
+func (m *Manager) Register(ctx context.Context, manifest Manifest) error {
+	return m.RegisterBatch(ctx, []Manifest{manifest})
+}
+
+// RegisterBatch 在发布任何运行时前完成整批校验与宿主绑定，避免启动恢复留下部分目录。
+func (m *Manager) RegisterBatch(ctx context.Context, manifests []Manifest) error {
 	if len(manifests) == 0 || len(manifests) > 4096 {
 		return ErrInvalidManifest
 	}
+	bound := make(map[string]Host, len(manifests))
 	seen := make(map[string]struct{}, len(manifests))
 	for _, manifest := range manifests {
 		if err := validateManifest(manifest); err != nil {
 			return err
 		}
-		if _, exists := m.hosts[manifest.Mode]; !exists {
-			return ErrUnsupportedMode
+		host, err := m.selectHost(ctx, manifest)
+		if err != nil {
+			return err
 		}
 		if _, exists := seen[manifest.ID]; exists {
 			return ErrDuplicateID
 		}
 		seen[manifest.ID] = struct{}{}
+		bound[manifest.ID] = host
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -166,6 +208,7 @@ func (m *Manager) RegisterBatch(manifests []Manifest) error {
 	for _, manifest := range manifests {
 		m.entries[manifest.ID] = &entry{
 			manifest: manifest,
+			host:     bound[manifest.ID],
 			state:    StateRegistered,
 		}
 	}
@@ -195,14 +238,14 @@ func (m *Manager) rollbackRegistered(manifests []Manifest) error {
 }
 
 func (m *Manager) EnsureLoaded(ctx context.Context, id string) error {
-	item, host, err := m.resolve(id)
+	item, err := m.resolve(id)
 	if err != nil {
 		return err
 	}
-	return m.ensureLoaded(ctx, item, host)
+	return m.ensureLoaded(ctx, item)
 }
 
-func (m *Manager) ensureLoaded(ctx context.Context, item *entry, host Host) error {
+func (m *Manager) ensureLoaded(ctx context.Context, item *entry) error {
 	for {
 		item.mu.Lock()
 		switch item.state {
@@ -227,7 +270,7 @@ func (m *Manager) ensureLoaded(ctx context.Context, item *entry, host Host) erro
 			wait := item.transition
 			item.mu.Unlock()
 			started := m.now()
-			loadErr := loadRuntime(ctx, host, item.manifest)
+			loadErr := loadRuntime(ctx, item.host, item.manifest)
 			item.mu.Lock()
 			if loadErr.err != nil {
 				item.state = StateFailed
@@ -270,15 +313,11 @@ func (m *Manager) Upgrade(ctx context.Context, manifest Manifest) error {
 		return err
 	}
 	m.mu.RLock()
-	if !m.accepting {
-		m.mu.RUnlock()
-		return ErrShuttingDown
-	}
-	host := m.hosts[manifest.Mode]
+	accepting := m.accepting
 	current := m.entries[manifest.ID]
 	m.mu.RUnlock()
-	if host == nil {
-		return ErrUnsupportedMode
+	if !accepting {
+		return ErrShuttingDown
 	}
 	if current == nil {
 		return ErrNotFound
@@ -286,8 +325,12 @@ func (m *Manager) Upgrade(ctx context.Context, manifest Manifest) error {
 	if current.manifest.Version == manifest.Version && current.manifest.LockedDigest == manifest.LockedDigest {
 		return ErrDuplicateID
 	}
-	candidate := &entry{manifest: manifest, state: StateRegistered}
-	if err := m.ensureLoaded(ctx, candidate, host); err != nil {
+	host, err := m.selectHost(ctx, manifest)
+	if err != nil {
+		return err
+	}
+	candidate := &entry{manifest: manifest, host: host, state: StateRegistered}
+	if err := m.ensureLoaded(ctx, candidate); err != nil {
 		return err
 	}
 
@@ -538,7 +581,7 @@ sendJobs:
 }
 
 func (m *Manager) Unload(ctx context.Context, id string) error {
-	item, _, err := m.resolve(id)
+	item, err := m.resolve(id)
 	if err != nil {
 		return err
 	}
@@ -546,7 +589,7 @@ func (m *Manager) Unload(ctx context.Context, id string) error {
 }
 
 func (m *Manager) ResetFailed(id string) error {
-	item, _, err := m.resolve(id)
+	item, err := m.resolve(id)
 	if err != nil {
 		return err
 	}
@@ -564,7 +607,7 @@ func (m *Manager) ResetFailed(id string) error {
 
 // RecoverFailed 在所有在途调用结束后清理失败句柄，使下一次调用重新执行完整加载流程。
 func (m *Manager) RecoverFailed(ctx context.Context, id string) error {
-	item, _, err := m.resolve(id)
+	item, err := m.resolve(id)
 	if err != nil {
 		return err
 	}
@@ -702,10 +745,12 @@ func (m *Manager) Shutdown(ctx context.Context) error {
 			}
 		}
 	}
-	for _, host := range m.hosts {
-		if closer, ok := host.(HostCloser); ok {
-			if err := closer.Close(ctx); err != nil {
-				result = append(result, err)
+	for _, hosts := range m.hosts {
+		for _, host := range hosts {
+			if closer, ok := host.(HostCloser); ok {
+				if err := closer.Close(ctx); err != nil {
+					result = append(result, err)
+				}
 			}
 		}
 	}
@@ -713,7 +758,7 @@ func (m *Manager) Shutdown(ctx context.Context) error {
 }
 
 func (m *Manager) Snapshot(id string) (Snapshot, error) {
-	item, _, err := m.resolve(id)
+	item, err := m.resolve(id)
 	if err != nil {
 		return Snapshot{}, err
 	}
@@ -725,18 +770,14 @@ func (m *Manager) Snapshot(id string) (Snapshot, error) {
 	}, nil
 }
 
-func (m *Manager) resolve(id string) (*entry, Host, error) {
+func (m *Manager) resolve(id string) (*entry, error) {
 	m.mu.RLock()
 	item := m.entries[id]
 	m.mu.RUnlock()
 	if item == nil {
-		return nil, nil, ErrNotFound
+		return nil, ErrNotFound
 	}
-	host := m.hosts[item.manifest.Mode]
-	if host == nil {
-		return nil, nil, ErrUnsupportedMode
-	}
-	return item, host, nil
+	return item, nil
 }
 
 func validateManifest(manifest Manifest) error {

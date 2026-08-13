@@ -18,6 +18,8 @@ import (
 const digest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
 type fakeHost struct {
+	// mode 声明宿主服务的模式；空值按 ModeHosted 处理（多数用例单一模式）。
+	mode      string
 	verifyErr error
 	loadErr   error
 	runtime   *fakeRuntime
@@ -26,10 +28,19 @@ type fakeHost struct {
 	loads     atomic.Int32
 }
 
+func (h *fakeHost) Mode() string {
+	if h.mode == "" {
+		return loader.ModeHosted
+	}
+	return h.mode
+}
+
 type versionHost struct {
 	runtimes map[string]*fakeRuntime
 	loads    atomic.Int32
 }
+
+func (h *versionHost) Mode() string { return loader.ModeHosted }
 
 func (h *versionHost) Verify(context.Context, loader.Manifest) error {
 	return nil
@@ -44,8 +55,11 @@ func (h *versionHost) Load(_ context.Context, manifest loader.Manifest) (loader.
 	return runtime, nil
 }
 
-func (h *fakeHost) Verify(context.Context, loader.Manifest) error {
+func (h *fakeHost) Verify(ctx context.Context, manifest loader.Manifest) error {
 	h.verifies.Add(1)
+	if h.mode != "" && manifest.Mode != h.mode {
+		return loader.ErrUnsupportedMode
+	}
 	return h.verifyErr
 }
 
@@ -104,11 +118,11 @@ func TestLoaderSingleFlightsFirstUseAndDrainsBeforeUnload(t *testing.T) {
 	gate := make(chan struct{})
 	runtime := &fakeRuntime{description: loader.Description{ID: "extension.test", Version: "1.2.3", Mode: loader.ModeHosted}}
 	host := &fakeHost{runtime: runtime, loadGate: gate}
-	manager, err := loader.New(map[string]loader.Host{loader.ModeHosted: host})
+	manager, err := loader.New(host)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := manager.Register(loader.Manifest{
+	if err := manager.Register(context.Background(), loader.Manifest{
 		ID: "extension.test", Version: "1.2.3", Mode: loader.ModeHosted,
 		LockedDigest: digest, IdleTTL: time.Minute,
 	}); err != nil {
@@ -141,7 +155,8 @@ func TestLoaderSingleFlightsFirstUseAndDrainsBeforeUnload(t *testing.T) {
 	for err := range failures {
 		t.Fatal(err)
 	}
-	if host.verifies.Load() != 1 || host.loads.Load() != 1 || runtime.starts.Load() != 1 || runtime.health.Load() != 1 {
+	// 注册期绑定宿主一次 Verify，加载期 loadRuntime 再 Verify 一次：单飞加载只发生一次。
+	if host.verifies.Load() != 2 || host.loads.Load() != 1 || runtime.starts.Load() != 1 || runtime.health.Load() != 1 {
 		t.Fatalf("verify=%d load=%d start=%d health=%d", host.verifies.Load(), host.loads.Load(), runtime.starts.Load(), runtime.health.Load())
 	}
 	held := make([]*loader.Lease, 0, callers)
@@ -167,25 +182,117 @@ func TestLoaderSingleFlightsFirstUseAndDrainsBeforeUnload(t *testing.T) {
 	}
 }
 
-func TestLoaderVerifiesLockBeforeLoadAndFailsFast(t *testing.T) {
-	runtime := &fakeRuntime{description: loader.Description{ID: "isolated.test", Version: "1.0.0", Mode: loader.ModeIsolated}}
-	host := &fakeHost{verifyErr: errors.New("digest mismatch"), runtime: runtime}
-	manager, err := loader.New(map[string]loader.Host{loader.ModeIsolated: host})
+// serveHost 按 (模式, 服务 ID 集合) 精确承载清单，用于验证同一模式多宿主
+// 场景下注册期按 Verify 绑定唯一宿主。
+type serveHost struct {
+	mode    string
+	ids     map[string]bool
+	runtime *fakeRuntime
+	loads   atomic.Int32
+}
+
+func (h *serveHost) Mode() string { return h.mode }
+
+func (h *serveHost) Verify(_ context.Context, manifest loader.Manifest) error {
+	if manifest.Mode != h.mode || !h.ids[manifest.ID] {
+		return loader.ErrUnsupportedMode
+	}
+	return nil
+}
+
+func (h *serveHost) Load(_ context.Context, manifest loader.Manifest) (loader.Runtime, error) {
+	h.loads.Add(1)
+	if h.runtime != nil {
+		return h.runtime, nil
+	}
+	return &fakeRuntime{description: loader.Description{
+		ID: manifest.ID, Version: manifest.Version, Mode: manifest.Mode,
+	}}, nil
+}
+
+// TestLoaderBindsManifestToTheOnlyVerifyingHost 验证同一模式多个宿主时，
+// 每个清单在注册期精确绑定到唯一能 Verify 它的宿主，加载只走绑定宿主。
+func TestLoaderBindsManifestToTheOnlyVerifyingHost(t *testing.T) {
+	t.Parallel()
+	first := &fakeRuntime{description: loader.Description{ID: "hosted.first", Version: "1.0.0", Mode: loader.ModeHosted}}
+	second := &fakeRuntime{description: loader.Description{ID: "hosted.second", Version: "1.0.0", Mode: loader.ModeHosted}}
+	hostA := &serveHost{mode: loader.ModeHosted, ids: map[string]bool{"hosted.first": true}, runtime: first}
+	hostB := &serveHost{mode: loader.ModeHosted, ids: map[string]bool{"hosted.second": true}, runtime: second}
+	manager, err := loader.New(hostA, hostB)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := manager.Register(loader.Manifest{
+	ctx := context.Background()
+	for _, manifest := range []loader.Manifest{
+		{ID: "hosted.first", Version: "1.0.0", Mode: loader.ModeHosted, LockedDigest: digest},
+		{ID: "hosted.second", Version: "1.0.0", Mode: loader.ModeHosted, LockedDigest: digest},
+	} {
+		if err := manager.Register(ctx, manifest); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, id := range []string{"hosted.first", "hosted.second"} {
+		if err := manager.EnsureLoaded(ctx, id); err != nil {
+			t.Fatalf("EnsureLoaded %s: %v", id, err)
+		}
+	}
+	if hostA.loads.Load() != 1 || hostB.loads.Load() != 1 {
+		t.Fatalf("loads hostA=%d hostB=%d, want 1/1", hostA.loads.Load(), hostB.loads.Load())
+	}
+	if snapshot, err := manager.Snapshot("hosted.first"); err != nil || snapshot.State != loader.StateReady {
+		t.Fatalf("snapshot=%#v err=%v", snapshot, err)
+	}
+	if err := manager.Shutdown(ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestLoaderRejectsAmbiguousAndUnservedManifests 验证注册期 fail-closed：
+// 同一模式多个宿主都通过 Verify（歧义）或都没有宿主能承载（未服务）都拒绝注册。
+func TestLoaderRejectsAmbiguousAndUnservedManifests(t *testing.T) {
+	t.Parallel()
+	hostA := &serveHost{mode: loader.ModeHosted, ids: map[string]bool{"shared": true}}
+	hostB := &serveHost{mode: loader.ModeHosted, ids: map[string]bool{"shared": true}}
+	manager, err := loader.New(hostA, hostB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	ambiguous := loader.Manifest{ID: "shared", Version: "1.0.0", Mode: loader.ModeHosted, LockedDigest: digest}
+	if err := manager.Register(ctx, ambiguous); !errors.Is(err, loader.ErrInvalidManifest) {
+		t.Fatalf("ambiguous manifest error=%v, want ErrInvalidManifest", err)
+	}
+	unserved := loader.Manifest{ID: "nobody", Version: "1.0.0", Mode: loader.ModeHosted, LockedDigest: digest}
+	if err := manager.Register(ctx, unserved); !errors.Is(err, loader.ErrUnsupportedMode) {
+		t.Fatalf("unserved manifest error=%v, want ErrUnsupportedMode", err)
+	}
+	unknownMode := loader.Manifest{ID: "remote.one", Version: "1.0.0", Mode: "remote", LockedDigest: digest}
+	if err := manager.Register(ctx, unknownMode); !errors.Is(err, loader.ErrInvalidManifest) {
+		t.Fatalf("unknown mode error=%v, want ErrInvalidManifest", err)
+	}
+}
+
+func TestLoaderVerifiesLockBeforeLoadAndFailsFast(t *testing.T) {
+	runtime := &fakeRuntime{description: loader.Description{ID: "isolated.test", Version: "1.0.0", Mode: loader.ModeIsolated}}
+	host := &fakeHost{mode: loader.ModeIsolated, runtime: runtime}
+	manager, err := loader.New(host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Register(context.Background(), loader.Manifest{
 		ID: "isolated.test", Version: "1.0.0", Mode: loader.ModeIsolated, LockedDigest: digest,
 	}); err != nil {
 		t.Fatal(err)
 	}
+	// 注册时 Verify 绑定宿主一次；加载前篡改锁，Load 前的二次 Verify 必须失败。
+	host.verifyErr = errors.New("digest mismatch")
 	if err := manager.EnsureLoaded(context.Background(), "isolated.test"); !errors.Is(err, loader.ErrLoadFailed) {
 		t.Fatalf("load error=%v", err)
 	}
 	if err := manager.EnsureLoaded(context.Background(), "isolated.test"); !errors.Is(err, loader.ErrLoadFailed) {
 		t.Fatalf("fast failure=%v", err)
 	}
-	if host.verifies.Load() != 1 || host.loads.Load() != 0 {
+	if host.verifies.Load() != 2 || host.loads.Load() != 0 {
 		t.Fatalf("verify=%d load=%d", host.verifies.Load(), host.loads.Load())
 	}
 	snapshot, _ := manager.Snapshot("isolated.test")
@@ -199,7 +306,7 @@ func TestLoaderVerifiesLockBeforeLoadAndFailsFast(t *testing.T) {
 	if err := manager.EnsureLoaded(context.Background(), "isolated.test"); err != nil {
 		t.Fatal(err)
 	}
-	if host.verifies.Load() != 2 || host.loads.Load() != 1 {
+	if host.verifies.Load() != 3 || host.loads.Load() != 1 {
 		t.Fatalf("retry verify=%d load=%d", host.verifies.Load(), host.loads.Load())
 	}
 }
@@ -207,7 +314,7 @@ func TestLoaderVerifiesLockBeforeLoadAndFailsFast(t *testing.T) {
 func TestLoaderRegisterBatchIsAtomic(t *testing.T) {
 	t.Parallel()
 
-	manager, err := loader.New(map[string]loader.Host{loader.ModeHosted: &fakeHost{}})
+	manager, err := loader.New(&fakeHost{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -217,13 +324,13 @@ func TestLoaderRegisterBatchIsAtomic(t *testing.T) {
 	invalid := loader.Manifest{
 		ID: "batch.two", Version: "not-semver", Mode: loader.ModeHosted, LockedDigest: digest,
 	}
-	if err := manager.RegisterBatch([]loader.Manifest{valid, invalid}); !errors.Is(err, loader.ErrInvalidManifest) {
+	if err := manager.RegisterBatch(context.Background(), []loader.Manifest{valid, invalid}); !errors.Is(err, loader.ErrInvalidManifest) {
 		t.Fatalf("无效批次错误=%v", err)
 	}
 	if _, err := manager.Snapshot(valid.ID); !errors.Is(err, loader.ErrNotFound) {
 		t.Fatalf("失败批次部分发布：%v", err)
 	}
-	if err := manager.RegisterBatch([]loader.Manifest{valid, {
+	if err := manager.RegisterBatch(context.Background(), []loader.Manifest{valid, {
 		ID: "batch.two", Version: "1.0.0", Mode: loader.ModeHosted, LockedDigest: digest,
 	}}); err != nil {
 		t.Fatal(err)
@@ -238,11 +345,11 @@ func TestLoaderRegisterBatchIsAtomic(t *testing.T) {
 
 func TestLoaderRejectsDescriptionMismatchAndStopsLoadedRuntime(t *testing.T) {
 	runtime := &fakeRuntime{description: loader.Description{ID: "different", Version: "1.0.0", Mode: loader.ModeHosted}}
-	manager, err := loader.New(map[string]loader.Host{loader.ModeHosted: &fakeHost{runtime: runtime}})
+	manager, err := loader.New(&fakeHost{runtime: runtime})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := manager.Register(loader.Manifest{
+	if err := manager.Register(context.Background(), loader.Manifest{
 		ID: "expected", Version: "1.0.0", Mode: loader.ModeHosted, LockedDigest: digest,
 	}); err != nil {
 		t.Fatal(err)
@@ -260,11 +367,11 @@ func TestLoaderRetainsHandleWhenFailedLoadCannotStop(t *testing.T) {
 		description: loader.Description{ID: "different", Version: "1.0.0", Mode: loader.ModeHosted},
 		stopErr:     errors.New("stop failed"),
 	}
-	manager, err := loader.New(map[string]loader.Host{loader.ModeHosted: &fakeHost{runtime: runtime}})
+	manager, err := loader.New(&fakeHost{runtime: runtime})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := manager.Register(loader.Manifest{
+	if err := manager.Register(context.Background(), loader.Manifest{
 		ID: "cleanup.test", Version: "1.0.0", Mode: loader.ModeHosted, LockedDigest: digest,
 	}); err != nil {
 		t.Fatal(err)
@@ -287,20 +394,20 @@ func TestLoaderRetainsHandleWhenFailedLoadCannotStop(t *testing.T) {
 func TestLoaderHandlerPreservesGovernedContextAndIdlePolicy(t *testing.T) {
 	hostedRuntime := &fakeRuntime{description: loader.Description{ID: "hosted.test", Version: "1.0.0", Mode: loader.ModeHosted}}
 	pinnedRuntime := &fakeRuntime{description: loader.Description{ID: "core.test", Version: "1.0.0", Mode: loader.ModeEmbedded}}
-	manager, err := loader.New(map[string]loader.Host{
-		loader.ModeHosted:   &fakeHost{runtime: hostedRuntime},
-		loader.ModeEmbedded: &fakeHost{runtime: pinnedRuntime},
-	})
+	manager, err := loader.New(
+		&fakeHost{runtime: hostedRuntime},
+		&fakeHost{mode: loader.ModeEmbedded, runtime: pinnedRuntime},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := manager.Register(loader.Manifest{
+	if err := manager.Register(context.Background(), loader.Manifest{
 		ID: "hosted.test", Version: "1.0.0", Mode: loader.ModeHosted,
 		LockedDigest: digest, IdleTTL: time.Millisecond,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := manager.Register(loader.Manifest{
+	if err := manager.Register(context.Background(), loader.Manifest{
 		ID: "core.test", Version: "1.0.0", Mode: loader.ModeEmbedded,
 		LockedDigest: digest, Pin: true, IdleTTL: time.Millisecond,
 	}); err != nil {
@@ -333,11 +440,11 @@ func TestLoaderHandlerPreservesGovernedContextAndIdlePolicy(t *testing.T) {
 func TestLoaderHandlerRemainsBehindRegistryDispatcherGovernance(t *testing.T) {
 	loaded := &fakeRuntime{description: loader.Description{ID: "runtime.capability", Version: "1.0.0", Mode: loader.ModeHosted}}
 	host := &fakeHost{runtime: loaded}
-	manager, err := loader.New(map[string]loader.Host{loader.ModeHosted: host})
+	manager, err := loader.New(host)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := manager.Register(loader.Manifest{
+	if err := manager.Register(context.Background(), loader.Manifest{
 		ID: "runtime.capability", Version: "1.0.0", Mode: loader.ModeHosted, LockedDigest: digest,
 	}); err != nil {
 		t.Fatal(err)
@@ -364,7 +471,7 @@ func TestLoaderHandlerRemainsBehindRegistryDispatcherGovernance(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	dispatcher := kernelruntime.NewDispatcher(reg, policy)
+	dispatcher := kernelruntime.NewDispatcher(reg, policy, kernelruntime.DispatcherConfig{})
 	request := contracts.RequestContext{
 		AppID: "app", EchoID: "echo", RequestID: "request", TraceID: "trace",
 		Deadline: time.Now().Add(time.Minute),
@@ -385,11 +492,11 @@ func TestLoaderUpgradeSwitchesNewTrafficBeforeDrainingOldVersion(t *testing.T) {
 	oldRuntime := &fakeRuntime{description: loader.Description{ID: "upgrade.test", Version: "1.0.0", Mode: loader.ModeHosted}}
 	newRuntime := &fakeRuntime{description: loader.Description{ID: "upgrade.test", Version: "2.0.0", Mode: loader.ModeHosted}}
 	host := &versionHost{runtimes: map[string]*fakeRuntime{"1.0.0": oldRuntime, "2.0.0": newRuntime}}
-	manager, err := loader.New(map[string]loader.Host{loader.ModeHosted: host})
+	manager, err := loader.New(host)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := manager.Register(loader.Manifest{
+	if err := manager.Register(context.Background(), loader.Manifest{
 		ID: "upgrade.test", Version: "1.0.0", Mode: loader.ModeHosted, LockedDigest: digest,
 	}); err != nil {
 		t.Fatal(err)
@@ -441,15 +548,15 @@ func TestLoaderUpgradeSwitchesNewTrafficBeforeDrainingOldVersion(t *testing.T) {
 }
 
 func TestLoaderUpgradeDeadlineRetainsOldHandleForShutdownCleanup(t *testing.T) {
-	oldRuntime := &fakeRuntime{description: loader.Description{ID: "upgrade.timeout", Version: "1.0.0", Mode: loader.ModeIsolated}}
-	newRuntime := &fakeRuntime{description: loader.Description{ID: "upgrade.timeout", Version: "2.0.0", Mode: loader.ModeIsolated}}
+	oldRuntime := &fakeRuntime{description: loader.Description{ID: "upgrade.timeout", Version: "1.0.0", Mode: loader.ModeHosted}}
+	newRuntime := &fakeRuntime{description: loader.Description{ID: "upgrade.timeout", Version: "2.0.0", Mode: loader.ModeHosted}}
 	host := &versionHost{runtimes: map[string]*fakeRuntime{"1.0.0": oldRuntime, "2.0.0": newRuntime}}
-	manager, err := loader.New(map[string]loader.Host{loader.ModeIsolated: host})
+	manager, err := loader.New(host)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := manager.Register(loader.Manifest{
-		ID: "upgrade.timeout", Version: "1.0.0", Mode: loader.ModeIsolated, LockedDigest: digest,
+	if err := manager.Register(context.Background(), loader.Manifest{
+		ID: "upgrade.timeout", Version: "1.0.0", Mode: loader.ModeHosted, LockedDigest: digest,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -460,7 +567,7 @@ func TestLoaderUpgradeDeadlineRetainsOldHandleForShutdownCleanup(t *testing.T) {
 	upgradeContext, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
 	err = manager.Upgrade(upgradeContext, loader.Manifest{
-		ID: "upgrade.timeout", Version: "2.0.0", Mode: loader.ModeIsolated, LockedDigest: digest,
+		ID: "upgrade.timeout", Version: "2.0.0", Mode: loader.ModeHosted, LockedDigest: digest,
 	})
 	if !errors.Is(err, loader.ErrInFlight) || !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("upgrade timeout error=%v", err)
@@ -480,11 +587,11 @@ func TestLoaderUpgradeDeadlineRetainsOldHandleForShutdownCleanup(t *testing.T) {
 
 func TestLoaderShutdownRejectsAdmissionAndHonorsDeadline(t *testing.T) {
 	runtime := &fakeRuntime{description: loader.Description{ID: "shutdown.test", Version: "1.0.0", Mode: loader.ModeIsolated}}
-	manager, err := loader.New(map[string]loader.Host{loader.ModeIsolated: &fakeHost{runtime: runtime}})
+	manager, err := loader.New(&fakeHost{mode: loader.ModeIsolated, runtime: runtime})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := manager.Register(loader.Manifest{
+	if err := manager.Register(context.Background(), loader.Manifest{
 		ID: "shutdown.test", Version: "1.0.0", Mode: loader.ModeIsolated, LockedDigest: digest,
 	}); err != nil {
 		t.Fatal(err)
@@ -511,10 +618,10 @@ func TestLoaderShutdownRejectsAdmissionAndHonorsDeadline(t *testing.T) {
 }
 
 func TestLoaderRejectsRemoteAndMalformedLocks(t *testing.T) {
-	if _, err := loader.New(map[string]loader.Host{"remote": &fakeHost{}}); !errors.Is(err, loader.ErrUnsupportedMode) {
+	if _, err := loader.New(&fakeHost{mode: "remote"}); !errors.Is(err, loader.ErrUnsupportedMode) {
 		t.Fatalf("remote host error=%v", err)
 	}
-	manager, err := loader.New(map[string]loader.Host{loader.ModeHosted: &fakeHost{}})
+	manager, err := loader.New(&fakeHost{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -524,7 +631,7 @@ func TestLoaderRejectsRemoteAndMalformedLocks(t *testing.T) {
 		{ID: "valid", Version: "1.0.0", Mode: loader.ModeHosted, LockedDigest: "not-a-digest"},
 		{ID: "valid", Version: "1.0.0", Mode: "remote", LockedDigest: digest},
 	} {
-		if err := manager.Register(manifest); !errors.Is(err, loader.ErrInvalidManifest) {
+		if err := manager.Register(context.Background(), manifest); !errors.Is(err, loader.ErrInvalidManifest) {
 			t.Fatalf("manifest=%#v err=%v", manifest, err)
 		}
 	}
@@ -536,11 +643,11 @@ func TestLoaderMarksFatalRuntimeFailureAndRecoversExplicitly(t *testing.T) {
 		invokeErr:   loader.ErrUnavailable,
 	}
 	host := &fakeHost{runtime: runtime}
-	manager, err := loader.New(map[string]loader.Host{loader.ModeHosted: host})
+	manager, err := loader.New(host)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := manager.Register(loader.Manifest{
+	if err := manager.Register(context.Background(), loader.Manifest{
 		ID: "recover.test", Version: "1.0.0", Mode: loader.ModeHosted, LockedDigest: digest,
 	}); err != nil {
 		t.Fatal(err)

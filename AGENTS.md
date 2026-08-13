@@ -207,7 +207,7 @@ The App-scoped storage/public-error, durable Echo/Run state, Go trust-boundary/i
 按"包 = 逻辑单元（Tool/Service）+ 运行模式"的统一架构，落地三种运行模式的 Loader 接入；**campus 完全重构为 hosted 内置包，无旧兼容**（`campus.Register` 直连注册已删除）：
 
 - hosted 生产 Backend（wazero）：`internal/kernel/loader/wasm_host.go` 用 wazero 沙箱执行 wasm32-wasi 工件——线性内存上限（默认 128 MiB）、WASI 裁剪（无文件系统/网络/环境变量）、每次调用独立实例（调用之间零共享状态）、stdin/stdout JSON 信封 ABI（`{tool_id,payload}` → `{ok,result,code,message}`）、宿主函数（host function）线性内存 ABI 投影（guest 以 `//go:wasmimport` 调用），治理上下文按调用绑定（guest 无法伪造 app_id/权限/调用链）。
-- campus hosted 化：业务逻辑在 `internal/campus/bus`（纯 Go，`bus.Store` 端口）；guest（`extensions/campus`，wasm32-wasi，`//go:build wasip1`）复用 bus handler，存储经宿主函数 `ailuo.bus.query` 投影（App 隔离/权限在宿主侧强制）；工件 `go:embed` 进内核（`internal/campus/builtin`），`campus.Manifest/ReadArtifact` 以 digest 锁定工件防漂移；链路为 Dispatcher → Loader.Acquire → WasmHost → campus guest → 宿主函数 → bus.Store，Dispatcher 治理（Schema/权限/深度/取消/幂等）与 App 策略不变。
+- campus hosted 化：业务逻辑在 `internal/tools/bus`（纯 Go 原子 Tool 包，`bus.Store` 端口）；guest（`internal/services/campus/guest`，wasm32-wasi，`//go:build wasip1`）复用 bus handler，存储经宿主函数 `ailuo.bus.query` 投影（App 隔离/权限在宿主侧强制）；工件 `go:embed` 进内核（`internal/services/campus/builtin`，guest 的 build 脚本直接输出到该目录、不保留副本），`campus.Manifest/ReadArtifact` 以 digest 锁定工件防漂移；链路为 Dispatcher → Loader.Acquire → WasmHost → campus guest → 宿主函数 → bus.Store，Dispatcher 治理（Schema/权限/深度/取消/幂等）与 App 策略不变。
 - `CapabilitySpec` 新增 `ToolID`：Dispatcher 把 Capability 直接执行的工具注入治理上下文 `ToolID`，运行时级 Handler（含 hosted guest）据此分发。
 - 信封错误码闭环：guest 闭式错误码（`invalid_argument`/`data_unavailable`/`data_incomplete`/`data_untrusted`/`data_expired`/`internal`）由宿主映射为稳定内部错误（数据治理错误保留类别），未知错误码按协议违例拒绝。
 - embedded 机制：`internal/kernel/loader/embedded_host.go`（进程内 Runtime，Verify 校验内置包表，生命周期/治理与 hosted/isolated 一致）；当前无生产 embedded 业务包（为内核自有组件以包形式纳管预留），有完整单元测试。
@@ -226,18 +226,37 @@ The App-scoped storage/public-error, durable Echo/Run state, Go trust-boundary/i
 - HTTP 接线：外层 ServeMux 组合——`/api/v1/ingress/` 前缀交给 ingress，其余路径交给 Web Access（健康检查、Echo/SSE、演示页面）。
 - 测试：ingress 9 个用例（身份解析/去重/会话连续性/幂等冲突/未绑定与禁用/匿名/畸形事件/错误映射）+ identity-bind 幂等与冲突测试 + access 全量回归。
 
-## 2026-08-13 agent 纳管基线（isolated Runtime 同构）
+## 2026-08-13 agent Service 最终结构（Agent 亦为一种 Service，统一 Loader）
 
-- **agent 不再是特殊进程**：`internal/agenthost` 已整体删除，无任何回退旧代码。内置 AI 执行者（Python Agent）改由 `internal/kernel/loader/agent_host.go` 的 `AgentHost` 以 isolated Runtime 形态纳管，与扩展包完全同构——经 `Manager.Register/Warmup/Acquire/Shutdown` 走统一生命周期，进程启动/资源限额/优雅停止/强制清理复用 loader 进程原语（`startCommandProcess`/`applyProcessLimits`/`terminateCommandProcess`/`killCommandProcess`）。
-- 装配契约：`AgentHost` 实现 `Host`（`Manifest`/`Verify`/`Load`），`Load` 生成 `agentRuntime`（`Runtime`）；`Lease.Runtime()` 暴露租约持有的运行时，装配经窄接口 `AgentClientProvider` 取 agent 协议客户端、`AgentProcessLifecycle`（`Done`/`Err`）做受监督进程崩溃监控（异常退出 → 内核 fail-closed 停止）。
+- **agent 是与其他 Service 同级的 `internal/services/agent` 包**：运行实现（`agent.Host`/`agent.Runtime`，implements `loader.Host`/`loader.Runtime`）与能力面注册（`agent.Register`：ServiceID=`agent`、核心能力 `agent.run`）同包内聚；`internal/kernel/loader` 不再包含任何 agent 特化代码（`loader/agent_host.go` 与 `internal/kernel/subagent` 已删除）。Python Agent 进程经 isolated Runtime 形态受监督：进程启动、资源限额、优雅停止与强制清理复用 loader 导出的进程原语（`StartProcess`/`Process` 的 `Reap`/`Terminate`/`Kill`/`Release` 与 `ValidProcessDuration`/`ValidProcessLimits`）。
+- **统一 Loader（共享 Manager）**：`loader.New(hosts ...Host)` 支持同一运行模式多个宿主（内置 campus 的 WasmHost、内置 agent 的 isolated 宿主、installed 的 GRPCHost/IsolatedProcessHost 同池），每个宿主经 `Mode()` 声明模式；清单注册时按 `Verify` 精确绑定唯一宿主（零匹配/歧义匹配都在注册期 fail-closed），绑定结果固化在条目上，加载期不再重新选择。main.go 只装配一个 `runtimeLoader`：内置包与 installed 包统一 `RegisterInstalled`/`Register`、统一 `Warmup`、统一 `Shutdown`，不再按包分叉多个 Manager。
+- **装配契约**：`agent.NewHost(agent.Config{...})` 生成宿主，`agentHost.Manifest()` 是运行时清单；`Lease.Runtime()` 暴露租约持有的运行时，装配经窄接口 `agent.ClientProvider` 取 agent 协议客户端、`agent.ProcessLifecycle`（`Done`/`Err`）做受监督进程崩溃监控（异常退出 → 内核 fail-closed 停止）。`agent.run` 能力依赖 Orchestrator 作为 `Runner`，在内核装配完成后单独注册。
+- **配置无 `With*` 选项函数**：`runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{...})` 与 `confirmation.NewService(store, confirmation.Config{...})` 使用显式 Config 结构体，无函数式选项、无分叉默认逻辑。
 - 健康检查内聚到 `internal/kernel/health`：`AgentChecker`（协议协商 + 指定模型 Provider 就绪）、`AgentAppChecker`（读取当前 App 配置的模型与启停状态再检查），与 `Combined` 一起构成 readiness。
-- 停止语义与 isolated 扩展一致：Spawn 模式先优雅终止等待（stopGrace），超时强制清理（terminateGrace）；连接模式只关闭 gRPC 连接、不拥有进程。e2e 全链路（Go → Python Agent → 子任务 → Capability → 存储 → SSE）真实走 AgentHost Spawn 路径。
+- 停止语义与 isolated 扩展一致：Spawn 模式先优雅终止等待（stopGrace），超时强制清理（terminateGrace）；连接模式只关闭 gRPC 连接、不拥有进程。e2e 全链路（Go → Python Agent → 子任务 → Capability → 存储 → SSE）真实走 `agent.Host` Spawn 路径。
+
+## 2026-08-13 最终仓库结构与 tools 共享基线
+
+- **仓库布局按层命名空间**：`internal/kernel`（L2 治理/编排/协议/Loader/存储端口）、`internal/access`/`internal/storage`/`internal/observe`（平台基础设施）、`internal/tools`（L3 共享原子 Tool 包）、`internal/services`（L3 业务 Service，对应设计文档 `services/` 目录形态）。`internal/bootstrap` 并入 `internal/services/campus/demo`，`internal/campustest` 并入 `internal/services/campus/campustest`。
+- **tools 共享契约**：Tool 是**全局目录 + 跨 Service 共享**的原子包——`Registry` 以 tool ID 全局注册（`ResolveTool` 校验调用方 Service 是否在 `ToolDependencies` 声明依赖），同一 Tool 的 handler 被所有声明依赖的服务复用；`internal/tools/bus`（stops/routes/journeys 三个原子 Tool + `bus.Store` 端口）是首个共享工具包，campus 经 `ToolDependencies` 依赖它。规则：可被第二个 Service 复用的原子能力进 `internal/tools`，服务专属装配留在 `internal/services`，工具包绝不反向 import 服务；既有 `campus.bus.*` Tool/Capability ID 是持久化契约保持稳定，**新增共享工具使用无服务前缀的 ID**（如 `http.fetch`）。
+- **装配单一来源**：campus 的 `campus.Host(store)`（WasmHost 工厂）与 `campus.Record()`（运行时+Tool+Service+Capability 安装清单）由 main 与测试共用，`campustest.RegisterHosted` 只负责测试专属的 Loader 生命周期与预热。
+- **严格 JSON 解码共享原语**：`internal/jsonutil`（`DecodeStrict`/`EnsureEOF`）统一平台接入、Agent 能力参数、安装清单三处此前各自实现的"未知字段拒绝 + 单 JSON 对象 EOF"校验。
+- **工件单副本 + guest 归队**：campus wasm 只提交 `internal/services/campus/builtin/campus.wasm`（`go:embed` 唯一来源），guest 源码与 build 脚本随服务内聚于 `internal/services/campus/guest`（`//go:build wasip1`，主机构建自动忽略），`extensions/` 只保留真正可安装的包（如 `strings.tool`）。
 
 ## 2026-08-13 hosted 生产边界基线
 
 - **hosted CPU 时间预算（强制终止，非协作式）**：wazero 无指令级计数（已核实 v1.12 及其全部历史版本），进程内无法预占 guest 忙循环。因此用 wazero 公共特性 `WithCloseOnContextDone(true)`——编译器与解释器**编译期插入周期检查**，调用 context 取消/超时即关闭模块强制终止执行——叠加**每次调用执行时间预算**（`WasmHostConfig.CallTimeout`，默认 30 秒，0 不表示不限时而是取默认）。预算耗尽按 `context.DeadlineExceeded` 归类（内核既有稳定超时分类），不视为协议违例；测试用死循环 guest 工件（`testdata/busy.wasm`，Go 交叉编译）验证 300ms 预算内被强制终止，且预算经外部 Runtime Host 协议同样生效。
 - **外部 Runtime Host 进程产品接线**：`RuntimeHostBackend` 生产实现 `hostedRuntimeBackend`（宿主进程内 wazero 执行，含内存上限与执行时间预算）；`RuntimeHostProtocolServer` 服务端首次拥有真实 Backend（此前只有测试 fake）；全链路测试（真实 wazero 执行经完整协议被内核 GRPCHost 调用，含预算强制跨协议生效）；`main.go` 新增 `runtime-host` 子命令（`--install-root` + `--address`，独立信号上下文，loopback/Unix socket 强制）。**host function 是内核特权**：需要宿主函数投影的工件（内置 campus）只能内核进程内执行，外部宿主承载无宿主函数的 hosted 包——这是架构契约，不是降级路径。安装目录配置了 hosted 包而宿主地址缺失时内核拒绝就绪（fail-closed，无进程内回退）。
-- **Windows Job Object 资源限额**（替换原 fail-closed）：`process_limits_windows.go` 用 Job Object 强制 `MaxAddressBytes`（JOB_OBJECT_LIMIT_PROCESS_MEMORY，等效 RLIMIT_AS）与 `MaxCPUSeconds`（JOB_OBJECT_LIMIT_JOB_TIME + 耗尽终止动作，等效 RLIMIT_CPU）；无论限额是否为零都创建 Job 并附加 KILL_ON_JOB_CLOSE（等效 Unix 进程组清理，且内核崩溃后由 OS 兜底防孤儿）；Job 句柄由 `commandProcess.release` 持有、子进程回收后在 `finish()` 释放（提前释放会立即误杀，这是 `applyProcessLimits` 签名改为返回释放器的原因）。`max_open_files`/`max_file_bytes`：Windows 无对应进程级原语，非零值 fail-closed（正确语义而非降级）。集成测试验证 1 秒 CPU 限额下死循环子进程被系统强制终止。其余平台（macOS/BSD、Plan 9 等）维持非零限额 fail-closed。
+- **Windows Job Object 资源限额**（替换原 fail-closed）：`process_limits_windows.go` 用 Job Object 强制 `MaxAddressBytes`（JOB_OBJECT_LIMIT_PROCESS_MEMORY，等效 RLIMIT_AS）与 `MaxCPUSeconds`（JOB_OBJECT_LIMIT_JOB_TIME + 耗尽终止动作，等效 RLIMIT_CPU）；无论限额是否为零都创建 Job 并附加 KILL_ON_JOB_CLOSE（等效 Unix 进程组清理，且内核崩溃后由 OS 兜底防孤儿）；Job 句柄由 `loader.Process` 持有、子进程回收后经 `Process.Release()` 释放（提前释放会立即误杀，这是 `applyProcessLimits` 签名改为返回释放器的原因）。`max_open_files`/`max_file_bytes`：Windows 无对应进程级原语，非零值 fail-closed（正确语义而非降级）。集成测试验证 1 秒 CPU 限额下死循环子进程被系统强制终止。其余平台（macOS/BSD、Plan 9 等）维持非零限额 fail-closed。
+
+## 2026-08-13 上下文与记忆装配基线（feat/context-assembly）
+
+- **新模块 `internal/kernel/contextasm`**：由 Go 决定模型本次看到什么，Python 只接收装配完成的系统提示，不持有会话数据库凭据。按 Run 构造确定性上下文快照——配置系统提示修订 + 当前标准消息 + 受限会话历史 + 当前 Capability 投影；知识库证据与授权长期记忆分属独立模块，本包不为其预留空壳端口。
+- **预算与裁剪**：条目数（默认 20）、单条字符（2000）、总字符（12000）、时间范围（默认不限）、提示总字节（默认 24 KiB，不超过协议 32 KiB 上限）五类预算；裁剪策略固定保留最新、丢弃最旧，超龄消息直接排除；日志与事件只记录条数/字符/裁剪数，正文永不进入日志、审计载荷或公共 API（正文只以 sha256 摘要进入来源版本）。
+- **确定性快照与来源版本固化**：摘要（sha256）覆盖 App、配置修订、基础系统提示、时区、当前消息、历史条目（message_id+正文摘要+时间）与排序后的 Capability 投影，墙钟时间不进入摘要——相同配置修订与数据版本必然产生相同摘要。迁移 19 为 `runs` 增加 `session_id/user_id/message_id/context_digest/context_sources`；执行开始时 `SetRunContext` 一次性固化（set-once，重试新 attempt 重置并重新装配）。`run.context` SSE 事件携带摘要与数量（不含正文）。
+- **会话上下文归属**：`RunRequest` 新增会话字段但 `json:"-"`（不进入 HTTP 契约），Web/ingress 在受治理 Intake 成功后填充，客户端无法伪造会话归属；重试自动携带会话上下文（恢复时按原会话重新装配）。子 Run 是干净工作区（不携带会话、不装配历史），但同样固化自身上下文摘要。
+- **错误契约**：历史读取失败映射 `context_unavailable`（可重试，无副作用前自动重试）；基础提示单独超出预算映射 `context_budget_exceeded`（配置错误，不可重试）。装配器是强制接线：`NewOrchestrator` 缺少会话历史来源时显式终止，无静默降级。
+- 测试：contextasm 单测（确定性/预算裁剪/App 隔离/删除消息/Blob 正文/非文本占位/无会话/超预算失败/错误路径）+ orchestrator 集成测试（历史进入系统提示、当前消息排除、摘要与来源版本持久化、run.context 事件、子 Run 干净工作区）+ sqlite 迁移 19 与 SetRunContext set-once 测试。
 
 ## Known Production Blockers
 
@@ -258,7 +277,9 @@ Do not implement the alternative Tool/package-management comparison owned by ano
 ## Repository Conventions
 
 - Keep kernel contracts under `internal/kernel`.
-- Keep campus domain and Service composition under `internal/campus`.
+- Keep platform access/storage/observability under `internal/access`, `internal/storage`, `internal/observe`.
+- Keep L3 能力面按角色分层：`internal/tools` 放**跨 Service 可复用**的原子 Tool 包（`internal/tools/bus` 是首个共享工具包）；`internal/services` 放业务 Service 装配（`agent`、`campus`），服务通过 `ToolDependencies` 依赖工具，工具包绝不反向依赖服务。
+- 内置服务的测试装配入口单一来源：campus 的 `campus.Host(store)`/`campus.Record()` 由 main 与 `internal/services/campus/campustest` 共用，不得在调用点重复构造边界。
 - Keep storage implementations behind domain/kernel ports; test adapters may live under `internal/storage/memory`.
 - Prefer the Go standard library unless a maintained dependency materially reduces security or correctness risk.
 - Pin dependencies intentionally, review release notes, and do not perform unrelated bulk upgrades.

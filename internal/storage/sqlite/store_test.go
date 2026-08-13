@@ -10,12 +10,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/campus/bus"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	kernelecho "github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/idempotency"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/publicerror"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/tools/bus"
 )
 
 func TestStorePersistsBusSnapshotAndEchoAudit(t *testing.T) {

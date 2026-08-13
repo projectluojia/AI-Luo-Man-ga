@@ -1,4 +1,4 @@
-package subagent_test
+package agent_test
 
 import (
 	"context"
@@ -9,7 +9,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/subagent"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/agent"
 )
 
 type captureRunner struct {
@@ -28,10 +28,10 @@ func (r *captureRunner) RunChild(_ context.Context, request echo.ChildRunRequest
 func TestRegisterRoutesGovernedParentIdentityAndStrictInput(t *testing.T) {
 	reg := registry.New()
 	runner := &captureRunner{}
-	if err := subagent.Register(reg, runner); err != nil {
+	if err := agent.Register(reg, runner); err != nil {
 		t.Fatal(err)
 	}
-	spec, handler, err := reg.ResolveCapability(subagent.CapabilityID)
+	spec, handler, err := reg.ResolveCapability(agent.CapabilityID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,10 +57,10 @@ func TestRegisterRoutesGovernedParentIdentityAndStrictInput(t *testing.T) {
 }
 
 func TestRegisterRejectsMissingDependencies(t *testing.T) {
-	if err := subagent.Register(nil, &captureRunner{}); !errors.Is(err, registry.ErrInvalidSpec) {
+	if err := agent.Register(nil, &captureRunner{}); !errors.Is(err, registry.ErrInvalidSpec) {
 		t.Fatalf("nil Registry error=%v", err)
 	}
-	if err := subagent.Register(registry.New(), nil); !errors.Is(err, registry.ErrInvalidSpec) {
+	if err := agent.Register(registry.New(), nil); !errors.Is(err, registry.ErrInvalidSpec) {
 		t.Fatalf("nil Runner error=%v", err)
 	}
 }

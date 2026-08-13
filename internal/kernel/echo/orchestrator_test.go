@@ -7,29 +7,48 @@ import (
 	"errors"
 	"net"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	agentv1 "github.com/projectluojia/AI-Luo-Man-ga/gen/agentv1"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/campus"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/campus/bus"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/campustest"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/agentprotocol"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/appconfig"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	kernelecho "github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/subagent"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/session"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/agent"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus/campustest"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/blob"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/memory"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/tools/bus"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/test/bufconn"
 )
+
+// newSessionSource 为上下文装配器构造真实的会话历史来源（SQLite 存储 + 安全
+// Blob 存储）。装配器是必需的接线，测试同样走真实来源，不注入空壳。
+func newSessionSource(t *testing.T, store *sqlite.Store) *session.Service {
+	t.Helper()
+	blobs, err := blob.Open(filepath.Join(t.TempDir(), "blobs"), session.MaxMessageContentBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { blobs.Close() })
+	service, err := session.NewService(store, blobs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return service
+}
 
 type fakeAgent struct {
 	agentv1.UnimplementedAgentRuntimeServer
@@ -123,7 +142,7 @@ func (a *cancellingNestedAgent) Run(stream agentv1.AgentRuntime_RunServer) error
 	if err := stream.Send(&agentv1.AgentFrame{
 		EchoId: start.EchoId, RunId: start.RunId, Sequence: 2,
 		Body: &agentv1.AgentFrame_CapabilityCall{CapabilityCall: &agentv1.CapabilityCall{
-			CallId: "delegate-call", CapabilityId: subagent.CapabilityID,
+			CallId: "delegate-call", CapabilityId: agent.CapabilityID,
 			PayloadJson: []byte(`{"task":"等待取消","capability_ids":["campus.bus.routes.list"]}`),
 		}},
 	}); err != nil {
@@ -177,7 +196,7 @@ func (a *nestedRunAgent) Run(stream agentv1.AgentRuntime_RunServer) error {
 	if err := stream.Send(&agentv1.AgentFrame{
 		EchoId: startFrame.EchoId, RunId: startFrame.RunId, Sequence: 3,
 		Body: &agentv1.AgentFrame_CapabilityCall{CapabilityCall: &agentv1.CapabilityCall{
-			CallId: "nested-delegate-call", CapabilityId: subagent.CapabilityID, PayloadJson: []byte(`{"task":"越权嵌套"}`),
+			CallId: "nested-delegate-call", CapabilityId: agent.CapabilityID, PayloadJson: []byte(`{"task":"越权嵌套"}`),
 		}},
 	}); err != nil {
 		return err
@@ -201,7 +220,7 @@ func (a *nestedRunAgent) Run(stream agentv1.AgentRuntime_RunServer) error {
 func (a *nestedRunAgent) runRoot(stream agentv1.AgentRuntime_RunServer, start *agentv1.AgentFrame) error {
 	hasSubagent := false
 	for _, capability := range start.GetStartRun().GetCapabilities() {
-		if capability.GetId() == subagent.CapabilityID {
+		if capability.GetId() == agent.CapabilityID {
 			hasSubagent = true
 		}
 	}
@@ -214,7 +233,7 @@ func (a *nestedRunAgent) runRoot(stream agentv1.AgentRuntime_RunServer, start *a
 	if err := stream.Send(&agentv1.AgentFrame{
 		EchoId: start.EchoId, RunId: start.RunId, Sequence: 2,
 		Body: &agentv1.AgentFrame_CapabilityCall{CapabilityCall: &agentv1.CapabilityCall{
-			CallId: "delegate-call", CapabilityId: subagent.CapabilityID,
+			CallId: "delegate-call", CapabilityId: agent.CapabilityID,
 			PayloadJson: []byte(`{"task":"只查询线路并总结","capability_ids":["campus.bus.routes.list"]}`),
 		}},
 	}); err != nil {
@@ -724,11 +743,11 @@ func TestOrchestratorRunsAgentCapabilityLoop(t *testing.T) {
 	reg := registry.New()
 	policy := runtime.NewStaticAppPolicy()
 	policy.Enable(campus.AppID, campus.BusRouteListCapabilityID)
-	dispatcher := runtime.NewDispatcher(reg, policy)
+	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{})
 	campustest.RegisterHosted(t, reg, busStore)
 	orchestrator := kernelecho.NewOrchestrator(
 		agentv1.NewAgentRuntimeClient(connection), reg, dispatcher, policy, store,
-		kernelecho.Config{AppID: campus.AppID, Model: "test-model", SystemPrompt: "test", Timezone: "Asia/Shanghai", MaxSteps: 4, RunTimeout: 5 * time.Second},
+		kernelecho.Config{AppID: campus.AppID, Model: "test-model", SystemPrompt: "test", Timezone: "Asia/Shanghai", MaxSteps: 4, RunTimeout: 5 * time.Second, Context: newSessionSource(t, store)},
 	)
 	events := []kernelecho.Event{}
 	echoID, err := orchestrator.Run(ctx, kernelecho.RunRequest{Message: "有哪些线路", IdempotencyKey: "orchestrator-run"}, func(event kernelecho.Event) error {
@@ -745,10 +764,10 @@ func TestOrchestratorRunsAgentCapabilityLoop(t *testing.T) {
 	if record.Status != kernelecho.StatusSucceeded || record.FinalMessage != "当前有一条线路。" {
 		t.Fatalf("record=%#v", record)
 	}
-	if len(events) != 5 || len(persisted) != len(events) {
+	if len(events) != 6 || len(persisted) != len(events) {
 		t.Fatalf("events=%d persisted=%d", len(events), len(persisted))
 	}
-	if events[2].Type != "capability.completed" || events[len(events)-1].Type != "reply.final" {
+	if events[3].Type != "capability.completed" || events[len(events)-1].Type != "reply.final" {
 		t.Fatalf("events=%#v", events)
 	}
 	if busStore.routeCalls.Load() != 1 {
@@ -760,11 +779,109 @@ func TestOrchestratorRunsAgentCapabilityLoop(t *testing.T) {
 	}
 }
 
+func TestOrchestratorAssemblesSessionContextIntoRun(t *testing.T) {
+	listener := bufconn.Listen(1 << 20)
+	grpcServer := grpc.NewServer()
+	agentServer := &configCaptureAgent{starts: make(chan *agentv1.StartRun, 1)}
+	agentv1.RegisterAgentRuntimeServer(grpcServer, agentServer)
+	go grpcServer.Serve(listener)
+	defer grpcServer.Stop()
+	connection, err := grpc.DialContext(t.Context(), "bufnet",
+		grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) { return listener.Dial() }),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.Close()
+
+	store, err := sqlite.Open(filepath.Join(t.TempDir(), "context-assembly.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	sessionService := newSessionSource(t, store)
+	// 模拟平台 Intake 后的会话台账：两条历史消息 + 当前消息（均已在库）。
+	now := time.Now().UTC()
+	if err := store.CreateSession(context.Background(), session.Session{
+		AppID: campus.AppID, SessionID: "session-1", Type: session.SessionTypeDirect,
+		Members:   []session.Member{{UserID: "anonymous", Role: session.MemberRoleOwner, JoinedAt: now}},
+		CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for index, text := range []string{"第一条历史", "第二条历史", "当前的问题"} {
+		if _, _, err := sessionService.CreateMessage(context.Background(), session.Message{
+			AppID: campus.AppID, SessionID: "session-1", MessageID: "message-" + strconv.Itoa(index),
+			SenderUserID: "anonymous", Type: session.MessageTypeText,
+			ContentRef: session.ContentRef{Mode: session.ContentModeInline, Size: int64(len([]byte(text)))},
+			CreatedAt:  now.Add(time.Duration(index) * time.Minute),
+		}, []byte(text)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	reg := registry.New()
+	policy := runtime.NewStaticAppPolicy()
+	policy.Enable(campus.AppID, campus.BusRouteListCapabilityID)
+	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{})
+	campustest.RegisterHosted(t, reg, memory.NewBusStore())
+	orchestrator := kernelecho.NewOrchestrator(
+		agentv1.NewAgentRuntimeClient(connection), reg, dispatcher, policy, store,
+		kernelecho.Config{AppID: campus.AppID, Model: "test-model", SystemPrompt: "test", Timezone: "Asia/Shanghai", MaxSteps: 4, RunTimeout: 5 * time.Second, Context: sessionService},
+	)
+	events := []kernelecho.Event{}
+	echoID, err := orchestrator.Run(t.Context(), kernelecho.RunRequest{
+		Message: "当前的问题", IdempotencyKey: "context-assembly-run",
+		SessionID: "session-1", UserID: "anonymous", MessageID: "message-2",
+	}, func(event kernelecho.Event) error {
+		events = append(events, event)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := <-agentServer.starts
+	if !strings.Contains(start.GetSystemPrompt(), "第一条历史") || !strings.Contains(start.GetSystemPrompt(), "第二条历史") {
+		t.Fatalf("StartRun 系统提示缺少会话历史: %q", start.GetSystemPrompt())
+	}
+	if strings.Contains(start.GetSystemPrompt(), "当前的问题") {
+		t.Fatalf("当前消息不得重复进入历史块: %q", start.GetSystemPrompt())
+	}
+	runs, err := store.ListRuns(t.Context(), campus.AppID, echoID)
+	if err != nil || len(runs) != 1 {
+		t.Fatalf("runs=%#v err=%v", runs, err)
+	}
+	run := runs[0]
+	if len(run.ContextDigest) != 64 {
+		t.Fatalf("Run 未固化上下文摘要: %#v", run)
+	}
+	if run.SessionID != "session-1" || run.UserID != "anonymous" || run.MessageID != "message-2" {
+		t.Fatalf("Run 未持久化会话上下文: %#v", run)
+	}
+	var sources map[string]any
+	if err := json.Unmarshal(run.ContextSources, &sources); err != nil {
+		t.Fatalf("Run 来源版本不是合法 JSON: %v", err)
+	}
+	contextEvent := false
+	for _, event := range events {
+		if event.Type == "run.context" {
+			contextEvent = true
+			if !strings.Contains(string(event.Payload), run.ContextDigest) {
+				t.Fatalf("run.context 事件缺少摘要: %s", event.Payload)
+			}
+		}
+	}
+	if !contextEvent {
+		t.Fatal("缺少 run.context 事件")
+	}
+}
+
 func TestOrchestratorRunsOneGovernedChildWithNarrowedProjection(t *testing.T) {
 	listener := bufconn.Listen(1 << 20)
 	grpcServer := grpc.NewServer()
-	agent := &nestedRunAgent{testing: t}
-	agentv1.RegisterAgentRuntimeServer(grpcServer, agent)
+	agentServer := &nestedRunAgent{testing: t}
+	agentv1.RegisterAgentRuntimeServer(grpcServer, agentServer)
 	go grpcServer.Serve(listener)
 	defer grpcServer.Stop()
 	ctx := context.Background()
@@ -787,8 +904,8 @@ func TestOrchestratorRunsOneGovernedChildWithNarrowedProjection(t *testing.T) {
 	reg := registry.New()
 	policy := runtime.NewStaticAppPolicy()
 	policy.Enable(campus.AppID, campus.BusRouteListCapabilityID)
-	policy.Enable(campus.AppID, subagent.CapabilityID)
-	dispatcher := runtime.NewDispatcher(reg, policy, runtime.WithIdempotencyStore(store))
+	policy.Enable(campus.AppID, agent.CapabilityID)
+	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{IdempotencyStore: store})
 	campustest.RegisterHosted(t, reg, busStore)
 	orchestrator := kernelecho.NewOrchestrator(
 		agentv1.NewAgentRuntimeClient(connection), reg, dispatcher, policy, store,
@@ -796,9 +913,10 @@ func TestOrchestratorRunsOneGovernedChildWithNarrowedProjection(t *testing.T) {
 			AppID: campus.AppID, Model: "test-model", SystemPrompt: "test", Timezone: "Asia/Shanghai",
 			MaxSteps: 4, MaxToolCalls: 8, MaxInputTokens: 1000, MaxOutputTokens: 500, MaxTotalTokens: 1500,
 			MaxOutputBytes: 4096, ProviderTimeout: time.Second, RunTimeout: 5 * time.Second,
+			Context: newSessionSource(t, store),
 		},
 	)
-	if err := subagent.Register(reg, orchestrator); err != nil {
+	if err := agent.Register(reg, orchestrator); err != nil {
 		t.Fatal(err)
 	}
 	var delivered []kernelecho.Event
@@ -815,7 +933,7 @@ func TestOrchestratorRunsOneGovernedChildWithNarrowedProjection(t *testing.T) {
 	if err != nil || record.Status != kernelecho.StatusSucceeded || record.FinalMessage != "父任务完成" {
 		t.Fatalf("Echo=%#v err=%v", record, err)
 	}
-	if len(delivered) != 4 || len(persisted) != len(delivered) {
+	if len(delivered) != 5 || len(persisted) != len(delivered) {
 		t.Fatalf("delivered=%#v persisted=%#v", delivered, persisted)
 	}
 	runs, err := store.ListRuns(ctx, campus.AppID, echoID)
@@ -836,6 +954,10 @@ func TestOrchestratorRunsOneGovernedChildWithNarrowedProjection(t *testing.T) {
 		child.MaxSteps >= root.MaxSteps || child.MaxToolCalls >= root.MaxToolCalls {
 		t.Fatalf("root=%#v child=%#v", root, child)
 	}
+	// 子 Run 是干净工作区：不携带会话上下文，但仍固化自身的上下文摘要。
+	if child.SessionID != "" || child.MessageID != "" || len(child.ContextDigest) != 64 {
+		t.Fatalf("child 会话上下文或摘要错误: %#v", child)
+	}
 	if busStore.routeCalls.Load() != 1 {
 		t.Fatalf("route calls=%d", busStore.routeCalls.Load())
 	}
@@ -845,7 +967,7 @@ func TestOrchestratorRunsOneGovernedChildWithNarrowedProjection(t *testing.T) {
 	}
 	delegationAudits := 0
 	for _, audit := range audits {
-		if audit.CapabilityID != subagent.CapabilityID {
+		if audit.CapabilityID != agent.CapabilityID {
 			continue
 		}
 		delegationAudits++
@@ -865,8 +987,8 @@ func TestOrchestratorRunsOneGovernedChildWithNarrowedProjection(t *testing.T) {
 func TestParentCancellationPropagatesAndPersistsChildThenRootTerminalState(t *testing.T) {
 	listener := bufconn.Listen(1 << 20)
 	grpcServer := grpc.NewServer()
-	agent := &cancellingNestedAgent{childStarted: make(chan struct{})}
-	agentv1.RegisterAgentRuntimeServer(grpcServer, agent)
+	agentServer := &cancellingNestedAgent{childStarted: make(chan struct{})}
+	agentv1.RegisterAgentRuntimeServer(grpcServer, agentServer)
 	go grpcServer.Serve(listener)
 	defer grpcServer.Stop()
 	connection, err := grpc.DialContext(context.Background(), "bufnet",
@@ -885,8 +1007,8 @@ func TestParentCancellationPropagatesAndPersistsChildThenRootTerminalState(t *te
 	reg := registry.New()
 	policy := runtime.NewStaticAppPolicy()
 	policy.Enable(campus.AppID, campus.BusRouteListCapabilityID)
-	policy.Enable(campus.AppID, subagent.CapabilityID)
-	dispatcher := runtime.NewDispatcher(reg, policy, runtime.WithIdempotencyStore(store))
+	policy.Enable(campus.AppID, agent.CapabilityID)
+	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{IdempotencyStore: store})
 	campustest.RegisterHosted(t, reg, memory.NewBusStore())
 	orchestrator := kernelecho.NewOrchestrator(
 		agentv1.NewAgentRuntimeClient(connection), reg, dispatcher, policy, store,
@@ -894,14 +1016,15 @@ func TestParentCancellationPropagatesAndPersistsChildThenRootTerminalState(t *te
 			AppID: campus.AppID, Model: "test-model", SystemPrompt: "test", Timezone: "Asia/Shanghai",
 			MaxSteps: 4, MaxToolCalls: 8, MaxInputTokens: 1000, MaxOutputTokens: 500, MaxTotalTokens: 1500,
 			MaxOutputBytes: 4096, ProviderTimeout: time.Second, RunTimeout: 5 * time.Second,
+			Context: newSessionSource(t, store),
 		},
 	)
-	if err := subagent.Register(reg, orchestrator); err != nil {
+	if err := agent.Register(reg, orchestrator); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
-		<-agent.childStarted
+		<-agentServer.childStarted
 		cancel()
 	}()
 	echoID, err := orchestrator.Run(ctx, kernelecho.RunRequest{
@@ -928,8 +1051,8 @@ func TestParentCancellationPropagatesAndPersistsChildThenRootTerminalState(t *te
 func TestOrchestratorRecoversHistoricalAppConfigRevision(t *testing.T) {
 	listener := bufconn.Listen(1 << 20)
 	grpcServer := grpc.NewServer()
-	agent := &configCaptureAgent{starts: make(chan *agentv1.StartRun, 1)}
-	agentv1.RegisterAgentRuntimeServer(grpcServer, agent)
+	agentServer := &configCaptureAgent{starts: make(chan *agentv1.StartRun, 1)}
+	agentv1.RegisterAgentRuntimeServer(grpcServer, agentServer)
 	go grpcServer.Serve(listener)
 	t.Cleanup(grpcServer.Stop)
 	connection, err := grpc.DialContext(t.Context(), "bufnet",
@@ -954,10 +1077,10 @@ func TestOrchestratorRecoversHistoricalAppConfigRevision(t *testing.T) {
 		t.Fatal(err)
 	}
 	reg := registry.New()
-	dispatcher := runtime.NewDispatcher(reg, policy)
+	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{})
 	orchestrator := kernelecho.NewOrchestrator(
 		agentv1.NewAgentRuntimeClient(connection), reg, dispatcher, policy, store,
-		kernelecho.Config{AppID: campus.AppID, AppConfigSource: store, RunTimeout: 5 * time.Second},
+		kernelecho.Config{AppID: campus.AppID, AppConfigSource: store, RunTimeout: 5 * time.Second, Context: newSessionSource(t, store)},
 	)
 	echoID, created, err := orchestrator.CreateIdempotent(t.Context(), kernelecho.RunRequest{
 		Message: "恢复历史配置", IdempotencyKey: "historical-config",
@@ -978,7 +1101,7 @@ func TestOrchestratorRecoversHistoricalAppConfigRevision(t *testing.T) {
 	if err := orchestrator.RunExisting(t.Context(), echoID, kernelecho.RunRequest{}, nil); err != nil {
 		t.Fatal(err)
 	}
-	start := <-agent.starts
+	start := <-agentServer.starts
 	if start.GetModel() != historical.Model ||
 		start.GetTimezone() != historical.Timezone ||
 		start.GetMaxSteps() != historical.MaxSteps ||
@@ -1057,10 +1180,10 @@ func TestOrchestratorRevalidatesCapabilityPolicyAfterProjection(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = connection.Close() })
-	dispatcher := runtime.NewDispatcher(reg, policy)
+	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{})
 	orchestrator := kernelecho.NewOrchestrator(
 		agentv1.NewAgentRuntimeClient(connection), reg, dispatcher, policy, store,
-		kernelecho.Config{AppID: campus.AppID, AppConfigSource: store, RunTimeout: 5 * time.Second},
+		kernelecho.Config{AppID: campus.AppID, AppConfigSource: store, RunTimeout: 5 * time.Second, Context: newSessionSource(t, store)},
 	)
 	if _, err := orchestrator.Run(t.Context(), kernelecho.RunRequest{
 		Message: "验证动态撤权", IdempotencyKey: "policy-revocation",
@@ -1156,10 +1279,10 @@ func TestOrchestratorAcceptedRunScopeCannotExpandAfterGrant(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = connection.Close() })
-	dispatcher := runtime.NewDispatcher(reg, policy)
+	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{})
 	orchestrator := kernelecho.NewOrchestrator(
 		agentv1.NewAgentRuntimeClient(connection), reg, dispatcher, policy, store,
-		kernelecho.Config{AppID: campus.AppID, AppConfigSource: store, RunTimeout: 5 * time.Second},
+		kernelecho.Config{AppID: campus.AppID, AppConfigSource: store, RunTimeout: 5 * time.Second, Context: newSessionSource(t, store)},
 	)
 	echoID, err := orchestrator.Run(t.Context(), kernelecho.RunRequest{
 		Message: "验证新增授权不能扩张既有 Run", IdempotencyKey: "policy-late-grant",
@@ -1192,8 +1315,8 @@ func orchestratorAppConfig() appconfig.Config {
 func TestOrchestratorDurablyRetriesOnlyRetryableRunAttempts(t *testing.T) {
 	listener := bufconn.Listen(1 << 20)
 	grpcServer := grpc.NewServer()
-	agent := &retryOnceAgent{}
-	agentv1.RegisterAgentRuntimeServer(grpcServer, agent)
+	agentServer := &retryOnceAgent{}
+	agentv1.RegisterAgentRuntimeServer(grpcServer, agentServer)
 	go grpcServer.Serve(listener)
 	defer grpcServer.Stop()
 	connection, err := grpc.DialContext(context.Background(), "bufnet",
@@ -1212,11 +1335,12 @@ func TestOrchestratorDurablyRetriesOnlyRetryableRunAttempts(t *testing.T) {
 	reg := registry.New()
 	policy := runtime.NewStaticAppPolicy()
 	orchestrator := kernelecho.NewOrchestrator(
-		agentv1.NewAgentRuntimeClient(connection), reg, runtime.NewDispatcher(reg, policy), policy, store,
+		agentv1.NewAgentRuntimeClient(connection), reg, runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{}), policy, store,
 		kernelecho.Config{
 			AppID: campus.AppID, Model: "test-model", SystemPrompt: "test", Timezone: "Asia/Shanghai",
 			MaxSteps: 4, RunTimeout: time.Second, MaxRunAttempts: 2,
 			RetryBaseDelay: 20 * time.Millisecond, RetryMaxDelay: 20 * time.Millisecond,
+			Context: newSessionSource(t, store),
 		},
 	)
 	events := make([]kernelecho.Event, 0)
@@ -1289,10 +1413,11 @@ func TestOrchestratorRenewsActiveRunLease(t *testing.T) {
 	reg := registry.New()
 	policy := runtime.NewStaticAppPolicy()
 	orchestrator := kernelecho.NewOrchestrator(
-		agentv1.NewAgentRuntimeClient(connection), reg, runtime.NewDispatcher(reg, policy), policy, store,
+		agentv1.NewAgentRuntimeClient(connection), reg, runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{}), policy, store,
 		kernelecho.Config{
 			AppID: campus.AppID, Model: "test-model", SystemPrompt: "test", Timezone: "Asia/Shanghai",
 			MaxSteps: 4, RunTimeout: 2 * time.Second, LeaseDuration: 150 * time.Millisecond,
+			Context: newSessionSource(t, baseStore),
 		},
 	)
 	if _, err := orchestrator.Run(context.Background(), kernelecho.RunRequest{
@@ -1349,12 +1474,13 @@ func TestOrchestratorDoesNotAutomaticallyRetryAfterSideEffect(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	dispatcher := runtime.NewDispatcher(reg, policy, runtime.WithIdempotencyStore(store))
+	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{IdempotencyStore: store})
 	orchestrator := kernelecho.NewOrchestrator(
 		agentv1.NewAgentRuntimeClient(connection), reg, dispatcher, policy, store,
 		kernelecho.Config{
 			AppID: campus.AppID, Model: "test-model", SystemPrompt: "test", Timezone: "Asia/Shanghai",
 			MaxSteps: 4, RunTimeout: time.Second, MaxRunAttempts: 3,
+			Context: newSessionSource(t, store),
 		},
 	)
 	echoID, err := orchestrator.Run(context.Background(), kernelecho.RunRequest{
@@ -1396,11 +1522,11 @@ func TestOrchestratorRejectsDuplicateAgentCallBeforeSecondEffect(t *testing.T) {
 	reg := registry.New()
 	policy := runtime.NewStaticAppPolicy()
 	policy.Enable(campus.AppID, campus.BusRouteListCapabilityID)
-	dispatcher := runtime.NewDispatcher(reg, policy, runtime.WithIdempotencyStore(store))
+	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{IdempotencyStore: store})
 	campustest.RegisterHosted(t, reg, busStore)
 	orchestrator := kernelecho.NewOrchestrator(
 		agentv1.NewAgentRuntimeClient(connection), reg, dispatcher, policy, store,
-		kernelecho.Config{AppID: campus.AppID, Model: "test-model", SystemPrompt: "test", Timezone: "Asia/Shanghai", MaxSteps: 4, RunTimeout: 5 * time.Second},
+		kernelecho.Config{AppID: campus.AppID, Model: "test-model", SystemPrompt: "test", Timezone: "Asia/Shanghai", MaxSteps: 4, RunTimeout: 5 * time.Second, Context: newSessionSource(t, store)},
 	)
 	echoID, err := orchestrator.Run(ctx, kernelecho.RunRequest{Message: "duplicate", IdempotencyKey: "duplicate-run"}, nil)
 	if !errors.Is(err, agentprotocol.ErrDuplicateCall) {
@@ -1446,8 +1572,8 @@ func TestOrchestratorRejectsFramesAfterTerminalWithoutPublishingFinal(t *testing
 	reg := registry.New()
 	policy := runtime.NewStaticAppPolicy()
 	orchestrator := kernelecho.NewOrchestrator(
-		agentv1.NewAgentRuntimeClient(connection), reg, runtime.NewDispatcher(reg, policy), policy, store,
-		kernelecho.Config{AppID: campus.AppID, Model: "test-model", SystemPrompt: "test", Timezone: "Asia/Shanghai", MaxSteps: 4, RunTimeout: 5 * time.Second},
+		agentv1.NewAgentRuntimeClient(connection), reg, runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{}), policy, store,
+		kernelecho.Config{AppID: campus.AppID, Model: "test-model", SystemPrompt: "test", Timezone: "Asia/Shanghai", MaxSteps: 4, RunTimeout: 5 * time.Second, Context: newSessionSource(t, store)},
 	)
 	echoID, err := orchestrator.Run(ctx, kernelecho.RunRequest{Message: "late", IdempotencyKey: "late-run"}, nil)
 	if !errors.Is(err, agentprotocol.ErrUnexpectedFrame) {
@@ -1491,8 +1617,8 @@ func TestOrchestratorRejectsSuccessfulTerminalWithoutUsage(t *testing.T) {
 	reg := registry.New()
 	policy := runtime.NewStaticAppPolicy()
 	orchestrator := kernelecho.NewOrchestrator(
-		agentv1.NewAgentRuntimeClient(connection), reg, runtime.NewDispatcher(reg, policy), policy, store,
-		kernelecho.Config{AppID: campus.AppID, Model: "test-model", SystemPrompt: "test", Timezone: "Asia/Shanghai", MaxSteps: 4, RunTimeout: 5 * time.Second},
+		agentv1.NewAgentRuntimeClient(connection), reg, runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{}), policy, store,
+		kernelecho.Config{AppID: campus.AppID, Model: "test-model", SystemPrompt: "test", Timezone: "Asia/Shanghai", MaxSteps: 4, RunTimeout: 5 * time.Second, Context: newSessionSource(t, store)},
 	)
 	echoID, err := orchestrator.Run(ctx, kernelecho.RunRequest{Message: "usage", IdempotencyKey: "missing-usage-run"}, nil)
 	if !errors.Is(err, agentprotocol.ErrUnexpectedFrame) {
@@ -1544,12 +1670,13 @@ func TestOrchestratorDoesNotExposeAgentOrCapabilityInternalErrors(t *testing.T) 
 	orchestrator := kernelecho.NewOrchestrator(
 		agentv1.NewAgentRuntimeClient(connection),
 		reg,
-		runtime.NewDispatcher(reg, policy),
+		runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{}),
 		policy,
 		store,
 		kernelecho.Config{
 			AppID: campus.AppID, Model: "test-model", SystemPrompt: "test",
 			Timezone: "Asia/Shanghai", MaxSteps: 4, RunTimeout: 5 * time.Second,
+			Context: newSessionSource(t, store),
 		},
 	)
 	echoID, err := orchestrator.Run(ctx, kernelecho.RunRequest{Message: "trigger boundary errors", IdempotencyKey: "boundary-run"}, nil)

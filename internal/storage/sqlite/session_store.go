@@ -247,13 +247,19 @@ func (s *Store) ListMessages(ctx context.Context, appID, sessionID string, query
 		return nil, session.ErrInvalidMessage
 	}
 	// 历史查询同时约束 app_id 与 session_id，并排除已删除消息。
+	// 默认按时间升序（最旧在前）；Descending 为 true 时按时间倒序（最新在前），
+	// 供上下文装配按预算读取最近历史。
 	sqlText := messageMetadataSelect + `WHERE app_id=? AND session_id=? AND deleted_at IS NULL`
 	args := []any{appID, sessionID}
 	if query.SenderUserID != "" {
 		sqlText += ` AND sender_user_id=?`
 		args = append(args, query.SenderUserID)
 	}
-	sqlText += ` ORDER BY created_at,message_id LIMIT ?`
+	if query.Descending {
+		sqlText += ` ORDER BY created_at DESC,message_id DESC LIMIT ?`
+	} else {
+		sqlText += ` ORDER BY created_at,message_id LIMIT ?`
+	}
 	args = append(args, query.Limit)
 	rows, err := s.db.QueryContext(ctx, sqlText, args...)
 	if err != nil {

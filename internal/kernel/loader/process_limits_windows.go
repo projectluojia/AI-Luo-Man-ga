@@ -36,7 +36,7 @@ const (
 // 提前释放会立即终止子进程。分配或分配失败一律 fail-closed：未受 Job 约束的
 // 进程不允许继续运行。
 func applyProcessLimits(process *os.Process, limits ProcessLimits) (func() error, error) {
-	if !validProcessLimits(limits) {
+	if !ValidProcessLimits(limits) {
 		return nil, ErrInvalidProcessSpec
 	}
 	if limits.MaxOpenFiles != 0 || limits.MaxFileBytes != 0 {

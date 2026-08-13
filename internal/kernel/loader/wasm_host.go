@@ -99,6 +99,9 @@ func NewWasmHost(config WasmHostConfig) (*WasmHost, error) {
 	return &WasmHost{config: config}, nil
 }
 
+// Mode 返回宿主服务的运行模式：hosted 沙箱。
+func (h *WasmHost) Mode() string { return ModeHosted }
+
 // Verify 确认工件可读且未超过大小上限；digest 校验由 ReadArtifact 负责。
 func (h *WasmHost) Verify(ctx context.Context, manifest Manifest) error {
 	artifact, err := h.config.ReadArtifact(ctx, manifest)

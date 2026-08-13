@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -92,6 +93,41 @@ func TestResolveToolRejectsUndeclaredDependency(t *testing.T) {
 	_, _, err := reg.ResolveTool("service-a", "tool-private")
 	if !errors.Is(err, registry.ErrToolNotFound) {
 		t.Fatalf("got error %v, want ErrToolNotFound", err)
+	}
+}
+
+// TestSharedToolResolvesForEveryDeclaringService 验证共享契约：Tool 是全局目录，
+// 任何声明 ToolDependencies 的服务都解析到同一个 handler；未声明依赖的服务被拒绝。
+func TestSharedToolResolvesForEveryDeclaringService(t *testing.T) {
+	t.Parallel()
+
+	reg := registry.New()
+	registerTool(t, reg, "shared.tool")
+	if err := reg.RegisterService(serviceRegistration("service-a", "capability-a", "shared.tool")); err != nil {
+		t.Fatalf("register service-a: %v", err)
+	}
+	if err := reg.RegisterService(serviceRegistration("service-b", "capability-b", "shared.tool")); err != nil {
+		t.Fatalf("register service-b: %v", err)
+	}
+	firstSpec, firstHandler, err := reg.ResolveTool("service-a", "shared.tool")
+	if err != nil {
+		t.Fatalf("resolve via service-a: %v", err)
+	}
+	secondSpec, secondHandler, err := reg.ResolveTool("service-b", "shared.tool")
+	if err != nil {
+		t.Fatalf("resolve via service-b: %v", err)
+	}
+	if firstSpec.ID != secondSpec.ID ||
+		reflect.ValueOf(firstHandler).Pointer() != reflect.ValueOf(secondHandler).Pointer() {
+		t.Fatalf("services resolved different tool handlers: %p vs %p", firstHandler, secondHandler)
+	}
+	// 已注册但未声明依赖的服务被拒绝（未注册的服务在服务查找层就返回 ErrServiceNotFound）。
+	registerTool(t, reg, "other.tool")
+	if err := reg.RegisterService(serviceRegistration("service-c", "capability-c", "other.tool")); err != nil {
+		t.Fatalf("register service-c: %v", err)
+	}
+	if _, _, err := reg.ResolveTool("service-c", "shared.tool"); !errors.Is(err, registry.ErrToolNotFound) {
+		t.Fatalf("undeclared service error=%v, want ErrToolNotFound", err)
 	}
 }
 

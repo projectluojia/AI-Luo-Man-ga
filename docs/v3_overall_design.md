@@ -264,6 +264,27 @@ storage:
       indexes: [document_id, updated_at]
 ```
 
+上文 `services/`、`tools/` 是**安装包形态**（yaml + 入口，部署到安装根目录）。仓库内**内置实现**按同一角色命名空间镜像：
+
+```text
+internal/
+├─ kernel/            L2 Go 内核（治理/编排/协议/Loader/存储端口）
+├─ access/ storage/ observe/   平台接入 · L1 适配器 · 可观测性
+├─ tools/             共享原子 Tool 包（跨 Service 复用）
+│  └─ bus/            bus 域工具（stops/routes/journeys + Store 端口）
+└─ services/          业务 Service 装配（对应安装形态 services/）
+   ├─ agent/          Agent Service（isolated 运行时宿主 + agent.run）
+   └─ campus/         Campus Service（hosted 内置包）
+      ├─ guest/       内置 wasm guest 源码与构建脚本（//go:build wasip1，主机构建忽略）
+      ├─ builtin/     go:embed 嵌入工件（唯一副本）
+      ├─ demo/        演示数据播种
+      └─ campustest/  测试装配
+```
+
+可安装包源码在 `extensions/`（如参考包 `strings.tool`）；内置 hosted 包的 guest 源码随服务内聚（`services/<svc>/guest`），编译产物 `go:embed` 进内核，运行期不经过安装目录。
+
+共享规则：Tool 是全局目录，任何 Service 声明 `ToolDependencies` 即可复用同一 handler；可被第二个 Service 复用的原子能力进 `internal/tools`，服务专属装配留在 `internal/services`，工具包绝不反向依赖服务；内置服务的装配入口（如 campus 的 `Host`/`Record`）由 main 与测试共用，单一来源。
+
 ### 调用关系
 
 ```text
@@ -345,6 +366,8 @@ session 元数据、成员关系、标准消息、回复关系和完整历史。
 ### 记忆与上下文
 
 用户长期记忆、session 上下文、Agent 全局记忆及其读写规则。Agent 可请求读取或建议写入，最终由 Go 审核执行。
+
+已实现基线（2026-08-13）：`internal/kernel/contextasm` 按 Run 构造确定性上下文快照——配置系统提示修订 + 当前标准消息 + 受限会话历史 + 当前 Capability 投影，执行条目数/字符数/时间范围/提示总大小预算（保留最新、丢弃最旧，只记录数量不记录正文）。快照摘要（sha256，墙钟时间不进入摘要）与来源版本固化到 Run 记录（`context_digest`/`context_sources`，迁移 19），支持恢复与审计；`run.context` 事件携带摘要与数量。会话上下文只来自受治理的平台接入入口，客户端无法伪造；子 Run 为干净工作区（不装配历史）但仍固化自身上下文摘要。知识库证据与授权长期记忆分属独立模块，落地后按同一契约扩展装配输入。
 
 ### 业务能力服务
 
@@ -515,14 +538,14 @@ isolated 扩展由 Go `IsolatedProcessHost` 启动。可执行文件、参数、
 
 安装目录使用 `ailuo.install.v2` 清单与 lock。内核只接受由有效进程用户持有、目录链和文件均不允许组或其他用户写入、没有符号链接的绝对目录；严格拒绝未知字段、重复 JSON 键、超限文件、非法稳定 ID、跨目录路径和不完整引用。lock 同时固定清单原始字节与实现文件的 SHA-256；isolated 还固定完整进程规格。发现结果先作为一批完成 Runtime、Tool、Service、Capability 全量校验，再分别原子发布到 Loader 与 Registry，Registry 冲突时回滚 Loader 发布。主程序通过 `AILUO_RUNTIME_INSTALL_ROOT` 启用恢复；hosted 还必须提供本机 `AILUO_RUNTIME_HOST_ADDRESS`。启动只预热 `pin` 项，失败则整个内核拒绝就绪；非 pin 项保持首次调用懒加载。已注册 Capability 不会自动进入任何 App，仍须通过持久 App 配置显式启用。
 
-上述实现完成了可长期保留的 Runtime Host 协议、Go 客户端/宿主校验器、持久安装目录发现与内核启动重注册、hosted 连接与容量边界，以及 isolated 真进程监管，但还不等于完整包平台已经交付。仓库尚未提供承载某种扩展语言或包格式的真实 Host Backend；hosted 共享进程的 CPU、内存和文件系统级资源隔离也需结合最终 Deployment 方案完成。当前安装目录属主校验在非 Unix 平台关闭失败，因此该能力目前只支持 Unix Deployment。Python Agent 仍由现有专用 Agent Host 管理。产品链路接入真实扩展 Backend 并完成对应恢复和资源限制验证前，不得把测试夹具描述成已上线扩展。
+上述实现完成了可长期保留的 Runtime Host 协议、Go 客户端/宿主校验器、持久安装目录发现与内核启动重注册、hosted 连接与容量边界，以及 isolated 真进程监管，但还不等于完整包平台已经交付。仓库尚未提供承载某种扩展语言或包格式的真实 Host Backend；hosted 共享进程的 CPU、内存和文件系统级资源隔离也需结合最终 Deployment 方案完成。当前安装目录属主校验在非 Unix 平台关闭失败，因此该能力目前只支持 Unix Deployment。内置 Python Agent 已由 `internal/services/agent` 包以 isolated Runtime 形态纳管（见下）。产品链路接入真实扩展 Backend 并完成对应恢复和资源限制验证前，不得把测试夹具描述成已上线扩展。
 
 2026-08-12 三模式接入基线：三种运行模式已由 Loader 统一接入，**campus 完全重构为 hosted 内置包（无旧兼容）**：
 
-- **hosted 生产 Backend = wazero 进程内沙箱**（`internal/kernel/loader/wasm_host.go`）。业务扩展包默认形态：wasm32-wasi 工件经线性内存上限（默认 128 MiB）与 WASI 裁剪（无文件系统/网络/环境变量）执行，每次调用独立实例（零共享状态），stdin/stdout JSON 信封 ABI（`{tool_id,payload}` → `{ok,result,code,message}`）。guest 需要内核能力时经宿主函数（host function）投影，线性内存 ABI + 按调用绑定的治理上下文（guest 无法伪造 app_id/权限）；`CapabilitySpec.ToolID` 让 Dispatcher 把 Capability 直接执行的工具注入治理上下文，运行时级 Handler 据此分发。campus 的存储查询即经 `ailuo.bus.query` 宿主函数投影（App 隔离在宿主侧强制），业务治理（数据权威性/新鲜度）留在 guest 复用 `internal/campus/bus`。
+- **hosted 生产 Backend = wazero 进程内沙箱**（`internal/kernel/loader/wasm_host.go`）。业务扩展包默认形态：wasm32-wasi 工件经线性内存上限（默认 128 MiB）与 WASI 裁剪（无文件系统/网络/环境变量）执行，每次调用独立实例（零共享状态），stdin/stdout JSON 信封 ABI（`{tool_id,payload}` → `{ok,result,code,message}`）。guest 需要内核能力时经宿主函数（host function）投影，线性内存 ABI + 按调用绑定的治理上下文（guest 无法伪造 app_id/权限）；`CapabilitySpec.ToolID` 让 Dispatcher 把 Capability 直接执行的工具注入治理上下文，运行时级 Handler 据此分发。campus 的存储查询即经 `ailuo.bus.query` 宿主函数投影（App 隔离在宿主侧强制），业务治理（数据权威性/新鲜度）留在 guest 复用 `internal/tools/bus`。
 - **embedded 机制**（`embedded_host.go`）：进程内 Runtime，供内核自有组件以包形式纳入统一治理；当前无生产业务包，机制完整并有测试。
 - **isolated 资源限额**：`ProcessSpec.Limits`（RLIMIT_AS/CPU/NOFILE/FSIZE）由锁固定，Linux 用 prlimit 在子进程启动后立即应用，其余平台对非零限额 fail-closed。
-- **Agent 定位**：内核内置的 isolated Runtime（执行者），与 isolated 扩展包同构（子进程 + gRPC），仅分发方式（随内核发布）与调用通道（双向流编排 vs 一元 Invoke）不同；不注册"可被调用的 Capability"，也不塞进 Loader 一元 Invoke 契约。
+- **Agent 定位（2026-08-13 最终结构）**：`internal/services/agent` 是与其他业务 Service 同级的包——运行实现（`agent.Host`/`agent.Runtime`，implements `loader.Host`/`loader.Runtime`）与能力面注册（`agent.Register`：ServiceID=`agent`、核心能力 `agent.run`）同包内聚。Python Agent 进程以 isolated Runtime 形态受监督，复用 loader 导出的进程原语；Loader 不包含任何 agent 特化代码。`loader.New(hosts ...Host)` 支持同一模式多个宿主，main.go 只装配一个共享 Manager（内置 campus/agent 与 installed 包同池，清单注册时按 Verify 精确绑定宿主），不再按包分叉多个 Loader。
 - 安装目录发现仍只支持 Unix Deployment（属主校验 fail-closed）；内置 hosted 包（campus）不依赖安装目录，三平台均可装载。hosted 工件 CPU 指令级预算与外部 Runtime Host 进程形态接线保留为后续 P1。
 
 ### 防止微服务化失控
@@ -1148,7 +1171,7 @@ Service 的 `requested_permissions` 是该 Service 及其依赖 Tool 的权限�
 
 确认记录绑定 App、Echo、Run、Call、目标类型与目标标识、副作用类型、幂等键与参数摘要；验证时任何维度不匹配都拒绝（跨 App 在读取层直接返回 not-found，不泄露记录是否存在）。参数摘要由确认时参数经规范化后取 SHA-256，参数改变后旧确认摘要必然不匹配，不可复用。重启后待确认状态从持久化存储恢复，非进程内存。Run 取消时批量撤销该 Run 下全部等待/批准确认。
 
-Service 实现 `runtime.ConfirmationVerifier`（编译期断言），经 `WithConfirmationVerifier` 注入 Dispatcher；`requires_confirmation` 的 Capability/Tool 未配置验证器、缺少确认标识或验证失败一律 fail-closed 收敛为 `confirmation_required`。当前 `runtime.ConfirmationRequest` 不携带本次调用的参数摘要，Dispatcher 边界的参数变化由持久化幂等指纹冲突拒绝；带摘要的 `Verify` 入口可在确认边界直接强制摘要匹配。执行结果不是确认状态：未知执行结果由幂等层返回 `idempotency_outcome_unknown`，不自动重试副作用，也不把“未知”伪报为成功或失败。
+Service 实现 `runtime.ConfirmationVerifier`（编译期断言），经 `DispatcherConfig.ConfirmationVerifier` 注入 Dispatcher；`requires_confirmation` 的 Capability/Tool 未配置验证器、缺少确认标识或验证失败一律 fail-closed 收敛为 `confirmation_required`。当前 `runtime.ConfirmationRequest` 不携带本次调用的参数摘要，Dispatcher 边界的参数变化由持久化幂等指纹冲突拒绝；带摘要的 `Verify` 入口可在确认边界直接强制摘要匹配。执行结果不是确认状态：未知执行结果由幂等层返回 `idempotency_outcome_unknown`，不自动重试副作用，也不把“未知”伪报为成功或失败。
 
 ### Agent 协议与 Provider 可靠性实现基线（2026-07-26）
 

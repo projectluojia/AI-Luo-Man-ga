@@ -51,28 +51,14 @@ type ConfirmationVerifier interface {
 	VerifyConfirmation(context.Context, ConfirmationRequest) error
 }
 
-type DispatcherOption func(*Dispatcher)
-
-func WithMaxCallDepth(depth uint16) DispatcherOption {
-	return func(d *Dispatcher) {
-		if depth > 0 {
-			d.maxCallDepth = depth
-		}
-	}
-}
-
-func WithConfirmationVerifier(verifier ConfirmationVerifier) DispatcherOption {
-	return func(d *Dispatcher) {
-		d.confirmations = verifier
-	}
-}
-
-func WithIdempotencyStore(store idempotency.Store) DispatcherOption {
-	return func(d *Dispatcher) {
-		if store != nil {
-			d.idempotency = idempotency.NewManager(store)
-		}
-	}
+// DispatcherConfig 装配 Dispatcher 的可选依赖；零值字段使用生产默认或保持禁用。
+type DispatcherConfig struct {
+	// MaxCallDepth 是 Capability/Tool 调用链的最大深度；0 使用默认值 16。
+	MaxCallDepth uint16
+	// ConfirmationVerifier 是持久确认验证器；为 nil 时要求确认的能力 fail-closed。
+	ConfirmationVerifier ConfirmationVerifier
+	// IdempotencyStore 是写/外部副作用调用的持久幂等存储；为 nil 时副作用调用 fail-closed。
+	IdempotencyStore idempotency.Store
 }
 
 type Dispatcher struct {
@@ -84,10 +70,16 @@ type Dispatcher struct {
 	now           func() time.Time
 }
 
-func NewDispatcher(reg *registry.Registry, policy AppPolicy, options ...DispatcherOption) *Dispatcher {
-	d := &Dispatcher{registry: reg, policy: policy, maxCallDepth: 16, now: time.Now}
-	for _, option := range options {
-		option(d)
+func NewDispatcher(reg *registry.Registry, policy AppPolicy, config DispatcherConfig) *Dispatcher {
+	if config.MaxCallDepth == 0 {
+		config.MaxCallDepth = 16
+	}
+	d := &Dispatcher{registry: reg, policy: policy, maxCallDepth: config.MaxCallDepth, now: time.Now}
+	if config.ConfirmationVerifier != nil {
+		d.confirmations = config.ConfirmationVerifier
+	}
+	if config.IdempotencyStore != nil {
+		d.idempotency = idempotency.NewManager(config.IdempotencyStore)
 	}
 	return d
 }

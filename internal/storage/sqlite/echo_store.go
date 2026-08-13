@@ -15,6 +15,7 @@ import (
 	kernelecho "github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/idempotency"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/publicerror"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/session"
 )
 
 const maxChildRunsPerParent = 1
@@ -142,17 +143,23 @@ func insertRun(ctx context.Context, tx *sql.Tx, run kernelecho.RunRecord) error 
 	if err != nil {
 		return errors.Join(kernelecho.ErrInvalidRunRecord, err)
 	}
+	contextSources := run.ContextSources
+	if len(contextSources) == 0 {
+		contextSources = json.RawMessage(`{}`) // 未装配前固化来源版本为空对象
+	}
 	if _, err := tx.ExecContext(ctx, `
 INSERT INTO runs(
   app_id,run_id,run_group_id,echo_id,parent_run_id,origin_call_id,attempt,status,model,model_config_version,protocol_version,
   max_steps,max_tool_calls,max_input_tokens,max_output_tokens,max_total_tokens,max_output_bytes,
   max_cost_microusd,provider_timeout_ms,deadline_at,available_at,last_agent_sequence,
-  capability_scope,permission_scope,recoverable_state,result_message,created_at
-) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+  capability_scope,permission_scope,recoverable_state,result_message,created_at,
+  session_id,user_id,message_id,context_digest,context_sources
+) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		run.AppID, run.ID, run.RunGroupID, run.EchoID, parentRunID, run.OriginCallID, run.Attempt, run.Status, run.Model, run.ModelConfigVersion, run.ProtocolVersion,
 		run.MaxSteps, run.MaxToolCalls, run.MaxInputTokens, run.MaxOutputTokens, run.MaxTotalTokens, run.MaxOutputBytes,
 		run.MaxCostMicrousd, run.ProviderTimeoutMS, run.Deadline.UTC().Format(time.RFC3339Nano), run.AvailableAt.UTC().Format(time.RFC3339Nano), run.LastAgentSequence,
 		string(capabilityScope), string(permissionScope), string(run.RecoverableState), run.ResultMessage, run.CreatedAt.UTC().Format(time.RFC3339Nano),
+		run.SessionID, run.UserID, run.MessageID, run.ContextDigest, string(contextSources),
 	); err != nil {
 		return fmt.Errorf("create run: %w", err)
 	}
@@ -1005,7 +1012,8 @@ SELECT
   max_cost_microusd,provider_timeout_ms,used_input_tokens,used_output_tokens,used_total_tokens,used_cost_microusd,used_provider_retries,
   deadline_at,available_at,coalesce(lease_token,''),lease_expires_at,last_agent_sequence,
   capability_scope,permission_scope,recoverable_state,result_message,
-  coalesce(error_code,''),coalesce(error_message,''),created_at,started_at,completed_at
+  coalesce(error_code,''),coalesce(error_message,''),created_at,started_at,completed_at,
+  coalesce(session_id,''),coalesce(user_id,''),coalesce(message_id,''),coalesce(context_digest,''),coalesce(context_sources,'{}')
 FROM runs`
 
 type rowScanner interface {
@@ -1038,6 +1046,11 @@ func queryRun(scanner rowScanner) (kernelecho.RunRecord, error) {
 	var createdAt string
 	var startedAt sql.NullString
 	var completedAt sql.NullString
+	var sessionID string
+	var userID string
+	var messageID string
+	var contextDigest string
+	var contextSources string
 	if err := scanner.Scan(
 		&run.AppID, &run.ID, &run.RunGroupID, &run.EchoID, &run.ParentRunID, &run.OriginCallID, &attempt, &run.Status,
 		&run.Model, &run.ModelConfigVersion, &run.ProtocolVersion,
@@ -1047,6 +1060,7 @@ func queryRun(scanner rowScanner) (kernelecho.RunRecord, error) {
 		&run.LeaseToken, &leaseExpiresAt, &lastAgentSequence,
 		&capabilityScope, &permissionScope, &recoverableState, &run.ResultMessage,
 		&run.ErrorCode, &run.ErrorMessage, &createdAt, &startedAt, &completedAt,
+		&sessionID, &userID, &messageID, &contextDigest, &contextSources,
 	); err != nil {
 		return kernelecho.RunRecord{}, err
 	}
@@ -1073,6 +1087,11 @@ func queryRun(scanner rowScanner) (kernelecho.RunRecord, error) {
 	run.UsedProviderRetries = uint32(usedProviderRetries)
 	run.LastAgentSequence = uint64(lastAgentSequence)
 	run.RecoverableState = json.RawMessage(recoverableState)
+	run.SessionID = sessionID
+	run.UserID = userID
+	run.MessageID = messageID
+	run.ContextDigest = contextDigest
+	run.ContextSources = json.RawMessage(contextSources)
 	if len(capabilityScope) > 65536 || len(permissionScope) > 65536 ||
 		json.Unmarshal([]byte(capabilityScope), &run.CapabilityScope) != nil ||
 		json.Unmarshal([]byte(permissionScope), &run.PermissionScope) != nil ||
@@ -1140,6 +1159,11 @@ func validateNewRun(echo kernelecho.Record, run kernelecho.RunRecord) error {
 		run.LastAgentSequence != 0 || run.LeaseToken != "" || run.LeaseExpiresAt != nil || run.StartedAt != nil ||
 		run.CompletedAt != nil || run.ResultMessage != "" || run.ErrorCode != "" || run.ErrorMessage != "" ||
 		!json.Valid(run.RecoverableState) ||
+		(run.SessionID != "" && !session.ValidStableID(run.SessionID)) ||
+		(run.UserID != "" && !session.ValidStableID(run.UserID)) ||
+		(run.MessageID != "" && !session.ValidStableID(run.MessageID)) ||
+		run.ContextDigest != "" || // 上下文在执行开始时由 SetRunContext 一次性固化
+		(len(run.ContextSources) != 0 && !json.Valid(run.ContextSources)) ||
 		!validCanonicalScope(run.CapabilityScope, agentprotocol.MaxCapabilities, capabilityIDPattern) ||
 		!validCanonicalScope(run.PermissionScope, 256, permissionIDPattern) {
 		return kernelecho.ErrInvalidRunRecord

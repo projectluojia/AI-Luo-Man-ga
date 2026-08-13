@@ -3,7 +3,6 @@ package access
 import (
 	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/identity"
@@ -49,18 +48,6 @@ func WriteJSON(writer http.ResponseWriter, status int, value any) {
 	writer.Header().Set("Content-Type", "application/json; charset=utf-8")
 	writer.WriteHeader(status)
 	_ = json.NewEncoder(writer).Encode(value)
-}
-
-// EnsureJSONEOF 拒绝请求体包含多个 JSON 对象（web 与平台 ingress 共用）。
-func EnsureJSONEOF(decoder *json.Decoder) error {
-	var extra json.RawMessage
-	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
-		if err == nil {
-			return errors.New("request body must contain exactly one JSON object")
-		}
-		return err
-	}
-	return nil
 }
 
 // SecurityHeaders 为接入层 HTTP 处理器统一附加基础安全响应头。

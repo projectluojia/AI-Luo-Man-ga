@@ -154,12 +154,12 @@ func TestHostedGRPCHostSharesConnectionAndPreservesGovernedContext(t *testing.T)
 	dialer, dials := startRuntimeHost(t, implementation)
 	var verifies atomic.Int32
 	host := newRuntimeGRPCHost(t, loader.ModeHosted, dialer, &verifies)
-	manager, err := loader.New(map[string]loader.Host{loader.ModeHosted: host})
+	manager, err := loader.New(host)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, id := range []string{"hosted.one", "hosted.two"} {
-		if err := manager.Register(runtimeManifest(id, loader.ModeHosted)); err != nil {
+		if err := manager.Register(context.Background(), runtimeManifest(id, loader.ModeHosted)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -180,7 +180,8 @@ func TestHostedGRPCHostSharesConnectionAndPreservesGovernedContext(t *testing.T)
 			t.Fatal(loadErr)
 		}
 	}
-	if dials.Load() != 1 || verifies.Load() != 2 {
+	// 注册期两个清单各 Verify 一次绑定宿主，加载期 loadRuntime 各再 Verify 一次。
+	if dials.Load() != 1 || verifies.Load() != 4 {
 		t.Fatalf("dials=%d verifies=%d", dials.Load(), verifies.Load())
 	}
 
@@ -225,13 +226,13 @@ func TestIsolatedGRPCHostUsesOwnedConnectionsAndRejectsLoadAfterClose(t *testing
 	dialer, dials := startRuntimeHost(t, implementation)
 	var verifies atomic.Int32
 	host := newRuntimeGRPCHost(t, loader.ModeIsolated, dialer, &verifies)
-	manager, err := loader.New(map[string]loader.Host{loader.ModeIsolated: host})
+	manager, err := loader.New(host)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, id := range []string{"isolated.one", "isolated.two"} {
 		manifest := runtimeManifest(id, loader.ModeIsolated)
-		if err := manager.Register(manifest); err != nil {
+		if err := manager.Register(context.Background(), manifest); err != nil {
 			t.Fatal(err)
 		}
 		if err := manager.EnsureLoaded(context.Background(), id); err != nil {
@@ -256,11 +257,11 @@ func TestGRPCHostRejectsProtocolMismatchAndCleansLoadedRuntime(t *testing.T) {
 	dialer, _ := startRuntimeHost(t, implementation)
 	var verifies atomic.Int32
 	host := newRuntimeGRPCHost(t, loader.ModeHosted, dialer, &verifies)
-	manager, err := loader.New(map[string]loader.Host{loader.ModeHosted: host})
+	manager, err := loader.New(host)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := manager.Register(runtimeManifest("hosted.mismatch", loader.ModeHosted)); err != nil {
+	if err := manager.Register(context.Background(), runtimeManifest("hosted.mismatch", loader.ModeHosted)); err != nil {
 		t.Fatal(err)
 	}
 	if err := manager.EnsureLoaded(context.Background(), "hosted.mismatch"); !errors.Is(err, loader.ErrLoadFailed) ||
@@ -278,11 +279,11 @@ func TestGRPCHostRejectsMalformedResponsesAndSanitizesRemoteErrors(t *testing.T)
 	dialer, _ := startRuntimeHost(t, implementation)
 	var verifies atomic.Int32
 	host := newRuntimeGRPCHost(t, loader.ModeHosted, dialer, &verifies)
-	manager, err := loader.New(map[string]loader.Host{loader.ModeHosted: host})
+	manager, err := loader.New(host)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := manager.Register(runtimeManifest("hosted.validation", loader.ModeHosted)); err != nil {
+	if err := manager.Register(context.Background(), runtimeManifest("hosted.validation", loader.ModeHosted)); err != nil {
 		t.Fatal(err)
 	}
 	handler := manager.Handler("hosted.validation")
@@ -378,12 +379,12 @@ func TestHostedGRPCHostEnforcesRuntimeAndInvocationCapacity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manager, err := loader.New(map[string]loader.Host{loader.ModeHosted: host})
+	manager, err := loader.New(host)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, id := range []string{"hosted.capacity.one", "hosted.capacity.two"} {
-		if err := manager.Register(runtimeManifest(id, loader.ModeHosted)); err != nil {
+		if err := manager.Register(context.Background(), runtimeManifest(id, loader.ModeHosted)); err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -16,6 +16,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/jsonutil"
 	kernelecho "github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/idempotency"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
@@ -221,7 +222,7 @@ func (s *Server) createEcho(writer http.ResponseWriter, request *http.Request) {
 		access.WriteJSON(writer, http.StatusBadRequest, map[string]string{"code": "invalid_request", "message": "请求体不是有效的 JSON 对象"})
 		return
 	}
-	if err := access.EnsureJSONEOF(decoder); err != nil {
+	if err := jsonutil.EnsureEOF(decoder); err != nil {
 		observe.Warn(request.Context(), "创建 Echo 的请求体包含多余内容",
 			observe.StringAttr("reason", err.Error()),
 		)
@@ -253,7 +254,12 @@ func (s *Server) createEcho(writer http.ResponseWriter, request *http.Request) {
 		s.writeIntakeError(writer, request, err)
 		return
 	}
+	// 会话上下文只来自受治理的 Intake 结果，覆盖客户端请求体中的任何同名字段
+	// （RunRequest 的会话字段不进入 HTTP 契约，客户端无法伪造会话归属）。
 	input.Message = intake.Text
+	input.SessionID = intake.SessionID
+	input.UserID = intake.UserID
+	input.MessageID = intake.MessageID
 	echoID, created, err := s.orchestrator.CreateIdempotent(request.Context(), input)
 	if err != nil {
 		access.WriteEchoError(writer, request, err)

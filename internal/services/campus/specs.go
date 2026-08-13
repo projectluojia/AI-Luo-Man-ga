@@ -1,8 +1,8 @@
 package campus
 
 import (
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/campus/bus"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/tools/bus"
 )
 
 const (
@@ -13,11 +13,6 @@ const (
 	BusRouteListCapabilityID     = "campus.bus.routes.list"
 	BusJourneySearchCapabilityID = "campus.bus.journeys.search"
 )
-
-// ToolSpecs 返回 campus 服务依赖的工具规格（单一来源：安装清单与 Registry 注册共用）。
-func ToolSpecs() []registry.ToolSpec {
-	return bus.ToolSpecs()
-}
 
 // ServiceSpec 返回 campus 服务规格。
 func ServiceSpec() registry.ServiceSpec {
