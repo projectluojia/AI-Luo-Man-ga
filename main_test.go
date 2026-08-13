@@ -244,7 +244,7 @@ func writeMainInstalledFixture(t *testing.T) string {
 	installed := loader.InstalledManifest{
 		SchemaVersion: loader.InstallSchemaVersion,
 		Runtime: loader.InstalledRuntimeSpec{
-			ID: "main.extension", Version: "1.0.0", Mode: loader.ModeHosted,
+			ID: "main.extension", Version: "1.0.0", Mode: loader.ModeHosted, Pin: true,
 		},
 		Service: registry.ServiceSpec{
 			ID: "main.extension", Version: "1.0.0", Description: "主程序扩展接线测试",
