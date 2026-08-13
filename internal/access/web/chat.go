@@ -57,7 +57,7 @@ func (s *Server) chatStream(writer http.ResponseWriter, request *http.Request) {
 	if !ok {
 		return
 	}
-	live, unsubscribe := s.hub.subscribe(s.appID, echoID)
+	live, unsubscribe := s.hub.Subscribe(s.appID, echoID)
 	defer unsubscribe()
 	writer.Header().Set("Content-Type", "text/event-stream")
 	writer.Header().Set("Cache-Control", "no-cache, no-transform")
@@ -113,7 +113,7 @@ func (s *Server) chatNonStream(writer http.ResponseWriter, request *http.Request
 	if !ok {
 		return
 	}
-	live, unsubscribe := s.hub.subscribe(s.appID, echoID)
+	live, unsubscribe := s.hub.Subscribe(s.appID, echoID)
 	defer unsubscribe()
 	if created {
 		s.queueEcho(request.Context(), echoID)

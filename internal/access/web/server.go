@@ -55,7 +55,7 @@ type Server struct {
 	policy       runtime.AppPolicy
 	appID        string
 	platformHub  *access.Hub
-	hub          *eventHub
+	hub          *access.EventHub
 	activeMu     sync.Mutex
 	active       map[echoKey]context.CancelFunc
 	pending      map[echoKey]context.Context
@@ -72,6 +72,12 @@ const (
 	schedulerBatchSize = 32
 	schedulerPoll      = 250 * time.Millisecond
 )
+
+// echoKey 是活动/待处理 Echo 的进程内键。
+type echoKey struct {
+	appID  string
+	echoID string
+}
 
 func NewServer(
 	ctx context.Context,
@@ -95,7 +101,7 @@ func NewServer(
 		policy:       policy,
 		appID:        appID,
 		platformHub:  platformHub,
-		hub:          newEventHub(),
+		hub:          access.NewEventHub(),
 		active:       make(map[echoKey]context.CancelFunc),
 		pending:      make(map[echoKey]context.Context),
 		workSignal:   make(chan struct{}, 1),
@@ -382,7 +388,7 @@ func (s *Server) runNext() bool {
 	}
 	key := echoKey{appID: s.appID, echoID: selected.Run.EchoID}
 	runErr := s.orchestrator.RunExisting(runContext, key.echoID, kernelecho.RunRequest{Message: selected.InputMessage}, func(event kernelecho.Event) error {
-		s.hub.publish(event)
+		s.hub.Publish(event)
 		return nil
 	})
 	cancel()
@@ -390,7 +396,7 @@ func (s *Server) runNext() bool {
 	delete(s.active, key)
 	s.activeMu.Unlock()
 	s.activeWG.Done()
-	s.hub.finish(s.appID, key.echoID)
+	s.hub.Finish(s.appID, key.echoID)
 	if runErr != nil && !errors.Is(runErr, context.Canceled) && !errors.Is(runErr, kernelecho.ErrInvalidTransition) &&
 		!errors.Is(runErr, kernelecho.ErrRunRetryScheduled) {
 		observe.Error(runContext, "持久调度 Run 执行失败", runErr)
@@ -466,6 +472,11 @@ func (s *Server) StopAccepting() {
 	s.activeMu.Lock()
 	s.accepting = false
 	s.activeMu.Unlock()
+}
+
+// Hub 返回共享的 Echo 事件订阅中心，供平台适配器（QQ 等）订阅 Run 事件回发。
+func (s *Server) Hub() *access.EventHub {
+	return s.hub
 }
 
 func (s *Server) beginAdmission() bool {
@@ -581,7 +592,7 @@ func (s *Server) echoEvents(writer http.ResponseWriter, request *http.Request) {
 		access.WriteJSON(writer, http.StatusNotFound, map[string]string{"code": "echo_not_found", "message": "Echo 不存在"})
 		return
 	}
-	live, unsubscribe := s.hub.subscribe(s.appID, echoID)
+	live, unsubscribe := s.hub.Subscribe(s.appID, echoID)
 	defer unsubscribe()
 	record, events, err := s.reader.GetEcho(request.Context(), s.appID, echoID)
 	if err != nil {
