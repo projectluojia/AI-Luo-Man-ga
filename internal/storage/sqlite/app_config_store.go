@@ -11,10 +11,6 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/appconfig"
 )
 
-type configScanner interface {
-	Scan(...any) error
-}
-
 func (s *Store) Ensure(ctx context.Context, seed appconfig.Config) (result appconfig.Config, created bool, resultErr error) {
 	started := time.Now()
 	defer func() { observeStorageOperation(ctx, "app_config_ensure", started, resultErr) }()
@@ -81,7 +77,7 @@ func (s *Store) Revision(ctx context.Context, appID, revision string) (result ap
 		return appconfig.Config{}, appconfig.ErrInvalid
 	}
 	row := s.db.QueryRowContext(ctx, `
-SELECT r.app_id,r.revision,0,r.enabled,r.model,r.system_prompt,r.timezone,
+SELECT r.app_id,r.revision,0,r.enabled,r.model,r.system_prompt,r.channel_prompts,r.timezone,
        r.max_steps,r.max_tool_calls,r.max_input_tokens,r.max_output_tokens,r.max_total_tokens,
        r.max_output_bytes,r.max_cost_microusd,r.provider_timeout_ms,
        r.enabled_capabilities,r.permission_scope,r.created_at,r.created_at
@@ -161,7 +157,7 @@ func readCurrentAppConfig(ctx context.Context, queryer interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }, appID string) (appconfig.Config, error) {
 	row := queryer.QueryRowContext(ctx, `
-SELECT r.app_id,r.revision,h.generation,r.enabled,r.model,r.system_prompt,r.timezone,
+SELECT r.app_id,r.revision,h.generation,r.enabled,r.model,r.system_prompt,r.channel_prompts,r.timezone,
        r.max_steps,r.max_tool_calls,r.max_input_tokens,r.max_output_tokens,r.max_total_tokens,
        r.max_output_bytes,r.max_cost_microusd,r.provider_timeout_ms,
        r.enabled_capabilities,r.permission_scope,h.created_at,h.updated_at
@@ -184,14 +180,18 @@ func insertAppConfigRevision(ctx context.Context, tx *sql.Tx, config appconfig.C
 	if err != nil {
 		return errors.Join(appconfig.ErrInvalid, err)
 	}
+	channelPrompts, err := json.Marshal(config.ChannelPrompts)
+	if err != nil {
+		return errors.Join(appconfig.ErrInvalid, err)
+	}
 	if _, err := tx.ExecContext(ctx, `
 INSERT INTO app_config_revisions(
-  app_id,revision,enabled,model,system_prompt,timezone,max_steps,max_tool_calls,
+  app_id,revision,enabled,model,system_prompt,channel_prompts,timezone,max_steps,max_tool_calls,
   max_input_tokens,max_output_tokens,max_total_tokens,max_output_bytes,max_cost_microusd,
   provider_timeout_ms,enabled_capabilities,permission_scope,created_at
-) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(app_id,revision) DO NOTHING`,
-		config.AppID, config.Revision, config.Enabled, config.Model, config.SystemPrompt, config.Timezone,
+		config.AppID, config.Revision, config.Enabled, config.Model, config.SystemPrompt, string(channelPrompts), config.Timezone,
 		config.MaxSteps, config.MaxToolCalls, config.MaxInputTokens, config.MaxOutputTokens,
 		config.MaxTotalTokens, config.MaxOutputBytes, config.MaxCostMicrousd,
 		config.ProviderTimeout.Milliseconds(), string(capabilities), string(permissions),
@@ -202,14 +202,18 @@ ON CONFLICT(app_id,revision) DO NOTHING`,
 	return nil
 }
 
+type configScanner interface {
+	Scan(...any) error
+}
+
 func scanAppConfig(scanner configScanner) (appconfig.Config, error) {
 	var config appconfig.Config
 	var enabled bool
 	var providerTimeoutMS int64
-	var capabilitiesJSON, permissionsJSON, createdAt, updatedAt string
+	var capabilitiesJSON, permissionsJSON, channelPromptsJSON, createdAt, updatedAt string
 	if err := scanner.Scan(
 		&config.AppID, &config.Revision, &config.Generation, &enabled, &config.Model,
-		&config.SystemPrompt, &config.Timezone, &config.MaxSteps, &config.MaxToolCalls,
+		&config.SystemPrompt, &channelPromptsJSON, &config.Timezone, &config.MaxSteps, &config.MaxToolCalls,
 		&config.MaxInputTokens, &config.MaxOutputTokens, &config.MaxTotalTokens,
 		&config.MaxOutputBytes, &config.MaxCostMicrousd, &providerTimeoutMS,
 		&capabilitiesJSON, &permissionsJSON, &createdAt, &updatedAt,
@@ -218,13 +222,16 @@ func scanAppConfig(scanner configScanner) (appconfig.Config, error) {
 	}
 	config.Enabled = enabled
 	config.ProviderTimeout = time.Duration(providerTimeoutMS) * time.Millisecond
-	if len(capabilitiesJSON) > 65536 || len(permissionsJSON) > 65536 {
+	if len(capabilitiesJSON) > 65536 || len(permissionsJSON) > 65536 || len(channelPromptsJSON) > 65536 {
 		return appconfig.Config{}, appconfig.ErrInvalid
 	}
 	if err := json.Unmarshal([]byte(capabilitiesJSON), &config.EnabledCapabilities); err != nil {
 		return appconfig.Config{}, errors.Join(appconfig.ErrInvalid, err)
 	}
 	if err := json.Unmarshal([]byte(permissionsJSON), &config.PermissionScope); err != nil {
+		return appconfig.Config{}, errors.Join(appconfig.ErrInvalid, err)
+	}
+	if err := json.Unmarshal([]byte(channelPromptsJSON), &config.ChannelPrompts); err != nil {
 		return appconfig.Config{}, errors.Join(appconfig.ErrInvalid, err)
 	}
 	var err error

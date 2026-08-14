@@ -1,8 +1,6 @@
 package observe
 
 import (
-	"bufio"
-	"context"
 	"fmt"
 	"log/slog"
 	"net"
@@ -114,12 +112,6 @@ func (w *responseCapture) Write(payload []byte) (int, error) {
 	return written, err
 }
 
-func (w *responseCapture) RecordWriteError(err error) {
-	if err != nil && w.writeErr == nil {
-		w.writeErr = err
-	}
-}
-
 func (w *responseCapture) Flush() {
 	if w.status == 0 {
 		w.WriteHeader(http.StatusOK)
@@ -127,14 +119,6 @@ func (w *responseCapture) Flush() {
 	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
 		flusher.Flush()
 	}
-}
-
-func (w *responseCapture) Hijack() (net.Conn, *bufio.ReadWriter, error) {
-	hijacker, ok := w.ResponseWriter.(http.Hijacker)
-	if !ok {
-		return nil, nil, fmt.Errorf("底层响应不支持连接接管")
-	}
-	return hijacker.Hijack()
 }
 
 func (w *responseCapture) Unwrap() http.ResponseWriter {
@@ -155,11 +139,4 @@ func remoteIP(address string) string {
 		return host
 	}
 	return address
-}
-
-func ContextWithRequestIDs(ctx context.Context, requestID, traceID string) context.Context {
-	return With(ctx,
-		slog.String("request_id", requestID),
-		slog.String("trace_id", traceID),
-	)
 }

@@ -1,0 +1,34 @@
+{
+  $schema: "https://docs.renovatebot.com/renovate-schema.json",
+  extends: ["config:recommended"],
+  // 每周批量更新一次，避免每日 PR 噪音；所有升级 PR 必须人工评审
+  // （main 规则集要求 1 人审批），不自动合并。
+  schedule: ["every monday"],
+  packageRules: [
+    {
+      // gRPC/protobuf 代码生成工具链：升级会改变生成的 executor_pb2*.py 产物，
+      // 必须人工走生成流程并提交生成物，禁止自动升级。
+      matchManagers: ["pep621", "uv"],
+      matchDepNames: ["grpcio-tools", "protobuf"],
+      enabled: false,
+    },
+    {
+      // Go 依赖的 minor/patch 合并为单个 PR，保持单一 scope。
+      matchManagers: ["gomod"],
+      matchUpdateTypes: ["minor", "patch"],
+      groupName: "go minor/patch",
+    },
+    {
+      // Python 依赖的 minor/patch 合并为单个 PR。
+      matchManagers: ["pep621", "uv"],
+      matchUpdateTypes: ["minor", "patch"],
+      groupName: "python minor/patch",
+    },
+    {
+      // GitHub Actions 的 minor/patch 合并为单个 PR。
+      matchManagers: ["github-actions"],
+      matchUpdateTypes: ["minor", "patch"],
+      groupName: "actions minor/patch",
+    },
+  ],
+}

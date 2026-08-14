@@ -59,5 +59,4 @@ class ModelProvider(ABC):
         return bool(model)
 
 
-ProviderFactory = Callable[[str], ModelProvider]
 CapabilityExecutor = Callable[[ToolCall], Awaitable[str]]

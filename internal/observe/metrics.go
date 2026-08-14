@@ -59,7 +59,6 @@ func (c *outcomeCounters) add(success bool) {
 
 // Metrics 只接受闭集标签，避免外部标识造成高基数或敏感信息泄露。
 type Metrics struct {
-	httpRequests  atomic.Uint64
 	httpResponses [5]atomic.Uint64
 	httpDuration  durationHistogram
 
@@ -98,7 +97,6 @@ func DefaultMetrics() *Metrics {
 }
 
 func (m *Metrics) ObserveHTTPRequest(status int, duration time.Duration) {
-	m.httpRequests.Add(1)
 	class := status/100 - 1
 	if class < 0 || class >= len(m.httpResponses) {
 		class = len(m.httpResponses) - 1
@@ -225,13 +223,12 @@ func (m *Metrics) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	writer.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 	writer.Header().Set("Cache-Control", "no-store")
 	output := &strings.Builder{}
-	writeMetric(output, "ailuo_http_requests_total", m.httpRequests.Load())
 	for index := range m.httpResponses {
 		writeLabeledMetric(output, "ailuo_http_responses_total", "status_class", strconv.Itoa(index+1)+"xx", m.httpResponses[index].Load())
 	}
 	writeHistogram(output, "ailuo_http_request_duration_seconds", &m.httpDuration)
-	writeGauge(output, "ailuo_runs_active", m.activeRuns.Load())
-	writeGauge(output, "ailuo_runs_queued", m.queuedRuns.Load())
+	writeMetric(output, "ailuo_runs_active", m.activeRuns.Load())
+	writeMetric(output, "ailuo_runs_queued", m.queuedRuns.Load())
 	writeLabeledMetric(output, "ailuo_runs_total", "status", "succeeded", m.runSucceeded.Load())
 	writeLabeledMetric(output, "ailuo_runs_total", "status", "failed", m.runFailed.Load())
 	writeLabeledMetric(output, "ailuo_runs_total", "status", "cancelled", m.runCancelled.Load())
@@ -254,7 +251,7 @@ func (m *Metrics) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	writeHistogram(output, "ailuo_runtime_load_duration_seconds", &m.runtimeLoad)
 	writeOutcomes(output, "ailuo_runtime_stops_total", &m.runtimeStops)
 	writeHistogram(output, "ailuo_runtime_stop_duration_seconds", &m.runtimeStop)
-	writeGauge(output, "ailuo_runtime_calls_active", m.runtimeCalls.Load())
+	writeMetric(output, "ailuo_runtime_calls_active", m.runtimeCalls.Load())
 	if _, err := writer.Write([]byte(output.String())); err != nil {
 		Error(request.Context(), "写入指标响应失败", err)
 	}
@@ -274,11 +271,7 @@ func writeHistogram(writer *strings.Builder, name string, histogram *durationHis
 	_, _ = fmt.Fprintf(writer, "%s_count %d\n", name, histogram.count.Load())
 }
 
-func writeMetric(writer *strings.Builder, name string, value uint64) {
-	_, _ = fmt.Fprintf(writer, "%s %d\n", name, value)
-}
-
-func writeGauge(writer *strings.Builder, name string, value int64) {
+func writeMetric(writer *strings.Builder, name string, value any) {
 	_, _ = fmt.Fprintf(writer, "%s %d\n", name, value)
 }
 

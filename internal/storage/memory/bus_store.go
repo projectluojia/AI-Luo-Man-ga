@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/campus/bus"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/tools/bus"
 )
 
 // BusStore 是用于测试和本地开发的并发安全参考适配器。

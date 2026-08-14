@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	goruntime "runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -18,13 +19,17 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/access"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access/web"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/appconfig"
 	kernelecho "github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/idempotency"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/identity"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/publicerror"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime/runtimetest"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/session"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite"
 )
@@ -40,6 +45,56 @@ type fakeOrchestrator struct {
 	runGate       chan struct{}
 	activeRuns    atomic.Int32
 	maxActiveRuns atomic.Int32
+}
+
+type testWebResolver struct{}
+
+func (testWebResolver) ResolveIdentity(_ context.Context, appID, _, _, _ string) (identity.IdentityContext, error) {
+	return identity.IdentityContext{
+		AppID: appID, UserID: "web-test-user",
+		Membership: &identity.AppMembership{AppID: appID, UserID: "web-test-user"},
+	}, nil
+}
+
+type testWebAuthenticator struct{}
+
+func (testWebAuthenticator) Authenticate(*http.Request) (web.AuthenticatedWebIdentity, error) {
+	return web.AuthenticatedWebIdentity{
+		PlatformSpaceID: "web", PlatformUserID: "web-test-subject", PlatformSessionID: "web-test-session",
+	}, nil
+}
+
+// newTestHub 为 Web 测试构造需要受治理身份的接入入口。
+func newTestHub(store *sqlite.Store, appID string) *access.Hub {
+	hub, err := access.NewHub(appID, store, testWebResolver{})
+	if err != nil {
+		panic(err)
+	}
+	return hub
+}
+
+func newAuthenticatedServer(
+	ctx context.Context,
+	orchestrator web.EchoOrchestrator,
+	reader web.EchoReader,
+	health web.HealthChecker,
+	reg *registry.Registry,
+	policy runtime.AppPolicy,
+	appID string,
+	platformHub *access.Hub,
+) *web.Server {
+	return web.NewServer(ctx, orchestrator, reader, health, reg, policy, appID, platformHub, web.WithWebAuthenticator(testWebAuthenticator{}))
+}
+
+// closeStore 关闭测试存储。Windows 上 modernc SQLite 的文件句柄由运行时
+// 最终化器延迟释放（sqlite3_close_v2 语义），关闭后立即回收一次，
+// 避免 TempDir 清理与最终化时序竞争导致 RemoveAll 失败。
+func closeStore(t *testing.T, store *sqlite.Store) {
+	t.Helper()
+	if err := store.Close(); err != nil {
+		t.Errorf("close store: %v", err)
+	}
+	goruntime.GC()
 }
 
 type observedContext struct {
@@ -61,17 +116,18 @@ func (f *fakeOrchestrator) CreateIdempotent(ctx context.Context, request kernele
 	}
 	id := uuid.NewString()
 	now := time.Now().UTC()
-	return f.store.CreateEchoRunIdempotent(ctx, request.IdempotencyKey, idempotency.Fingerprint([]byte(request.Message)), kernelecho.Record{
+	return f.store.CreateEchoRunIdempotentLimited(ctx, request.IdempotencyKey, idempotency.Fingerprint([]byte(request.Message)), kernelecho.Record{
 		ID: id, AppID: "campus-services", InputMessage: request.Message,
 		Status: kernelecho.StatusRunning, CreatedAt: now,
 	}, kernelecho.RunRecord{
 		ID: "run-" + id, RunGroupID: "run-" + id, AppID: "campus-services", EchoID: id, Attempt: 1,
+		SessionID: request.SessionID, UserID: request.UserID, MessageID: request.MessageID, Channel: request.Channel,
 		Status: kernelecho.RunStatusQueued, Model: "test-model", ModelConfigVersion: "test-config",
 		ProtocolVersion: "1.0", MaxSteps: 4, MaxToolCalls: 4,
 		MaxInputTokens: 1000, MaxOutputTokens: 1000, MaxTotalTokens: 2000,
 		MaxOutputBytes: 4096, ProviderTimeoutMS: 5000, Deadline: now.Add(time.Minute), AvailableAt: now,
 		RecoverableState: []byte(`{}`), CreatedAt: now,
-	})
+	}, 0)
 }
 
 func (f *fakeOrchestrator) Recoverable(context.Context) ([]kernelecho.RunWork, error) {
@@ -192,7 +248,7 @@ func TestWebAccessCancelsRunningEcho(t *testing.T) {
 	if response.Code != http.StatusNoContent {
 		t.Fatalf("cancel status=%d", response.Code)
 	}
-	deadline := time.Now().Add(time.Second)
+	deadline := time.Now().Add(5 * time.Second)
 	for {
 		record, _, err := store.GetEcho(context.Background(), "campus-services", echoID)
 		if err == nil && record.Status == kernelecho.StatusCancelled {
@@ -208,12 +264,28 @@ func TestWebAccessCancelsRunningEcho(t *testing.T) {
 func TestWebAccessRejectsUnknownFields(t *testing.T) {
 	handler, _ := newTestServer(t, false)
 	response := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/api/v1/echoes", strings.NewReader(`{"message":"ok","user_id":"not-allowed"}`))
+	request := httptest.NewRequest(http.MethodPost, "/api/v2/echoes", strings.NewReader(`{"message":"ok","user_id":"not-allowed"}`))
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Idempotency-Key", "unknown-fields")
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("status=%d", response.Code)
+	}
+}
+
+func TestWebAccessRejectsUnauthenticatedEchoBeforePersistence(t *testing.T) {
+	store, err := sqlite.Open(filepath.Join(t.TempDir(), "unauthenticated.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	server := web.NewServer(
+		context.Background(), &fakeOrchestrator{store: store}, store, store,
+		registry.New(), runtimetest.NewStaticAppPolicy(), "campus-services", newTestHub(store, "campus-services"),
+	)
+	response := createEchoRequest(t, server.Handler(), "不应写入", "unauthenticated")
+	if response.Code != http.StatusUnauthorized || !strings.Contains(response.Body.String(), `"code":"authentication_required"`) {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
 }
 
@@ -263,12 +335,12 @@ func TestWebAccessCopiesRequestContextIntoBackgroundRun(t *testing.T) {
 	}
 	defer store.Close()
 	reg := registry.New()
-	policy := runtime.NewStaticAppPolicy()
+	policy := runtimetest.NewStaticAppPolicy()
 	observed := make(chan observedContext, 1)
 	backend := &fakeOrchestrator{store: store, observed: observed}
-	handler := web.NewServer(context.Background(), backend, store, store, reg, policy, "campus-services").Handler()
+	handler := newAuthenticatedServer(context.Background(), backend, store, store, reg, policy, "campus-services", newTestHub(store, "campus-services")).Handler()
 	payload := strings.NewReader(`{"message":"查询校巴"}`)
-	request := httptest.NewRequest(http.MethodPost, "/api/v1/echoes", payload)
+	request := httptest.NewRequest(http.MethodPost, "/api/v2/echoes", payload)
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Idempotency-Key", "background-run")
 	request.Header.Set("X-Request-ID", "request-background")
@@ -297,7 +369,7 @@ func TestWebAccessRecoversPersistedQueuedRun(t *testing.T) {
 	}
 	defer store.Close()
 	reg := registry.New()
-	policy := runtime.NewStaticAppPolicy()
+	policy := runtimetest.NewStaticAppPolicy()
 	backend := &fakeOrchestrator{store: store}
 	echoID, _, err := backend.CreateIdempotent(context.Background(), kernelecho.RunRequest{Message: "recover", IdempotencyKey: "recover"})
 	if err != nil {
@@ -308,12 +380,12 @@ func TestWebAccessRecoversPersistedQueuedRun(t *testing.T) {
 		t.Fatalf("runs=%#v err=%v", runs, err)
 	}
 	backend.recovery = []kernelecho.RunWork{{Run: runs[0], InputMessage: "recover"}}
-	access := web.NewServer(context.Background(), backend, store, store, reg, policy, "campus-services")
-	count, err := access.Recover(context.Background())
+	server := newAuthenticatedServer(context.Background(), backend, store, store, reg, policy, "campus-services", newTestHub(store, "campus-services"))
+	count, err := server.Recover(context.Background())
 	if err != nil || count != 1 {
 		t.Fatalf("count=%d err=%v", count, err)
 	}
-	deadline := time.Now().Add(time.Second)
+	deadline := time.Now().Add(5 * time.Second)
 	for {
 		record, _, err := store.GetEcho(context.Background(), "campus-services", echoID)
 		if err == nil && record.Status == kernelecho.StatusSucceeded {
@@ -347,9 +419,9 @@ func TestWebAccessDoesNotExposeCrossAppEcho(t *testing.T) {
 		t.Fatal(err)
 	}
 	reg := registry.New()
-	policy := runtime.NewStaticAppPolicy()
+	policy := runtimetest.NewStaticAppPolicy()
 	backend := &fakeOrchestrator{store: store}
-	handler := web.NewServer(context.Background(), backend, store, store, reg, policy, "app-a").Handler()
+	handler := newAuthenticatedServer(context.Background(), backend, store, store, reg, policy, "app-a", newTestHub(store, "app-a")).Handler()
 	for _, methodAndPath := range [][2]string{
 		{http.MethodGet, "/api/v1/echoes/other-app-echo"},
 		{http.MethodDelete, "/api/v1/echoes/other-app-echo"},
@@ -374,9 +446,9 @@ func TestWebAccessPublicErrorsDoNotDiscloseInternalDetails(t *testing.T) {
 	}
 	defer store.Close()
 	reg := registry.New()
-	policy := runtime.NewStaticAppPolicy()
+	policy := runtimetest.NewStaticAppPolicy()
 
-	createHandler := web.NewServer(
+	createHandler := newAuthenticatedServer(
 		context.Background(),
 		&fakeOrchestrator{store: store, createErr: errors.New(secret)},
 		store,
@@ -384,16 +456,17 @@ func TestWebAccessPublicErrorsDoNotDiscloseInternalDetails(t *testing.T) {
 		reg,
 		policy,
 		"campus-services",
+		newTestHub(store, "campus-services"),
 	).Handler()
 	createResponse := httptest.NewRecorder()
-	createRequest := httptest.NewRequest(http.MethodPost, "/api/v1/echoes", strings.NewReader(`{"message":"test"}`))
+	createRequest := httptest.NewRequest(http.MethodPost, "/api/v2/echoes", strings.NewReader(`{"message":"test"}`))
 	createRequest.Header.Set("Idempotency-Key", "public-error")
 	createHandler.ServeHTTP(createResponse, createRequest)
 	if createResponse.Code != http.StatusInternalServerError || strings.Contains(createResponse.Body.String(), secret) {
 		t.Fatalf("create response status=%d body=%s", createResponse.Code, createResponse.Body.String())
 	}
 
-	readHandler := web.NewServer(
+	readHandler := newAuthenticatedServer(
 		context.Background(),
 		&fakeOrchestrator{store: store},
 		failingReader{err: errors.New(secret)},
@@ -401,6 +474,7 @@ func TestWebAccessPublicErrorsDoNotDiscloseInternalDetails(t *testing.T) {
 		reg,
 		policy,
 		"campus-services",
+		newTestHub(store, "campus-services"),
 	).Handler()
 	readResponse := httptest.NewRecorder()
 	readHandler.ServeHTTP(readResponse, httptest.NewRequest(http.MethodGet, "/api/v1/echoes/echo", nil))
@@ -408,7 +482,7 @@ func TestWebAccessPublicErrorsDoNotDiscloseInternalDetails(t *testing.T) {
 		t.Fatalf("read response status=%d body=%s", readResponse.Code, readResponse.Body.String())
 	}
 
-	healthHandler := web.NewServer(
+	healthHandler := newAuthenticatedServer(
 		context.Background(),
 		&fakeOrchestrator{store: store},
 		store,
@@ -416,6 +490,7 @@ func TestWebAccessPublicErrorsDoNotDiscloseInternalDetails(t *testing.T) {
 		reg,
 		policy,
 		"campus-services",
+		newTestHub(store, "campus-services"),
 	).Handler()
 	healthResponse := httptest.NewRecorder()
 	healthHandler.ServeHTTP(healthResponse, httptest.NewRequest(http.MethodGet, "/readyz", nil))
@@ -453,7 +528,12 @@ func TestCapabilitiesFailClosedForUnavailableOrDisabledAppPolicy(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			policy := test.policy
 			expectedCode := test.code
-			handler := web.NewServer(
+			store, err := sqlite.Open(filepath.Join(t.TempDir(), "capabilities.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = store.Close() })
+			handler := newAuthenticatedServer(
 				t.Context(),
 				&fakeOrchestrator{},
 				failingReader{err: errors.New("unused")},
@@ -461,6 +541,7 @@ func TestCapabilitiesFailClosedForUnavailableOrDisabledAppPolicy(t *testing.T) {
 				registry.New(),
 				policy,
 				"campus-services",
+				newTestHub(store, "campus-services"),
 			).Handler()
 			response := httptest.NewRecorder()
 			handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/capabilities", nil))
@@ -486,14 +567,15 @@ func TestEchoCreationMapsAppConfigurationFailuresToSafeErrors(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Cleanup(func() { _ = store.Close() })
-			handler := web.NewServer(
+			handler := newAuthenticatedServer(
 				t.Context(),
 				&fakeOrchestrator{store: store, createErr: createErr},
 				store,
 				staticHealth{},
 				registry.New(),
-				runtime.NewStaticAppPolicy(),
+				runtimetest.NewStaticAppPolicy(),
 				"campus-services",
+				newTestHub(store, "campus-services"),
 			).Handler()
 			response := createEchoRequest(t, handler, "test", "app-config-error")
 			if response.Code != http.StatusServiceUnavailable ||
@@ -505,15 +587,65 @@ func TestEchoCreationMapsAppConfigurationFailuresToSafeErrors(t *testing.T) {
 	}
 }
 
+// TestEchoCreationPersistsStandardMessageToSessionStore 验证平台消息经统一入口
+// 持久化到会话台账（SQLite），且同一幂等键的重复投递既不重复消息也不重复 Echo。
+func TestEchoCreationPersistsStandardMessageToSessionStore(t *testing.T) {
+	store, err := sqlite.Open(filepath.Join(t.TempDir(), "session-persist.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	reg := registry.New()
+	policy := runtimetest.NewStaticAppPolicy()
+	backend := &fakeOrchestrator{store: store}
+	handler := newAuthenticatedServer(context.Background(), backend, store, store, reg, policy, "campus-services", newTestHub(store, "campus-services")).Handler()
+	first := createEchoRequest(t, handler, "有哪些校巴线路？", "persist-message")
+	if first.Code != http.StatusAccepted {
+		t.Fatalf("首次创建 status=%d body=%s", first.Code, first.Body.String())
+	}
+	var firstBody, secondBody map[string]string
+	if err := json.Unmarshal(first.Body.Bytes(), &firstBody); err != nil {
+		t.Fatal(err)
+	}
+	runs, err := store.ListRuns(context.Background(), "campus-services", firstBody["echo_id"])
+	if err != nil || len(runs) != 1 || !strings.HasPrefix(runs[0].SessionID, "session-v1-") {
+		t.Fatalf("run session=%#v err=%v", runs, err)
+	}
+	messages, err := store.ListMessages(context.Background(), "campus-services", runs[0].SessionID, session.MessageQuery{Limit: 10})
+	if err != nil || len(messages) != 1 || messages[0].SenderUserID != "web-test-user" || messages[0].PlatformMessageID != "persist-message" {
+		t.Fatalf("标准消息未持久化到会话台账: messages=%#v err=%v", messages, err)
+	}
+	replay := createEchoRequest(t, handler, "有哪些校巴线路？", "persist-message")
+	if replay.Code != http.StatusOK {
+		t.Fatalf("重放 status=%d body=%s", replay.Code, replay.Body.String())
+	}
+	if err := json.Unmarshal(replay.Body.Bytes(), &secondBody); err != nil {
+		t.Fatal(err)
+	}
+	if secondBody["echo_id"] != firstBody["echo_id"] {
+		t.Fatalf("重放返回不同 Echo: first=%s second=%s", firstBody["echo_id"], secondBody["echo_id"])
+	}
+	messages, err = store.ListMessages(context.Background(), "campus-services", runs[0].SessionID, session.MessageQuery{Limit: 10})
+	if err != nil || len(messages) != 1 {
+		t.Fatalf("重复投递产生多条标准消息: messages=%#v err=%v", messages, err)
+	}
+}
+
 func TestHealthzIsProcessLivenessAndReadyzChecksDependencies(t *testing.T) {
-	handler := web.NewServer(
+	store, err := sqlite.Open(filepath.Join(t.TempDir(), "healthz.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	handler := newAuthenticatedServer(
 		context.Background(),
 		&fakeOrchestrator{},
 		failingReader{err: errors.New("unused")},
 		staticHealth{err: errors.New("dependency unavailable")},
 		registry.New(),
-		runtime.NewStaticAppPolicy(),
+		runtimetest.NewStaticAppPolicy(),
 		"app",
+		newTestHub(store, "app"),
 	).Handler()
 
 	liveness := httptest.NewRecorder()
@@ -534,14 +666,15 @@ func TestWebAccessReturnsStableBackpressureResponse(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	server := web.NewServer(
+	server := newAuthenticatedServer(
 		context.Background(),
 		&fakeOrchestrator{store: store, createErr: kernelecho.ErrQueueFull},
 		store,
 		store,
 		registry.New(),
-		runtime.NewStaticAppPolicy(),
+		runtimetest.NewStaticAppPolicy(),
 		"campus-services",
+		newTestHub(store, "campus-services"),
 	)
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/api/v2/echoes", bytes.NewBufferString(`{"message":"full"}`))
@@ -554,14 +687,20 @@ func TestWebAccessReturnsStableBackpressureResponse(t *testing.T) {
 }
 
 func TestMetricsEndpointUsesPrometheusFormatWithoutBusinessIdentifiers(t *testing.T) {
-	handler := web.NewServer(
+	store, err := sqlite.Open(filepath.Join(t.TempDir(), "metrics.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	handler := newAuthenticatedServer(
 		context.Background(),
 		&fakeOrchestrator{},
 		failingReader{err: errors.New("unused")},
 		staticHealth{},
 		registry.New(),
-		runtime.NewStaticAppPolicy(),
+		runtimetest.NewStaticAppPolicy(),
 		"secret-app-id",
+		newTestHub(store, "secret-app-id"),
 	).Handler()
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/metrics", nil))
@@ -569,7 +708,7 @@ func TestMetricsEndpointUsesPrometheusFormatWithoutBusinessIdentifiers(t *testin
 		t.Fatalf("metrics status=%d headers=%v", response.Code, response.Header())
 	}
 	body := response.Body.String()
-	if !strings.Contains(body, "ailuo_http_requests_total") || strings.Contains(body, "secret-app-id") {
+	if !strings.Contains(body, "ailuo_http_responses_total") || strings.Contains(body, "secret-app-id") {
 		t.Fatalf("metrics body=%s", body)
 	}
 }
@@ -579,16 +718,17 @@ func TestWebAccessShutdownStopsAdmissionAndDrainsActiveRuns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer closeStore(t, store)
 	backend := &fakeOrchestrator{store: store, block: true}
-	server := web.NewServer(
+	server := newAuthenticatedServer(
 		context.Background(),
 		backend,
 		store,
 		store,
 		registry.New(),
-		runtime.NewStaticAppPolicy(),
+		runtimetest.NewStaticAppPolicy(),
 		"campus-services",
+		newTestHub(store, "campus-services"),
 	)
 	handler := server.Handler()
 	echoID, _ := createEcho(t, handler, "shutdown")
@@ -623,9 +763,9 @@ func TestPersistentSchedulerBoundsConcurrentRuns(t *testing.T) {
 	defer store.Close()
 	gate := make(chan struct{})
 	backend := &fakeOrchestrator{store: store, runGate: gate}
-	server := web.NewServer(
+	server := newAuthenticatedServer(
 		context.Background(), backend, store, store, registry.New(),
-		runtime.NewStaticAppPolicy(), "campus-services",
+		runtimetest.NewStaticAppPolicy(), "campus-services", newTestHub(store, "campus-services"),
 	)
 	handler := server.Handler()
 	echoIDs := make([]string, 0, 10)
@@ -633,7 +773,7 @@ func TestPersistentSchedulerBoundsConcurrentRuns(t *testing.T) {
 		echoID, _ := createEcho(t, handler, fmt.Sprintf("bounded-%d", index))
 		echoIDs = append(echoIDs, echoID)
 	}
-	deadline := time.Now().Add(time.Second)
+	deadline := time.Now().Add(5 * time.Second)
 	for backend.activeRuns.Load() < 4 && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
 	}
@@ -645,7 +785,7 @@ func TestPersistentSchedulerBoundsConcurrentRuns(t *testing.T) {
 		t.Fatalf("scheduler exceeded worker limit: %d", maximum)
 	}
 	close(gate)
-	deadline = time.Now().Add(2 * time.Second)
+	deadline = time.Now().Add(10 * time.Second)
 	completed := 0
 	for time.Now().Before(deadline) {
 		completed = 0
@@ -678,21 +818,21 @@ func TestShutdownWaitsForAdmittedCreationBeforeCancellingRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
 	backend := &fakeOrchestrator{
 		store:         store,
 		block:         true,
 		createEntered: make(chan struct{}),
 		releaseCreate: make(chan struct{}),
 	}
-	server := web.NewServer(
+	server := newAuthenticatedServer(
 		context.Background(),
 		backend,
 		store,
 		store,
 		registry.New(),
-		runtime.NewStaticAppPolicy(),
+		runtimetest.NewStaticAppPolicy(),
 		"campus-services",
+		newTestHub(store, "campus-services"),
 	)
 	responseDone := make(chan *httptest.ResponseRecorder, 1)
 	go func() {
@@ -732,6 +872,7 @@ func TestShutdownWaitsForAdmittedCreationBeforeCancellingRun(t *testing.T) {
 	if err != nil || record.Status != kernelecho.StatusCancelled {
 		t.Fatalf("record=%#v err=%v", record, err)
 	}
+	closeStore(t, store)
 }
 
 func newTestServer(t *testing.T, block bool) (http.Handler, *sqlite.Store) {
@@ -742,9 +883,9 @@ func newTestServer(t *testing.T, block bool) (http.Handler, *sqlite.Store) {
 	}
 	t.Cleanup(func() { store.Close() })
 	reg := registry.New()
-	policy := runtime.NewStaticAppPolicy()
+	policy := runtimetest.NewStaticAppPolicy()
 	backend := &fakeOrchestrator{store: store, block: block}
-	return web.NewServer(context.Background(), backend, store, store, reg, policy, "campus-services").Handler(), store
+	return newAuthenticatedServer(context.Background(), backend, store, store, reg, policy, "campus-services", newTestHub(store, "campus-services")).Handler(), store
 }
 
 func createEcho(t *testing.T, handler http.Handler, message string) (string, string) {

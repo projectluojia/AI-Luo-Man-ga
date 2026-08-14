@@ -13,14 +13,15 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/idempotency"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime/runtimetest"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite"
 )
 
 func TestDispatcherRejectsNonProgressingCapabilityCycle(t *testing.T) {
 	reg := registry.New()
-	policy := runtime.NewStaticAppPolicy()
+	policy := runtimetest.NewStaticAppPolicy()
 	policy.Enable("app", "cycle")
-	dispatcher := runtime.NewDispatcher(reg, policy)
+	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{})
 	if err := reg.RegisterService(registry.ServiceRegistration{
 		Spec: registry.ServiceSpec{ID: "service", Version: "1.0.0"},
 		Capabilities: map[string]struct {
@@ -56,7 +57,7 @@ func TestDispatcherValidatesCapabilitySchemaBeforeHandler(t *testing.T) {
 	t.Parallel()
 
 	reg := registry.New()
-	policy := runtime.NewStaticAppPolicy()
+	policy := runtimetest.NewStaticAppPolicy()
 	policy.Enable("app", "capability")
 	called := false
 	registerCapability(t, reg, registry.CapabilitySpec{
@@ -69,7 +70,7 @@ func TestDispatcherValidatesCapabilitySchemaBeforeHandler(t *testing.T) {
 		called = true
 		return json.RawMessage(`{}`), nil
 	})
-	dispatcher := runtime.NewDispatcher(reg, policy)
+	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{})
 
 	_, err := dispatcher.InvokeCapability(context.Background(), validRequest(), "capability", json.RawMessage(`{"value":"wrong","secret":"must-not-pass"}`))
 	if !errors.Is(err, registry.ErrSchemaValidation) {
@@ -84,7 +85,7 @@ func TestDispatcherEnforcesAndNarrowsPermissions(t *testing.T) {
 	t.Parallel()
 
 	reg := registry.New()
-	policy := runtime.NewStaticAppPolicy()
+	policy := runtimetest.NewStaticAppPolicy()
 	policy.Enable("app", "capability")
 	policy.Grant("app", "bus.read")
 	policy.Grant("app", "system.admin")
@@ -100,7 +101,7 @@ func TestDispatcherEnforcesAndNarrowsPermissions(t *testing.T) {
 		observed = append([]string(nil), request.PermissionScope...)
 		return json.RawMessage(`{}`), nil
 	})
-	dispatcher := runtime.NewDispatcher(reg, policy)
+	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{})
 
 	request := validRequest()
 	request.PermissionScope = []string{"system.admin", "bus.read"}
@@ -121,9 +122,9 @@ func TestDispatcherProjectsClosedTargetIdentityToHandlers(t *testing.T) {
 	t.Parallel()
 
 	reg := registry.New()
-	policy := runtime.NewStaticAppPolicy()
+	policy := runtimetest.NewStaticAppPolicy()
 	policy.Enable("app", "service.capability")
-	dispatcher := runtime.NewDispatcher(reg, policy)
+	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{})
 	var capabilityContext, toolContext contracts.RequestContext
 	if err := reg.RegisterTool(registry.ToolRegistration{
 		Spec: registry.ToolSpec{
@@ -201,7 +202,7 @@ func TestDispatcherUsesPersistentAppPolicyAndRevalidatesChanges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dispatcher := runtime.NewDispatcher(reg, policy)
+	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{})
 
 	request := validRequest()
 	request.PermissionScope = []string{"bus.read"}
@@ -253,7 +254,7 @@ func TestDispatcherFailsClosedWhenAppPolicyIsUnavailable(t *testing.T) {
 	})
 	dispatcher := runtime.NewDispatcher(reg, appPolicyFunc(func(context.Context, string) (appconfig.PolicySnapshot, error) {
 		return appconfig.PolicySnapshot{}, errors.New("private storage failure")
-	}))
+	}), runtime.DispatcherConfig{})
 	if _, err := dispatcher.InvokeCapability(t.Context(), validRequest(), "capability", json.RawMessage(`{}`)); !errors.Is(err, runtime.ErrAppPolicyUnavailable) {
 		t.Fatalf("policy failure error=%v", err)
 	}
@@ -266,10 +267,10 @@ func TestDispatcherPreventsInternalPermissionGain(t *testing.T) {
 	t.Parallel()
 
 	reg := registry.New()
-	policy := runtime.NewStaticAppPolicy()
+	policy := runtimetest.NewStaticAppPolicy()
 	policy.Enable("app", "capability")
 	policy.Grant("app", "private.read")
-	dispatcher := runtime.NewDispatcher(reg, policy)
+	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{})
 	if err := reg.RegisterTool(registry.ToolRegistration{
 		Spec: registry.ToolSpec{
 			ID:                  "private-tool",
@@ -323,7 +324,7 @@ func TestDispatcherEnforcesSideEffectIdempotency(t *testing.T) {
 	t.Parallel()
 
 	reg := registry.New()
-	policy := runtime.NewStaticAppPolicy()
+	policy := runtimetest.NewStaticAppPolicy()
 	policy.Enable("app", "write-capability")
 	called := 0
 	registerCapability(t, reg, registry.CapabilitySpec{
@@ -336,7 +337,7 @@ func TestDispatcherEnforcesSideEffectIdempotency(t *testing.T) {
 		called++
 		return json.RawMessage(`{}`), nil
 	})
-	withoutStore := runtime.NewDispatcher(reg, policy)
+	withoutStore := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{})
 
 	request := validRequest()
 	if _, err := withoutStore.InvokeCapability(context.Background(), request, "write-capability", json.RawMessage(`{}`)); !errors.Is(err, runtime.ErrIdempotencyKeyRequired) {
@@ -347,7 +348,7 @@ func TestDispatcherEnforcesSideEffectIdempotency(t *testing.T) {
 		t.Fatalf("got %v, want ErrIdempotencyUnavailable", err)
 	}
 	store := openIdempotencyStore(t)
-	dispatcher := runtime.NewDispatcher(reg, policy, runtime.WithIdempotencyStore(store))
+	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{IdempotencyStore: store})
 	if _, err := dispatcher.InvokeCapability(context.Background(), request, "write-capability", json.RawMessage(`{}`)); err != nil {
 		t.Fatalf("invoke governed write: %v", err)
 	}
@@ -367,7 +368,7 @@ func TestDispatcherRequiresGovernedConfirmation(t *testing.T) {
 	t.Parallel()
 
 	reg := registry.New()
-	policy := runtime.NewStaticAppPolicy()
+	policy := runtimetest.NewStaticAppPolicy()
 	policy.Enable("app", "external-capability")
 	registerCapability(t, reg, registry.CapabilitySpec{
 		ID:                   "external-capability",
@@ -383,22 +384,20 @@ func TestDispatcherRequiresGovernedConfirmation(t *testing.T) {
 	request := validRequest()
 	request.IdempotencyKey = "operation-1"
 	request.ConfirmationID = "confirmation-1"
-	withoutVerifier := runtime.NewDispatcher(reg, policy)
+	withoutVerifier := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{})
 	if _, err := withoutVerifier.InvokeCapability(context.Background(), request, "external-capability", json.RawMessage(`{}`)); !errors.Is(err, runtime.ErrConfirmationRequired) {
 		t.Fatalf("got %v, want ErrConfirmationRequired", err)
 	}
 
 	var verified runtime.ConfirmationRequest
 	store := openIdempotencyStore(t)
-	withVerifier := runtime.NewDispatcher(
-		reg,
-		policy,
-		runtime.WithIdempotencyStore(store),
-		runtime.WithConfirmationVerifier(verifierFunc(func(_ context.Context, request runtime.ConfirmationRequest) error {
+	withVerifier := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{
+		IdempotencyStore: store,
+		ConfirmationVerifier: verifierFunc(func(_ context.Context, request runtime.ConfirmationRequest) error {
 			verified = request
 			return nil
-		})),
-	)
+		}),
+	})
 	if _, err := withVerifier.InvokeCapability(context.Background(), request, "external-capability", json.RawMessage(`{}`)); err != nil {
 		t.Fatalf("invoke confirmed capability: %v", err)
 	}
@@ -411,9 +410,9 @@ func TestDispatcherRevalidatesAtToolBoundary(t *testing.T) {
 	t.Parallel()
 
 	reg := registry.New()
-	policy := runtime.NewStaticAppPolicy()
+	policy := runtimetest.NewStaticAppPolicy()
 	policy.Enable("app", "capability")
-	dispatcher := runtime.NewDispatcher(reg, policy)
+	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{})
 	toolCalled := false
 	if err := reg.RegisterTool(registry.ToolRegistration{
 		Spec: registry.ToolSpec{

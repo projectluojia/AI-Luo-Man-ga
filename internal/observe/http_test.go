@@ -60,7 +60,7 @@ func TestHTTPMiddlewareAcceptsValidTraceparentAndRejectsMalformedTraceID(t *test
 }
 
 func TestCopyPreservesFieldsWithoutSharingStorage(t *testing.T) {
-	source := observe.ContextWithRequestIDs(t.Context(), "request-1", "trace-1")
+	source := observe.With(t.Context(), observe.StringAttr("request_id", "request-1"), observe.StringAttr("trace_id", "trace-1"))
 	target := observe.Copy(source, t.Context())
 	updated := observe.With(source, observe.StringAttr("request_id", "request-2"))
 

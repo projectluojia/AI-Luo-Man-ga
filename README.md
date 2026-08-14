@@ -24,7 +24,7 @@ Web Access API
 
 ## 本地运行
 
-要求：Go 1.26、Python 3.14、Protobuf 编译器，以及支持原生 ToolCall 的 OpenAI-compatible 模型。
+要求：Go 1.26、[uv](https://docs.astral.sh/uv/)、Python 3.11–3.14、Protobuf 编译器，以及支持原生 ToolCall 的 OpenAI-compatible 模型。Python 版本与依赖由 `agent/pyproject.toml` 和 `agent/uv.lock` 统一管理，不使用系统 `pip` 直接安装。
 
 ```bash
 make setup-agent
@@ -53,7 +53,6 @@ App 的启停状态、模型、系统提示、时区、运行预算、Capability
 ## API
 
 - `POST /api/v2/echoes`：使用必填 `Idempotency-Key` 原子创建 Echo 和排队 Run；相同请求可安全重放。
-- `POST /api/v1/echoes`：兼容入口，执行与 v2 相同的必填幂等契约；新调用方应使用 v2。
 - `GET /api/v1/echoes/{echo_id}/events`：SSE 事件流，支持 `Last-Event-ID` 重放。
 - `GET /api/v1/echoes/{echo_id}`：查询状态和完整事件。
 - `DELETE /api/v1/echoes/{echo_id}`：取消运行。
@@ -62,7 +61,7 @@ App 的启停状态、模型、系统提示、时区、运行预算、Capability
 - `GET /readyz`：检查是否仍接收工作、SQLite 与实际模型 Provider 就绪状态。
 - `GET /metrics`：Prometheus 文本指标；不包含 App、Echo、Run、调用标识或业务正文。
 
-完整契约见 `docs/openapi.yaml`；Agent 跨进程契约见 `proto/agent.proto`，扩展 Runtime Host 契约见 `proto/runtime_host.proto`。生成后的 Go/Python 文件是提交构件，不得手工修改。
+完整契约见 `docs/openapi.yaml`；执行者跨进程契约见 `proto/executor.proto`，扩展 Runtime Host 契约见 `proto/runtime_host.proto`。生成后的 Go/Python 文件是提交构件，不得手工修改。
 
 ## 验证
 
@@ -72,6 +71,8 @@ make test-race
 make vet
 make test-integration
 ```
+
+普通 Go/Python Agent 开发链路支持 Windows、Linux 和 macOS，默认 Python 路径会适配各平台的 uv 虚拟环境。安装目录属主验证、Unix Socket 和进程组隔离属于 Unix Runtime Host 安全边界，当前只在 Linux/macOS 启用；非 Unix 平台会显式拒绝这些能力。CI 在三平台运行核心测试，并在 Linux 运行 race、vet 和全部跨进程集成测试。
 
 集成测试会启动真实 Python Agent 进程，通过 OpenAI SDK 的流式协议发起原生 ToolCall，并完成 Go Capability、Service、Tool、数据库和最终回复的闭环。`go test -tags=integration ./internal/kernel/loader` 另行启动真实 isolated Runtime Host 子进程，验证 Unix gRPC、协议身份、优雅退出和进程组强制清理；该测试需要允许创建本机 Unix Socket。
 

@@ -5,23 +5,24 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"regexp"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
 
 	_ "modernc.org/sqlite"
 
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/campus/bus"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/id"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/tools/bus"
 )
 
 type Store struct {
 	db *sql.DB
 }
 
-var busStableIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]*$`)
+var busStableIDPattern = id.StableMixedUncapped
 
 func Open(path string) (*Store, error) {
 	started := time.Now()
@@ -57,11 +58,36 @@ func (s *Store) migrate(ctx context.Context) error {
 	return s.migrateThrough(ctx, 0)
 }
 
-func (s *Store) migrateThrough(ctx context.Context, maximumVersion int) error {
-	if _, err := s.db.ExecContext(ctx, `PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; CREATE TABLE IF NOT EXISTS schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);`); err != nil {
-		return fmt.Errorf("initialize sqlite migrations: %w", err)
+// registeredMigrations 是统一的前向迁移注册表，key 为唯一迁移版本号。
+// 各存储实现通过 registerMigration 在包初始化阶段注册自身迁移，
+// 使多个模块可以独立并行地扩展数据库 Schema，而不需要改动既有迁移。
+var registeredMigrations = make(map[int]string)
+
+// registerMigration 注册一个前向迁移。版本号必须唯一且大于 0；
+// 重复或非法注册属于启动期编程错误，直接以显式错误终止启动。
+func registerMigration(version int, statements string) {
+	if version <= 0 {
+		panic(fmt.Sprintf("非法迁移版本号 %d", version))
 	}
-	migrations := []string{`
+	if _, exists := registeredMigrations[version]; exists {
+		panic(fmt.Sprintf("迁移版本 %d 重复注册", version))
+	}
+	registeredMigrations[version] = statements
+}
+
+// currentSchemaVersion 返回当前注册的最大迁移版本，即当前数据库 Schema 版本。
+func currentSchemaVersion() int {
+	maximum := 0
+	for version := range registeredMigrations {
+		if version > maximum {
+			maximum = version
+		}
+	}
+	return maximum
+}
+
+func init() {
+	baseMigrations := []string{`
 CREATE TABLE IF NOT EXISTS bus_source_revisions (
   app_id TEXT NOT NULL,
   revision TEXT NOT NULL,
@@ -658,14 +684,44 @@ DROP TABLE capability_audit;
 ALTER TABLE capability_audit_v14 RENAME TO capability_audit;
 CREATE INDEX capability_audit_echo_idx ON capability_audit(app_id,echo_id,created_at,run_id,call_id);
 `}
-	if maximumVersion < 0 || maximumVersion > len(migrations) {
+	for index, statements := range baseMigrations {
+		registerMigration(index+1, statements)
+	}
+}
+
+func (s *Store) migrateThrough(ctx context.Context, maximumVersion int) error {
+	if _, err := s.db.ExecContext(ctx, `PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; CREATE TABLE IF NOT EXISTS schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);`); err != nil {
+		return fmt.Errorf("initialize sqlite migrations: %w", err)
+	}
+	// WAL 是持久化文件数据库的既定日志模式：只读/不支持 WAL 的文件系统会让
+	// PRAGMA 静默退回回滚日志模式，必须校验实际生效模式并 fail-closed，不得
+	// 在错误的持久性档案下继续运行。内存数据库只能为 memory 模式，无持久性
+	// 要求，允许通过。
+	var journalMode string
+	if err := s.db.QueryRowContext(ctx, `PRAGMA journal_mode`).Scan(&journalMode); err != nil {
+		return fmt.Errorf("read sqlite journal mode: %w", err)
+	}
+	switch strings.ToLower(journalMode) {
+	case "wal", "memory":
+	default:
+		return fmt.Errorf("sqlite journal mode is %q, expected wal (WAL 不可用时拒绝启动，避免静默降级)", journalMode)
+	}
+	versions := make([]int, 0, len(registeredMigrations))
+	for version := range registeredMigrations {
+		versions = append(versions, version)
+	}
+	sort.Ints(versions)
+	if len(versions) == 0 {
+		return fmt.Errorf("no database migrations are registered")
+	}
+	if maximumVersion < 0 || (maximumVersion > 0 && versions[len(versions)-1] < maximumVersion) {
 		return fmt.Errorf("invalid maximum migration version")
 	}
-	if maximumVersion > 0 {
-		migrations = migrations[:maximumVersion]
-	}
-	for index, migration := range migrations {
-		version := index + 1
+	for _, version := range versions {
+		if maximumVersion > 0 && version > maximumVersion {
+			continue
+		}
+		migration := registeredMigrations[version]
 		var applied int
 		if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations WHERE version=?`, version).Scan(&applied); err != nil {
 			return fmt.Errorf("check migration %d: %w", version, err)

@@ -12,25 +12,40 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/access"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access/web"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/agenthost"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/campus"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/campus/bus"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/appconfig"
 	kernelecho "github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/executor"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/health"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/identity"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/subagent"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime/runtimetest"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/session"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/agent"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus/campustest"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/blob"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/memory"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/tools/bus"
 )
+
+type integrationWebAuthenticator struct{}
+
+func (integrationWebAuthenticator) Authenticate(*http.Request) (web.AuthenticatedWebIdentity, error) {
+	return web.AuthenticatedWebIdentity{
+		PlatformSpaceID: "web", PlatformUserID: "integration-user", PlatformSessionID: "integration-session",
+	}, nil
+}
 
 func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 	var modelTurns atomic.Int32
@@ -102,58 +117,130 @@ func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	command := exec.CommandContext(ctx, filepath.Join(root, "agent/.venv/bin/python"), "-m", "agent.runtime", "--listen", address)
-	command.Dir = root
-	command.Env = append(os.Environ(),
-		"AILUO_MODEL_API_KEY=test-key",
-		"AILUO_MODEL_BASE_URL="+modelServer.URL+"/v1",
-	)
-	logs := &strings.Builder{}
-	command.Stdout = logs
-	command.Stderr = logs
-	if err := command.Start(); err != nil {
-		t.Fatal(err)
-	}
-	defer func() {
-		cancel()
-		_ = command.Wait()
-	}()
-
-	dialContext, cancelDial := context.WithTimeout(ctx, 10*time.Second)
-	defer cancelDial()
-	connection, agentClient, err := agenthost.Dial(dialContext, address)
-	if err != nil {
-		t.Fatalf("dial agent: %v\n%s", err, logs.String())
-	}
-	defer connection.Close()
 
 	store, err := sqlite.Open(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
+	// 关闭顺序（defer 逆序）：租约归还 → 关闭 agent → 取消调度 → 关闭存储。
+	// 取消必须先于关库，避免调度轮询打到已关闭的存储。
 	defer store.Close()
+	defer cancel()
+	// 内置 AI 执行者经 agent 包以 isolated Runtime 纳管：进程启动、健康、停止与内核同构。
+	logs := &strings.Builder{}
+	agentHost, err := agent.NewHost(agent.Config{
+		Resolve: func(context.Context) (agent.Spec, error) {
+			return agent.Spec{
+				PythonPath: agent.DefaultPythonPath(root),
+				WorkDir:    root,
+				Address:    address,
+				Env: append(os.Environ(),
+					"AILUO_MODEL_API_KEY=test-key",
+					"AILUO_MODEL_BASE_URL="+modelServer.URL+"/v1",
+				),
+			}, nil
+		},
+		Spawn:          true,
+		Model:          "test-model",
+		Stdout:         logs,
+		Stderr:         logs,
+		DialTimeout:    10 * time.Second,
+		StopGrace:      3 * time.Second,
+		TerminateGrace: 2 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("NewAgentHost: %v", err)
+	}
+	agentManager, err := loader.New(agentHost)
+	if err != nil {
+		t.Fatalf("new agent manager: %v", err)
+	}
+	reg := registry.New()
+	// 内置 agent 经与内核 main 相同的插件路径注册：agent.Record(host) 携带运行时
+	// 清单，RegisterInstalled 统一注册；预热清单由 Pinned() 从各清单声明推导。
+	if err := loader.RegisterInstalled(ctx, agentManager, reg, []loader.InstalledRecord{agent.Record(agentHost)}); err != nil {
+		t.Fatalf("register agent: %v", err)
+	}
+	if err := agentManager.Warmup(ctx, agentManager.Pinned(), 1); err != nil {
+		t.Fatalf("warm agent: %v\n%s", err, logs.String())
+	}
+	agentLease, err := agentManager.Executor(ctx)
+	if err != nil {
+		t.Fatalf("resolve executor: %v", err)
+	}
+	agentRuntime := agentLease.Runtime()
+	clientProvider, ok := agentRuntime.(executor.ClientProvider)
+	if !ok {
+		t.Fatal("executor runtime does not expose an executor client")
+	}
+	agentClient := clientProvider.Client()
+	// 关闭顺序（defer 逆序）：Shutdown 需等待租约排空，故租约归还最后注册、最先执行。
+	defer func() {
+		shutdownContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := agentManager.Shutdown(shutdownContext); err != nil {
+			t.Errorf("shutdown agent manager: %v", err)
+		}
+	}()
+	defer agentLease.Release()
+
 	busStore := memory.NewBusStore()
 	busStore.ReplaceCatalog(campus.AppID, nil, []bus.Route{{ID: "r1", Name: "测试线路", Direction: "去程"}})
-	reg := registry.New()
-	policy := runtime.NewStaticAppPolicy()
+	policy := runtimetest.NewStaticAppPolicy()
 	policy.Enable(campus.AppID, campus.BusRouteListCapabilityID)
-	policy.Enable(campus.AppID, subagent.CapabilityID)
-	dispatcher := runtime.NewDispatcher(reg, policy, runtime.WithIdempotencyStore(store))
-	if err := campus.Register(reg, dispatcher, busStore); err != nil {
-		t.Fatal(err)
+	policy.Enable(campus.AppID, agent.CapabilityID)
+	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{IdempotencyStore: store})
+	campustest.RegisterHosted(t, reg, busStore)
+	// 上下文装配使用真实会话来源（SQLite 消息存储 + 安全 Blob 存储）。
+	blobStore, err := blob.Open(filepath.Join(t.TempDir(), "blobs"), session.MaxMessageContentBytes)
+	if err != nil {
+		t.Fatalf("open blob store: %v", err)
+	}
+	defer blobStore.Close()
+	sessionService, err := session.NewService(store, blobStore)
+	if err != nil {
+		t.Fatalf("new session service: %v", err)
+	}
+	if _, _, err := store.Ensure(ctx, appconfig.Config{
+		AppID: campus.AppID, Enabled: true, Model: "test-model", SystemPrompt: "test",
+		Timezone: "Asia/Shanghai", MaxSteps: 4, MaxToolCalls: 8, MaxInputTokens: 1000,
+		MaxOutputTokens: 500, MaxTotalTokens: 1500, MaxOutputBytes: 4096,
+		ProviderTimeout: 5 * time.Second,
+	}); err != nil {
+		t.Fatalf("seed app config: %v", err)
 	}
 	orchestrator := kernelecho.NewOrchestrator(agentClient, reg, dispatcher, policy, store, kernelecho.Config{
-		AppID: campus.AppID, Model: "test-model", SystemPrompt: "test", Timezone: "Asia/Shanghai",
-		MaxSteps: 4, MaxToolCalls: 8, MaxInputTokens: 1000, MaxOutputTokens: 500,
-		MaxTotalTokens: 1500, MaxOutputBytes: 4096, ProviderTimeout: 5 * time.Second,
+		AppID:           campus.AppID,
+		AppConfigSource: store,
+		Context:         sessionService,
 	})
-	if err := subagent.Register(reg, orchestrator); err != nil {
+	if err := agent.Register(reg, orchestrator); err != nil {
 		t.Fatal(err)
 	}
-	access := web.NewServer(ctx, orchestrator, store, health.Combined{store, agenthost.NewHealthChecker(agentClient, "test-model")}, reg, policy, campus.AppID).Handler()
+	identities := identity.NewService(store)
+	if _, err := identities.CreateUser(ctx, "integration-user"); err != nil {
+		t.Fatal(err)
+	}
+	if err := identities.BindExternalIdentity(ctx, identity.ExternalIdentity{
+		AppID: campus.AppID, Platform: "web", PlatformSpaceID: "web",
+		PlatformUserID: "integration-user", UserID: "integration-user",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := identities.SetMembership(ctx, identity.AppMembership{AppID: campus.AppID, UserID: "integration-user"}); err != nil {
+		t.Fatal(err)
+	}
+	platformHub, err := access.NewHub(campus.AppID, store, identities)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := web.NewServer(
+		ctx, orchestrator, store,
+		health.Combined{store, health.ExecutorChecker{Client: agentClient, Model: "test-model"}},
+		reg, policy, campus.AppID, platformHub, web.WithWebAuthenticator(integrationWebAuthenticator{}),
+	).Handler()
 	readinessRecorder := httptest.NewRecorder()
-	access.ServeHTTP(readinessRecorder, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	handler.ServeHTTP(readinessRecorder, httptest.NewRequest(http.MethodGet, "/readyz", nil))
 	if readinessRecorder.Code != http.StatusOK {
 		t.Fatalf("readiness status=%d body=%s logs=%s", readinessRecorder.Code, readinessRecorder.Body.String(), logs.String())
 	}
@@ -161,7 +248,7 @@ func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 	createRequest := httptest.NewRequest(http.MethodPost, "/api/v2/echoes", bytes.NewBufferString(`{"message":"有哪些校巴线路？"}`))
 	createRequest.Header.Set("Content-Type", "application/json")
 	createRequest.Header.Set("Idempotency-Key", "integration-create-echo")
-	access.ServeHTTP(createRecorder, createRequest)
+	handler.ServeHTTP(createRecorder, createRequest)
 	if createRecorder.Code != http.StatusAccepted {
 		t.Fatalf("create echo status=%d body=%s", createRecorder.Code, createRecorder.Body.String())
 	}
@@ -172,7 +259,7 @@ func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 	}
 	echoID := accepted["echo_id"]
 	eventsRecorder := httptest.NewRecorder()
-	access.ServeHTTP(eventsRecorder, httptest.NewRequest(http.MethodGet, accepted["events_url"], nil))
+	handler.ServeHTTP(eventsRecorder, httptest.NewRequest(http.MethodGet, accepted["events_url"], nil))
 	if eventsRecorder.Code != http.StatusOK || !strings.Contains(eventsRecorder.Body.String(), "event: reply.final") {
 		t.Fatalf("events status=%d body=%s logs=%s", eventsRecorder.Code, eventsRecorder.Body.String(), logs.String())
 	}
@@ -196,6 +283,10 @@ func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 			childRun = run
 		}
 	}
+	messages, err := store.ListMessages(ctx, campus.AppID, rootRun.SessionID, session.MessageQuery{Limit: 10})
+	if err != nil || len(messages) != 1 || messages[0].SenderUserID != "integration-user" || messages[0].Type != "text" {
+		t.Fatalf("会话消息未持久化或形状错误: messages=%#v err=%v", messages, err)
+	}
 	if rootRun.ID == "" ||
 		childRun.ParentRunID != rootRun.ID ||
 		childRun.OriginCallID != "delegate-call" ||
@@ -218,7 +309,7 @@ func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 		t.Fatalf("audits=%#v err=%v logs=%s", audits, err, logs.String())
 	}
 	for _, audit := range audits {
-		if audit.CapabilityID == subagent.CapabilityID &&
+		if audit.CapabilityID == agent.CapabilityID &&
 			(bytes.Contains(audit.Payload, []byte("查询校巴线路")) ||
 				!bytes.Contains(audit.Payload, []byte(`"task":"[已脱敏]"`))) {
 			t.Fatalf("Subagent task leaked into audit: %s", audit.Payload)

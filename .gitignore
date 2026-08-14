@@ -15,3 +15,8 @@ dontcommitthis/
 *.db-wal
 coverage.out
 dist/
+.review-gocache/
+.codegraph/
+.uv-cache/
+
+server.log

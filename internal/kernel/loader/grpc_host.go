@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -12,6 +13,7 @@ import (
 
 	runtimev1 "github.com/projectluojia/AI-Luo-Man-ga/gen/runtimev1"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/backoff"
@@ -66,7 +68,7 @@ type GRPCHost struct {
 
 func NewGRPCHost(config GRPCHostConfig) (*GRPCHost, error) {
 	if (config.Mode != ModeHosted && config.Mode != ModeIsolated) ||
-		!isLocalRuntimeAddress(config.Address) || config.VerifyInstalled == nil {
+		!IsLocalRuntimeAddress(config.Address) || config.VerifyInstalled == nil {
 		return nil, ErrInvalidManifest
 	}
 	if config.DialTimeout == 0 {
@@ -87,6 +89,9 @@ func NewGRPCHost(config GRPCHostConfig) (*GRPCHost, error) {
 	}
 	return &GRPCHost{config: config, invocations: make(chan struct{}, config.MaxConcurrent)}, nil
 }
+
+// Mode 返回宿主服务的运行模式（构造时配置）。
+func (h *GRPCHost) Mode() string { return h.config.Mode }
 
 func (h *GRPCHost) Verify(ctx context.Context, manifest Manifest) error {
 	if manifest.Mode != h.config.Mode {
@@ -251,7 +256,7 @@ func (r *grpcRuntime) Describe(ctx context.Context) (Description, error) {
 		return Description{}, normalizeRuntimeRPCError(err)
 	}
 	if hasUnknown(response) || response.RuntimeId != r.manifest.ID || response.Version != r.manifest.Version ||
-		response.Mode != r.manifest.Mode || !containsString(response.SupportedProtocolVersions, RuntimeHostProtocolVersion) {
+		response.Mode != r.manifest.Mode || !slices.Contains(response.SupportedProtocolVersions, RuntimeHostProtocolVersion) {
 		return Description{}, ErrRuntimeProtocol
 	}
 	return Description{ID: response.RuntimeId, Version: response.Version, Mode: response.Mode}, nil
@@ -400,11 +405,11 @@ func validateRuntimeInvoke(request contracts.RequestContext, payload json.RawMes
 		}
 	}
 	switch request.TargetType {
-	case "capability":
+	case registry.TargetTypeCapability:
 		if !stableIDPattern.MatchString(request.CapabilityID) || !stableIDPattern.MatchString(request.ServiceID) || request.ToolID != "" {
 			return ErrRuntimeProtocol
 		}
-	case "tool":
+	case registry.TargetTypeTool:
 		if request.CapabilityID != "" || !stableIDPattern.MatchString(request.ServiceID) || !stableIDPattern.MatchString(request.ToolID) {
 			return ErrRuntimeProtocol
 		}
@@ -441,16 +446,9 @@ func hasUnknown(message proto.Message) bool {
 	return message == nil || len(message.ProtoReflect().GetUnknown()) != 0
 }
 
-func containsString(values []string, expected string) bool {
-	for _, value := range values {
-		if value == expected {
-			return true
-		}
-	}
-	return false
-}
-
-func isLocalRuntimeAddress(address string) bool {
+// IsLocalRuntimeAddress 校验运行时宿主地址只能是 loopback 或绝对 Unix socket：
+// 明文 gRPC 只允许同 Deployment 本机边界，非本机地址一律拒绝。
+func IsLocalRuntimeAddress(address string) bool {
 	if strings.HasPrefix(address, "unix:") {
 		socketPath := strings.TrimPrefix(address, "unix:")
 		return strings.HasPrefix(socketPath, "/")

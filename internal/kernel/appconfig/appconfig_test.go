@@ -58,11 +58,53 @@ func TestNormalizeRejectsUnsafeOrUnboundedConfiguration(t *testing.T) {
 			value.PermissionScope = []string{"bus.read", "bus.read"}
 			return value
 		}(),
+		func() appconfig.Config {
+			value := validConfig()
+			value.ChannelPrompts = map[string]string{"Bad/Key": "提示"}
+			return value
+		}(),
+		func() appconfig.Config {
+			value := validConfig()
+			value.ChannelPrompts = map[string]string{"qq_group": " \n\t"}
+			return value
+		}(),
+		func() appconfig.Config {
+			value := validConfig()
+			value.ChannelPrompts = map[string]string{"qq_group": "bad\x00prompt"}
+			return value
+		}(),
 	}
 	for _, config := range tests {
 		if _, err := appconfig.Normalize(config); err == nil {
 			t.Fatalf("invalid config accepted: %#v", config)
 		}
+	}
+}
+
+func TestChannelPromptsEnterRevisionDigest(t *testing.T) {
+	config := validConfig()
+	config.ChannelPrompts = map[string]string{"qq_group": "群聊规则", "web": "网页规则"}
+	first, err := appconfig.Normalize(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 相同内容（map 顺序无关）必须产生相同修订。
+	config.ChannelPrompts = map[string]string{"web": "网页规则", "qq_group": "群聊规则"}
+	second, err := appconfig.Normalize(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Revision != second.Revision {
+		t.Fatalf("map 顺序不影响修订：%s != %s", first.Revision, second.Revision)
+	}
+	// 渠道提示变化必须改变修订（配置即契约）。
+	config.ChannelPrompts = map[string]string{"qq_group": "不同的群聊规则", "web": "网页规则"}
+	third, err := appconfig.Normalize(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Revision == third.Revision {
+		t.Fatal("渠道提示变化未改变修订")
 	}
 }
 

@@ -10,12 +10,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/campus/bus"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	kernelecho "github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/idempotency"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/publicerror"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/tools/bus"
 )
 
 func TestStorePersistsBusSnapshotAndEchoAudit(t *testing.T) {
@@ -106,34 +106,34 @@ func TestEchoCreationIdempotencyIsAtomicAndAppScoped(t *testing.T) {
 	now := time.Now().UTC()
 
 	echoA, runA := echoRunRecords("app-a", "echo-a", "run-a", "message", now)
-	echoID, created, err := store.CreateEchoRunIdempotent(ctx, "client-request", idempotency.Fingerprint([]byte("message")), echoA, runA)
+	echoID, created, err := store.CreateEchoRunIdempotentLimited(ctx, "client-request", idempotency.Fingerprint([]byte("message")), echoA, runA, 0)
 	if err != nil || !created || echoID != "echo-a" {
 		t.Fatalf("first creation echo=%q created=%t err=%v", echoID, created, err)
 	}
 	replayEcho, replayRun := echoRunRecords("app-a", "must-not-exist", "must-not-exist", "message", now.Add(time.Second))
-	echoID, created, err = store.CreateEchoRunIdempotent(ctx, "client-request", idempotency.Fingerprint([]byte("message")), replayEcho, replayRun)
+	echoID, created, err = store.CreateEchoRunIdempotentLimited(ctx, "client-request", idempotency.Fingerprint([]byte("message")), replayEcho, replayRun, 0)
 	if err != nil || created || echoID != "echo-a" {
 		t.Fatalf("replay echo=%q created=%t err=%v", echoID, created, err)
 	}
 	if _, _, err := store.GetEcho(ctx, "app-a", "must-not-exist"); !errors.Is(err, kernelecho.ErrEchoNotFound) {
 		t.Fatalf("replay created a second Echo: %v", err)
 	}
-	if _, _, err := store.CreateEchoRunIdempotent(ctx, "client-request", idempotency.Fingerprint([]byte("different")), replayEcho, replayRun); !errors.Is(err, idempotency.ErrKeyConflict) {
+	if _, _, err := store.CreateEchoRunIdempotentLimited(ctx, "client-request", idempotency.Fingerprint([]byte("different")), replayEcho, replayRun, 0); !errors.Is(err, idempotency.ErrKeyConflict) {
 		t.Fatalf("conflicting request error=%v, want ErrKeyConflict", err)
 	}
 
 	echoB, runB := echoRunRecords("app-b", "echo-b", "run-b", "different", now)
-	echoID, created, err = store.CreateEchoRunIdempotent(ctx, "client-request", idempotency.Fingerprint([]byte("different")), echoB, runB)
+	echoID, created, err = store.CreateEchoRunIdempotentLimited(ctx, "client-request", idempotency.Fingerprint([]byte("different")), echoB, runB, 0)
 	if err != nil || !created || echoID != "echo-b" {
 		t.Fatalf("cross-App key creation echo=%q created=%t err=%v", echoID, created, err)
 	}
 
 	brokenEcho, brokenRun := echoRunRecords("app-a", "echo-broken", "run-a", "broken", now)
-	if _, _, err := store.CreateEchoRunIdempotent(ctx, "rollback-key", idempotency.Fingerprint([]byte("broken")), brokenEcho, brokenRun); err == nil {
+	if _, _, err := store.CreateEchoRunIdempotentLimited(ctx, "rollback-key", idempotency.Fingerprint([]byte("broken")), brokenEcho, brokenRun, 0); err == nil {
 		t.Fatal("expected colliding Run identity to roll back")
 	}
 	validEcho, validRun := echoRunRecords("app-a", "echo-after-rollback", "run-after-rollback", "broken", now)
-	if echoID, created, err := store.CreateEchoRunIdempotent(ctx, "rollback-key", idempotency.Fingerprint([]byte("broken")), validEcho, validRun); err != nil || !created || echoID != validEcho.ID {
+	if echoID, created, err := store.CreateEchoRunIdempotentLimited(ctx, "rollback-key", idempotency.Fingerprint([]byte("broken")), validEcho, validRun, 0); err != nil || !created || echoID != validEcho.ID {
 		t.Fatalf("idempotency key was reserved by rolled-back creation: echo=%q created=%t err=%v", echoID, created, err)
 	}
 }
@@ -246,6 +246,48 @@ func TestDelayedRunAndLeaseRenewalAreGovernedByPersistentState(t *testing.T) {
 	}
 	if err := store.RenewRunLease(context.Background(), claimed, renewedExpiry.Add(time.Second), renewedExpiry.Add(2*time.Second)); !errors.Is(err, kernelecho.ErrInvalidTransition) {
 		t.Fatalf("expired lease renewal error=%v", err)
+	}
+}
+
+func TestOrphanedQueuedRunIsDeterministicallyFailed(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "orphan.db")
+	store, err := sqlite.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+	echo, run := echoRunRecords("app", "orphan", "orphan-run", "input", now)
+	if err := store.CreateEchoRun(ctx, echo, run); err != nil {
+		t.Fatal(err)
+	}
+	// 模拟崩溃窗口：Echo 已进入终态而 Run 仍排队（绕过 CancelQueuedRun 的正常路径）。
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE echoes SET status=?,error_code='cancelled',error_message='Echo 已取消',completed_at=? WHERE app_id='app' AND echo_id='orphan'`,
+		kernelecho.StatusCancelled, now.Format(time.RFC3339Nano)); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// 调度读取不再返回孤儿，且该 Run 被确定性失败（不再永久占用 queued 状态）。
+	work, err := store.ListRunnableRuns(ctx, "app", now, 10)
+	if err != nil || len(work) != 0 {
+		t.Fatalf("runnable=%#v err=%v", work, err)
+	}
+	runs, err := store.ListRuns(ctx, "app", "orphan")
+	if err != nil || len(runs) != 1 || runs[0].Status != kernelecho.RunStatusFailed {
+		t.Fatalf("孤儿 Run 未确定性失败: runs=%#v err=%v", runs, err)
+	}
+	if runs[0].ErrorCode != "recovery_failed" {
+		t.Fatalf("孤儿 Run 错误码=%q，期望 recovery_failed", runs[0].ErrorCode)
+	}
+	if queued, err := store.ListQueuedRuns(ctx, "app", 10); err != nil || len(queued) != 0 {
+		t.Fatalf("孤儿 Run 仍被列为 queued: queued=%#v err=%v", queued, err)
 	}
 }
 

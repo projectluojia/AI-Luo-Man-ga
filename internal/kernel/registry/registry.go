@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"regexp"
+	"slices"
 	"sort"
 	"sync"
 
@@ -13,6 +13,7 @@ import (
 	"golang.org/x/mod/semver"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/id"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
 )
 
@@ -31,6 +32,12 @@ const (
 	SideEffectRead     = "read"
 	SideEffectWrite    = "write"
 	SideEffectExternal = "external"
+)
+
+// 治理目标类型：Dispatcher 子请求与 Runtime Host 协议共用的闭式取值。
+const (
+	TargetTypeCapability = "capability"
+	TargetTypeTool       = "tool"
 )
 
 type Handler func(context.Context, contracts.RequestContext, json.RawMessage) (json.RawMessage, error)
@@ -55,6 +62,9 @@ type CapabilitySpec struct {
 	SideEffect           string   `json:"side_effect"`
 	RequiresConfirmation bool     `json:"requires_confirmation"`
 	RequiredPermissions  []string `json:"required_permissions,omitempty"`
+	// ToolID 声明该 Capability 直接执行的工具；Dispatcher 将其注入治理上下文的 ToolID，
+	// hosted 等运行时级 Handler 据此分发。空表示 Capability 自行处理分发。
+	ToolID string `json:"tool_id,omitempty"`
 }
 
 type ServiceSpec struct {
@@ -313,8 +323,8 @@ func (r *Registry) RegisterBatch(tools []ToolRegistration, services []ServiceReg
 }
 
 var (
-	stableIDPattern   = regexp.MustCompile(`^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$`)
-	permissionPattern = regexp.MustCompile(`^[a-z][a-z0-9]*(?:[._:-][a-z0-9]+)*$`)
+	stableIDPattern   = id.StableLower
+	permissionPattern = id.Permission
 )
 
 func validateToolSpec(spec ToolSpec, handler Handler) error {
@@ -373,6 +383,8 @@ func validateCapabilitySpec(service ServiceSpec, mapID string, spec CapabilitySp
 		return fmt.Errorf("%w: capability %q has invalid required permissions", ErrInvalidSpec, spec.ID)
 	case !permissionSubset(spec.RequiredPermissions, service.RequestedPermissions):
 		return fmt.Errorf("%w: capability %q permissions exceed service %q requested permissions", ErrInvalidSpec, spec.ID, service.ID)
+	case spec.ToolID != "" && !validStableID(spec.ToolID):
+		return fmt.Errorf("%w: capability %q has invalid tool id %q", ErrInvalidSpec, spec.ID, spec.ToolID)
 	default:
 		return nil
 	}
@@ -469,7 +481,7 @@ func (r *Registry) ResolveTool(serviceID, toolID string) (ToolSpec, Handler, err
 	if !exists {
 		return ToolSpec{}, nil, fmt.Errorf("%w: %q", ErrServiceNotFound, serviceID)
 	}
-	if !contains(service.ToolDependencies, toolID) {
+	if !slices.Contains(service.ToolDependencies, toolID) {
 		return ToolSpec{}, nil, fmt.Errorf("%w: service %q does not declare tool %q", ErrToolNotFound, serviceID, toolID)
 	}
 	tool, exists := r.tools[toolID]
@@ -497,7 +509,7 @@ func (r *Registry) ValidateToolInput(serviceID, toolID string, payload json.RawM
 	if !serviceExists {
 		return fmt.Errorf("%w: %q", ErrServiceNotFound, serviceID)
 	}
-	if !contains(service.ToolDependencies, toolID) || !toolExists {
+	if !slices.Contains(service.ToolDependencies, toolID) || !toolExists {
 		return fmt.Errorf("%w: service %q does not declare tool %q", ErrToolNotFound, serviceID, toolID)
 	}
 	return validatePayload(tool.schema, payload)
@@ -550,13 +562,4 @@ func cloneToolSpec(spec ToolSpec) ToolSpec {
 func cloneCapabilitySpec(spec CapabilitySpec) CapabilitySpec {
 	spec.RequiredPermissions = append([]string(nil), spec.RequiredPermissions...)
 	return spec
-}
-
-func contains(items []string, target string) bool {
-	for _, item := range items {
-		if item == target {
-			return true
-		}
-	}
-	return false
 }

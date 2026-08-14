@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/jsonutil"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 )
@@ -52,11 +53,12 @@ type InstalledManifest struct {
 }
 
 type InstalledProcessSpec struct {
-	Path    string   `json:"path"`
-	Args    []string `json:"args"`
-	Env     []string `json:"env"`
-	WorkDir string   `json:"work_dir"`
-	Address string   `json:"address"`
+	Path    string        `json:"path"`
+	Args    []string      `json:"args"`
+	Env     []string      `json:"env"`
+	WorkDir string        `json:"work_dir"`
+	Address string        `json:"address"`
+	Limits  ProcessLimits `json:"limits,omitempty"`
 }
 
 type InstalledLock struct {
@@ -72,6 +74,7 @@ type InstalledLock struct {
 
 type InstalledRecord struct {
 	Directory    string
+	ArtifactPath string
 	Runtime      Manifest
 	Tools        []registry.ToolSpec
 	Service      registry.ServiceSpec
@@ -168,6 +171,32 @@ func (c *Catalog) VerifyProcess(ctx context.Context, manifest Manifest, process 
 	return nil
 }
 
+// ReadArtifact 读取与 manifest 锁定的 hosted 工件字节。
+// 每次读取都重新校验目录、属主、清单一致性、工件 digest 与大小，防止 TOCTOU 替换。
+// 与 manifest 的比较只限定身份字段（ID/Version/Mode）：工件 digest 已在 readRecord
+// 内重新校验，Role/Pin/IdleTTL 不参与工件装载；且外部 Runtime Host 协议身份只携带
+// ID/Version，携带完整清单字段的绑定校验由内核侧 VerifyRuntime 负责。
+func (c *Catalog) ReadArtifact(ctx context.Context, manifest Manifest) ([]byte, error) {
+	record, err := c.readRecordByID(ctx, manifest.ID)
+	if err != nil {
+		return nil, err
+	}
+	if !sameRuntimeIdentity(record.Runtime, manifest) {
+		return nil, ErrInstallChanged
+	}
+	if record.Runtime.Mode != ModeHosted {
+		return nil, ErrUnsupportedMode
+	}
+	data, err := os.ReadFile(record.ArtifactPath)
+	if err != nil {
+		return nil, errors.Join(ErrInstallCatalogInvalid, err)
+	}
+	if int64(len(data)) > maxInstallArtifact {
+		return nil, ErrInstallCatalogInvalid
+	}
+	return data, nil
+}
+
 func (c *Catalog) readRecordByID(ctx context.Context, id string) (InstalledRecord, error) {
 	if c == nil || !stableIDPattern.MatchString(id) {
 		return InstalledRecord{}, ErrInstallCatalogInvalid
@@ -215,9 +244,12 @@ func (c *Catalog) readRecord(ctx context.Context, directory string) (InstalledRe
 	if installed.Runtime.IdleTTLMS > uint64((30*24*time.Hour)/time.Millisecond) {
 		return InstalledRecord{}, ErrInstallCatalogInvalid
 	}
+	// installed 包一律是能力提供者角色：其线协议（runtime_host.proto）是
+	// 请求/响应的能力执行协议；执行者角色需要执行者会话协议，由未来
+	// 专门的宿主承载，不允许以 installed 清单伪装。
 	runtimeManifest := Manifest{
 		ID: installed.Runtime.ID, Version: installed.Runtime.Version, Mode: installed.Runtime.Mode,
-		LockedDigest: lock.ArtifactSHA256, Pin: installed.Runtime.Pin,
+		Role: RoleCapability, LockedDigest: lock.ArtifactSHA256, Pin: installed.Runtime.Pin,
 		IdleTTL: time.Duration(installed.Runtime.IdleTTLMS) * time.Millisecond,
 	}
 	if err := validateManifest(runtimeManifest); err != nil {
@@ -248,6 +280,7 @@ func (c *Catalog) readRecord(ctx context.Context, directory string) (InstalledRe
 		spec := ProcessSpec{
 			Path: artifactPath, Args: append([]string(nil), lock.Process.Args...),
 			Env: append([]string(nil), lock.Process.Env...), WorkDir: workDir, Address: lock.Process.Address,
+			Limits: lock.Process.Limits,
 		}
 		if err := validateProcessSpec(spec); err != nil {
 			return InstalledRecord{}, err
@@ -255,7 +288,7 @@ func (c *Catalog) readRecord(ctx context.Context, directory string) (InstalledRe
 		process = &spec
 	}
 	record := InstalledRecord{
-		Directory: directory, Runtime: runtimeManifest,
+		Directory: directory, ArtifactPath: artifactPath, Runtime: runtimeManifest,
 		Tools: cloneToolSpecs(installed.Tools), Service: cloneInstalledService(installed.Service),
 		Capabilities: cloneCapabilitySpecs(installed.Capabilities), Process: process,
 	}
@@ -265,7 +298,7 @@ func (c *Catalog) readRecord(ctx context.Context, directory string) (InstalledRe
 	return record, nil
 }
 
-func RegisterInstalled(manager *Manager, target *registry.Registry, records []InstalledRecord) error {
+func RegisterInstalled(ctx context.Context, manager *Manager, target *registry.Registry, records []InstalledRecord) error {
 	if manager == nil || target == nil || len(records) == 0 || len(records) > maxInstalledRuntimes {
 		return ErrInstallCatalogInvalid
 	}
@@ -288,12 +321,19 @@ func RegisterInstalled(manager *Manager, target *registry.Registry, records []In
 				Handler registry.Handler
 			}{Spec: spec, Handler: handler}
 		}
-		services = append(services, registry.ServiceRegistration{
-			Spec: record.Service, Capabilities: capabilities,
-		})
+		// 运行时专用记录（如内置 agent：Service 依赖内核 Orchestrator，装配完成后
+		// 单独注册）不携带 Service 规格，只注册运行时清单。
+		if record.Service.ID != "" {
+			services = append(services, registry.ServiceRegistration{
+				Spec: record.Service, Capabilities: capabilities,
+			})
+		}
 	}
-	if err := manager.RegisterBatch(manifests); err != nil {
+	if err := manager.RegisterBatch(ctx, manifests); err != nil {
 		return err
+	}
+	if len(tools) == 0 && len(services) == 0 {
+		return nil // 记录只声明运行时清单（如内置 agent），无 Registry 规格
 	}
 	if err := target.RegisterBatch(tools, services); err != nil {
 		return errors.Join(err, manager.rollbackRegistered(manifests))
@@ -402,8 +442,8 @@ func decodeStrictJSON(payload []byte, target any) error {
 	if err := decoder.Decode(target); err != nil {
 		return err
 	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return ErrInstallCatalogInvalid
+	if err := jsonutil.EnsureEOF(decoder); err != nil {
+		return errors.Join(ErrInstallCatalogInvalid, err)
 	}
 	return nil
 }
@@ -552,7 +592,15 @@ func hashInstalledArtifact(ctx context.Context, path string) (string, error) {
 
 func sameRuntimeManifest(left, right Manifest) bool {
 	return left.ID == right.ID && left.Version == right.Version && left.Mode == right.Mode &&
-		left.LockedDigest == right.LockedDigest && left.Pin == right.Pin && left.IdleTTL == right.IdleTTL
+		left.Role == right.Role && left.LockedDigest == right.LockedDigest &&
+		left.Pin == right.Pin && left.IdleTTL == right.IdleTTL
+}
+
+// sameRuntimeIdentity 只比较运行时身份字段（ID/Version/Mode），供 ReadArtifact
+// 在装载工件时使用；其余清单字段不参与工件装载，完整清单的一致性由
+// VerifyRuntime/readRecord 在各自边界校验。
+func sameRuntimeIdentity(left, right Manifest) bool {
+	return left.ID == right.ID && left.Version == right.Version && left.Mode == right.Mode
 }
 
 func cloneProcessSpec(spec ProcessSpec) ProcessSpec {

@@ -6,14 +6,15 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/campus/bus"
 	kernelecho "github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/publicerror"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/tools/bus"
 )
 
 func TestBackupAndRestorePreserveCompleteSnapshot(t *testing.T) {
@@ -80,7 +81,7 @@ func TestBackupAndRestorePreserveCompleteSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o600 {
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Fatalf("备份权限=%v", info.Mode().Perm())
 	}
 	if err := sqlite.ValidateBackup(t.Context(), backupPath); err != nil {

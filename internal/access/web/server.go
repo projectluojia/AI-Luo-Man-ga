@@ -15,6 +15,8 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/access"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/jsonutil"
 	kernelecho "github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/idempotency"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
@@ -43,25 +45,26 @@ type EchoOrchestrator interface {
 }
 
 type Server struct {
-	ctx          context.Context
-	schedulerCtx context.Context
-	stopSchedule context.CancelFunc
-	orchestrator EchoOrchestrator
-	reader       EchoReader
-	health       HealthChecker
-	registry     *registry.Registry
-	policy       runtime.AppPolicy
-	appID        string
-	hub          *eventHub
-	activeMu     sync.Mutex
-	active       map[echoKey]context.CancelFunc
-	pending      map[echoKey]context.Context
-	activeWG     sync.WaitGroup
-	workerWG     sync.WaitGroup
-	admissionWG  sync.WaitGroup
-	workSignal   chan struct{}
-	scheduleOnce sync.Once
-	accepting    bool
+	schedulerCtx     context.Context
+	stopSchedule     context.CancelFunc
+	orchestrator     EchoOrchestrator
+	reader           EchoReader
+	health           HealthChecker
+	registry         *registry.Registry
+	policy           runtime.AppPolicy
+	appID            string
+	platformHub      *access.Hub
+	webAuthenticator WebAuthenticator
+	hub              *access.EventHub
+	activeMu         sync.Mutex
+	active           map[echoKey]context.CancelFunc
+	pending          map[echoKey]context.Context
+	activeWG         sync.WaitGroup
+	workerWG         sync.WaitGroup
+	admissionWG      sync.WaitGroup
+	workSignal       chan struct{}
+	scheduleOnce     sync.Once
+	accepting        bool
 }
 
 const (
@@ -69,6 +72,12 @@ const (
 	schedulerBatchSize = 32
 	schedulerPoll      = 250 * time.Millisecond
 )
+
+// echoKey 是活动/待处理 Echo 的进程内键。
+type echoKey struct {
+	appID  string
+	echoID string
+}
 
 func NewServer(
 	ctx context.Context,
@@ -78,10 +87,11 @@ func NewServer(
 	reg *registry.Registry,
 	policy runtime.AppPolicy,
 	appID string,
+	platformHub *access.Hub,
+	options ...ServerOption,
 ) *Server {
 	schedulerCtx, stopSchedule := context.WithCancel(ctx)
 	server := &Server{
-		ctx:          ctx,
 		schedulerCtx: schedulerCtx,
 		stopSchedule: stopSchedule,
 		orchestrator: orchestrator,
@@ -90,11 +100,17 @@ func NewServer(
 		registry:     reg,
 		policy:       policy,
 		appID:        appID,
-		hub:          newEventHub(),
+		platformHub:  platformHub,
+		hub:          access.NewEventHub(),
 		active:       make(map[echoKey]context.CancelFunc),
 		pending:      make(map[echoKey]context.Context),
 		workSignal:   make(chan struct{}, 1),
 		accepting:    true,
+	}
+	for _, option := range options {
+		if option != nil {
+			option(server)
+		}
 	}
 	return server
 }
@@ -105,14 +121,16 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /readyz", s.readyz)
 	mux.Handle("GET /metrics", observe.DefaultMetrics())
 	mux.HandleFunc("GET /api/v1/capabilities", s.capabilities)
-	mux.HandleFunc("POST /api/v1/echoes", s.createEcho)
 	mux.HandleFunc("POST /api/v2/echoes", s.createEcho)
 	mux.HandleFunc("GET /api/v1/echoes/{echo_id}", s.getEcho)
 	mux.HandleFunc("DELETE /api/v1/echoes/{echo_id}", s.cancelEcho)
 	mux.HandleFunc("GET /api/v1/echoes/{echo_id}/events", s.echoEvents)
+	// 产品前端聊天契约（LuoYing-Frontend）：流式接口，经标准 Intake → Echo →
+	// 事件翻译链路，不直接暴露内核事件类型。
+	mux.HandleFunc("POST /chat/stream", s.chatStream)
 	static, _ := fs.Sub(staticFiles, "static")
 	mux.Handle("GET /", http.FileServer(http.FS(static)))
-	return observe.HTTPMiddleware("web_access", securityHeaders(mux))
+	return observe.HTTPMiddleware("web_access", access.SecurityHeaders(mux))
 }
 
 func (s *Server) Recover(ctx context.Context) (int, error) {
@@ -134,7 +152,7 @@ func (s *Server) Recover(ctx context.Context) (int, error) {
 }
 
 func (s *Server) healthz(writer http.ResponseWriter, request *http.Request) {
-	writeJSON(writer, http.StatusOK, map[string]string{"status": "live"})
+	access.WriteJSON(writer, http.StatusOK, map[string]string{"status": "live"})
 }
 
 func (s *Server) readyz(writer http.ResponseWriter, request *http.Request) {
@@ -142,17 +160,17 @@ func (s *Server) readyz(writer http.ResponseWriter, request *http.Request) {
 	accepting := s.accepting
 	s.activeMu.Unlock()
 	if !accepting {
-		writeJSON(writer, http.StatusServiceUnavailable, map[string]string{"code": "shutting_down", "message": "服务正在关闭"})
+		access.WriteJSON(writer, http.StatusServiceUnavailable, map[string]string{"code": "shutting_down", "message": "服务正在关闭"})
 		return
 	}
 	ctx, cancel := context.WithTimeout(request.Context(), 2*time.Second)
 	defer cancel()
 	if err := s.health.Ping(ctx); err != nil {
 		observe.Error(request.Context(), "服务健康检查失败", err)
-		writeJSON(writer, http.StatusServiceUnavailable, map[string]string{"code": "dependency_unavailable", "message": "服务依赖暂时不可用"})
+		access.WriteJSON(writer, http.StatusServiceUnavailable, map[string]string{"code": "dependency_unavailable", "message": "服务依赖暂时不可用"})
 		return
 	}
-	writeJSON(writer, http.StatusOK, map[string]string{"status": "ready"})
+	access.WriteJSON(writer, http.StatusOK, map[string]string{"status": "ready"})
 }
 
 func (s *Server) capabilities(writer http.ResponseWriter, request *http.Request) {
@@ -161,7 +179,7 @@ func (s *Server) capabilities(writer http.ResponseWriter, request *http.Request)
 		observe.Error(request.Context(), "读取 App Capability 策略失败", err,
 			observe.StringAttr("app_id", s.appID),
 		)
-		writeJSON(writer, http.StatusServiceUnavailable, map[string]string{
+		access.WriteJSON(writer, http.StatusServiceUnavailable, map[string]string{
 			"code": "app_policy_unavailable", "message": "当前 App 策略暂时不可用",
 		})
 		return
@@ -170,13 +188,13 @@ func (s *Server) capabilities(writer http.ResponseWriter, request *http.Request)
 		observe.Error(request.Context(), "App Capability 策略身份不匹配", runtime.ErrAppPolicyUnavailable,
 			observe.StringAttr("app_id", s.appID),
 		)
-		writeJSON(writer, http.StatusServiceUnavailable, map[string]string{
+		access.WriteJSON(writer, http.StatusServiceUnavailable, map[string]string{
 			"code": "app_policy_unavailable", "message": "当前 App 策略暂时不可用",
 		})
 		return
 	}
 	if !snapshot.Enabled {
-		writeJSON(writer, http.StatusServiceUnavailable, map[string]string{
+		access.WriteJSON(writer, http.StatusServiceUnavailable, map[string]string{
 			"code": "app_disabled", "message": "当前 App 已停用",
 		})
 		return
@@ -191,19 +209,23 @@ func (s *Server) capabilities(writer http.ResponseWriter, request *http.Request)
 		observe.StringAttr("app_id", s.appID),
 		observe.IntAttr("capability_count", len(items)),
 	)
-	writeJSON(writer, http.StatusOK, map[string]any{"capabilities": items})
+	access.WriteJSON(writer, http.StatusOK, map[string]any{"capabilities": items})
 }
 
 func (s *Server) createEcho(writer http.ResponseWriter, request *http.Request) {
 	if !s.beginAdmission() {
-		writeJSON(writer, http.StatusServiceUnavailable, map[string]string{"code": "shutting_down", "message": "服务正在关闭"})
+		access.WriteJSON(writer, http.StatusServiceUnavailable, map[string]string{"code": "shutting_down", "message": "服务正在关闭"})
 		return
 	}
 	defer s.admissionWG.Done()
+	webIdentity, authenticated := s.authenticateWeb(writer, request)
+	if !authenticated {
+		return
+	}
 	idempotencyValues := request.Header.Values("Idempotency-Key")
 	if len(idempotencyValues) != 1 || idempotencyValues[0] != strings.TrimSpace(idempotencyValues[0]) || idempotency.ValidateKey(idempotencyValues[0]) != nil {
 		observe.Warn(request.Context(), "创建 Echo 的幂等键无效")
-		writeJSON(writer, http.StatusBadRequest, map[string]string{"code": "invalid_idempotency_key", "message": "Idempotency-Key 必须是 1 至 128 位安全字符"})
+		access.WriteJSON(writer, http.StatusBadRequest, map[string]string{"code": "invalid_idempotency_key", "message": "Idempotency-Key 必须是 1 至 128 位安全字符"})
 		return
 	}
 	request.Body = http.MaxBytesReader(writer, request.Body, 64<<10)
@@ -214,14 +236,14 @@ func (s *Server) createEcho(writer http.ResponseWriter, request *http.Request) {
 		observe.Warn(request.Context(), "创建 Echo 的请求体解析失败",
 			observe.StringAttr("reason", err.Error()),
 		)
-		writeJSON(writer, http.StatusBadRequest, map[string]string{"code": "invalid_request", "message": "请求体不是有效的 JSON 对象"})
+		access.WriteJSON(writer, http.StatusBadRequest, map[string]string{"code": "invalid_request", "message": "请求体不是有效的 JSON 对象"})
 		return
 	}
-	if err := ensureJSONEOF(decoder); err != nil {
+	if err := jsonutil.EnsureEOF(decoder); err != nil {
 		observe.Warn(request.Context(), "创建 Echo 的请求体包含多余内容",
 			observe.StringAttr("reason", err.Error()),
 		)
-		writeJSON(writer, http.StatusBadRequest, map[string]string{"code": "invalid_request", "message": "请求体只能包含一个 JSON 对象"})
+		access.WriteJSON(writer, http.StatusBadRequest, map[string]string{"code": "invalid_request", "message": "请求体只能包含一个 JSON 对象"})
 		return
 	}
 	input.Message = strings.TrimSpace(input.Message)
@@ -229,40 +251,38 @@ func (s *Server) createEcho(writer http.ResponseWriter, request *http.Request) {
 		observe.Warn(request.Context(), "创建 Echo 的消息长度不合法",
 			observe.IntAttr("message_length", utf8.RuneCountInString(input.Message)),
 		)
-		writeJSON(writer, http.StatusBadRequest, map[string]string{"code": "invalid_message", "message": "消息长度必须为 1 至 4000 个字符"})
+		access.WriteJSON(writer, http.StatusBadRequest, map[string]string{"code": "invalid_message", "message": "消息长度必须为 1 至 4000 个字符"})
 		return
 	}
 	input.IdempotencyKey = idempotencyValues[0]
+	// 平台接入统一入口：标准消息校验 → 身份解析 → 会话找到或创建 → 消息入库。
+	// 平台与 Agent 历史在此解耦：消息进会话台账（SQLite），Echo 在入库成功后创建。
+	intake, err := s.platformHub.Intake(request.Context(), access.InboundMessage{
+		AppID:             s.appID,
+		Platform:          "web",
+		PlatformChannel:   "private",
+		PlatformSpaceID:   webIdentity.PlatformSpaceID,
+		PlatformUserID:    webIdentity.PlatformUserID,
+		PlatformMessageID: input.IdempotencyKey,
+		PlatformSessionID: webIdentity.PlatformSessionID,
+		MessageType:       "text",
+		Text:              input.Message,
+		OccurredAt:        time.Now().UTC(),
+		IdempotencyKey:    input.IdempotencyKey,
+	})
+	if err != nil {
+		access.WriteIntakeError(writer, request, err)
+		return
+	}
+	// 会话上下文只来自受治理的 Intake 结果，覆盖客户端请求体中的任何同名字段
+	// （RunRequest 的会话字段不进入 HTTP 契约，客户端无法伪造会话归属）。
+	input.Message = intake.Text
+	input.SessionID = intake.SessionID
+	input.UserID = intake.UserID
+	input.MessageID = intake.MessageID
 	echoID, created, err := s.orchestrator.CreateIdempotent(request.Context(), input)
 	if err != nil {
-		if errors.Is(err, kernelecho.ErrAppDisabled) {
-			writeJSON(writer, http.StatusServiceUnavailable, map[string]string{"code": "app_disabled", "message": "当前 App 已停用"})
-			return
-		}
-		if errors.Is(err, kernelecho.ErrAppConfigUnavailable) {
-			observe.Error(request.Context(), "读取 App 配置失败", err,
-				observe.StringAttr("app_id", s.appID),
-			)
-			writeJSON(writer, http.StatusServiceUnavailable, map[string]string{"code": "app_config_unavailable", "message": "当前 App 配置暂时不可用"})
-			return
-		}
-		if errors.Is(err, kernelecho.ErrQueueFull) {
-			observe.Warn(request.Context(), "Run 队列已达到配置容量",
-				observe.StringAttr("app_id", s.appID),
-			)
-			writer.Header().Set("Retry-After", "1")
-			writeJSON(writer, http.StatusTooManyRequests, map[string]string{"code": "queue_full", "message": "当前任务队列已满，请稍后重试"})
-			return
-		}
-		if errors.Is(err, idempotency.ErrKeyConflict) {
-			observe.Warn(request.Context(), "Echo 创建幂等键与既有请求冲突",
-				observe.StringAttr("app_id", s.appID),
-			)
-			writeJSON(writer, http.StatusConflict, map[string]string{"code": "idempotency_conflict", "message": "Idempotency-Key 已用于不同的创建请求"})
-			return
-		}
-		observe.Error(request.Context(), "创建 Echo 失败", err)
-		writeJSON(writer, http.StatusInternalServerError, map[string]string{"code": "internal_error", "message": "Echo 创建失败"})
+		access.WriteEchoError(writer, request, err)
 		return
 	}
 	if created {
@@ -282,7 +302,7 @@ func (s *Server) createEcho(writer http.ResponseWriter, request *http.Request) {
 	if !created {
 		status = http.StatusOK
 	}
-	writeJSON(writer, status, map[string]string{
+	access.WriteJSON(writer, status, map[string]string{
 		"echo_id":    echoID,
 		"status_url": "/api/v1/echoes/" + echoID,
 		"events_url": "/api/v1/echoes/" + echoID + "/events",
@@ -372,7 +392,7 @@ func (s *Server) runNext() bool {
 	}
 	key := echoKey{appID: s.appID, echoID: selected.Run.EchoID}
 	runErr := s.orchestrator.RunExisting(runContext, key.echoID, kernelecho.RunRequest{Message: selected.InputMessage}, func(event kernelecho.Event) error {
-		s.hub.publish(event)
+		s.hub.Publish(event)
 		return nil
 	})
 	cancel()
@@ -380,7 +400,7 @@ func (s *Server) runNext() bool {
 	delete(s.active, key)
 	s.activeMu.Unlock()
 	s.activeWG.Done()
-	s.hub.finish(s.appID, key.echoID)
+	s.hub.Finish(s.appID, key.echoID)
 	if runErr != nil && !errors.Is(runErr, context.Canceled) && !errors.Is(runErr, kernelecho.ErrInvalidTransition) &&
 		!errors.Is(runErr, kernelecho.ErrRunRetryScheduled) {
 		observe.Error(runContext, "持久调度 Run 执行失败", runErr)
@@ -458,6 +478,11 @@ func (s *Server) StopAccepting() {
 	s.activeMu.Unlock()
 }
 
+// Hub 返回共享的 Echo 事件订阅中心，供平台适配器（QQ 等）订阅 Run 事件回发。
+func (s *Server) Hub() *access.EventHub {
+	return s.hub
+}
+
 func (s *Server) beginAdmission() bool {
 	s.activeMu.Lock()
 	defer s.activeMu.Unlock()
@@ -477,14 +502,14 @@ func (s *Server) getEcho(writer http.ResponseWriter, request *http.Request) {
 				observe.StringAttr("app_id", s.appID),
 				observe.StringAttr("echo_id", echoID),
 			)
-			writeJSON(writer, http.StatusInternalServerError, map[string]string{"code": "internal_error", "message": "Echo 状态读取失败"})
+			access.WriteJSON(writer, http.StatusInternalServerError, map[string]string{"code": "internal_error", "message": "Echo 状态读取失败"})
 			return
 		}
 		observe.Warn(request.Context(), "查询的 Echo 不存在",
 			observe.StringAttr("app_id", s.appID),
 			observe.StringAttr("echo_id", echoID),
 		)
-		writeJSON(writer, http.StatusNotFound, map[string]string{"code": "echo_not_found", "message": "Echo 不存在"})
+		access.WriteJSON(writer, http.StatusNotFound, map[string]string{"code": "echo_not_found", "message": "Echo 不存在"})
 		return
 	}
 	runs, err := s.reader.ListRuns(request.Context(), s.appID, echoID)
@@ -493,10 +518,10 @@ func (s *Server) getEcho(writer http.ResponseWriter, request *http.Request) {
 			observe.StringAttr("app_id", s.appID),
 			observe.StringAttr("echo_id", echoID),
 		)
-		writeJSON(writer, http.StatusInternalServerError, map[string]string{"code": "internal_error", "message": "Echo 状态读取失败"})
+		access.WriteJSON(writer, http.StatusInternalServerError, map[string]string{"code": "internal_error", "message": "Echo 状态读取失败"})
 		return
 	}
-	writeJSON(writer, http.StatusOK, map[string]any{"echo": record, "runs": runs, "events": events})
+	access.WriteJSON(writer, http.StatusOK, map[string]any{"echo": record, "runs": runs, "events": events})
 }
 
 func (s *Server) cancelEcho(writer http.ResponseWriter, request *http.Request) {
@@ -507,24 +532,24 @@ func (s *Server) cancelEcho(writer http.ResponseWriter, request *http.Request) {
 				observe.StringAttr("app_id", s.appID),
 				observe.StringAttr("echo_id", echoID),
 			)
-			writeJSON(writer, http.StatusInternalServerError, map[string]string{"code": "internal_error", "message": "Echo 状态读取失败"})
+			access.WriteJSON(writer, http.StatusInternalServerError, map[string]string{"code": "internal_error", "message": "Echo 状态读取失败"})
 			return
 		}
-		writeJSON(writer, http.StatusNotFound, map[string]string{"code": "echo_not_found", "message": "Echo 不存在"})
+		access.WriteJSON(writer, http.StatusNotFound, map[string]string{"code": "echo_not_found", "message": "Echo 不存在"})
 		return
 	}
 	key := echoKey{appID: s.appID, echoID: echoID}
 	cancelledQueued, err := s.orchestrator.Cancel(request.Context(), echoID)
 	if err != nil {
 		if errors.Is(err, kernelecho.ErrInvalidTransition) {
-			writeJSON(writer, http.StatusConflict, map[string]string{"code": "echo_not_running", "message": "Echo 当前不在运行"})
+			access.WriteJSON(writer, http.StatusConflict, map[string]string{"code": "echo_not_running", "message": "Echo 当前不在运行"})
 			return
 		}
 		observe.Error(request.Context(), "持久化 Echo 取消状态失败", err,
 			observe.StringAttr("app_id", s.appID),
 			observe.StringAttr("echo_id", echoID),
 		)
-		writeJSON(writer, http.StatusInternalServerError, map[string]string{"code": "internal_error", "message": "Echo 取消失败"})
+		access.WriteJSON(writer, http.StatusInternalServerError, map[string]string{"code": "internal_error", "message": "Echo 取消失败"})
 		return
 	}
 	s.activeMu.Lock()
@@ -534,7 +559,7 @@ func (s *Server) cancelEcho(writer http.ResponseWriter, request *http.Request) {
 		observe.Warn(request.Context(), "无法取消未运行的 Echo",
 			observe.StringAttr("echo_id", echoID),
 		)
-		writeJSON(writer, http.StatusConflict, map[string]string{"code": "echo_not_running", "message": "Echo 当前不在运行"})
+		access.WriteJSON(writer, http.StatusConflict, map[string]string{"code": "echo_not_running", "message": "Echo 当前不在运行"})
 		return
 	}
 	if cancel != nil {
@@ -550,7 +575,7 @@ func (s *Server) echoEvents(writer http.ResponseWriter, request *http.Request) {
 	flusher, ok := writer.(http.Flusher)
 	if !ok {
 		observe.Error(request.Context(), "当前响应实现不支持 SSE", nil)
-		writeJSON(writer, http.StatusInternalServerError, map[string]string{"code": "streaming_unavailable"})
+		access.WriteJSON(writer, http.StatusInternalServerError, map[string]string{"code": "streaming_unavailable"})
 		return
 	}
 	echoID := request.PathValue("echo_id")
@@ -561,17 +586,17 @@ func (s *Server) echoEvents(writer http.ResponseWriter, request *http.Request) {
 				observe.StringAttr("app_id", s.appID),
 				observe.StringAttr("echo_id", echoID),
 			)
-			writeJSON(writer, http.StatusInternalServerError, map[string]string{"code": "internal_error", "message": "Echo 事件读取失败"})
+			access.WriteJSON(writer, http.StatusInternalServerError, map[string]string{"code": "internal_error", "message": "Echo 事件读取失败"})
 			return
 		}
 		observe.Warn(request.Context(), "订阅事件时 Echo 不存在",
 			observe.StringAttr("app_id", s.appID),
 			observe.StringAttr("echo_id", echoID),
 		)
-		writeJSON(writer, http.StatusNotFound, map[string]string{"code": "echo_not_found", "message": "Echo 不存在"})
+		access.WriteJSON(writer, http.StatusNotFound, map[string]string{"code": "echo_not_found", "message": "Echo 不存在"})
 		return
 	}
-	live, unsubscribe := s.hub.subscribe(s.appID, echoID)
+	live, unsubscribe := s.hub.Subscribe(s.appID, echoID)
 	defer unsubscribe()
 	record, events, err := s.reader.GetEcho(request.Context(), s.appID, echoID)
 	if err != nil {
@@ -579,7 +604,7 @@ func (s *Server) echoEvents(writer http.ResponseWriter, request *http.Request) {
 			observe.StringAttr("app_id", s.appID),
 			observe.StringAttr("echo_id", echoID),
 		)
-		writeJSON(writer, http.StatusInternalServerError, map[string]string{"code": "internal_error", "message": "Echo 事件读取失败"})
+		access.WriteJSON(writer, http.StatusInternalServerError, map[string]string{"code": "internal_error", "message": "Echo 事件读取失败"})
 		return
 	}
 	lastSequence, _ := strconv.ParseUint(request.Header.Get("Last-Event-ID"), 10, 64)
@@ -646,35 +671,4 @@ func writeSSE(writer io.Writer, event kernelecho.Event) error {
 	}
 	_, err = fmt.Fprintf(writer, "id: %d\nevent: %s\ndata: %s\n\n", event.Sequence, event.Type, encoded)
 	return err
-}
-
-func writeJSON(writer http.ResponseWriter, status int, value any) {
-	writer.Header().Set("Content-Type", "application/json; charset=utf-8")
-	writer.WriteHeader(status)
-	if err := json.NewEncoder(writer).Encode(value); err != nil {
-		if recorder, ok := writer.(interface{ RecordWriteError(error) }); ok {
-			recorder.RecordWriteError(err)
-		}
-	}
-}
-
-func ensureJSONEOF(decoder *json.Decoder) error {
-	var extra any
-	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
-		if err == nil {
-			return errors.New("request body must contain exactly one JSON object")
-		}
-		return err
-	}
-	return nil
-}
-
-func securityHeaders(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		writer.Header().Set("X-Content-Type-Options", "nosniff")
-		writer.Header().Set("X-Frame-Options", "DENY")
-		writer.Header().Set("Referrer-Policy", "no-referrer")
-		writer.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'")
-		next.ServeHTTP(writer, request)
-	})
 }

@@ -6,64 +6,14 @@ info:
 servers:
   - url: http://127.0.0.1:8080
 paths:
-  /api/v1/echoes:
-    post:
-      deprecated: true
-      summary: Create and start an Echo
-      description: Compatibility route. It has the same mandatory idempotency contract as /api/v2/echoes; new clients must use v2.
-      parameters:
-        - $ref: "#/components/parameters/IdempotencyKey"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              additionalProperties: false
-              required: [message]
-              properties:
-                message:
-                  type: string
-                  minLength: 1
-                  maxLength: 4000
-      responses:
-        "202":
-          description: Echo accepted
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/EchoAccepted"
-        "200":
-          description: A completed durable creation record was replayed; no second Echo or Run was created or scheduled.
-          headers:
-            Idempotency-Replayed:
-              $ref: "#/components/headers/IdempotencyReplayed"
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/EchoAccepted"
-        "400":
-          $ref: "#/components/responses/Error"
-        "409":
-          description: The Idempotency-Key is already bound to a different request body.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-        "429":
-          $ref: "#/components/responses/QueueFull"
-        "503":
-          description: The App is disabled or its persisted configuration is temporarily unavailable.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-        "500":
-          $ref: "#/components/responses/Error"
   /api/v2/echoes:
     post:
       summary: Idempotently create and schedule an Echo
-      description: Echo, attempt-1 Run, and the App-scoped idempotency mapping are committed in one transaction.
+      description: >-
+        Requires a trusted server-side Web login identity. Request body fields never
+        establish user or session ownership. When no Web authenticator is configured,
+        this endpoint fails closed with 401. Echo, attempt-1 Run, and the App-scoped
+        idempotency mapping are committed in one transaction.
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
@@ -97,6 +47,18 @@ paths:
                 $ref: "#/components/schemas/EchoAccepted"
         "400":
           $ref: "#/components/responses/Error"
+        "401":
+          description: No valid trusted Web login identity is available.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: The resolved user is disabled or is not a member of the current App.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         "409":
           description: The Idempotency-Key is already bound to a different request body.
           content:
@@ -189,6 +151,75 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+  /chat/stream:
+    post:
+      summary: Stream a product-frontend chat message (SSE)
+      description: >
+        Product frontend contract (LuoYing-Frontend). The message enters the
+        governed platform chain (standard Intake -> idempotent Echo creation ->
+        event translation) and is delivered as a text/event-stream with events
+        track, text_delta, final, error and done. The kernel echo events are
+        translated; kernel event types are not exposed.
+        A trusted server-side Web login identity is required. The user_id,
+        user_name and session_id request fields are compatibility display fields only
+        and never establish identity or session ownership.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [text]
+              properties:
+                session_id:
+                  type: string
+                  description: Compatibility field only; ignored for identity and session ownership.
+                user_id:
+                  type: string
+                  description: Compatibility field only; never trusted as an identity credential.
+                user_name:
+                  type: string
+                  description: Compatibility field only; never trusted as an identity credential.
+                text:
+                  type: string
+                  minLength: 1
+                  maxLength: 4000
+                image_ids:
+                  type: array
+                  items:
+                    type: string
+                  description: Unsupported in the current slice; non-empty arrays are rejected.
+                file_ids:
+                  type: array
+                  items:
+                    type: string
+                  description: Unsupported in the current slice; non-empty arrays are rejected.
+      responses:
+        "200":
+          description: SSE event stream (track/text_delta/final/error/done)
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        "400":
+          description: Invalid body, message length, unknown field, or unsupported attachments.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: No valid trusted Web login identity is available or it is not bound to an internal user.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: The service is shutting down.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /healthz:
     get:
       summary: Process liveness
@@ -234,6 +265,70 @@ paths:
             text/plain:
               schema:
                 type: string
+  /api/v1/ingress/{platform}:
+    post:
+      summary: Ingest one normalized platform event
+      description: >-
+        Unified platform event entry. Platform adapters normalize raw events and POST
+        them here; the kernel resolves the platform identity to an internal user,
+        persists the standard session/message, and idempotently creates the Echo.
+        Empty or unbound user identities are rejected before any persistence; there is
+        no anonymous sender or anonymous session fallback. Repeated delivery with the
+        same platform_message_id and idempotency_key replays the stored Echo with created=false; the same
+        platform_message_id with a different idempotency_key is rejected as a conflict.
+      parameters:
+        - name: platform
+          in: path
+          required: true
+          description: Platform identifier used in identity binding, lowercase letters, digits, dot, underscore, hyphen.
+          schema:
+            type: string
+            pattern: "^[a-z0-9][a-z0-9._-]{0,63}$"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PlatformEvent"
+      responses:
+        "200":
+          description: The message was persisted and its Echo was created or replayed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IntakeAccepted"
+        "400":
+          description: Invalid event fields, malformed JSON, unknown fields, or an invalid platform identity.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: The platform identity is not bound to an internal user.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: The platform identity is rejected or its user is disabled.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: The same platform_message_id was already persisted with a different idempotency_key.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          $ref: "#/components/responses/QueueFull"
+        "500":
+          description: Internal error; safe public message only.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
 components:
   parameters:
     IdempotencyKey:
@@ -254,6 +349,72 @@ components:
         type: string
         format: uuid
   schemas:
+    PlatformEvent:
+      type: object
+      additionalProperties: false
+      required: [platform_channel, platform_space_id, platform_user_id, platform_session_id, platform_message_id, message_type, text, occurred_at, idempotency_key]
+      properties:
+        platform_channel:
+          type: string
+          enum: [private, group]
+          description: Determines direct versus group session semantics.
+        platform_space_id:
+          type: string
+          description: Required platform space (group/channel) identifier.
+          minLength: 1
+          maxLength: 128
+        platform_user_id:
+          type: string
+          description: Required opaque platform user identifier. Control characters are rejected.
+          minLength: 1
+          maxLength: 256
+        platform_session_id:
+          type: string
+          description: Required platform-side session identifier used in the versioned session key.
+          minLength: 1
+          maxLength: 256
+        platform_message_id:
+          type: string
+          description: Stable platform message identifier, deduplicated per App and platform.
+          minLength: 1
+          maxLength: 128
+        message_type:
+          type: string
+          description: Standard message type, e.g. text.
+          minLength: 1
+        text:
+          type: string
+          minLength: 1
+          maxLength: 4000
+        reply_to:
+          type: string
+        occurred_at:
+          type: string
+          format: date-time
+        idempotency_key:
+          type: string
+          description: App-scoped idempotency key shared between message persistence and Echo creation.
+          minLength: 1
+          maxLength: 128
+          pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    IntakeAccepted:
+      type: object
+      additionalProperties: false
+      required: [echo_id, session_id, message_id, sender_user_id, created]
+      properties:
+        echo_id:
+          type: string
+        session_id:
+          type: string
+          description: Opaque session-v1 digest scoped by App, platform, channel, space and platform session; direct sessions also include the internal user.
+        message_id:
+          type: string
+        sender_user_id:
+          type: string
+          description: Resolved internal user. Anonymous senders are not supported.
+        created:
+          type: boolean
+          description: False when the delivery replayed an already persisted message and Echo.
     Capability:
       type: object
       additionalProperties: false

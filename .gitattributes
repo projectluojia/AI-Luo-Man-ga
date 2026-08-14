@@ -1,0 +1,16 @@
+# 源文件统一 LF：golden 契约文件与代码跨平台保持字节一致，
+# 避免 checkout 行尾转换破坏 golden 回归与字节比较。
+* text=auto
+
+*.go text eol=lf
+*.py text eol=lf
+*.proto text eol=lf
+*.md text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.golden text eol=lf
+
+*.db binary
+*.png binary
+*.wasm binary
+*.zip binary

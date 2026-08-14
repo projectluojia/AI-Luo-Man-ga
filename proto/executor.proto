@@ -1,0 +1,116 @@
+syntax = "proto3";
+
+package ailuo.executor.v1;
+
+option go_package = "github.com/projectluojia/AI-Luo-Man-ga/gen/executorv1;executorv1";
+
+// ExecutorRuntime 是内核 AI 执行者会话协议：内核与执行者（LLM 智能体、
+// 规划器、工作流引擎等任何可驱动受治理 Run 会话的实现）之间协商执行。
+service ExecutorRuntime {
+  rpc Run(stream ExecutorFrame) returns (stream ExecutorFrame);
+  rpc Health(HealthRequest) returns (HealthResponse);
+}
+
+message HealthRequest {
+  repeated string accepted_protocol_versions = 1;
+  string model = 2;
+}
+
+message HealthResponse {
+  bool ready = 1;
+  string provider = 2;
+  repeated string supported_protocol_versions = 3;
+  string status_code = 4;
+}
+
+message ExecutorFrame {
+  string echo_id = 1;
+  string run_id = 2;
+  uint64 sequence = 3;
+
+  oneof body {
+    StartRun start_run = 10;
+    CapabilityCall capability_call = 11;
+    CapabilityResult capability_result = 12;
+    ReplyDelta reply_delta = 13;
+    FinalMessage final_message = 14;
+    RunFailure run_failure = 15;
+    CancelRun cancel_run = 16;
+    RunAccepted run_accepted = 17;
+    RunUsage run_usage = 18;
+  }
+}
+
+message StartRun {
+  string app_id = 1;
+  string input_message = 2;
+  string timezone = 3;
+  repeated Capability capabilities = 4;
+  string model = 5;
+  string system_prompt = 6;
+  uint32 max_steps = 7;
+  string protocol_version = 8;
+  uint32 max_tool_calls = 9;
+  uint64 max_input_tokens = 10;
+  uint64 max_output_tokens = 11;
+  uint64 max_total_tokens = 12;
+  uint64 max_output_bytes = 13;
+  uint64 max_cost_microusd = 14;
+  uint32 provider_timeout_ms = 15;
+  string trace_id = 16;
+  string parent_span_id = 17;
+  string parent_run_id = 18;
+}
+
+message RunAccepted {
+  string protocol_version = 1;
+}
+
+message RunUsage {
+  uint64 input_tokens = 1;
+  uint64 output_tokens = 2;
+  uint64 total_tokens = 3;
+  uint64 cost_microusd = 4;
+  uint32 provider_retries = 5;
+}
+
+message Capability {
+  string id = 1;
+  string version = 2;
+  string name = 3;
+  string description = 4;
+  string input_schema_json = 5;
+}
+
+message CapabilityCall {
+  string call_id = 1;
+  string capability_id = 2;
+  bytes payload_json = 3;
+}
+
+message CapabilityResult {
+  string call_id = 1;
+  string capability_id = 2;
+  bool success = 3;
+  bytes payload_json = 4;
+  string error_code = 5;
+  string error_message = 6;
+}
+
+message ReplyDelta {
+  string text = 1;
+}
+
+message FinalMessage {
+  string text = 1;
+}
+
+message RunFailure {
+  string code = 1;
+  string message = 2;
+  bool retryable = 3;
+}
+
+message CancelRun {
+  string reason = 1;
+}

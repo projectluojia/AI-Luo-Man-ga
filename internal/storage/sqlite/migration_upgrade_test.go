@@ -61,8 +61,133 @@ INSERT INTO capability_audit(
 		t.Fatalf("upgraded audits=%#v err=%v", audits, err)
 	}
 	var version int
-	if err := upgraded.db.QueryRowContext(t.Context(), `SELECT max(version) FROM schema_migrations`).Scan(&version); err != nil || version != currentSchemaVersion {
+	if err := upgraded.db.QueryRowContext(t.Context(), `SELECT max(version) FROM schema_migrations`).Scan(&version); err != nil || version != currentSchemaVersion() {
 		t.Fatalf("version=%d err=%v", version, err)
+	}
+}
+
+func TestMigrationV21PreservesAppConfigHeads(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "upgrade-v20.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &Store{db: db}
+	if err := store.migrateThrough(t.Context(), 20); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	// 写入一个"控制面调优过"的当前配置修订与 head：迁移 21 不得清除当前指针。
+	if _, err := db.ExecContext(t.Context(), `
+INSERT INTO app_config_revisions(
+  app_id,revision,enabled,model,system_prompt,channel_prompts,timezone,max_steps,max_tool_calls,
+  max_input_tokens,max_output_tokens,max_total_tokens,max_output_bytes,max_cost_microusd,
+  provider_timeout_ms,enabled_capabilities,permission_scope,created_at
+) VALUES(
+  'app-a',lower(hex(randomblob(32))),1,'model-x','管理员调优提示','{"web":"自定义"}','Asia/Shanghai',
+  8,8,32768,8192,40960,65536,0,30000,'[]','[]',?
+);
+INSERT INTO app_config_heads(app_id,revision,generation,created_at,updated_at)
+SELECT app_id,revision,7,?,? FROM app_config_revisions WHERE app_id='app-a';`,
+		now, now, now,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	upgraded, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer upgraded.Close()
+	var revision string
+	var generation int
+	if err := upgraded.db.QueryRowContext(t.Context(),
+		`SELECT h.revision,h.generation FROM app_config_heads h WHERE h.app_id='app-a'`).
+		Scan(&revision, &generation); err != nil {
+		t.Fatalf("升级后 head 丢失（迁移 21 破坏性删除）：%v", err)
+	}
+	if generation != 7 {
+		t.Fatalf("升级后 generation=%d，期望 7", generation)
+	}
+	var channelPrompts string
+	if err := upgraded.db.QueryRowContext(t.Context(),
+		`SELECT channel_prompts FROM app_config_revisions WHERE app_id='app-a' AND revision=?`, revision).
+		Scan(&channelPrompts); err != nil || channelPrompts != `{"web":"自定义"}` {
+		t.Fatalf("升级后渠道提示=%q err=%v", channelPrompts, err)
+	}
+}
+
+func TestMigrationRegistryVersionOrderAndDuplicateDetection(t *testing.T) {
+	saved := registeredMigrations
+	registeredMigrations = make(map[int]string)
+	defer func() { registeredMigrations = saved }()
+
+	// 注册顺序与版本号无关：版本 18 先注册、版本 15 后注册，仍按 15→18 顺序应用。
+	registerMigration(18, `CREATE TABLE registry_18 (id INTEGER PRIMARY KEY);`)
+	registerMigration(15, `CREATE TABLE registry_15 (id INTEGER PRIMARY KEY);`)
+	if version := currentSchemaVersion(); version != 18 {
+		t.Fatalf("current schema version = %d, want 18", version)
+	}
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("重复注册迁移版本必须显式失败")
+			}
+		}()
+		registerMigration(15, `CREATE TABLE duplicate_15 (id INTEGER PRIMARY KEY);`)
+	}()
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("非法迁移版本号必须显式失败")
+			}
+		}()
+		registerMigration(0, `CREATE TABLE invalid (id INTEGER PRIMARY KEY);`)
+	}()
+
+	applyRegistry := func(t *testing.T, maximumVersion int) (*Store, error) {
+		t.Helper()
+		db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "registry.db"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		store := &Store{db: db}
+		err = store.migrateThrough(t.Context(), maximumVersion)
+		if err != nil {
+			db.Close()
+			return nil, err
+		}
+		t.Cleanup(func() { db.Close() })
+		return store, nil
+	}
+
+	full, err := applyRegistry(t, 0)
+	if err != nil {
+		t.Fatalf("应用全部注册迁移：%v", err)
+	}
+	var tables, maxVersion int
+	if err := full.db.QueryRow(`SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN ('registry_15','registry_18')`).Scan(&tables); err != nil || tables != 2 {
+		t.Fatalf("注册迁移后表数量=%d err=%v", tables, err)
+	}
+	if err := full.db.QueryRow(`SELECT max(version) FROM schema_migrations`).Scan(&maxVersion); err != nil || maxVersion != 18 {
+		t.Fatalf("记录的最大迁移版本=%d err=%v", maxVersion, err)
+	}
+
+	partial, err := applyRegistry(t, 15)
+	if err != nil {
+		t.Fatalf("部分升级到版本 15：%v", err)
+	}
+	if err := partial.db.QueryRow(`SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN ('registry_15','registry_18')`).Scan(&tables); err != nil || tables != 1 {
+		t.Fatalf("部分升级后表数量=%d err=%v", tables, err)
+	}
+
+	if _, err := applyRegistry(t, 999); err == nil {
+		t.Fatal("超过当前 Schema 版本的部分升级必须失败")
+	}
+	if _, err := applyRegistry(t, -1); err == nil {
+		t.Fatal("负的最大迁移版本必须失败")
 	}
 }
 

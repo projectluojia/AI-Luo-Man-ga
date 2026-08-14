@@ -11,18 +11,21 @@ import (
 	"sort"
 	"time"
 
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/agentprotocol"
 	kernelecho "github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/executor"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/id"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/idempotency"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/publicerror"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/session"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
 )
 
 const maxChildRunsPerParent = 1
 
 var (
-	runIdentifierPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
-	capabilityIDPattern  = regexp.MustCompile(`^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$`)
-	permissionIDPattern  = regexp.MustCompile(`^[a-z][a-z0-9]*(?:[._:-][a-z0-9]+)*$`)
+	runIdentifierPattern = id.StableMixed
+	capabilityIDPattern  = id.StableLower
+	permissionIDPattern  = id.Permission
 )
 
 func (s *Store) CreateEchoRun(ctx context.Context, echo kernelecho.Record, run kernelecho.RunRecord) (resultErr error) {
@@ -46,16 +49,6 @@ func (s *Store) CreateEchoRun(ctx context.Context, echo kernelecho.Record, run k
 		return fmt.Errorf("commit Echo/Run creation: %w", err)
 	}
 	return nil
-}
-
-func (s *Store) CreateEchoRunIdempotent(
-	ctx context.Context,
-	key string,
-	fingerprint string,
-	echo kernelecho.Record,
-	run kernelecho.RunRecord,
-) (_ string, _ bool, resultErr error) {
-	return s.CreateEchoRunIdempotentLimited(ctx, key, fingerprint, echo, run, 0)
 }
 
 func (s *Store) CreateEchoRunIdempotentLimited(
@@ -142,17 +135,24 @@ func insertRun(ctx context.Context, tx *sql.Tx, run kernelecho.RunRecord) error 
 	if err != nil {
 		return errors.Join(kernelecho.ErrInvalidRunRecord, err)
 	}
+	contextSources := run.ContextSources
+	if len(contextSources) == 0 {
+		contextSources = json.RawMessage(`{}`) // 未装配前固化来源版本为空对象
+	}
 	if _, err := tx.ExecContext(ctx, `
 INSERT INTO runs(
   app_id,run_id,run_group_id,echo_id,parent_run_id,origin_call_id,attempt,status,model,model_config_version,protocol_version,
   max_steps,max_tool_calls,max_input_tokens,max_output_tokens,max_total_tokens,max_output_bytes,
   max_cost_microusd,provider_timeout_ms,deadline_at,available_at,last_agent_sequence,
-  capability_scope,permission_scope,recoverable_state,result_message,created_at
-) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+  capability_scope,permission_scope,recoverable_state,result_message,created_at,
+  session_id,user_id,message_id,context_digest,context_sources,channel
+) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		run.AppID, run.ID, run.RunGroupID, run.EchoID, parentRunID, run.OriginCallID, run.Attempt, run.Status, run.Model, run.ModelConfigVersion, run.ProtocolVersion,
 		run.MaxSteps, run.MaxToolCalls, run.MaxInputTokens, run.MaxOutputTokens, run.MaxTotalTokens, run.MaxOutputBytes,
 		run.MaxCostMicrousd, run.ProviderTimeoutMS, run.Deadline.UTC().Format(time.RFC3339Nano), run.AvailableAt.UTC().Format(time.RFC3339Nano), run.LastAgentSequence,
 		string(capabilityScope), string(permissionScope), string(run.RecoverableState), run.ResultMessage, run.CreatedAt.UTC().Format(time.RFC3339Nano),
+		run.SessionID, run.UserID, run.MessageID, run.ContextDigest, string(contextSources),
+		run.Channel,
 	); err != nil {
 		return fmt.Errorf("create run: %w", err)
 	}
@@ -611,7 +611,7 @@ func (s *Store) CompleteChildRun(ctx context.Context, run kernelecho.RunRecord, 
 		return kernelecho.ErrInvalidTransition
 	}
 	if runStatus == kernelecho.RunStatusSucceeded {
-		if resultMessage == "" || len(resultMessage) > agentprotocol.MaxFinalMessageBytes {
+		if resultMessage == "" || len(resultMessage) > executor.MaxFinalMessageBytes {
 			return kernelecho.ErrInvalidRunRecord
 		}
 		failure = publicerror.Error{}
@@ -822,10 +822,21 @@ func scanRuns(rows *sql.Rows, kind string) ([]kernelecho.RunRecord, error) {
 
 func (s *Store) loadRunWork(ctx context.Context, runs []kernelecho.RunRecord) ([]kernelecho.RunWork, error) {
 	work := make([]kernelecho.RunWork, 0, len(runs))
+	now := time.Now().UTC()
 	for _, run := range runs {
 		var inputMessage string
 		if err := s.db.QueryRowContext(ctx, `SELECT input_message FROM echoes WHERE app_id=? AND echo_id=? AND status=?`, run.AppID, run.EchoID, kernelecho.StatusRunning).Scan(&inputMessage); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
+				// Echo 已进入终态而 Run 仍排队（取消/崩溃窗口等边缘路径）：确定性
+				// 失败该 Run，释放 (app_id,echo_id,attempt) 唯一槽位，避免孤儿排队
+				// Run 永久占用槽位并阻塞后续 attempt 排队。
+				if failErr := s.failOrphanQueuedRun(ctx, run, now); failErr != nil {
+					observe.Warn(ctx, "孤儿排队 Run 确定性失败失败",
+						observe.StringAttr("app_id", run.AppID),
+						observe.StringAttr("echo_id", run.EchoID),
+						observe.StringAttr("run_id", run.ID),
+					)
+				}
 				continue
 			}
 			return nil, fmt.Errorf("read queued Run Echo input: %w", err)
@@ -833,6 +844,33 @@ func (s *Store) loadRunWork(ctx context.Context, runs []kernelecho.RunRecord) ([
 		work = append(work, kernelecho.RunWork{Run: run, InputMessage: inputMessage})
 	}
 	return work, nil
+}
+
+// failOrphanQueuedRun 把 Echo 已进入终态的排队 Run 确定性转移为失败
+// （仅从 queued 转移，幂等；并发已转移时 RowsAffected 为 0）。
+func (s *Store) failOrphanQueuedRun(ctx context.Context, run kernelecho.RunRecord, now time.Time) error {
+	public := publicerror.Echo("recovery_failed")
+	result, err := s.db.ExecContext(ctx, `
+UPDATE runs SET status=?,lease_token=NULL,lease_expires_at=NULL,result_message='',error_code=?,error_message=?,completed_at=?
+WHERE app_id=? AND run_id=? AND status=?`,
+		kernelecho.RunStatusFailed, public.Code, public.Message, now.Format(time.RFC3339Nano),
+		run.AppID, run.ID, kernelecho.RunStatusQueued,
+	)
+	if err != nil {
+		return fmt.Errorf("fail orphan queued run: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read orphan run update count: %w", err)
+	}
+	if affected == 1 {
+		observe.Info(ctx, "孤儿排队 Run 已确定性失败（Echo 已进入终态）",
+			observe.StringAttr("app_id", run.AppID),
+			observe.StringAttr("echo_id", run.EchoID),
+			observe.StringAttr("run_id", run.ID),
+		)
+	}
+	return nil
 }
 
 func (s *Store) ListRunnableRuns(ctx context.Context, appID string, now time.Time, limit int) (_ []kernelecho.RunWork, resultErr error) {
@@ -1005,7 +1043,9 @@ SELECT
   max_cost_microusd,provider_timeout_ms,used_input_tokens,used_output_tokens,used_total_tokens,used_cost_microusd,used_provider_retries,
   deadline_at,available_at,coalesce(lease_token,''),lease_expires_at,last_agent_sequence,
   capability_scope,permission_scope,recoverable_state,result_message,
-  coalesce(error_code,''),coalesce(error_message,''),created_at,started_at,completed_at
+  coalesce(error_code,''),coalesce(error_message,''),created_at,started_at,completed_at,
+  coalesce(session_id,''),coalesce(user_id,''),coalesce(message_id,''),coalesce(context_digest,''),coalesce(context_sources,'{}'),
+  coalesce(channel,'')
 FROM runs`
 
 type rowScanner interface {
@@ -1038,6 +1078,11 @@ func queryRun(scanner rowScanner) (kernelecho.RunRecord, error) {
 	var createdAt string
 	var startedAt sql.NullString
 	var completedAt sql.NullString
+	var sessionID string
+	var userID string
+	var messageID string
+	var contextDigest string
+	var contextSources string
 	if err := scanner.Scan(
 		&run.AppID, &run.ID, &run.RunGroupID, &run.EchoID, &run.ParentRunID, &run.OriginCallID, &attempt, &run.Status,
 		&run.Model, &run.ModelConfigVersion, &run.ProtocolVersion,
@@ -1047,6 +1092,8 @@ func queryRun(scanner rowScanner) (kernelecho.RunRecord, error) {
 		&run.LeaseToken, &leaseExpiresAt, &lastAgentSequence,
 		&capabilityScope, &permissionScope, &recoverableState, &run.ResultMessage,
 		&run.ErrorCode, &run.ErrorMessage, &createdAt, &startedAt, &completedAt,
+		&sessionID, &userID, &messageID, &contextDigest, &contextSources,
+		&run.Channel,
 	); err != nil {
 		return kernelecho.RunRecord{}, err
 	}
@@ -1073,10 +1120,15 @@ func queryRun(scanner rowScanner) (kernelecho.RunRecord, error) {
 	run.UsedProviderRetries = uint32(usedProviderRetries)
 	run.LastAgentSequence = uint64(lastAgentSequence)
 	run.RecoverableState = json.RawMessage(recoverableState)
+	run.SessionID = sessionID
+	run.UserID = userID
+	run.MessageID = messageID
+	run.ContextDigest = contextDigest
+	run.ContextSources = json.RawMessage(contextSources)
 	if len(capabilityScope) > 65536 || len(permissionScope) > 65536 ||
 		json.Unmarshal([]byte(capabilityScope), &run.CapabilityScope) != nil ||
 		json.Unmarshal([]byte(permissionScope), &run.PermissionScope) != nil ||
-		!validCanonicalScope(run.CapabilityScope, agentprotocol.MaxCapabilities, capabilityIDPattern) ||
+		!validCanonicalScope(run.CapabilityScope, executor.MaxCapabilities, capabilityIDPattern) ||
 		!validCanonicalScope(run.PermissionScope, 256, permissionIDPattern) {
 		return kernelecho.RunRecord{}, kernelecho.ErrInvalidRunRecord
 	}
@@ -1123,24 +1175,29 @@ func validateNewRun(echo kernelecho.Record, run kernelecho.RunRecord) error {
 		!runIdentifierPattern.MatchString(run.ID) || !runIdentifierPattern.MatchString(run.RunGroupID) ||
 		run.AppID != echo.AppID || run.EchoID != echo.ID ||
 		run.Attempt == 0 || run.Status != kernelecho.RunStatusQueued || run.Model == "" || run.ModelConfigVersion == "" ||
-		run.ProtocolVersion == "" || run.MaxSteps == 0 || run.MaxSteps > agentprotocol.MaxProtocolSteps ||
-		run.MaxToolCalls == 0 || run.MaxToolCalls > agentprotocol.MaxToolCalls ||
-		run.MaxInputTokens == 0 || run.MaxInputTokens > agentprotocol.MaxTokenBudget ||
-		run.MaxOutputTokens == 0 || run.MaxOutputTokens > agentprotocol.MaxTokenBudget ||
-		run.MaxTotalTokens == 0 || run.MaxTotalTokens > agentprotocol.MaxTokenBudget ||
-		run.MaxOutputBytes == 0 || run.MaxOutputBytes > agentprotocol.MaxFinalMessageBytes ||
-		run.MaxCostMicrousd > agentprotocol.MaxCostMicrousd ||
+		run.ProtocolVersion == "" || run.MaxSteps == 0 || run.MaxSteps > executor.MaxProtocolSteps ||
+		run.MaxToolCalls == 0 || run.MaxToolCalls > executor.MaxToolCalls ||
+		run.MaxInputTokens == 0 || run.MaxInputTokens > executor.MaxTokenBudget ||
+		run.MaxOutputTokens == 0 || run.MaxOutputTokens > executor.MaxTokenBudget ||
+		run.MaxTotalTokens == 0 || run.MaxTotalTokens > executor.MaxTokenBudget ||
+		run.MaxOutputBytes == 0 || run.MaxOutputBytes > executor.MaxFinalMessageBytes ||
+		run.MaxCostMicrousd > executor.MaxCostMicrousd ||
 		run.MaxInputTokens > math.MaxInt64 || run.MaxOutputTokens > math.MaxInt64 ||
 		run.MaxTotalTokens > math.MaxInt64 || run.MaxOutputBytes > math.MaxInt64 ||
 		run.MaxCostMicrousd > math.MaxInt64 ||
-		run.ProviderTimeoutMS < 100 || run.ProviderTimeoutMS > agentprotocol.MaxProviderTimeoutMS ||
+		run.ProviderTimeoutMS < 100 || run.ProviderTimeoutMS > executor.MaxProviderTimeoutMS ||
 		run.UsedInputTokens != 0 || run.UsedOutputTokens != 0 || run.UsedTotalTokens != 0 || run.UsedCostMicrousd != 0 ||
 		run.UsedProviderRetries != 0 ||
 		run.CreatedAt.IsZero() || run.AvailableAt.IsZero() || run.AvailableAt.Before(run.CreatedAt) || !run.Deadline.After(run.AvailableAt) ||
 		run.LastAgentSequence != 0 || run.LeaseToken != "" || run.LeaseExpiresAt != nil || run.StartedAt != nil ||
 		run.CompletedAt != nil || run.ResultMessage != "" || run.ErrorCode != "" || run.ErrorMessage != "" ||
 		!json.Valid(run.RecoverableState) ||
-		!validCanonicalScope(run.CapabilityScope, agentprotocol.MaxCapabilities, capabilityIDPattern) ||
+		(run.SessionID != "" && !session.ValidStableID(run.SessionID)) ||
+		(run.UserID != "" && !session.ValidStableID(run.UserID)) ||
+		(run.MessageID != "" && !session.ValidStableID(run.MessageID)) ||
+		run.ContextDigest != "" || // 上下文在执行开始时由 SetRunContext 一次性固化
+		(len(run.ContextSources) != 0 && !json.Valid(run.ContextSources)) ||
+		!validCanonicalScope(run.CapabilityScope, executor.MaxCapabilities, capabilityIDPattern) ||
 		!validCanonicalScope(run.PermissionScope, 256, permissionIDPattern) {
 		return kernelecho.ErrInvalidRunRecord
 	}

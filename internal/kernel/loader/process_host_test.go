@@ -1,4 +1,4 @@
-//go:build integration
+//go:build integration && unix
 
 package loader_test
 
@@ -21,9 +21,10 @@ import (
 )
 
 const (
-	helperEnabled = "AILUO_RUNTIME_HELPER"
-	helperSocket  = "AILUO_RUNTIME_SOCKET"
-	helperMode    = "AILUO_RUNTIME_MODE"
+	helperEnabled   = "AILUO_RUNTIME_HELPER"
+	helperSocket    = "AILUO_RUNTIME_SOCKET"
+	helperMode      = "AILUO_RUNTIME_MODE"
+	helperWriteFile = "AILUO_RUNTIME_WRITE_FILE"
 )
 
 type processHelperRuntime struct {
@@ -51,6 +52,17 @@ func (s *processHelperRuntime) Health(_ context.Context, request *runtimev1.Life
 }
 
 func (s *processHelperRuntime) Invoke(_ context.Context, request *runtimev1.InvokeRequest) (*runtimev1.InvokeResponse, error) {
+	// 资源限额验证模式：向工作目录写入 8 KiB 文件，写失败（如 RLIMIT_FSIZE 生效）则报告失败。
+	if target := os.Getenv(helperWriteFile); target != "" {
+		if err := os.WriteFile(target, make([]byte, 8<<10), 0o600); err != nil {
+			return &runtimev1.InvokeResponse{
+				Identity: cloneIdentity(request.Identity), Success: false, ErrorCode: "file_write_failed",
+			}, nil
+		}
+		return &runtimev1.InvokeResponse{
+			Identity: cloneIdentity(request.Identity), Success: true, PayloadJson: []byte(`{"write":"ok"}`),
+		}, nil
+	}
 	payload, _ := json.Marshal(map[string]any{
 		"app_id": request.Context.AppId, "call_id": request.Context.CallId,
 	})
@@ -129,11 +141,11 @@ func TestIsolatedProcessHostRunsOutsideKernelAndShutsDownGracefully(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	manager, err := loader.New(map[string]loader.Host{loader.ModeIsolated: host})
+	manager, err := loader.New(host)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := manager.Register(runtimeManifest("isolated.real", loader.ModeIsolated)); err != nil {
+	if err := manager.Register(context.Background(), runtimeManifest("isolated.real", loader.ModeIsolated)); err != nil {
 		t.Fatal(err)
 	}
 	result, err := manager.Handler("isolated.real")(
@@ -152,7 +164,8 @@ func TestIsolatedProcessHostRunsOutsideKernelAndShutsDownGracefully(t *testing.T
 		decoded["app_id"] != "campus-services" || decoded["call_id"] != "call-1" {
 		t.Fatalf("result=%s err=%v", result, err)
 	}
-	if resolves.Load() != 2 || verifies.Load() != 2 {
+	// 三层校验：注册期 selectHost、加载期 loadRuntime、执行前 Load 内部 TOCTOU 防御各一次。
+	if resolves.Load() != 3 || verifies.Load() != 3 {
 		t.Fatalf("resolves=%d verifies=%d", resolves.Load(), verifies.Load())
 	}
 	shutdownContext, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -162,6 +175,61 @@ func TestIsolatedProcessHostRunsOutsideKernelAndShutsDownGracefully(t *testing.T
 	}
 	if _, err := host.Load(context.Background(), runtimeManifest("isolated.after", loader.ModeIsolated)); err == nil {
 		t.Fatal("closed process host accepted a new runtime")
+	}
+}
+
+func TestIsolatedProcessHostEnforcesFileSizeLimit(t *testing.T) {
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	workDir := t.TempDir()
+	socketPath := filepath.Join(workDir, "runtime.sock")
+	writeTarget := filepath.Join(workDir, "out.bin")
+	spec := loader.ProcessSpec{
+		Path: executable, Args: []string{"-test.run=^TestIsolatedRuntimeHelper$"},
+		Env: []string{
+			helperEnabled + "=1", helperSocket + "=" + socketPath, helperMode + "=" + loader.ModeIsolated,
+			helperWriteFile + "=" + writeTarget,
+		},
+		WorkDir: workDir, Address: "unix:" + socketPath,
+		// RLIMIT_FSIZE=1 KiB：helper 写入 8 KiB 必须被限额阻止。
+		Limits: loader.ProcessLimits{MaxFileBytes: 1024},
+	}
+	host, err := loader.NewIsolatedProcessHost(loader.IsolatedProcessHostConfig{
+		ResolveInstalled: func(context.Context, loader.Manifest) (loader.ProcessSpec, error) { return spec, nil },
+		VerifyInstalled:  func(context.Context, loader.Manifest, loader.ProcessSpec) error { return nil },
+		DialTimeout:      3 * time.Second, StopGrace: time.Second, TerminateGrace: time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager, err := loader.New(host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Register(context.Background(), runtimeManifest("isolated.limit", loader.ModeIsolated)); err != nil {
+		t.Fatal(err)
+	}
+	_, err = manager.Handler("isolated.limit")(
+		context.Background(),
+		contracts.RequestContext{
+			AppID: "campus-services", EchoID: "echo-1", RequestID: "request-1", CallID: "call-1",
+			TargetType: "capability", CapabilityID: "campus.bus.routes.list", ServiceID: "campus",
+		},
+		json.RawMessage(`{"value":1}`),
+	)
+	if err == nil {
+		t.Fatal("file size limit was not enforced")
+	}
+	// 文件要么未被写入，要么写入被限额截断；超限写入必须失败。
+	if info, statErr := os.Stat(writeTarget); statErr == nil && info.Size() > 1024 {
+		t.Fatalf("limited process wrote %d bytes beyond RLIMIT_FSIZE", info.Size())
+	}
+	shutdownContext, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := manager.Shutdown(shutdownContext); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -190,11 +258,11 @@ func TestIsolatedProcessHostForcesBoundedExitAfterStopGrace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manager, err := loader.New(map[string]loader.Host{loader.ModeIsolated: host})
+	manager, err := loader.New(host)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := manager.Register(runtimeManifest("isolated.force", loader.ModeIsolated)); err != nil {
+	if err := manager.Register(context.Background(), runtimeManifest("isolated.force", loader.ModeIsolated)); err != nil {
 		t.Fatal(err)
 	}
 	if err := manager.EnsureLoaded(context.Background(), "isolated.force"); err != nil {

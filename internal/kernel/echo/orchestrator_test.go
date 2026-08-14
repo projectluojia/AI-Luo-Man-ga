@@ -7,79 +7,100 @@ import (
 	"errors"
 	"net"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	agentv1 "github.com/projectluojia/AI-Luo-Man-ga/gen/agentv1"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/campus"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/campus/bus"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/agentprotocol"
+	executorv1 "github.com/projectluojia/AI-Luo-Man-ga/gen/executorv1"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/appconfig"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	kernelecho "github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/executor"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/subagent"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime/runtimetest"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/session"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/agent"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus/campustest"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/blob"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/memory"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/tools/bus"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/test/bufconn"
 )
 
+// newSessionSource 为上下文装配器构造真实的会话历史来源（SQLite 存储 + 安全
+// Blob 存储）。装配器是必需的接线，测试同样走真实来源，不注入空壳。
+func newSessionSource(t *testing.T, store *sqlite.Store) *session.Service {
+	t.Helper()
+	blobs, err := blob.Open(filepath.Join(t.TempDir(), "blobs"), session.MaxMessageContentBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { blobs.Close() })
+	service, err := session.NewService(store, blobs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return service
+}
+
 type fakeAgent struct {
-	agentv1.UnimplementedAgentRuntimeServer
+	executorv1.UnimplementedExecutorRuntimeServer
 	testing *testing.T
 }
 
 type boundaryAgent struct {
-	agentv1.UnimplementedAgentRuntimeServer
+	executorv1.UnimplementedExecutorRuntimeServer
 	testing *testing.T
 }
 
 type duplicateCallAgent struct {
-	agentv1.UnimplementedAgentRuntimeServer
+	executorv1.UnimplementedExecutorRuntimeServer
 }
 
 type lateFrameAgent struct {
-	agentv1.UnimplementedAgentRuntimeServer
+	executorv1.UnimplementedExecutorRuntimeServer
 }
 
 type missingUsageAgent struct {
-	agentv1.UnimplementedAgentRuntimeServer
+	executorv1.UnimplementedExecutorRuntimeServer
 }
 
 type retryOnceAgent struct {
-	agentv1.UnimplementedAgentRuntimeServer
+	executorv1.UnimplementedExecutorRuntimeServer
 	calls atomic.Int32
 }
 
 type slowSuccessAgent struct {
-	agentv1.UnimplementedAgentRuntimeServer
+	executorv1.UnimplementedExecutorRuntimeServer
 	delay time.Duration
 }
 
 type sideEffectFailureAgent struct {
-	agentv1.UnimplementedAgentRuntimeServer
+	executorv1.UnimplementedExecutorRuntimeServer
 }
 
 type configCaptureAgent struct {
-	agentv1.UnimplementedAgentRuntimeServer
-	starts chan *agentv1.StartRun
+	executorv1.UnimplementedExecutorRuntimeServer
+	starts chan *executorv1.StartRun
 }
 
 type revokingPolicyAgent struct {
-	agentv1.UnimplementedAgentRuntimeServer
+	executorv1.UnimplementedExecutorRuntimeServer
 	testing      *testing.T
 	capabilityID string
 	revoke       func() error
 }
 
 type grantingPolicyAgent struct {
-	agentv1.UnimplementedAgentRuntimeServer
+	executorv1.UnimplementedExecutorRuntimeServer
 	testing              *testing.T
 	acceptedCapability   string
 	newCapability        string
@@ -93,17 +114,17 @@ type renewalCountingStore struct {
 }
 
 type nestedRunAgent struct {
-	agentv1.UnimplementedAgentRuntimeServer
+	executorv1.UnimplementedExecutorRuntimeServer
 	testing   *testing.T
 	rootRunID atomic.Value
 }
 
 type cancellingNestedAgent struct {
-	agentv1.UnimplementedAgentRuntimeServer
+	executorv1.UnimplementedExecutorRuntimeServer
 	childStarted chan struct{}
 }
 
-func (a *cancellingNestedAgent) Run(stream agentv1.AgentRuntime_RunServer) error {
+func (a *cancellingNestedAgent) Run(stream executorv1.ExecutorRuntime_RunServer) error {
 	start, err := stream.Recv()
 	if err != nil {
 		return err
@@ -119,10 +140,10 @@ func (a *cancellingNestedAgent) Run(stream agentv1.AgentRuntime_RunServer) error
 	if err := stream.Send(acceptedFrame(start, 1)); err != nil {
 		return err
 	}
-	if err := stream.Send(&agentv1.AgentFrame{
+	if err := stream.Send(&executorv1.ExecutorFrame{
 		EchoId: start.EchoId, RunId: start.RunId, Sequence: 2,
-		Body: &agentv1.AgentFrame_CapabilityCall{CapabilityCall: &agentv1.CapabilityCall{
-			CallId: "delegate-call", CapabilityId: subagent.CapabilityID,
+		Body: &executorv1.ExecutorFrame_CapabilityCall{CapabilityCall: &executorv1.CapabilityCall{
+			CallId: "delegate-call", CapabilityId: agent.CapabilityID,
 			PayloadJson: []byte(`{"task":"等待取消","capability_ids":["campus.bus.routes.list"]}`),
 		}},
 	}); err != nil {
@@ -132,7 +153,7 @@ func (a *cancellingNestedAgent) Run(stream agentv1.AgentRuntime_RunServer) error
 	return err
 }
 
-func (a *nestedRunAgent) Run(stream agentv1.AgentRuntime_RunServer) error {
+func (a *nestedRunAgent) Run(stream executorv1.ExecutorRuntime_RunServer) error {
 	startFrame, err := stream.Recv()
 	if err != nil {
 		return err
@@ -158,9 +179,9 @@ func (a *nestedRunAgent) Run(stream agentv1.AgentRuntime_RunServer) error {
 	if err := stream.Send(acceptedFrame(startFrame, 1)); err != nil {
 		return err
 	}
-	if err := stream.Send(&agentv1.AgentFrame{
+	if err := stream.Send(&executorv1.ExecutorFrame{
 		EchoId: startFrame.EchoId, RunId: startFrame.RunId, Sequence: 2,
-		Body: &agentv1.AgentFrame_CapabilityCall{CapabilityCall: &agentv1.CapabilityCall{
+		Body: &executorv1.ExecutorFrame_CapabilityCall{CapabilityCall: &executorv1.CapabilityCall{
 			CallId: "child-route-call", CapabilityId: campus.BusRouteListCapabilityID, PayloadJson: []byte(`{"limit":10}`),
 		}},
 	}); err != nil {
@@ -173,10 +194,10 @@ func (a *nestedRunAgent) Run(stream agentv1.AgentRuntime_RunServer) error {
 	if !result.GetCapabilityResult().GetSuccess() {
 		a.testing.Errorf("child capability result=%#v", result.GetCapabilityResult())
 	}
-	if err := stream.Send(&agentv1.AgentFrame{
+	if err := stream.Send(&executorv1.ExecutorFrame{
 		EchoId: startFrame.EchoId, RunId: startFrame.RunId, Sequence: 3,
-		Body: &agentv1.AgentFrame_CapabilityCall{CapabilityCall: &agentv1.CapabilityCall{
-			CallId: "nested-delegate-call", CapabilityId: subagent.CapabilityID, PayloadJson: []byte(`{"task":"越权嵌套"}`),
+		Body: &executorv1.ExecutorFrame_CapabilityCall{CapabilityCall: &executorv1.CapabilityCall{
+			CallId: "nested-delegate-call", CapabilityId: agent.CapabilityID, PayloadJson: []byte(`{"task":"越权嵌套"}`),
 		}},
 	}); err != nil {
 		return err
@@ -191,16 +212,16 @@ func (a *nestedRunAgent) Run(stream agentv1.AgentRuntime_RunServer) error {
 	if err := stream.Send(usageFrame(startFrame, 4, 4, 2)); err != nil {
 		return err
 	}
-	return stream.Send(&agentv1.AgentFrame{
+	return stream.Send(&executorv1.ExecutorFrame{
 		EchoId: startFrame.EchoId, RunId: startFrame.RunId, Sequence: 5,
-		Body: &agentv1.AgentFrame_FinalMessage{FinalMessage: &agentv1.FinalMessage{Text: "子任务完成"}},
+		Body: &executorv1.ExecutorFrame_FinalMessage{FinalMessage: &executorv1.FinalMessage{Text: "子任务完成"}},
 	})
 }
 
-func (a *nestedRunAgent) runRoot(stream agentv1.AgentRuntime_RunServer, start *agentv1.AgentFrame) error {
+func (a *nestedRunAgent) runRoot(stream executorv1.ExecutorRuntime_RunServer, start *executorv1.ExecutorFrame) error {
 	hasSubagent := false
 	for _, capability := range start.GetStartRun().GetCapabilities() {
-		if capability.GetId() == subagent.CapabilityID {
+		if capability.GetId() == agent.CapabilityID {
 			hasSubagent = true
 		}
 	}
@@ -210,10 +231,10 @@ func (a *nestedRunAgent) runRoot(stream agentv1.AgentRuntime_RunServer, start *a
 	if err := stream.Send(acceptedFrame(start, 1)); err != nil {
 		return err
 	}
-	if err := stream.Send(&agentv1.AgentFrame{
+	if err := stream.Send(&executorv1.ExecutorFrame{
 		EchoId: start.EchoId, RunId: start.RunId, Sequence: 2,
-		Body: &agentv1.AgentFrame_CapabilityCall{CapabilityCall: &agentv1.CapabilityCall{
-			CallId: "delegate-call", CapabilityId: subagent.CapabilityID,
+		Body: &executorv1.ExecutorFrame_CapabilityCall{CapabilityCall: &executorv1.CapabilityCall{
+			CallId: "delegate-call", CapabilityId: agent.CapabilityID,
 			PayloadJson: []byte(`{"task":"只查询线路并总结","capability_ids":["campus.bus.routes.list"]}`),
 		}},
 	}); err != nil {
@@ -230,23 +251,23 @@ func (a *nestedRunAgent) runRoot(stream agentv1.AgentRuntime_RunServer, start *a
 	if err := stream.Send(usageFrame(start, 3, 6, 3)); err != nil {
 		return err
 	}
-	return stream.Send(&agentv1.AgentFrame{
+	return stream.Send(&executorv1.ExecutorFrame{
 		EchoId: start.EchoId, RunId: start.RunId, Sequence: 4,
-		Body: &agentv1.AgentFrame_FinalMessage{FinalMessage: &agentv1.FinalMessage{Text: "父任务完成"}},
+		Body: &executorv1.ExecutorFrame_FinalMessage{FinalMessage: &executorv1.FinalMessage{Text: "父任务完成"}},
 	})
 }
 
-func acceptedFrame(start *agentv1.AgentFrame, sequence uint64) *agentv1.AgentFrame {
-	return &agentv1.AgentFrame{
+func acceptedFrame(start *executorv1.ExecutorFrame, sequence uint64) *executorv1.ExecutorFrame {
+	return &executorv1.ExecutorFrame{
 		EchoId: start.EchoId, RunId: start.RunId, Sequence: sequence,
-		Body: &agentv1.AgentFrame_RunAccepted{RunAccepted: &agentv1.RunAccepted{ProtocolVersion: agentprotocol.Version}},
+		Body: &executorv1.ExecutorFrame_RunAccepted{RunAccepted: &executorv1.RunAccepted{ProtocolVersion: executor.Version}},
 	}
 }
 
-func usageFrame(start *agentv1.AgentFrame, sequence, inputTokens, outputTokens uint64) *agentv1.AgentFrame {
-	return &agentv1.AgentFrame{
+func usageFrame(start *executorv1.ExecutorFrame, sequence, inputTokens, outputTokens uint64) *executorv1.ExecutorFrame {
+	return &executorv1.ExecutorFrame{
 		EchoId: start.EchoId, RunId: start.RunId, Sequence: sequence,
-		Body: &agentv1.AgentFrame_RunUsage{RunUsage: &agentv1.RunUsage{
+		Body: &executorv1.ExecutorFrame_RunUsage{RunUsage: &executorv1.RunUsage{
 			InputTokens: inputTokens, OutputTokens: outputTokens, TotalTokens: inputTokens + outputTokens,
 		}},
 	}
@@ -257,40 +278,40 @@ func (s *renewalCountingStore) RenewRunLease(ctx context.Context, run kernelecho
 	return s.Store.RenewRunLease(ctx, run, renewedAt, leaseExpiresAt)
 }
 
-func (a *retryOnceAgent) Run(stream agentv1.AgentRuntime_RunServer) error {
+func (a *retryOnceAgent) Run(stream executorv1.ExecutorRuntime_RunServer) error {
 	start, err := stream.Recv()
 	if err != nil {
 		return err
 	}
-	if err := stream.Send(&agentv1.AgentFrame{
+	if err := stream.Send(&executorv1.ExecutorFrame{
 		EchoId: start.EchoId, RunId: start.RunId, Sequence: 1,
-		Body: &agentv1.AgentFrame_RunAccepted{RunAccepted: &agentv1.RunAccepted{ProtocolVersion: agentprotocol.Version}},
+		Body: &executorv1.ExecutorFrame_RunAccepted{RunAccepted: &executorv1.RunAccepted{ProtocolVersion: executor.Version}},
 	}); err != nil {
 		return err
 	}
 	if a.calls.Add(1) == 1 {
-		return stream.Send(&agentv1.AgentFrame{
+		return stream.Send(&executorv1.ExecutorFrame{
 			EchoId: start.EchoId, RunId: start.RunId, Sequence: 2,
-			Body: &agentv1.AgentFrame_RunFailure{RunFailure: &agentv1.RunFailure{
+			Body: &executorv1.ExecutorFrame_RunFailure{RunFailure: &executorv1.RunFailure{
 				Code: "provider_unavailable", Message: "temporary", Retryable: true,
 			}},
 		})
 	}
-	if err := stream.Send(&agentv1.AgentFrame{
+	if err := stream.Send(&executorv1.ExecutorFrame{
 		EchoId: start.EchoId, RunId: start.RunId, Sequence: 2,
-		Body: &agentv1.AgentFrame_RunUsage{RunUsage: &agentv1.RunUsage{
+		Body: &executorv1.ExecutorFrame_RunUsage{RunUsage: &executorv1.RunUsage{
 			InputTokens: 3, OutputTokens: 2, TotalTokens: 5,
 		}},
 	}); err != nil {
 		return err
 	}
-	return stream.Send(&agentv1.AgentFrame{
+	return stream.Send(&executorv1.ExecutorFrame{
 		EchoId: start.EchoId, RunId: start.RunId, Sequence: 3,
-		Body: &agentv1.AgentFrame_FinalMessage{FinalMessage: &agentv1.FinalMessage{Text: "重试成功"}},
+		Body: &executorv1.ExecutorFrame_FinalMessage{FinalMessage: &executorv1.FinalMessage{Text: "重试成功"}},
 	})
 }
 
-func (a *slowSuccessAgent) Run(stream agentv1.AgentRuntime_RunServer) error {
+func (a *slowSuccessAgent) Run(stream executorv1.ExecutorRuntime_RunServer) error {
 	start, err := stream.Recv()
 	if err != nil {
 		return err
@@ -300,20 +321,20 @@ func (a *slowSuccessAgent) Run(stream agentv1.AgentRuntime_RunServer) error {
 	case <-stream.Context().Done():
 		return stream.Context().Err()
 	}
-	for _, frame := range []*agentv1.AgentFrame{
+	for _, frame := range []*executorv1.ExecutorFrame{
 		{
 			EchoId: start.EchoId, RunId: start.RunId, Sequence: 1,
-			Body: &agentv1.AgentFrame_RunAccepted{RunAccepted: &agentv1.RunAccepted{ProtocolVersion: agentprotocol.Version}},
+			Body: &executorv1.ExecutorFrame_RunAccepted{RunAccepted: &executorv1.RunAccepted{ProtocolVersion: executor.Version}},
 		},
 		{
 			EchoId: start.EchoId, RunId: start.RunId, Sequence: 2,
-			Body: &agentv1.AgentFrame_RunUsage{RunUsage: &agentv1.RunUsage{
+			Body: &executorv1.ExecutorFrame_RunUsage{RunUsage: &executorv1.RunUsage{
 				InputTokens: 3, OutputTokens: 2, TotalTokens: 5,
 			}},
 		},
 		{
 			EchoId: start.EchoId, RunId: start.RunId, Sequence: 3,
-			Body: &agentv1.AgentFrame_FinalMessage{FinalMessage: &agentv1.FinalMessage{Text: "续租成功"}},
+			Body: &executorv1.ExecutorFrame_FinalMessage{FinalMessage: &executorv1.FinalMessage{Text: "续租成功"}},
 		},
 	} {
 		if err := stream.Send(frame); err != nil {
@@ -323,19 +344,19 @@ func (a *slowSuccessAgent) Run(stream agentv1.AgentRuntime_RunServer) error {
 	return nil
 }
 
-func (a *sideEffectFailureAgent) Run(stream agentv1.AgentRuntime_RunServer) error {
+func (a *sideEffectFailureAgent) Run(stream executorv1.ExecutorRuntime_RunServer) error {
 	start, err := stream.Recv()
 	if err != nil {
 		return err
 	}
-	for _, frame := range []*agentv1.AgentFrame{
+	for _, frame := range []*executorv1.ExecutorFrame{
 		{
 			EchoId: start.EchoId, RunId: start.RunId, Sequence: 1,
-			Body: &agentv1.AgentFrame_RunAccepted{RunAccepted: &agentv1.RunAccepted{ProtocolVersion: agentprotocol.Version}},
+			Body: &executorv1.ExecutorFrame_RunAccepted{RunAccepted: &executorv1.RunAccepted{ProtocolVersion: executor.Version}},
 		},
 		{
 			EchoId: start.EchoId, RunId: start.RunId, Sequence: 2,
-			Body: &agentv1.AgentFrame_CapabilityCall{CapabilityCall: &agentv1.CapabilityCall{
+			Body: &executorv1.ExecutorFrame_CapabilityCall{CapabilityCall: &executorv1.CapabilityCall{
 				CallId: "external-call", CapabilityId: "test.external", PayloadJson: []byte(`{}`),
 			}},
 		},
@@ -347,34 +368,34 @@ func (a *sideEffectFailureAgent) Run(stream agentv1.AgentRuntime_RunServer) erro
 	if _, err := stream.Recv(); err != nil {
 		return err
 	}
-	return stream.Send(&agentv1.AgentFrame{
+	return stream.Send(&executorv1.ExecutorFrame{
 		EchoId: start.EchoId, RunId: start.RunId, Sequence: 3,
-		Body: &agentv1.AgentFrame_RunFailure{RunFailure: &agentv1.RunFailure{
+		Body: &executorv1.ExecutorFrame_RunFailure{RunFailure: &executorv1.RunFailure{
 			Code: "provider_unavailable", Message: "temporary", Retryable: true,
 		}},
 	})
 }
 
-func (a *configCaptureAgent) Run(stream agentv1.AgentRuntime_RunServer) error {
+func (a *configCaptureAgent) Run(stream executorv1.ExecutorRuntime_RunServer) error {
 	start, err := stream.Recv()
 	if err != nil {
 		return err
 	}
 	a.starts <- start.GetStartRun()
-	for _, frame := range []*agentv1.AgentFrame{
+	for _, frame := range []*executorv1.ExecutorFrame{
 		{
 			EchoId: start.EchoId, RunId: start.RunId, Sequence: 1,
-			Body: &agentv1.AgentFrame_RunAccepted{RunAccepted: &agentv1.RunAccepted{ProtocolVersion: agentprotocol.Version}},
+			Body: &executorv1.ExecutorFrame_RunAccepted{RunAccepted: &executorv1.RunAccepted{ProtocolVersion: executor.Version}},
 		},
 		{
 			EchoId: start.EchoId, RunId: start.RunId, Sequence: 2,
-			Body: &agentv1.AgentFrame_RunUsage{RunUsage: &agentv1.RunUsage{
+			Body: &executorv1.ExecutorFrame_RunUsage{RunUsage: &executorv1.RunUsage{
 				InputTokens: 3, OutputTokens: 2, TotalTokens: 5,
 			}},
 		},
 		{
 			EchoId: start.EchoId, RunId: start.RunId, Sequence: 3,
-			Body: &agentv1.AgentFrame_FinalMessage{FinalMessage: &agentv1.FinalMessage{Text: "配置恢复成功"}},
+			Body: &executorv1.ExecutorFrame_FinalMessage{FinalMessage: &executorv1.FinalMessage{Text: "配置恢复成功"}},
 		},
 	} {
 		if err := stream.Send(frame); err != nil {
@@ -384,7 +405,7 @@ func (a *configCaptureAgent) Run(stream agentv1.AgentRuntime_RunServer) error {
 	return nil
 }
 
-func (a *revokingPolicyAgent) Run(stream agentv1.AgentRuntime_RunServer) error {
+func (a *revokingPolicyAgent) Run(stream executorv1.ExecutorRuntime_RunServer) error {
 	start, err := stream.Recv()
 	if err != nil {
 		return err
@@ -398,18 +419,18 @@ func (a *revokingPolicyAgent) Run(stream agentv1.AgentRuntime_RunServer) error {
 	if !projected {
 		a.testing.Error("Capability 未在撤权前投影")
 	}
-	if err := stream.Send(&agentv1.AgentFrame{
+	if err := stream.Send(&executorv1.ExecutorFrame{
 		EchoId: start.EchoId, RunId: start.RunId, Sequence: 1,
-		Body: &agentv1.AgentFrame_RunAccepted{RunAccepted: &agentv1.RunAccepted{ProtocolVersion: agentprotocol.Version}},
+		Body: &executorv1.ExecutorFrame_RunAccepted{RunAccepted: &executorv1.RunAccepted{ProtocolVersion: executor.Version}},
 	}); err != nil {
 		return err
 	}
 	if err := a.revoke(); err != nil {
 		return err
 	}
-	if err := stream.Send(&agentv1.AgentFrame{
+	if err := stream.Send(&executorv1.ExecutorFrame{
 		EchoId: start.EchoId, RunId: start.RunId, Sequence: 2,
-		Body: &agentv1.AgentFrame_CapabilityCall{CapabilityCall: &agentv1.CapabilityCall{
+		Body: &executorv1.ExecutorFrame_CapabilityCall{CapabilityCall: &executorv1.CapabilityCall{
 			CallId: "revoked-call", CapabilityId: a.capabilityID, PayloadJson: []byte(`{}`),
 		}},
 	}); err != nil {
@@ -423,16 +444,16 @@ func (a *revokingPolicyAgent) Run(stream agentv1.AgentRuntime_RunServer) error {
 	if result.GetSuccess() || result.GetErrorCode() != "capability_disabled" {
 		a.testing.Errorf("撤权后的 Capability 结果=%#v", result)
 	}
-	for _, frame := range []*agentv1.AgentFrame{
+	for _, frame := range []*executorv1.ExecutorFrame{
 		{
 			EchoId: start.EchoId, RunId: start.RunId, Sequence: 3,
-			Body: &agentv1.AgentFrame_RunUsage{RunUsage: &agentv1.RunUsage{
+			Body: &executorv1.ExecutorFrame_RunUsage{RunUsage: &executorv1.RunUsage{
 				InputTokens: 3, OutputTokens: 2, TotalTokens: 5,
 			}},
 		},
 		{
 			EchoId: start.EchoId, RunId: start.RunId, Sequence: 4,
-			Body: &agentv1.AgentFrame_FinalMessage{FinalMessage: &agentv1.FinalMessage{Text: "撤权已生效"}},
+			Body: &executorv1.ExecutorFrame_FinalMessage{FinalMessage: &executorv1.FinalMessage{Text: "撤权已生效"}},
 		},
 	} {
 		if err := stream.Send(frame); err != nil {
@@ -442,7 +463,7 @@ func (a *revokingPolicyAgent) Run(stream agentv1.AgentRuntime_RunServer) error {
 	return nil
 }
 
-func (a *grantingPolicyAgent) Run(stream agentv1.AgentRuntime_RunServer) error {
+func (a *grantingPolicyAgent) Run(stream executorv1.ExecutorRuntime_RunServer) error {
 	start, err := stream.Recv()
 	if err != nil {
 		return err
@@ -477,9 +498,9 @@ func (a *grantingPolicyAgent) Run(stream agentv1.AgentRuntime_RunServer) error {
 		{callID: "late-capability-grant", capabilityID: a.newCapability, errorCode: "capability_disabled"},
 		{callID: "late-permission-grant", capabilityID: a.permissionCapability, errorCode: "permission_denied"},
 	} {
-		if err := stream.Send(&agentv1.AgentFrame{
+		if err := stream.Send(&executorv1.ExecutorFrame{
 			EchoId: start.EchoId, RunId: start.RunId, Sequence: uint64(index + 2),
-			Body: &agentv1.AgentFrame_CapabilityCall{CapabilityCall: &agentv1.CapabilityCall{
+			Body: &executorv1.ExecutorFrame_CapabilityCall{CapabilityCall: &executorv1.CapabilityCall{
 				CallId: test.callID, CapabilityId: test.capabilityID, PayloadJson: []byte(`{}`),
 			}},
 		}); err != nil {
@@ -497,89 +518,89 @@ func (a *grantingPolicyAgent) Run(stream agentv1.AgentRuntime_RunServer) error {
 	if err := stream.Send(usageFrame(start, 4, 3, 2)); err != nil {
 		return err
 	}
-	return stream.Send(&agentv1.AgentFrame{
+	return stream.Send(&executorv1.ExecutorFrame{
 		EchoId: start.EchoId, RunId: start.RunId, Sequence: 5,
-		Body: &agentv1.AgentFrame_FinalMessage{FinalMessage: &agentv1.FinalMessage{Text: "授权未扩张"}},
+		Body: &executorv1.ExecutorFrame_FinalMessage{FinalMessage: &executorv1.FinalMessage{Text: "授权未扩张"}},
 	})
 }
 
-func (a *missingUsageAgent) Run(stream agentv1.AgentRuntime_RunServer) error {
+func (a *missingUsageAgent) Run(stream executorv1.ExecutorRuntime_RunServer) error {
 	start, err := stream.Recv()
 	if err != nil {
 		return err
 	}
-	if err := stream.Send(&agentv1.AgentFrame{
+	if err := stream.Send(&executorv1.ExecutorFrame{
 		EchoId: start.EchoId, RunId: start.RunId, Sequence: 1,
-		Body: &agentv1.AgentFrame_RunAccepted{RunAccepted: &agentv1.RunAccepted{ProtocolVersion: agentprotocol.Version}},
+		Body: &executorv1.ExecutorFrame_RunAccepted{RunAccepted: &executorv1.RunAccepted{ProtocolVersion: executor.Version}},
 	}); err != nil {
 		return err
 	}
-	return stream.Send(&agentv1.AgentFrame{
+	return stream.Send(&executorv1.ExecutorFrame{
 		EchoId: start.EchoId, RunId: start.RunId, Sequence: 2,
-		Body: &agentv1.AgentFrame_FinalMessage{FinalMessage: &agentv1.FinalMessage{Text: "缺少用量"}},
+		Body: &executorv1.ExecutorFrame_FinalMessage{FinalMessage: &executorv1.FinalMessage{Text: "缺少用量"}},
 	})
 }
 
-func (a *duplicateCallAgent) Run(stream agentv1.AgentRuntime_RunServer) error {
+func (a *duplicateCallAgent) Run(stream executorv1.ExecutorRuntime_RunServer) error {
 	start, err := stream.Recv()
 	if err != nil {
 		return err
 	}
-	if err := stream.Send(&agentv1.AgentFrame{
+	if err := stream.Send(&executorv1.ExecutorFrame{
 		EchoId: start.EchoId, RunId: start.RunId, Sequence: 1,
-		Body: &agentv1.AgentFrame_RunAccepted{RunAccepted: &agentv1.RunAccepted{ProtocolVersion: agentprotocol.Version}},
+		Body: &executorv1.ExecutorFrame_RunAccepted{RunAccepted: &executorv1.RunAccepted{ProtocolVersion: executor.Version}},
 	}); err != nil {
 		return err
 	}
-	call := &agentv1.CapabilityCall{
+	call := &executorv1.CapabilityCall{
 		CallId: "duplicate-call", CapabilityId: campus.BusRouteListCapabilityID, PayloadJson: []byte(`{"limit":10}`),
 	}
-	if err := stream.Send(&agentv1.AgentFrame{
+	if err := stream.Send(&executorv1.ExecutorFrame{
 		EchoId: start.EchoId, RunId: start.RunId, Sequence: 2,
-		Body: &agentv1.AgentFrame_RunUsage{RunUsage: &agentv1.RunUsage{
+		Body: &executorv1.ExecutorFrame_RunUsage{RunUsage: &executorv1.RunUsage{
 			InputTokens: 10, OutputTokens: 2, TotalTokens: 12,
 		}},
 	}); err != nil {
 		return err
 	}
-	if err := stream.Send(&agentv1.AgentFrame{
+	if err := stream.Send(&executorv1.ExecutorFrame{
 		EchoId: start.EchoId, RunId: start.RunId, Sequence: 3,
-		Body: &agentv1.AgentFrame_CapabilityCall{CapabilityCall: call},
+		Body: &executorv1.ExecutorFrame_CapabilityCall{CapabilityCall: call},
 	}); err != nil {
 		return err
 	}
 	if _, err := stream.Recv(); err != nil {
 		return err
 	}
-	return stream.Send(&agentv1.AgentFrame{
+	return stream.Send(&executorv1.ExecutorFrame{
 		EchoId: start.EchoId, RunId: start.RunId, Sequence: 4,
-		Body: &agentv1.AgentFrame_CapabilityCall{CapabilityCall: call},
+		Body: &executorv1.ExecutorFrame_CapabilityCall{CapabilityCall: call},
 	})
 }
 
-func (a *lateFrameAgent) Run(stream agentv1.AgentRuntime_RunServer) error {
+func (a *lateFrameAgent) Run(stream executorv1.ExecutorRuntime_RunServer) error {
 	start, err := stream.Recv()
 	if err != nil {
 		return err
 	}
-	frames := []*agentv1.AgentFrame{
+	frames := []*executorv1.ExecutorFrame{
 		{
 			EchoId: start.EchoId, RunId: start.RunId, Sequence: 1,
-			Body: &agentv1.AgentFrame_RunAccepted{RunAccepted: &agentv1.RunAccepted{ProtocolVersion: agentprotocol.Version}},
+			Body: &executorv1.ExecutorFrame_RunAccepted{RunAccepted: &executorv1.RunAccepted{ProtocolVersion: executor.Version}},
 		},
 		{
 			EchoId: start.EchoId, RunId: start.RunId, Sequence: 2,
-			Body: &agentv1.AgentFrame_RunUsage{RunUsage: &agentv1.RunUsage{
+			Body: &executorv1.ExecutorFrame_RunUsage{RunUsage: &executorv1.RunUsage{
 				InputTokens: 10, OutputTokens: 2, TotalTokens: 12,
 			}},
 		},
 		{
 			EchoId: start.EchoId, RunId: start.RunId, Sequence: 3,
-			Body: &agentv1.AgentFrame_FinalMessage{FinalMessage: &agentv1.FinalMessage{Text: "不得成为最终结果"}},
+			Body: &executorv1.ExecutorFrame_FinalMessage{FinalMessage: &executorv1.FinalMessage{Text: "不得成为最终结果"}},
 		},
 		{
 			EchoId: start.EchoId, RunId: start.RunId, Sequence: 4,
-			Body: &agentv1.AgentFrame_ReplyDelta{ReplyDelta: &agentv1.ReplyDelta{Text: "迟到"}},
+			Body: &executorv1.ExecutorFrame_ReplyDelta{ReplyDelta: &executorv1.ReplyDelta{Text: "迟到"}},
 		},
 	}
 	for _, frame := range frames {
@@ -590,20 +611,20 @@ func (a *lateFrameAgent) Run(stream agentv1.AgentRuntime_RunServer) error {
 	return nil
 }
 
-func (a *boundaryAgent) Run(stream agentv1.AgentRuntime_RunServer) error {
+func (a *boundaryAgent) Run(stream executorv1.ExecutorRuntime_RunServer) error {
 	start, err := stream.Recv()
 	if err != nil {
 		return err
 	}
-	if err := stream.Send(&agentv1.AgentFrame{
+	if err := stream.Send(&executorv1.ExecutorFrame{
 		EchoId: start.EchoId, RunId: start.RunId, Sequence: 1,
-		Body: &agentv1.AgentFrame_RunAccepted{RunAccepted: &agentv1.RunAccepted{ProtocolVersion: agentprotocol.Version}},
+		Body: &executorv1.ExecutorFrame_RunAccepted{RunAccepted: &executorv1.RunAccepted{ProtocolVersion: executor.Version}},
 	}); err != nil {
 		return err
 	}
-	if err := stream.Send(&agentv1.AgentFrame{
+	if err := stream.Send(&executorv1.ExecutorFrame{
 		EchoId: start.EchoId, RunId: start.RunId, Sequence: 2,
-		Body: &agentv1.AgentFrame_CapabilityCall{CapabilityCall: &agentv1.CapabilityCall{
+		Body: &executorv1.ExecutorFrame_CapabilityCall{CapabilityCall: &executorv1.CapabilityCall{
 			CallId: "boundary-call", CapabilityId: "private.capability", PayloadJson: []byte(`{"path":"/srv/private.db"}`),
 		}},
 	}); err != nil {
@@ -620,22 +641,22 @@ func (a *boundaryAgent) Run(stream agentv1.AgentRuntime_RunServer) error {
 	if strings.Contains(result.GetErrorMessage(), "private.capability") || strings.Contains(result.GetErrorMessage(), "campus-services") {
 		a.testing.Errorf("capability result disclosed internal details: %#v", result)
 	}
-	return stream.Send(&agentv1.AgentFrame{
+	return stream.Send(&executorv1.ExecutorFrame{
 		EchoId: start.EchoId, RunId: start.RunId, Sequence: 3,
-		Body: &agentv1.AgentFrame_RunFailure{RunFailure: &agentv1.RunFailure{
+		Body: &executorv1.ExecutorFrame_RunFailure{RunFailure: &executorv1.RunFailure{
 			Code: "private_failure", Message: "provider token api-key-secret", Retryable: true,
 		}},
 	})
 }
 
-func (f *fakeAgent) Run(stream agentv1.AgentRuntime_RunServer) error {
+func (f *fakeAgent) Run(stream executorv1.ExecutorRuntime_RunServer) error {
 	start, err := stream.Recv()
 	if err != nil {
 		return err
 	}
-	if err := stream.Send(&agentv1.AgentFrame{
+	if err := stream.Send(&executorv1.ExecutorFrame{
 		EchoId: start.EchoId, RunId: start.RunId, Sequence: 1,
-		Body: &agentv1.AgentFrame_RunAccepted{RunAccepted: &agentv1.RunAccepted{ProtocolVersion: agentprotocol.Version}},
+		Body: &executorv1.ExecutorFrame_RunAccepted{RunAccepted: &executorv1.RunAccepted{ProtocolVersion: executor.Version}},
 	}); err != nil {
 		return err
 	}
@@ -649,17 +670,17 @@ func (f *fakeAgent) Run(stream agentv1.AgentRuntime_RunServer) error {
 	if !available[campus.BusRouteListCapabilityID] {
 		f.testing.Error("route capability was not projected")
 	}
-	if err := stream.Send(&agentv1.AgentFrame{
+	if err := stream.Send(&executorv1.ExecutorFrame{
 		EchoId: start.EchoId, RunId: start.RunId, Sequence: 2,
-		Body: &agentv1.AgentFrame_RunUsage{RunUsage: &agentv1.RunUsage{
+		Body: &executorv1.ExecutorFrame_RunUsage{RunUsage: &executorv1.RunUsage{
 			InputTokens: 10, OutputTokens: 2, TotalTokens: 12,
 		}},
 	}); err != nil {
 		return err
 	}
-	if err := stream.Send(&agentv1.AgentFrame{
+	if err := stream.Send(&executorv1.ExecutorFrame{
 		EchoId: start.EchoId, RunId: start.RunId, Sequence: 3,
-		Body: &agentv1.AgentFrame_CapabilityCall{CapabilityCall: &agentv1.CapabilityCall{
+		Body: &executorv1.ExecutorFrame_CapabilityCall{CapabilityCall: &executorv1.CapabilityCall{
 			CallId: "call-1", CapabilityId: campus.BusRouteListCapabilityID, PayloadJson: []byte(`{"limit":10}`),
 		}},
 	}); err != nil {
@@ -676,30 +697,30 @@ func (f *fakeAgent) Run(stream agentv1.AgentRuntime_RunServer) error {
 	if err := json.Unmarshal(result.GetCapabilityResult().GetPayloadJson(), &decoded); err != nil || len(decoded.Routes) != 1 {
 		f.testing.Fatalf("result=%s err=%v", result.GetCapabilityResult().GetPayloadJson(), err)
 	}
-	if err := stream.Send(&agentv1.AgentFrame{
+	if err := stream.Send(&executorv1.ExecutorFrame{
 		EchoId: start.EchoId, RunId: start.RunId, Sequence: 4,
-		Body: &agentv1.AgentFrame_ReplyDelta{ReplyDelta: &agentv1.ReplyDelta{Text: "当前有一条线路。"}},
+		Body: &executorv1.ExecutorFrame_ReplyDelta{ReplyDelta: &executorv1.ReplyDelta{Text: "当前有一条线路。"}},
 	}); err != nil {
 		return err
 	}
-	if err := stream.Send(&agentv1.AgentFrame{
+	if err := stream.Send(&executorv1.ExecutorFrame{
 		EchoId: start.EchoId, RunId: start.RunId, Sequence: 5,
-		Body: &agentv1.AgentFrame_RunUsage{RunUsage: &agentv1.RunUsage{
+		Body: &executorv1.ExecutorFrame_RunUsage{RunUsage: &executorv1.RunUsage{
 			InputTokens: 30, OutputTokens: 5, TotalTokens: 35,
 		}},
 	}); err != nil {
 		return err
 	}
-	return stream.Send(&agentv1.AgentFrame{
+	return stream.Send(&executorv1.ExecutorFrame{
 		EchoId: start.EchoId, RunId: start.RunId, Sequence: 6,
-		Body: &agentv1.AgentFrame_FinalMessage{FinalMessage: &agentv1.FinalMessage{Text: "当前有一条线路。"}},
+		Body: &executorv1.ExecutorFrame_FinalMessage{FinalMessage: &executorv1.FinalMessage{Text: "当前有一条线路。"}},
 	})
 }
 
 func TestOrchestratorRunsAgentCapabilityLoop(t *testing.T) {
 	listener := bufconn.Listen(1 << 20)
 	grpcServer := grpc.NewServer()
-	agentv1.RegisterAgentRuntimeServer(grpcServer, &fakeAgent{testing: t})
+	executorv1.RegisterExecutorRuntimeServer(grpcServer, &fakeAgent{testing: t})
 	go grpcServer.Serve(listener)
 	defer grpcServer.Stop()
 	ctx := context.Background()
@@ -721,18 +742,17 @@ func TestOrchestratorRunsAgentCapabilityLoop(t *testing.T) {
 	baseBusStore.ReplaceCatalog(campus.AppID, nil, []bus.Route{{ID: "r", Name: "测试线路", Direction: "去程"}})
 	busStore := &countingBusStore{Store: baseBusStore}
 	reg := registry.New()
-	policy := runtime.NewStaticAppPolicy()
+	policy := runtimetest.NewStaticAppPolicy()
 	policy.Enable(campus.AppID, campus.BusRouteListCapabilityID)
-	dispatcher := runtime.NewDispatcher(reg, policy)
-	if err := campus.Register(reg, dispatcher, busStore); err != nil {
-		t.Fatal(err)
-	}
+	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{})
+	campustest.RegisterHosted(t, reg, busStore)
+	seedOrchestratorConfig(t, store, orchestratorSeed("test-model"))
 	orchestrator := kernelecho.NewOrchestrator(
-		agentv1.NewAgentRuntimeClient(connection), reg, dispatcher, policy, store,
-		kernelecho.Config{AppID: campus.AppID, Model: "test-model", SystemPrompt: "test", Timezone: "Asia/Shanghai", MaxSteps: 4, RunTimeout: 5 * time.Second},
+		executorv1.NewExecutorRuntimeClient(connection), reg, dispatcher, policy, store,
+		kernelecho.Config{AppID: campus.AppID, AppConfigSource: store, RunTimeout: 5 * time.Second, Context: newSessionSource(t, store)},
 	)
 	events := []kernelecho.Event{}
-	echoID, err := orchestrator.Run(ctx, kernelecho.RunRequest{Message: "有哪些线路", IdempotencyKey: "orchestrator-run"}, func(event kernelecho.Event) error {
+	echoID, err := runOrchestrator(orchestrator, ctx, kernelecho.RunRequest{Message: "有哪些线路", IdempotencyKey: "orchestrator-run"}, func(event kernelecho.Event) error {
 		events = append(events, event)
 		return nil
 	})
@@ -746,10 +766,10 @@ func TestOrchestratorRunsAgentCapabilityLoop(t *testing.T) {
 	if record.Status != kernelecho.StatusSucceeded || record.FinalMessage != "当前有一条线路。" {
 		t.Fatalf("record=%#v", record)
 	}
-	if len(events) != 5 || len(persisted) != len(events) {
+	if len(events) != 6 || len(persisted) != len(events) {
 		t.Fatalf("events=%d persisted=%d", len(events), len(persisted))
 	}
-	if events[2].Type != "capability.completed" || events[len(events)-1].Type != "reply.final" {
+	if events[3].Type != "capability.completed" || events[len(events)-1].Type != "reply.final" {
 		t.Fatalf("events=%#v", events)
 	}
 	if busStore.routeCalls.Load() != 1 {
@@ -761,11 +781,110 @@ func TestOrchestratorRunsAgentCapabilityLoop(t *testing.T) {
 	}
 }
 
+func TestOrchestratorAssemblesSessionContextIntoRun(t *testing.T) {
+	listener := bufconn.Listen(1 << 20)
+	grpcServer := grpc.NewServer()
+	agentServer := &configCaptureAgent{starts: make(chan *executorv1.StartRun, 1)}
+	executorv1.RegisterExecutorRuntimeServer(grpcServer, agentServer)
+	go grpcServer.Serve(listener)
+	defer grpcServer.Stop()
+	connection, err := grpc.DialContext(t.Context(), "bufnet",
+		grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) { return listener.Dial() }),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.Close()
+
+	store, err := sqlite.Open(filepath.Join(t.TempDir(), "context-assembly.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	sessionService := newSessionSource(t, store)
+	// 模拟平台 Intake 后的会话台账：两条历史消息 + 当前消息（均已在库）。
+	now := time.Now().UTC()
+	if err := store.CreateSession(context.Background(), session.Session{
+		AppID: campus.AppID, SessionID: "session-1", Type: session.SessionTypeDirect,
+		Members:   []session.Member{{UserID: "anonymous", Role: session.MemberRoleOwner, JoinedAt: now}},
+		CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for index, text := range []string{"第一条历史", "第二条历史", "当前的问题"} {
+		if _, _, err := store.CreateMessage(context.Background(), session.Message{
+			AppID: campus.AppID, SessionID: "session-1", MessageID: "message-" + strconv.Itoa(index),
+			SenderUserID: "anonymous", Type: session.MessageTypeText,
+			ContentRef: session.ContentRef{Mode: session.ContentModeInline, Size: int64(len([]byte(text)))},
+			CreatedAt:  now.Add(time.Duration(index) * time.Minute),
+		}, []byte(text)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	reg := registry.New()
+	policy := runtimetest.NewStaticAppPolicy()
+	policy.Enable(campus.AppID, campus.BusRouteListCapabilityID)
+	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{})
+	campustest.RegisterHosted(t, reg, memory.NewBusStore())
+	seedOrchestratorConfig(t, store, orchestratorSeed("test-model"))
+	orchestrator := kernelecho.NewOrchestrator(
+		executorv1.NewExecutorRuntimeClient(connection), reg, dispatcher, policy, store,
+		kernelecho.Config{AppID: campus.AppID, AppConfigSource: store, RunTimeout: 5 * time.Second, Context: sessionService},
+	)
+	events := []kernelecho.Event{}
+	echoID, err := runOrchestrator(orchestrator, t.Context(), kernelecho.RunRequest{
+		Message: "当前的问题", IdempotencyKey: "context-assembly-run",
+		SessionID: "session-1", UserID: "anonymous", MessageID: "message-2",
+	}, func(event kernelecho.Event) error {
+		events = append(events, event)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := <-agentServer.starts
+	if !strings.Contains(start.GetSystemPrompt(), "第一条历史") || !strings.Contains(start.GetSystemPrompt(), "第二条历史") {
+		t.Fatalf("StartRun 系统提示缺少会话历史: %q", start.GetSystemPrompt())
+	}
+	if strings.Contains(start.GetSystemPrompt(), "当前的问题") {
+		t.Fatalf("当前消息不得重复进入历史块: %q", start.GetSystemPrompt())
+	}
+	runs, err := store.ListRuns(t.Context(), campus.AppID, echoID)
+	if err != nil || len(runs) != 1 {
+		t.Fatalf("runs=%#v err=%v", runs, err)
+	}
+	run := runs[0]
+	if len(run.ContextDigest) != 64 {
+		t.Fatalf("Run 未固化上下文摘要: %#v", run)
+	}
+	if run.SessionID != "session-1" || run.UserID != "anonymous" || run.MessageID != "message-2" {
+		t.Fatalf("Run 未持久化会话上下文: %#v", run)
+	}
+	var sources map[string]any
+	if err := json.Unmarshal(run.ContextSources, &sources); err != nil {
+		t.Fatalf("Run 来源版本不是合法 JSON: %v", err)
+	}
+	contextEvent := false
+	for _, event := range events {
+		if event.Type == "run.context" {
+			contextEvent = true
+			if !strings.Contains(string(event.Payload), run.ContextDigest) {
+				t.Fatalf("run.context 事件缺少摘要: %s", event.Payload)
+			}
+		}
+	}
+	if !contextEvent {
+		t.Fatal("缺少 run.context 事件")
+	}
+}
+
 func TestOrchestratorRunsOneGovernedChildWithNarrowedProjection(t *testing.T) {
 	listener := bufconn.Listen(1 << 20)
 	grpcServer := grpc.NewServer()
-	agent := &nestedRunAgent{testing: t}
-	agentv1.RegisterAgentRuntimeServer(grpcServer, agent)
+	agentServer := &nestedRunAgent{testing: t}
+	executorv1.RegisterExecutorRuntimeServer(grpcServer, agentServer)
 	go grpcServer.Serve(listener)
 	defer grpcServer.Stop()
 	ctx := context.Background()
@@ -786,26 +905,29 @@ func TestOrchestratorRunsOneGovernedChildWithNarrowedProjection(t *testing.T) {
 	baseBusStore.ReplaceCatalog(campus.AppID, nil, []bus.Route{{ID: "r", Name: "测试线路", Direction: "去程"}})
 	busStore := &countingBusStore{Store: baseBusStore}
 	reg := registry.New()
-	policy := runtime.NewStaticAppPolicy()
+	policy := runtimetest.NewStaticAppPolicy()
 	policy.Enable(campus.AppID, campus.BusRouteListCapabilityID)
-	policy.Enable(campus.AppID, subagent.CapabilityID)
-	dispatcher := runtime.NewDispatcher(reg, policy, runtime.WithIdempotencyStore(store))
-	if err := campus.Register(reg, dispatcher, busStore); err != nil {
-		t.Fatal(err)
-	}
+	policy.Enable(campus.AppID, agent.CapabilityID)
+	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{IdempotencyStore: store})
+	campustest.RegisterHosted(t, reg, busStore)
+	seedOrchestratorConfig(t, store, appconfig.Config{
+		AppID: campus.AppID, Enabled: true, Model: "test-model", SystemPrompt: "test",
+		Timezone: "Asia/Shanghai", MaxSteps: 4, MaxToolCalls: 8, MaxInputTokens: 1000,
+		MaxOutputTokens: 500, MaxTotalTokens: 1500, MaxOutputBytes: 4096,
+		ProviderTimeout: time.Second,
+	})
 	orchestrator := kernelecho.NewOrchestrator(
-		agentv1.NewAgentRuntimeClient(connection), reg, dispatcher, policy, store,
+		executorv1.NewExecutorRuntimeClient(connection), reg, dispatcher, policy, store,
 		kernelecho.Config{
-			AppID: campus.AppID, Model: "test-model", SystemPrompt: "test", Timezone: "Asia/Shanghai",
-			MaxSteps: 4, MaxToolCalls: 8, MaxInputTokens: 1000, MaxOutputTokens: 500, MaxTotalTokens: 1500,
-			MaxOutputBytes: 4096, ProviderTimeout: time.Second, RunTimeout: 5 * time.Second,
+			AppID: campus.AppID, AppConfigSource: store, RunTimeout: 5 * time.Second,
+			Context: newSessionSource(t, store),
 		},
 	)
-	if err := subagent.Register(reg, orchestrator); err != nil {
+	if err := agent.Register(reg, orchestrator); err != nil {
 		t.Fatal(err)
 	}
 	var delivered []kernelecho.Event
-	echoID, err := orchestrator.Run(ctx, kernelecho.RunRequest{
+	echoID, err := runOrchestrator(orchestrator, ctx, kernelecho.RunRequest{
 		Message: "委派线路查询", IdempotencyKey: "governed-child-run",
 	}, func(event kernelecho.Event) error {
 		delivered = append(delivered, event)
@@ -818,7 +940,7 @@ func TestOrchestratorRunsOneGovernedChildWithNarrowedProjection(t *testing.T) {
 	if err != nil || record.Status != kernelecho.StatusSucceeded || record.FinalMessage != "父任务完成" {
 		t.Fatalf("Echo=%#v err=%v", record, err)
 	}
-	if len(delivered) != 4 || len(persisted) != len(delivered) {
+	if len(delivered) != 5 || len(persisted) != len(delivered) {
 		t.Fatalf("delivered=%#v persisted=%#v", delivered, persisted)
 	}
 	runs, err := store.ListRuns(ctx, campus.AppID, echoID)
@@ -839,6 +961,10 @@ func TestOrchestratorRunsOneGovernedChildWithNarrowedProjection(t *testing.T) {
 		child.MaxSteps >= root.MaxSteps || child.MaxToolCalls >= root.MaxToolCalls {
 		t.Fatalf("root=%#v child=%#v", root, child)
 	}
+	// 子 Run 是干净工作区：不携带会话上下文，但仍固化自身的上下文摘要。
+	if child.SessionID != "" || child.MessageID != "" || len(child.ContextDigest) != 64 {
+		t.Fatalf("child 会话上下文或摘要错误: %#v", child)
+	}
 	if busStore.routeCalls.Load() != 1 {
 		t.Fatalf("route calls=%d", busStore.routeCalls.Load())
 	}
@@ -848,7 +974,7 @@ func TestOrchestratorRunsOneGovernedChildWithNarrowedProjection(t *testing.T) {
 	}
 	delegationAudits := 0
 	for _, audit := range audits {
-		if audit.CapabilityID != subagent.CapabilityID {
+		if audit.CapabilityID != agent.CapabilityID {
 			continue
 		}
 		delegationAudits++
@@ -868,8 +994,8 @@ func TestOrchestratorRunsOneGovernedChildWithNarrowedProjection(t *testing.T) {
 func TestParentCancellationPropagatesAndPersistsChildThenRootTerminalState(t *testing.T) {
 	listener := bufconn.Listen(1 << 20)
 	grpcServer := grpc.NewServer()
-	agent := &cancellingNestedAgent{childStarted: make(chan struct{})}
-	agentv1.RegisterAgentRuntimeServer(grpcServer, agent)
+	agentServer := &cancellingNestedAgent{childStarted: make(chan struct{})}
+	executorv1.RegisterExecutorRuntimeServer(grpcServer, agentServer)
 	go grpcServer.Serve(listener)
 	defer grpcServer.Stop()
 	connection, err := grpc.DialContext(context.Background(), "bufnet",
@@ -886,30 +1012,33 @@ func TestParentCancellationPropagatesAndPersistsChildThenRootTerminalState(t *te
 	}
 	defer store.Close()
 	reg := registry.New()
-	policy := runtime.NewStaticAppPolicy()
+	policy := runtimetest.NewStaticAppPolicy()
 	policy.Enable(campus.AppID, campus.BusRouteListCapabilityID)
-	policy.Enable(campus.AppID, subagent.CapabilityID)
-	dispatcher := runtime.NewDispatcher(reg, policy, runtime.WithIdempotencyStore(store))
-	if err := campus.Register(reg, dispatcher, memory.NewBusStore()); err != nil {
-		t.Fatal(err)
-	}
+	policy.Enable(campus.AppID, agent.CapabilityID)
+	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{IdempotencyStore: store})
+	campustest.RegisterHosted(t, reg, memory.NewBusStore())
+	seedOrchestratorConfig(t, store, appconfig.Config{
+		AppID: campus.AppID, Enabled: true, Model: "test-model", SystemPrompt: "test",
+		Timezone: "Asia/Shanghai", MaxSteps: 4, MaxToolCalls: 8, MaxInputTokens: 1000,
+		MaxOutputTokens: 500, MaxTotalTokens: 1500, MaxOutputBytes: 4096,
+		ProviderTimeout: time.Second,
+	})
 	orchestrator := kernelecho.NewOrchestrator(
-		agentv1.NewAgentRuntimeClient(connection), reg, dispatcher, policy, store,
+		executorv1.NewExecutorRuntimeClient(connection), reg, dispatcher, policy, store,
 		kernelecho.Config{
-			AppID: campus.AppID, Model: "test-model", SystemPrompt: "test", Timezone: "Asia/Shanghai",
-			MaxSteps: 4, MaxToolCalls: 8, MaxInputTokens: 1000, MaxOutputTokens: 500, MaxTotalTokens: 1500,
-			MaxOutputBytes: 4096, ProviderTimeout: time.Second, RunTimeout: 5 * time.Second,
+			AppID: campus.AppID, AppConfigSource: store, RunTimeout: 5 * time.Second,
+			Context: newSessionSource(t, store),
 		},
 	)
-	if err := subagent.Register(reg, orchestrator); err != nil {
+	if err := agent.Register(reg, orchestrator); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
-		<-agent.childStarted
+		<-agentServer.childStarted
 		cancel()
 	}()
-	echoID, err := orchestrator.Run(ctx, kernelecho.RunRequest{
+	echoID, err := runOrchestrator(orchestrator, ctx, kernelecho.RunRequest{
 		Message: "取消父任务", IdempotencyKey: "cancel-governed-child",
 	}, nil)
 	if !errors.Is(err, context.Canceled) {
@@ -933,8 +1062,8 @@ func TestParentCancellationPropagatesAndPersistsChildThenRootTerminalState(t *te
 func TestOrchestratorRecoversHistoricalAppConfigRevision(t *testing.T) {
 	listener := bufconn.Listen(1 << 20)
 	grpcServer := grpc.NewServer()
-	agent := &configCaptureAgent{starts: make(chan *agentv1.StartRun, 1)}
-	agentv1.RegisterAgentRuntimeServer(grpcServer, agent)
+	agentServer := &configCaptureAgent{starts: make(chan *executorv1.StartRun, 1)}
+	executorv1.RegisterExecutorRuntimeServer(grpcServer, agentServer)
 	go grpcServer.Serve(listener)
 	t.Cleanup(grpcServer.Stop)
 	connection, err := grpc.DialContext(t.Context(), "bufnet",
@@ -959,10 +1088,10 @@ func TestOrchestratorRecoversHistoricalAppConfigRevision(t *testing.T) {
 		t.Fatal(err)
 	}
 	reg := registry.New()
-	dispatcher := runtime.NewDispatcher(reg, policy)
+	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{})
 	orchestrator := kernelecho.NewOrchestrator(
-		agentv1.NewAgentRuntimeClient(connection), reg, dispatcher, policy, store,
-		kernelecho.Config{AppID: campus.AppID, AppConfigSource: store, RunTimeout: 5 * time.Second},
+		executorv1.NewExecutorRuntimeClient(connection), reg, dispatcher, policy, store,
+		kernelecho.Config{AppID: campus.AppID, AppConfigSource: store, RunTimeout: 5 * time.Second, Context: newSessionSource(t, store)},
 	)
 	echoID, created, err := orchestrator.CreateIdempotent(t.Context(), kernelecho.RunRequest{
 		Message: "恢复历史配置", IdempotencyKey: "historical-config",
@@ -983,7 +1112,7 @@ func TestOrchestratorRecoversHistoricalAppConfigRevision(t *testing.T) {
 	if err := orchestrator.RunExisting(t.Context(), echoID, kernelecho.RunRequest{}, nil); err != nil {
 		t.Fatal(err)
 	}
-	start := <-agent.starts
+	start := <-agentServer.starts
 	if start.GetModel() != historical.Model ||
 		start.GetTimezone() != historical.Timezone ||
 		start.GetMaxSteps() != historical.MaxSteps ||
@@ -1043,7 +1172,7 @@ func TestOrchestratorRevalidatesCapabilityPolicyAfterProjection(t *testing.T) {
 	}
 	listener := bufconn.Listen(1 << 20)
 	grpcServer := grpc.NewServer()
-	agentv1.RegisterAgentRuntimeServer(grpcServer, &revokingPolicyAgent{
+	executorv1.RegisterExecutorRuntimeServer(grpcServer, &revokingPolicyAgent{
 		testing: t, capabilityID: capabilityID,
 		revoke: func() error {
 			replacement := current
@@ -1062,12 +1191,12 @@ func TestOrchestratorRevalidatesCapabilityPolicyAfterProjection(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = connection.Close() })
-	dispatcher := runtime.NewDispatcher(reg, policy)
+	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{})
 	orchestrator := kernelecho.NewOrchestrator(
-		agentv1.NewAgentRuntimeClient(connection), reg, dispatcher, policy, store,
-		kernelecho.Config{AppID: campus.AppID, AppConfigSource: store, RunTimeout: 5 * time.Second},
+		executorv1.NewExecutorRuntimeClient(connection), reg, dispatcher, policy, store,
+		kernelecho.Config{AppID: campus.AppID, AppConfigSource: store, RunTimeout: 5 * time.Second, Context: newSessionSource(t, store)},
 	)
-	if _, err := orchestrator.Run(t.Context(), kernelecho.RunRequest{
+	if _, err := runOrchestrator(orchestrator, t.Context(), kernelecho.RunRequest{
 		Message: "验证动态撤权", IdempotencyKey: "policy-revocation",
 	}, nil); err != nil {
 		t.Fatal(err)
@@ -1140,7 +1269,7 @@ func TestOrchestratorAcceptedRunScopeCannotExpandAfterGrant(t *testing.T) {
 	}
 	listener := bufconn.Listen(1 << 20)
 	grpcServer := grpc.NewServer()
-	agentv1.RegisterAgentRuntimeServer(grpcServer, &grantingPolicyAgent{
+	executorv1.RegisterExecutorRuntimeServer(grpcServer, &grantingPolicyAgent{
 		testing: t, acceptedCapability: acceptedCapability, newCapability: newCapability,
 		permissionCapability: permissionCapability,
 		grantNewScope: func() error {
@@ -1161,12 +1290,12 @@ func TestOrchestratorAcceptedRunScopeCannotExpandAfterGrant(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = connection.Close() })
-	dispatcher := runtime.NewDispatcher(reg, policy)
+	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{})
 	orchestrator := kernelecho.NewOrchestrator(
-		agentv1.NewAgentRuntimeClient(connection), reg, dispatcher, policy, store,
-		kernelecho.Config{AppID: campus.AppID, AppConfigSource: store, RunTimeout: 5 * time.Second},
+		executorv1.NewExecutorRuntimeClient(connection), reg, dispatcher, policy, store,
+		kernelecho.Config{AppID: campus.AppID, AppConfigSource: store, RunTimeout: 5 * time.Second, Context: newSessionSource(t, store)},
 	)
-	echoID, err := orchestrator.Run(t.Context(), kernelecho.RunRequest{
+	echoID, err := runOrchestrator(orchestrator, t.Context(), kernelecho.RunRequest{
 		Message: "验证新增授权不能扩张既有 Run", IdempotencyKey: "policy-late-grant",
 	}, nil)
 	if err != nil {
@@ -1194,11 +1323,98 @@ func orchestratorAppConfig() appconfig.Config {
 	}
 }
 
+// orchestratorSeed 生成与历史 Orchestrator 默认预算等价的测试种子配置。
+func orchestratorSeed(model string) appconfig.Config {
+	return appconfig.Config{
+		AppID: campus.AppID, Enabled: true, Model: model, SystemPrompt: "test",
+		Timezone: "Asia/Shanghai", MaxSteps: 4, MaxToolCalls: 8,
+		MaxInputTokens: 32768, MaxOutputTokens: 8192, MaxTotalTokens: 40960,
+		MaxOutputBytes: 65536, MaxCostMicrousd: 0, ProviderTimeout: 30 * time.Second,
+	}
+}
+
+// seedOrchestratorConfig 把测试种子写入持久配置，并以 store 作为 Orchestrator
+// 的 AppConfigSource（Orchestrator 强制要求持久配置来源，无合成配置回退）。
+func seedOrchestratorConfig(t *testing.T, store *sqlite.Store, seed appconfig.Config) {
+	t.Helper()
+	if _, _, err := store.Ensure(t.Context(), seed); err != nil {
+		t.Fatalf("seed app config: %v", err)
+	}
+}
+
+// runOrchestrator 是测试便捷入口：等价于生产链路的 CreateIdempotent +
+// RunExisting 两步（Orchestrator 不再提供合并便捷方法）。
+func runOrchestrator(orchestrator *kernelecho.Orchestrator, ctx context.Context, request kernelecho.RunRequest, emit kernelecho.EventEmitter) (string, error) {
+	echoID, created, err := orchestrator.CreateIdempotent(ctx, request)
+	if err != nil {
+		return "", err
+	}
+	if !created {
+		return echoID, nil
+	}
+	return echoID, orchestrator.RunExisting(ctx, echoID, request, emit)
+}
+
+// TestOrchestratorAppendsChannelPromptFromPersistedConfig 验证渠道提示来自
+// 持久化 App 配置（app_config_revisions.channel_prompts），并随 Run 渠道
+// 进入装配后的系统提示；无渠道提示时行为与迁移前一致。
+func TestOrchestratorAppendsChannelPromptFromPersistedConfig(t *testing.T) {
+	listener := bufconn.Listen(1 << 20)
+	grpcServer := grpc.NewServer()
+	agentServer := &configCaptureAgent{starts: make(chan *executorv1.StartRun, 1)}
+	executorv1.RegisterExecutorRuntimeServer(grpcServer, agentServer)
+	go grpcServer.Serve(listener)
+	t.Cleanup(grpcServer.Stop)
+	connection, err := grpc.DialContext(t.Context(), "bufnet",
+		grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) { return listener.Dial() }),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = connection.Close() })
+	store, err := sqlite.Open(filepath.Join(t.TempDir(), "channel-prompt.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	seed := orchestratorAppConfig()
+	seed.ChannelPrompts = map[string]string{"qq_group": "【群聊规则】禁止 Markdown，像真实群聊。", "web": "【网页规则】适合连续阅读。"}
+	if _, _, err := store.Ensure(t.Context(), seed); err != nil {
+		t.Fatal(err)
+	}
+	policy, err := appconfig.NewPersistentPolicy(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg := registry.New()
+	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{})
+	orchestrator := kernelecho.NewOrchestrator(
+		executorv1.NewExecutorRuntimeClient(connection), reg, dispatcher, policy, store,
+		kernelecho.Config{AppID: campus.AppID, AppConfigSource: store, RunTimeout: 5 * time.Second, Context: newSessionSource(t, store)},
+	)
+	echoID, err := runOrchestrator(orchestrator, t.Context(), kernelecho.RunRequest{
+		Message: "群聊问题", IdempotencyKey: "channel-qq-group", Channel: "qq_group",
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := <-agentServer.starts
+	if !strings.Contains(start.GetSystemPrompt(), "【群聊规则】") ||
+		strings.Contains(start.GetSystemPrompt(), "【网页规则】") {
+		t.Fatalf("群聊渠道提示未按渠道装配: %q", start.GetSystemPrompt())
+	}
+	runs, err := store.ListRuns(t.Context(), campus.AppID, echoID)
+	if err != nil || len(runs) != 1 || runs[0].Channel != "qq_group" {
+		t.Fatalf("runs=%#v err=%v", runs, err)
+	}
+}
+
 func TestOrchestratorDurablyRetriesOnlyRetryableRunAttempts(t *testing.T) {
 	listener := bufconn.Listen(1 << 20)
 	grpcServer := grpc.NewServer()
-	agent := &retryOnceAgent{}
-	agentv1.RegisterAgentRuntimeServer(grpcServer, agent)
+	agentServer := &retryOnceAgent{}
+	executorv1.RegisterExecutorRuntimeServer(grpcServer, agentServer)
 	go grpcServer.Serve(listener)
 	defer grpcServer.Stop()
 	connection, err := grpc.DialContext(context.Background(), "bufnet",
@@ -1215,17 +1431,18 @@ func TestOrchestratorDurablyRetriesOnlyRetryableRunAttempts(t *testing.T) {
 	}
 	defer store.Close()
 	reg := registry.New()
-	policy := runtime.NewStaticAppPolicy()
+	policy := runtimetest.NewStaticAppPolicy()
+	seedOrchestratorConfig(t, store, orchestratorSeed("test-model"))
 	orchestrator := kernelecho.NewOrchestrator(
-		agentv1.NewAgentRuntimeClient(connection), reg, runtime.NewDispatcher(reg, policy), policy, store,
+		executorv1.NewExecutorRuntimeClient(connection), reg, runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{}), policy, store,
 		kernelecho.Config{
-			AppID: campus.AppID, Model: "test-model", SystemPrompt: "test", Timezone: "Asia/Shanghai",
-			MaxSteps: 4, RunTimeout: time.Second, MaxRunAttempts: 2,
+			AppID: campus.AppID, AppConfigSource: store, RunTimeout: time.Second, MaxRunAttempts: 2,
 			RetryBaseDelay: 20 * time.Millisecond, RetryMaxDelay: 20 * time.Millisecond,
+			Context: newSessionSource(t, store),
 		},
 	)
 	events := make([]kernelecho.Event, 0)
-	echoID, err := orchestrator.Run(context.Background(), kernelecho.RunRequest{
+	echoID, err := runOrchestrator(orchestrator, context.Background(), kernelecho.RunRequest{
 		Message: "retry", IdempotencyKey: "retry-run",
 	}, func(event kernelecho.Event) error {
 		events = append(events, event)
@@ -1274,7 +1491,7 @@ func TestOrchestratorDurablyRetriesOnlyRetryableRunAttempts(t *testing.T) {
 func TestOrchestratorRenewsActiveRunLease(t *testing.T) {
 	listener := bufconn.Listen(1 << 20)
 	grpcServer := grpc.NewServer()
-	agentv1.RegisterAgentRuntimeServer(grpcServer, &slowSuccessAgent{delay: 90 * time.Millisecond})
+	executorv1.RegisterExecutorRuntimeServer(grpcServer, &slowSuccessAgent{delay: 320 * time.Millisecond})
 	go grpcServer.Serve(listener)
 	defer grpcServer.Stop()
 	connection, err := grpc.DialContext(context.Background(), "bufnet",
@@ -1292,15 +1509,16 @@ func TestOrchestratorRenewsActiveRunLease(t *testing.T) {
 	defer baseStore.Close()
 	store := &renewalCountingStore{Store: baseStore}
 	reg := registry.New()
-	policy := runtime.NewStaticAppPolicy()
+	policy := runtimetest.NewStaticAppPolicy()
+	seedOrchestratorConfig(t, baseStore, orchestratorSeed("test-model"))
 	orchestrator := kernelecho.NewOrchestrator(
-		agentv1.NewAgentRuntimeClient(connection), reg, runtime.NewDispatcher(reg, policy), policy, store,
+		executorv1.NewExecutorRuntimeClient(connection), reg, runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{}), policy, store,
 		kernelecho.Config{
-			AppID: campus.AppID, Model: "test-model", SystemPrompt: "test", Timezone: "Asia/Shanghai",
-			MaxSteps: 4, RunTimeout: time.Second, LeaseDuration: 30 * time.Millisecond,
+			AppID: campus.AppID, AppConfigSource: baseStore, RunTimeout: 2 * time.Second, LeaseDuration: 150 * time.Millisecond,
+			Context: newSessionSource(t, baseStore),
 		},
 	)
-	if _, err := orchestrator.Run(context.Background(), kernelecho.RunRequest{
+	if _, err := runOrchestrator(orchestrator, context.Background(), kernelecho.RunRequest{
 		Message: "renew", IdempotencyKey: "renew-run",
 	}, nil); err != nil {
 		t.Fatal(err)
@@ -1313,7 +1531,7 @@ func TestOrchestratorRenewsActiveRunLease(t *testing.T) {
 func TestOrchestratorDoesNotAutomaticallyRetryAfterSideEffect(t *testing.T) {
 	listener := bufconn.Listen(1 << 20)
 	grpcServer := grpc.NewServer()
-	agentv1.RegisterAgentRuntimeServer(grpcServer, &sideEffectFailureAgent{})
+	executorv1.RegisterExecutorRuntimeServer(grpcServer, &sideEffectFailureAgent{})
 	go grpcServer.Serve(listener)
 	defer grpcServer.Stop()
 	connection, err := grpc.DialContext(context.Background(), "bufnet",
@@ -1330,7 +1548,7 @@ func TestOrchestratorDoesNotAutomaticallyRetryAfterSideEffect(t *testing.T) {
 	}
 	defer store.Close()
 	reg := registry.New()
-	policy := runtime.NewStaticAppPolicy()
+	policy := runtimetest.NewStaticAppPolicy()
 	policy.Enable(campus.AppID, "test.external")
 	var calls atomic.Int32
 	if err := reg.RegisterService(registry.ServiceRegistration{
@@ -1354,15 +1572,16 @@ func TestOrchestratorDoesNotAutomaticallyRetryAfterSideEffect(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	dispatcher := runtime.NewDispatcher(reg, policy, runtime.WithIdempotencyStore(store))
+	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{IdempotencyStore: store})
+	seedOrchestratorConfig(t, store, orchestratorSeed("test-model"))
 	orchestrator := kernelecho.NewOrchestrator(
-		agentv1.NewAgentRuntimeClient(connection), reg, dispatcher, policy, store,
+		executorv1.NewExecutorRuntimeClient(connection), reg, dispatcher, policy, store,
 		kernelecho.Config{
-			AppID: campus.AppID, Model: "test-model", SystemPrompt: "test", Timezone: "Asia/Shanghai",
-			MaxSteps: 4, RunTimeout: time.Second, MaxRunAttempts: 3,
+			AppID: campus.AppID, AppConfigSource: store, RunTimeout: time.Second, MaxRunAttempts: 3,
+			Context: newSessionSource(t, store),
 		},
 	)
-	echoID, err := orchestrator.Run(context.Background(), kernelecho.RunRequest{
+	echoID, err := runOrchestrator(orchestrator, context.Background(), kernelecho.RunRequest{
 		Message: "external", IdempotencyKey: "external-run",
 	}, nil)
 	if !errors.Is(err, kernelecho.ErrAgentRunFailed) || errors.Is(err, kernelecho.ErrRunRetryScheduled) {
@@ -1377,7 +1596,7 @@ func TestOrchestratorDoesNotAutomaticallyRetryAfterSideEffect(t *testing.T) {
 func TestOrchestratorRejectsDuplicateAgentCallBeforeSecondEffect(t *testing.T) {
 	listener := bufconn.Listen(1 << 20)
 	grpcServer := grpc.NewServer()
-	agentv1.RegisterAgentRuntimeServer(grpcServer, &duplicateCallAgent{})
+	executorv1.RegisterExecutorRuntimeServer(grpcServer, &duplicateCallAgent{})
 	go grpcServer.Serve(listener)
 	defer grpcServer.Stop()
 	ctx := context.Background()
@@ -1399,18 +1618,17 @@ func TestOrchestratorRejectsDuplicateAgentCallBeforeSecondEffect(t *testing.T) {
 	baseBusStore.ReplaceCatalog(campus.AppID, nil, []bus.Route{{ID: "r", Name: "测试线路", Direction: "去程"}})
 	busStore := &countingBusStore{Store: baseBusStore}
 	reg := registry.New()
-	policy := runtime.NewStaticAppPolicy()
+	policy := runtimetest.NewStaticAppPolicy()
 	policy.Enable(campus.AppID, campus.BusRouteListCapabilityID)
-	dispatcher := runtime.NewDispatcher(reg, policy, runtime.WithIdempotencyStore(store))
-	if err := campus.Register(reg, dispatcher, busStore); err != nil {
-		t.Fatal(err)
-	}
+	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{IdempotencyStore: store})
+	campustest.RegisterHosted(t, reg, busStore)
+	seedOrchestratorConfig(t, store, orchestratorSeed("test-model"))
 	orchestrator := kernelecho.NewOrchestrator(
-		agentv1.NewAgentRuntimeClient(connection), reg, dispatcher, policy, store,
-		kernelecho.Config{AppID: campus.AppID, Model: "test-model", SystemPrompt: "test", Timezone: "Asia/Shanghai", MaxSteps: 4, RunTimeout: 5 * time.Second},
+		executorv1.NewExecutorRuntimeClient(connection), reg, dispatcher, policy, store,
+		kernelecho.Config{AppID: campus.AppID, AppConfigSource: store, RunTimeout: 5 * time.Second, Context: newSessionSource(t, store)},
 	)
-	echoID, err := orchestrator.Run(ctx, kernelecho.RunRequest{Message: "duplicate", IdempotencyKey: "duplicate-run"}, nil)
-	if !errors.Is(err, agentprotocol.ErrDuplicateCall) {
+	echoID, err := runOrchestrator(orchestrator, ctx, kernelecho.RunRequest{Message: "duplicate", IdempotencyKey: "duplicate-run"}, nil)
+	if !errors.Is(err, executor.ErrDuplicateCall) {
 		t.Fatalf("run error=%v, want ErrDuplicateCall", err)
 	}
 	if busStore.routeCalls.Load() != 1 {
@@ -1433,7 +1651,7 @@ func TestOrchestratorRejectsDuplicateAgentCallBeforeSecondEffect(t *testing.T) {
 func TestOrchestratorRejectsFramesAfterTerminalWithoutPublishingFinal(t *testing.T) {
 	listener := bufconn.Listen(1 << 20)
 	grpcServer := grpc.NewServer()
-	agentv1.RegisterAgentRuntimeServer(grpcServer, &lateFrameAgent{})
+	executorv1.RegisterExecutorRuntimeServer(grpcServer, &lateFrameAgent{})
 	go grpcServer.Serve(listener)
 	defer grpcServer.Stop()
 	ctx := context.Background()
@@ -1451,13 +1669,14 @@ func TestOrchestratorRejectsFramesAfterTerminalWithoutPublishingFinal(t *testing
 	}
 	defer store.Close()
 	reg := registry.New()
-	policy := runtime.NewStaticAppPolicy()
+	policy := runtimetest.NewStaticAppPolicy()
+	seedOrchestratorConfig(t, store, orchestratorSeed("test-model"))
 	orchestrator := kernelecho.NewOrchestrator(
-		agentv1.NewAgentRuntimeClient(connection), reg, runtime.NewDispatcher(reg, policy), policy, store,
-		kernelecho.Config{AppID: campus.AppID, Model: "test-model", SystemPrompt: "test", Timezone: "Asia/Shanghai", MaxSteps: 4, RunTimeout: 5 * time.Second},
+		executorv1.NewExecutorRuntimeClient(connection), reg, runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{}), policy, store,
+		kernelecho.Config{AppID: campus.AppID, AppConfigSource: store, RunTimeout: 5 * time.Second, Context: newSessionSource(t, store)},
 	)
-	echoID, err := orchestrator.Run(ctx, kernelecho.RunRequest{Message: "late", IdempotencyKey: "late-run"}, nil)
-	if !errors.Is(err, agentprotocol.ErrUnexpectedFrame) {
+	echoID, err := runOrchestrator(orchestrator, ctx, kernelecho.RunRequest{Message: "late", IdempotencyKey: "late-run"}, nil)
+	if !errors.Is(err, executor.ErrUnexpectedFrame) {
 		t.Fatalf("run error=%v, want ErrUnexpectedFrame", err)
 	}
 	record, events, getErr := store.GetEcho(ctx, campus.AppID, echoID)
@@ -1478,7 +1697,7 @@ func TestOrchestratorRejectsFramesAfterTerminalWithoutPublishingFinal(t *testing
 func TestOrchestratorRejectsSuccessfulTerminalWithoutUsage(t *testing.T) {
 	listener := bufconn.Listen(1 << 20)
 	grpcServer := grpc.NewServer()
-	agentv1.RegisterAgentRuntimeServer(grpcServer, &missingUsageAgent{})
+	executorv1.RegisterExecutorRuntimeServer(grpcServer, &missingUsageAgent{})
 	go grpcServer.Serve(listener)
 	defer grpcServer.Stop()
 	ctx := context.Background()
@@ -1496,13 +1715,14 @@ func TestOrchestratorRejectsSuccessfulTerminalWithoutUsage(t *testing.T) {
 	}
 	defer store.Close()
 	reg := registry.New()
-	policy := runtime.NewStaticAppPolicy()
+	policy := runtimetest.NewStaticAppPolicy()
+	seedOrchestratorConfig(t, store, orchestratorSeed("test-model"))
 	orchestrator := kernelecho.NewOrchestrator(
-		agentv1.NewAgentRuntimeClient(connection), reg, runtime.NewDispatcher(reg, policy), policy, store,
-		kernelecho.Config{AppID: campus.AppID, Model: "test-model", SystemPrompt: "test", Timezone: "Asia/Shanghai", MaxSteps: 4, RunTimeout: 5 * time.Second},
+		executorv1.NewExecutorRuntimeClient(connection), reg, runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{}), policy, store,
+		kernelecho.Config{AppID: campus.AppID, AppConfigSource: store, RunTimeout: 5 * time.Second, Context: newSessionSource(t, store)},
 	)
-	echoID, err := orchestrator.Run(ctx, kernelecho.RunRequest{Message: "usage", IdempotencyKey: "missing-usage-run"}, nil)
-	if !errors.Is(err, agentprotocol.ErrUnexpectedFrame) {
+	echoID, err := runOrchestrator(orchestrator, ctx, kernelecho.RunRequest{Message: "usage", IdempotencyKey: "missing-usage-run"}, nil)
+	if !errors.Is(err, executor.ErrUnexpectedFrame) {
 		t.Fatalf("run error=%v, want ErrUnexpectedFrame", err)
 	}
 	record, events, getErr := store.GetEcho(ctx, campus.AppID, echoID)
@@ -1529,7 +1749,7 @@ func (s *countingBusStore) ListRoutes(ctx context.Context, appID string, request
 func TestOrchestratorDoesNotExposeAgentOrCapabilityInternalErrors(t *testing.T) {
 	listener := bufconn.Listen(1 << 20)
 	grpcServer := grpc.NewServer()
-	agentv1.RegisterAgentRuntimeServer(grpcServer, &boundaryAgent{testing: t})
+	executorv1.RegisterExecutorRuntimeServer(grpcServer, &boundaryAgent{testing: t})
 	go grpcServer.Serve(listener)
 	defer grpcServer.Stop()
 	ctx := context.Background()
@@ -1547,19 +1767,20 @@ func TestOrchestratorDoesNotExposeAgentOrCapabilityInternalErrors(t *testing.T) 
 	}
 	defer store.Close()
 	reg := registry.New()
-	policy := runtime.NewStaticAppPolicy()
+	policy := runtimetest.NewStaticAppPolicy()
+	seedOrchestratorConfig(t, store, orchestratorSeed("test-model"))
 	orchestrator := kernelecho.NewOrchestrator(
-		agentv1.NewAgentRuntimeClient(connection),
+		executorv1.NewExecutorRuntimeClient(connection),
 		reg,
-		runtime.NewDispatcher(reg, policy),
+		runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{}),
 		policy,
 		store,
 		kernelecho.Config{
-			AppID: campus.AppID, Model: "test-model", SystemPrompt: "test",
-			Timezone: "Asia/Shanghai", MaxSteps: 4, RunTimeout: 5 * time.Second,
+			AppID: campus.AppID, AppConfigSource: store, RunTimeout: 5 * time.Second,
+			Context: newSessionSource(t, store),
 		},
 	)
-	echoID, err := orchestrator.Run(ctx, kernelecho.RunRequest{Message: "trigger boundary errors", IdempotencyKey: "boundary-run"}, nil)
+	echoID, err := runOrchestrator(orchestrator, ctx, kernelecho.RunRequest{Message: "trigger boundary errors", IdempotencyKey: "boundary-run"}, nil)
 	if !errors.Is(err, kernelecho.ErrAgentRunFailed) {
 		t.Fatalf("run error=%v, want ErrAgentRunFailed", err)
 	}
