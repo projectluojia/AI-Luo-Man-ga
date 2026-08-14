@@ -180,8 +180,8 @@ func TestManagerExecutorFailsClosedWithMultipleExecutors(t *testing.T) {
 	}
 }
 
-func TestLoaderUpgradeRejectsRoleChange(t *testing.T) {
-	description := loader.Description{ID: "upgrade.test", Version: "1.0.0", Mode: loader.ModeHosted}
+func TestLoaderRoleConsistencyEnforcedAtLoad(t *testing.T) {
+	description := loader.Description{ID: "role.test", Version: "1.0.0", Mode: loader.ModeHosted}
 	manager, err := loader.New(&fakeHost{runtime: &fakeRuntime{description: description}})
 	if err != nil {
 		t.Fatal(err)
@@ -193,11 +193,8 @@ func TestLoaderUpgradeRejectsRoleChange(t *testing.T) {
 	if err := manager.Register(context.Background(), capability); err != nil {
 		t.Fatal(err)
 	}
-	executorRole := capability
-	executorRole.Version = "2.0.0"
-	executorRole.Role = loader.RoleExecutor
-	if err := manager.Upgrade(context.Background(), executorRole); !errors.Is(err, loader.ErrDescribeMismatch) {
-		t.Fatalf("upgrade role change error=%v, want ErrDescribeMismatch", err)
+	if err := manager.EnsureLoaded(context.Background(), description.ID); err != nil {
+		t.Fatalf("能力提供者角色必须可加载：%v", err)
 	}
 }
 

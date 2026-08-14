@@ -13,6 +13,7 @@ import (
 
 	runtimev1 "github.com/projectluojia/AI-Luo-Man-ga/gen/runtimev1"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/backoff"
@@ -404,11 +405,11 @@ func validateRuntimeInvoke(request contracts.RequestContext, payload json.RawMes
 		}
 	}
 	switch request.TargetType {
-	case "capability":
+	case registry.TargetTypeCapability:
 		if !stableIDPattern.MatchString(request.CapabilityID) || !stableIDPattern.MatchString(request.ServiceID) || request.ToolID != "" {
 			return ErrRuntimeProtocol
 		}
-	case "tool":
+	case registry.TargetTypeTool:
 		if request.CapabilityID != "" || !stableIDPattern.MatchString(request.ServiceID) || !stableIDPattern.MatchString(request.ToolID) {
 			return ErrRuntimeProtocol
 		}

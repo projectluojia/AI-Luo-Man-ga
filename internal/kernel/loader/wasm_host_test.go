@@ -107,12 +107,8 @@ func TestWasmHostServesStringToolsThroughLoader(t *testing.T) {
 	if err := manager.EnsureLoaded(ctx, "strings.tool"); err != nil {
 		t.Fatalf("EnsureLoaded: %v", err)
 	}
-	snapshot, err := manager.Snapshot("strings.tool")
-	if err != nil {
-		t.Fatalf("Snapshot: %v", err)
-	}
-	if snapshot.State != loader.StateReady || snapshot.Mode != loader.ModeHosted {
-		t.Fatalf("snapshot = %+v, want ready hosted", snapshot)
+	if err := manager.EnsureLoaded(ctx, "strings.tool"); err != nil {
+		t.Fatalf("已加载运行时应幂等返回：%v", err)
 	}
 
 	invoke := func(toolID string, payload string) (map[string]any, error) {

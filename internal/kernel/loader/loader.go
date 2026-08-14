@@ -13,12 +13,12 @@ import (
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/executor"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/id"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
 )
 
 const (
-	ModeEmbedded = "embedded"
 	ModeHosted   = "hosted"
 	ModeIsolated = "isolated"
 
@@ -37,23 +37,20 @@ const (
 )
 
 var (
-	ErrInvalidManifest   = errors.New("invalid runtime manifest")
-	ErrDuplicateID       = errors.New("runtime is already registered")
-	ErrNotFound          = errors.New("runtime is not registered")
-	ErrUnsupportedMode   = errors.New("runtime mode is unsupported")
-	ErrLoadFailed        = errors.New("runtime load failed")
-	ErrUnavailable       = errors.New("runtime is unavailable")
-	ErrInFlight          = errors.New("runtime has in-flight calls")
-	ErrPinned            = errors.New("runtime is pinned")
-	ErrShuttingDown      = errors.New("runtime loader is shutting down")
-	ErrDescribeMismatch  = errors.New("runtime description does not match lock")
-	ErrCleanupRequired   = errors.New("failed runtime requires cleanup")
-	ErrConcurrentUpgrade = errors.New("runtime was concurrently upgraded")
-	ErrRuntimeBusy       = errors.New("runtime host capacity is exhausted")
+	ErrInvalidManifest  = errors.New("invalid runtime manifest")
+	ErrDuplicateID      = errors.New("runtime is already registered")
+	ErrNotFound         = errors.New("runtime is not registered")
+	ErrUnsupportedMode  = errors.New("runtime mode is unsupported")
+	ErrLoadFailed       = errors.New("runtime load failed")
+	ErrUnavailable      = errors.New("runtime is unavailable")
+	ErrInFlight         = errors.New("runtime has in-flight calls")
+	ErrShuttingDown     = errors.New("runtime loader is shutting down")
+	ErrDescribeMismatch = errors.New("runtime description does not match lock")
+	ErrRuntimeBusy      = errors.New("runtime host capacity is exhausted")
 )
 
 var (
-	stableIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,127}$`)
+	stableIDPattern = id.AppID
 	versionPattern  = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$`)
 )
 
@@ -103,16 +100,6 @@ type HostCloser interface {
 	Close(context.Context) error
 }
 
-type Snapshot struct {
-	ID         string
-	Version    string
-	Mode       string
-	State      string
-	Pin        bool
-	InFlight   int
-	LastUsedAt time.Time
-}
-
 type entry struct {
 	manifest Manifest
 	// host 是注册时按 Verify 精确绑定、能加载该清单的宿主；同一模式存在多个
@@ -123,14 +110,12 @@ type entry struct {
 	state      string
 	runtime    Runtime
 	inFlight   int
-	lastUsedAt time.Time
 	transition chan struct{}
 }
 
 type Manager struct {
 	mu        sync.RWMutex
 	entries   map[string]*entry
-	retired   []*entry
 	hosts     map[string][]Host
 	accepting bool
 	now       func() time.Time
@@ -148,7 +133,7 @@ func New(hosts ...Host) (*Manager, error) {
 			return nil, ErrUnavailable
 		}
 		mode := host.Mode()
-		if mode != ModeEmbedded && mode != ModeHosted && mode != ModeIsolated {
+		if mode != ModeHosted && mode != ModeIsolated {
 			return nil, ErrUnsupportedMode
 		}
 		grouped[mode] = append(grouped[mode], host)
@@ -312,7 +297,6 @@ func (m *Manager) ensureLoaded(ctx context.Context, item *entry) error {
 			} else {
 				item.state = StateReady
 				item.runtime = loadErr.runtime
-				item.lastUsedAt = m.now().UTC()
 			}
 			close(wait)
 			item.transition = nil
@@ -337,102 +321,6 @@ func (m *Manager) ensureLoaded(ctx context.Context, item *entry) error {
 		default:
 			item.mu.Unlock()
 			return ErrUnavailable
-		}
-	}
-}
-
-// Upgrade 先完整校验并启动新版本，再原子切换新流量，最后等待旧版本在途调用排空。
-func (m *Manager) Upgrade(ctx context.Context, manifest Manifest) error {
-	if err := validateManifest(manifest); err != nil {
-		return err
-	}
-	m.mu.RLock()
-	accepting := m.accepting
-	current := m.entries[manifest.ID]
-	m.mu.RUnlock()
-	if !accepting {
-		return ErrShuttingDown
-	}
-	if current == nil {
-		return ErrNotFound
-	}
-	if current.manifest.Version == manifest.Version && current.manifest.LockedDigest == manifest.LockedDigest {
-		return ErrDuplicateID
-	}
-	// 角色是运行时身份的一部分：升级不允许改变角色。
-	if current.manifest.Role != manifest.Role {
-		return ErrDescribeMismatch
-	}
-	host, err := m.selectHost(ctx, manifest)
-	if err != nil {
-		return err
-	}
-	candidate := &entry{manifest: manifest, host: host, state: StateRegistered}
-	if err := m.ensureLoaded(ctx, candidate); err != nil {
-		return err
-	}
-
-	m.mu.Lock()
-	if !m.accepting {
-		m.mu.Unlock()
-		cleanupErr := m.cleanupRuntime(ctx, candidate)
-		return errors.Join(ErrShuttingDown, cleanupErr)
-	}
-	if m.entries[manifest.ID] != current {
-		m.mu.Unlock()
-		cleanupErr := m.cleanupRuntime(ctx, candidate)
-		return errors.Join(ErrConcurrentUpgrade, cleanupErr)
-	}
-	m.entries[manifest.ID] = candidate
-	m.retired = append(m.retired, current)
-	m.mu.Unlock()
-	observe.Info(ctx, "运行时新版本已接管新调用",
-		observe.StringAttr("runtime_id", manifest.ID),
-		observe.StringAttr("runtime_version", manifest.Version),
-		observe.StringAttr("runtime_mode", manifest.Mode),
-	)
-
-	if err := waitDrained(ctx, current); err != nil {
-		return err
-	}
-	if err := m.unload(ctx, current, true); err != nil {
-		return err
-	}
-	m.removeRetired(current)
-	return nil
-}
-
-func (m *Manager) cleanupRuntime(ctx context.Context, item *entry) error {
-	cleanupContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-	defer cancel()
-	return m.unload(cleanupContext, item, true)
-}
-
-func waitDrained(ctx context.Context, item *entry) error {
-	ticker := time.NewTicker(10 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		item.mu.Lock()
-		drained := item.inFlight == 0 && item.state != StateLoading && item.state != StateUnloading
-		item.mu.Unlock()
-		if drained {
-			return nil
-		}
-		select {
-		case <-ctx.Done():
-			return errors.Join(ErrInFlight, ctx.Err())
-		case <-ticker.C:
-		}
-	}
-}
-
-func (m *Manager) removeRetired(target *entry) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	for index, item := range m.retired {
-		if item == target {
-			m.retired = append(m.retired[:index], m.retired[index+1:]...)
-			return
 		}
 	}
 }
@@ -491,7 +379,6 @@ type Lease struct {
 	entry   *entry
 	runtime Runtime
 	invoker Invoker
-	now     func() time.Time
 	once    sync.Once
 }
 
@@ -534,12 +421,11 @@ func (m *Manager) Acquire(ctx context.Context, id string) (*Lease, error) {
 		}
 	}
 	item.inFlight++
-	item.lastUsedAt = m.now().UTC()
 	loadedRuntime := item.runtime
 	item.mu.Unlock()
 	m.mu.RUnlock()
 	observe.DefaultMetrics().RuntimeCallStarted()
-	return &Lease{entry: item, runtime: loadedRuntime, invoker: invoker, now: m.now}, nil
+	return &Lease{entry: item, runtime: loadedRuntime, invoker: invoker}, nil
 }
 
 func (l *Lease) Invoke(ctx context.Context, request contracts.RequestContext, payload json.RawMessage) (json.RawMessage, error) {
@@ -572,7 +458,6 @@ func (l *Lease) Release() {
 	l.once.Do(func() {
 		l.entry.mu.Lock()
 		l.entry.inFlight--
-		l.entry.lastUsedAt = l.now().UTC()
 		l.entry.mu.Unlock()
 		observe.DefaultMetrics().RuntimeCallStopped()
 	})
@@ -675,31 +560,6 @@ sendJobs:
 	return errors.Join(result...)
 }
 
-func (m *Manager) Unload(ctx context.Context, id string) error {
-	item, err := m.resolve(id)
-	if err != nil {
-		return err
-	}
-	return m.unload(ctx, item, false)
-}
-
-func (m *Manager) ResetFailed(id string) error {
-	item, err := m.resolve(id)
-	if err != nil {
-		return err
-	}
-	item.mu.Lock()
-	defer item.mu.Unlock()
-	if item.state != StateFailed {
-		return ErrUnavailable
-	}
-	if item.runtime != nil {
-		return ErrCleanupRequired
-	}
-	item.state = StateRegistered
-	return nil
-}
-
 // RecoverFailed 在所有在途调用结束后清理失败句柄，使下一次调用重新执行完整加载流程。
 func (m *Manager) RecoverFailed(ctx context.Context, id string) error {
 	item, err := m.resolve(id)
@@ -719,15 +579,11 @@ func (m *Manager) RecoverFailed(ctx context.Context, id string) error {
 	if !hasRuntime {
 		return nil
 	}
-	return m.unload(ctx, item, true)
+	return m.unload(ctx, item)
 }
 
-func (m *Manager) unload(ctx context.Context, item *entry, force bool) error {
+func (m *Manager) unload(ctx context.Context, item *entry) error {
 	item.mu.Lock()
-	if item.manifest.Pin && !force {
-		item.mu.Unlock()
-		return ErrPinned
-	}
 	if item.inFlight > 0 {
 		item.mu.Unlock()
 		return ErrInFlight
@@ -736,7 +592,7 @@ func (m *Manager) unload(ctx context.Context, item *entry, force bool) error {
 		item.mu.Unlock()
 		return nil
 	}
-	if item.runtime == nil || (item.state != StateReady && !(force && item.state == StateFailed)) {
+	if item.runtime == nil || (item.state != StateReady && item.state != StateFailed) {
 		item.mu.Unlock()
 		return ErrUnavailable
 	}
@@ -777,39 +633,13 @@ func (m *Manager) unload(ctx context.Context, item *entry, force bool) error {
 	return stopErr
 }
 
-func (m *Manager) SweepIdle(ctx context.Context, now time.Time) error {
-	if now.IsZero() {
-		return ErrInvalidManifest
-	}
-	m.mu.RLock()
+func (m *Manager) Shutdown(ctx context.Context) error {
+	m.mu.Lock()
+	m.accepting = false
 	items := make([]*entry, 0, len(m.entries))
 	for _, item := range m.entries {
 		items = append(items, item)
 	}
-	m.mu.RUnlock()
-	var result []error
-	for _, item := range items {
-		item.mu.Lock()
-		idle := !item.manifest.Pin && item.manifest.IdleTTL > 0 && item.state == StateReady &&
-			item.inFlight == 0 && !now.Before(item.lastUsedAt.Add(item.manifest.IdleTTL))
-		item.mu.Unlock()
-		if idle {
-			if err := m.unload(ctx, item, false); err != nil && !errors.Is(err, ErrInFlight) {
-				result = append(result, err)
-			}
-		}
-	}
-	return errors.Join(result...)
-}
-
-func (m *Manager) Shutdown(ctx context.Context) error {
-	m.mu.Lock()
-	m.accepting = false
-	items := make([]*entry, 0, len(m.entries)+len(m.retired))
-	for _, item := range m.entries {
-		items = append(items, item)
-	}
-	items = append(items, m.retired...)
 	m.mu.Unlock()
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
@@ -835,7 +665,7 @@ func (m *Manager) Shutdown(ctx context.Context) error {
 		ready := item.state == StateReady || (item.state == StateFailed && item.runtime != nil)
 		item.mu.Unlock()
 		if ready {
-			if err := m.unload(ctx, item, true); err != nil {
+			if err := m.unload(ctx, item); err != nil {
 				result = append(result, err)
 			}
 		}
@@ -852,19 +682,6 @@ func (m *Manager) Shutdown(ctx context.Context) error {
 	return errors.Join(result...)
 }
 
-func (m *Manager) Snapshot(id string) (Snapshot, error) {
-	item, err := m.resolve(id)
-	if err != nil {
-		return Snapshot{}, err
-	}
-	item.mu.Lock()
-	defer item.mu.Unlock()
-	return Snapshot{
-		ID: item.manifest.ID, Version: item.manifest.Version, Mode: item.manifest.Mode,
-		State: item.state, Pin: item.manifest.Pin, InFlight: item.inFlight, LastUsedAt: item.lastUsedAt,
-	}, nil
-}
-
 func (m *Manager) resolve(id string) (*entry, error) {
 	m.mu.RLock()
 	item := m.entries[id]
@@ -877,7 +694,7 @@ func (m *Manager) resolve(id string) (*entry, error) {
 
 func validateManifest(manifest Manifest) error {
 	if !stableIDPattern.MatchString(manifest.ID) || !versionPattern.MatchString(manifest.Version) ||
-		(manifest.Mode != ModeEmbedded && manifest.Mode != ModeHosted && manifest.Mode != ModeIsolated) ||
+		(manifest.Mode != ModeHosted && manifest.Mode != ModeIsolated) ||
 		(manifest.Role != RoleCapability && manifest.Role != RoleExecutor) ||
 		manifest.IdleTTL < 0 || len(manifest.LockedDigest) != 64 {
 		return ErrInvalidManifest

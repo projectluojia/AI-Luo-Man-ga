@@ -45,9 +45,6 @@ func TestInstalledCatalogDiscoversVerifiesAndRegistersHostedRuntime(t *testing.T
 	if err := loader.RegisterInstalled(t.Context(), manager, reg, records); err != nil {
 		t.Fatal(err)
 	}
-	if snapshot, err := manager.Snapshot(record.Runtime.ID); err != nil || snapshot.State != loader.StateRegistered {
-		t.Fatalf("snapshot=%#v err=%v", snapshot, err)
-	}
 	if _, _, err := reg.ResolveCapability("extension.query"); err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +118,7 @@ func TestInstalledRegistrationRollsBackLoaderOnRegistryConflict(t *testing.T) {
 	if err := loader.RegisterInstalled(t.Context(), manager, reg, records); !errors.Is(err, registry.ErrDuplicateID) {
 		t.Fatalf("冲突注册错误=%v", err)
 	}
-	if _, err := manager.Snapshot(records[0].Runtime.ID); !errors.Is(err, loader.ErrNotFound) {
+	if err := manager.EnsureLoaded(t.Context(), records[0].Runtime.ID); !errors.Is(err, loader.ErrNotFound) {
 		t.Fatalf("失败注册后 Loader 残留=%v", err)
 	}
 	if len(reg.Services()) != 0 || len(reg.Capabilities()) != 0 || len(reg.Tools()) != 1 {

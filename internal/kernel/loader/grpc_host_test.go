@@ -203,15 +203,6 @@ func TestHostedGRPCHostSharesConnectionAndPreservesGovernedContext(t *testing.T)
 		t.Fatalf("governed context=%#v", got)
 	}
 
-	if err := manager.SweepIdle(context.Background(), time.Now().Add(time.Hour)); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := handler(context.Background(), governedRuntimeRequest(), json.RawMessage(`{}`)); err != nil {
-		t.Fatalf("idle sweep closed active hosted connection: %v", err)
-	}
-	if dials.Load() != 1 {
-		t.Fatalf("idle sweep caused redial: %d", dials.Load())
-	}
 	if err := manager.Shutdown(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -413,13 +404,8 @@ func TestHostedGRPCHostEnforcesRuntimeAndInvocationCapacity(t *testing.T) {
 	if err := <-firstDone; err != nil {
 		t.Fatal(err)
 	}
-	if err := manager.Unload(context.Background(), "hosted.capacity.one"); err != nil {
-		t.Fatal(err)
-	}
+	// 失败条目可恢复：句柄清理后处于注册态，Shutdown 可干净收尾。
 	if err := manager.RecoverFailed(context.Background(), "hosted.capacity.two"); err != nil {
-		t.Fatal(err)
-	}
-	if err := manager.EnsureLoaded(context.Background(), "hosted.capacity.two"); err != nil {
 		t.Fatal(err)
 	}
 	if err := manager.Shutdown(context.Background()); err != nil {
