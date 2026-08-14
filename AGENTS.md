@@ -198,7 +198,7 @@ The App-scoped storage/public-error, durable Echo/Run state, Go trust-boundary/i
 - 确认与副作用治理（迁移 17）：持久 Confirmation 五态状态机（waiting/approved/rejected/expired/revoked），argument_digest 与范围绑定，CAS 决策、并发重复批准幂等、重启后待确认状态仍在、未知执行结果不伪报；Service 实现 `runtime.ConfirmationVerifier` 并已注入 Dispatcher（未批准 fail-closed）。
 - 后台任务与调度（迁移 18）：持久 Task 状态机（租约领取/续期/死亡恢复/有界重试/App 容量隔离/封闭类型注册表+参数 Schema 双重校验；`task/outbox.go` 无消费者，2026-08-14 审计删除）；`main.go` 已装配调度器，首个真实消费者为确认过期清扫（`governance.confirmation.expiry`，5 分钟周期，任务自续链，启动播种一轮）。
 - 测试基建：`internal/kernel/strictschema` 共享严格 JSON Schema 编译/校验（Registry 与任务类型注册表共用，消除重复实现）；7 个 fuzz 目标（种子随 `go test` 常驻）；task.Event 与 SSE 信封两组 golden 契约。
-- 平台接入统一入口：`internal/access` 定义标准 `InboundMessage`/`OutboundMessage` 与 `Hub.Intake`（校验 → 身份解析 → 会话找到或创建 → 消息入库）。Web 适配器已接入该入口：HTTP 请求经标准消息 → 会话/消息持久化（SQLite，匿名发送者）→ Echo 创建，平台与 Agent 历史解耦；重复投递由同一幂等键在消息与 Echo 两侧去重，重放不产生重复消息或重复 Echo。身份服务已装配（匿名 Web 不触发，携带平台身份的消息到达时才解析）。
+- 平台接入统一入口：`internal/access` 定义标准 `InboundMessage`/`OutboundMessage` 与 `Hub.Intake`（校验 → 身份解析 → 会话找到或创建 → 消息入库）。所有用户消息必须先解析为内部用户与有效 AppMembership，不存在匿名发送者或匿名会话降级；Web 仅接受可信认证器提供的登录态，主程序未接入认证器时聊天创建入口返回 401。重复投递仍由同一幂等键在消息与 Echo 两侧去重。
 
 该批模块的存储/服务/调度代码与测试全部合并并通过 Go 全量测试、`go vet`、`-race`、Python 测试与 e2e 集成门禁（e2e 断言 Web 消息已持久化到会话台账）。
 
@@ -220,10 +220,10 @@ The App-scoped storage/public-error, durable Echo/Run state, Go trust-boundary/i
 - 严格入站契约：64KiB 请求体上限、`DisallowUnknownFields` 严格解码、单 JSON 对象 EOF 校验、平台路径标识正则、字段级校验（platform_message_id/message_type/text≤4000/幂等键复用 `idempotency.ValidateKey`）；非法平台身份标识（含控制字符）映射 400 `invalid_platform_identity`（此前会误落 500）。
 - 跨入口共享错误映射：`access.WriteIntakeError`/`WriteEchoError`/`SecurityHeaders` 从 Web 适配器抽取为共享函数，web 与 ingress 共用同一公共错误契约（身份未绑定 401 `identity_not_found`、用户禁用 403 `user_disabled`、平台消息去重键冲突 409 `idempotency_conflict`、队列满 429+Retry-After、App 禁用/配置不可用 503）。
 - 幂等闭环：同一平台消息重复投递（相同 platform_message_id + 幂等键）在消息与 Echo 两侧同时去重，重放返回既有 echo 且 created=false；同一 platform_message_id 配不同幂等键被拒绝（409），不产生新消息/新 Echo。
-- 会话归一：同一身份用户跨平台消息归一到同一 `session-<user_id>` 会话（消息在会话内按序累积），匿名渠道使用保留匿名会话。
+- 会话归一：使用 `session-v1-<sha256>` 版本化会话键；direct 按 App、平台、渠道、空间、平台会话与内部用户隔离，group 按 App、平台、渠道、空间与平台会话共享群历史。SQLite 原子确保会话类型、平台绑定与群成员，旧 `session-<user_id>`/`web-anonymous` 历史不会进入新上下文。
 - `identity-bind` 维护命令：`main.go` 新增幂等身份开通（CreateUser 已存在则继续、同一外部身份重复绑定同一用户视为成功重放、绑定其他用户明确报错、成员关系 upsert），支持 --user/--app/--platform/--space/--platform-user，用于控制面开通内部用户与平台绑定（2026-08-14 移除 --roles：角色管理面已删，无角色可引用）。
 - HTTP 接线：外层 ServeMux 组合——`/api/v1/ingress/` 前缀交给 ingress，其余路径交给 Web Access（健康检查、Echo/SSE、演示页面）。
-- 测试：ingress 9 个用例（身份解析/去重/会话连续性/幂等冲突/未绑定与禁用/匿名/畸形事件/错误映射）+ identity-bind 幂等与冲突测试 + access 全量回归。
+- 测试：ingress 覆盖身份解析/去重/会话连续性/幂等冲突/身份缺失/未绑定与禁用/畸形事件/错误映射，Hub 覆盖跨群、群私聊、跨平台、群成员原子补写与旧会话隔离，另保留 identity-bind 幂等与冲突测试。
 
 ## 2026-08-13 agent Service 最终结构（Agent 亦为一种 Service，统一 Loader）
 

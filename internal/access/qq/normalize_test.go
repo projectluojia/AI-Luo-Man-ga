@@ -5,6 +5,8 @@ import (
 	"testing"
 )
 
+const testBotQQID = "2647414417"
+
 type inboundExpect struct {
 	channel   string
 	space     string
@@ -46,6 +48,41 @@ func TestNormalizeEvent(t *testing.T) {
 			want:    &inboundExpect{channel: "group", space: "111", user: "222", session: "111", text: "有哪些线路", mentioned: true},
 		},
 		{
+			name:    "group at another user not flagged",
+			payload: `{"post_type":"message","message_type":"group","group_id":111,"user_id":222,"message_id":"m9","message":[{"type":"at","data":{"qq":"123456"}},{"type":"text","data":{"text":"你好"}}]}`,
+			want:    &inboundExpect{channel: "group", space: "111", user: "222", session: "111", text: "你好"},
+		},
+		{
+			name:    "group at all not flagged",
+			payload: `{"post_type":"message","message_type":"group","group_id":111,"user_id":222,"message_id":"m10","message":[{"type":"at","data":{"qq":"all"}},{"type":"text","data":{"text":"你好"}}]}`,
+			want:    &inboundExpect{channel: "group", space: "111", user: "222", session: "111", text: "你好"},
+		},
+		{
+			name:    "multiple mentions include bot",
+			payload: `{"post_type":"message","message_type":"group","group_id":111,"user_id":222,"message_id":"m11","message":[{"type":"at","data":{"qq":"123456"}},{"type":"at","data":{"qq":"2647414417"}},{"type":"text","data":{"text":"你好"}}]}`,
+			want:    &inboundExpect{channel: "group", space: "111", user: "222", session: "111", text: "你好", mentioned: true},
+		},
+		{
+			name:    "raw cq mentions bot",
+			payload: `{"post_type":"message","message_type":"group","group_id":111,"user_id":222,"message_id":"m12","raw_message":"[CQ:at,name=AI珞,qq=2647414417] 你好"}`,
+			want:    &inboundExpect{channel: "group", space: "111", user: "222", session: "111", text: "你好", mentioned: true},
+		},
+		{
+			name:    "raw cq mentions another user",
+			payload: `{"post_type":"message","message_type":"group","group_id":111,"user_id":222,"message_id":"m13","raw_message":"[CQ:at,qq=123456] 你好"}`,
+			want:    &inboundExpect{channel: "group", space: "111", user: "222", session: "111", text: "你好"},
+		},
+		{
+			name:    "bot self message skipped",
+			payload: `{"post_type":"message","message_type":"group","group_id":111,"user_id":2647414417,"message_id":"m14","message":[{"type":"text","data":{"text":"机器人消息"}}]}`,
+			want:    nil,
+		},
+		{
+			name:    "mismatched self id skipped",
+			payload: `{"post_type":"message","self_id":999999,"message_type":"group","group_id":111,"user_id":222,"message_id":"m15","message":[{"type":"at","data":{"qq":"2647414417"}},{"type":"text","data":{"text":"你好"}}]}`,
+			want:    nil,
+		},
+		{
 			name:    "group at only no text skipped",
 			payload: `{"post_type":"message","message_type":"group","group_id":111,"user_id":222,"message_id":"m8","message":[{"type":"at","data":{"qq":"2647414417"}}]}`,
 			want:    nil,
@@ -73,10 +110,10 @@ func TestNormalizeEvent(t *testing.T) {
 			if err := json.Unmarshal([]byte(test.payload), &raw); err != nil {
 				t.Fatal(err)
 			}
-			got, mentioned := normalizeEvent("campus-services", raw)
+			got, mentioned := normalizeEvent("campus-services", testBotQQID, raw)
 			if test.want == nil {
-				if got != nil {
-					t.Fatalf("got %#v, want nil", got)
+				if got != nil || mentioned {
+					t.Fatalf("got %#v mentioned=%t, want nil and false", got, mentioned)
 				}
 				return
 			}
@@ -91,6 +128,31 @@ func TestNormalizeEvent(t *testing.T) {
 				t.Fatalf("got %#v mentioned=%t", got, mentioned)
 			}
 		})
+	}
+}
+
+func TestNormalizeQQID(t *testing.T) {
+	tests := []struct {
+		value string
+		valid bool
+	}{
+		{value: testBotQQID, valid: true},
+		{value: "", valid: false},
+		{value: " 2647414417", valid: false},
+		{value: "2647414417 ", valid: false},
+		{value: "02647414417", valid: false},
+		{value: "-1", valid: false},
+		{value: "all", valid: false},
+		{value: "0", valid: false},
+	}
+	for _, test := range tests {
+		normalized, valid := normalizeQQID(test.value)
+		if valid != test.valid {
+			t.Errorf("normalizeQQID(%q) valid=%t, want %t", test.value, valid, test.valid)
+		}
+		if valid && normalized != test.value {
+			t.Errorf("normalizeQQID(%q)=%q", test.value, normalized)
+		}
 	}
 }
 

@@ -22,8 +22,9 @@ const (
 )
 
 // Event 是平台适配器推送的统一平台事件（规范化入站消息）。
-// platform 由请求路径提供；PlatformUserID 为空表示匿名渠道（走保留匿名路径）。
+// platform 由请求路径提供；用户身份与渠道类型均为必填，不提供匿名降级。
 type Event struct {
+	PlatformChannel   string    `json:"platform_channel"`
 	PlatformSpaceID   string    `json:"platform_space_id"`
 	PlatformUserID    string    `json:"platform_user_id"`
 	PlatformSessionID string    `json:"platform_session_id"`
@@ -115,6 +116,7 @@ func (s *Server) toInbound(platform string, event Event) access.InboundMessage {
 	return access.InboundMessage{
 		AppID:             s.appID,
 		Platform:          platform,
+		PlatformChannel:   event.PlatformChannel,
 		PlatformSpaceID:   event.PlatformSpaceID,
 		PlatformUserID:    event.PlatformUserID,
 		PlatformMessageID: event.PlatformMessageID,

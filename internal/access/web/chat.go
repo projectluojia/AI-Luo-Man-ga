@@ -19,7 +19,7 @@ import (
 
 // chatRequest 是产品前端（LuoYing-Frontend）的聊天契约：文本消息经受治理
 // Intake 进入平台标准链路。session_id 只用于平台会话绑定记录，客户端提供的
-// user_id/user_name 不作为身份依据（匿名渠道由内核保留匿名身份）。
+// user_id/user_name/session_id 不作为身份依据，身份只来自可信 Web 登录态。
 type chatRequest struct {
 	SessionID string   `json:"session_id"`
 	UserID    string   `json:"user_id"`
@@ -38,11 +38,15 @@ func (s *Server) chatStream(writer http.ResponseWriter, request *http.Request) {
 		access.WriteJSON(writer, http.StatusInternalServerError, map[string]string{"code": "streaming_unavailable"})
 		return
 	}
+	webIdentity, authenticated := s.authenticateWeb(writer, request)
+	if !authenticated {
+		return
+	}
 	req, ok := s.decodeChatRequest(writer, request)
 	if !ok {
 		return
 	}
-	echoID, created, ok := s.startChatRun(writer, request, req)
+	echoID, created, ok := s.startChatRun(writer, request, req, webIdentity)
 	if !ok {
 		return
 	}
@@ -126,17 +130,16 @@ func (s *Server) decodeChatRequest(writer http.ResponseWriter, request *http.Req
 
 // startChatRun 执行受治理的标准链路：平台消息入库 → 幂等 Echo 创建。
 // 平台消息标识与幂等键由服务端生成（前端契约不携带幂等键）。
-func (s *Server) startChatRun(writer http.ResponseWriter, request *http.Request, req *chatRequest) (string, bool, bool) {
+func (s *Server) startChatRun(writer http.ResponseWriter, request *http.Request, req *chatRequest, webIdentity AuthenticatedWebIdentity) (string, bool, bool) {
 	idempotencyKey := uuid.NewString()
-	sessionID := strings.TrimSpace(req.SessionID)
-	if sessionID == "" {
-		sessionID = access.AnonymousSessionID
-	}
 	intake, err := s.platformHub.Intake(request.Context(), access.InboundMessage{
 		AppID:             s.appID,
 		Platform:          "web",
+		PlatformChannel:   "private",
+		PlatformSpaceID:   webIdentity.PlatformSpaceID,
+		PlatformUserID:    webIdentity.PlatformUserID,
 		PlatformMessageID: idempotencyKey,
-		PlatformSessionID: sessionID,
+		PlatformSessionID: webIdentity.PlatformSessionID,
 		MessageType:       "text",
 		Text:              req.Text,
 		OccurredAt:        time.Now().UTC(),

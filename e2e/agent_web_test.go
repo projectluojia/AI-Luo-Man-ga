@@ -24,6 +24,7 @@ import (
 	kernelecho "github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/executor"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/health"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/identity"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime"
@@ -37,6 +38,14 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/tools/bus"
 )
+
+type integrationWebAuthenticator struct{}
+
+func (integrationWebAuthenticator) Authenticate(*http.Request) (web.AuthenticatedWebIdentity, error) {
+	return web.AuthenticatedWebIdentity{
+		PlatformSpaceID: "web", PlatformUserID: "integration-user", PlatformSessionID: "integration-session",
+	}, nil
+}
 
 func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 	var modelTurns atomic.Int32
@@ -208,7 +217,28 @@ func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 	if err := agent.Register(reg, orchestrator); err != nil {
 		t.Fatal(err)
 	}
-	handler := web.NewServer(ctx, orchestrator, store, health.Combined{store, health.ExecutorChecker{Client: agentClient, Model: "test-model"}}, reg, policy, campus.AppID, access.NewHub(campus.AppID, store, nil)).Handler()
+	identities := identity.NewService(store)
+	if _, err := identities.CreateUser(ctx, "integration-user"); err != nil {
+		t.Fatal(err)
+	}
+	if err := identities.BindExternalIdentity(ctx, identity.ExternalIdentity{
+		AppID: campus.AppID, Platform: "web", PlatformSpaceID: "web",
+		PlatformUserID: "integration-user", UserID: "integration-user",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := identities.SetMembership(ctx, identity.AppMembership{AppID: campus.AppID, UserID: "integration-user"}); err != nil {
+		t.Fatal(err)
+	}
+	platformHub, err := access.NewHub(campus.AppID, store, identities)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := web.NewServer(
+		ctx, orchestrator, store,
+		health.Combined{store, health.ExecutorChecker{Client: agentClient, Model: "test-model"}},
+		reg, policy, campus.AppID, platformHub, web.WithWebAuthenticator(integrationWebAuthenticator{}),
+	).Handler()
 	readinessRecorder := httptest.NewRecorder()
 	handler.ServeHTTP(readinessRecorder, httptest.NewRequest(http.MethodGet, "/readyz", nil))
 	if readinessRecorder.Code != http.StatusOK {
@@ -233,11 +263,6 @@ func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 	if eventsRecorder.Code != http.StatusOK || !strings.Contains(eventsRecorder.Body.String(), "event: reply.final") {
 		t.Fatalf("events status=%d body=%s logs=%s", eventsRecorder.Code, eventsRecorder.Body.String(), logs.String())
 	}
-	// 平台消息必须已持久化到会话台账（Web 匿名会话），验证"平台与 Agent 历史解耦"。
-	messages, err := store.ListMessages(ctx, campus.AppID, "web-anonymous", session.MessageQuery{Limit: 10})
-	if err != nil || len(messages) != 1 || messages[0].SenderUserID != "anonymous" || messages[0].Type != "text" {
-		t.Fatalf("会话消息未持久化或形状错误: messages=%#v err=%v", messages, err)
-	}
 	record, events, err := store.GetEcho(ctx, campus.AppID, echoID)
 	if err != nil {
 		t.Fatal(err)
@@ -257,6 +282,10 @@ func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 		} else {
 			childRun = run
 		}
+	}
+	messages, err := store.ListMessages(ctx, campus.AppID, rootRun.SessionID, session.MessageQuery{Limit: 10})
+	if err != nil || len(messages) != 1 || messages[0].SenderUserID != "integration-user" || messages[0].Type != "text" {
+		t.Fatalf("会话消息未持久化或形状错误: messages=%#v err=%v", messages, err)
 	}
 	if rootRun.ID == "" ||
 		childRun.ParentRunID != rootRun.ID ||

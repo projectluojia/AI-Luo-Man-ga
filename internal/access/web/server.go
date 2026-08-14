@@ -45,25 +45,26 @@ type EchoOrchestrator interface {
 }
 
 type Server struct {
-	schedulerCtx context.Context
-	stopSchedule context.CancelFunc
-	orchestrator EchoOrchestrator
-	reader       EchoReader
-	health       HealthChecker
-	registry     *registry.Registry
-	policy       runtime.AppPolicy
-	appID        string
-	platformHub  *access.Hub
-	hub          *access.EventHub
-	activeMu     sync.Mutex
-	active       map[echoKey]context.CancelFunc
-	pending      map[echoKey]context.Context
-	activeWG     sync.WaitGroup
-	workerWG     sync.WaitGroup
-	admissionWG  sync.WaitGroup
-	workSignal   chan struct{}
-	scheduleOnce sync.Once
-	accepting    bool
+	schedulerCtx     context.Context
+	stopSchedule     context.CancelFunc
+	orchestrator     EchoOrchestrator
+	reader           EchoReader
+	health           HealthChecker
+	registry         *registry.Registry
+	policy           runtime.AppPolicy
+	appID            string
+	platformHub      *access.Hub
+	webAuthenticator WebAuthenticator
+	hub              *access.EventHub
+	activeMu         sync.Mutex
+	active           map[echoKey]context.CancelFunc
+	pending          map[echoKey]context.Context
+	activeWG         sync.WaitGroup
+	workerWG         sync.WaitGroup
+	admissionWG      sync.WaitGroup
+	workSignal       chan struct{}
+	scheduleOnce     sync.Once
+	accepting        bool
 }
 
 const (
@@ -87,6 +88,7 @@ func NewServer(
 	policy runtime.AppPolicy,
 	appID string,
 	platformHub *access.Hub,
+	options ...ServerOption,
 ) *Server {
 	schedulerCtx, stopSchedule := context.WithCancel(ctx)
 	server := &Server{
@@ -104,6 +106,11 @@ func NewServer(
 		pending:      make(map[echoKey]context.Context),
 		workSignal:   make(chan struct{}, 1),
 		accepting:    true,
+	}
+	for _, option := range options {
+		if option != nil {
+			option(server)
+		}
 	}
 	return server
 }
@@ -211,6 +218,10 @@ func (s *Server) createEcho(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	defer s.admissionWG.Done()
+	webIdentity, authenticated := s.authenticateWeb(writer, request)
+	if !authenticated {
+		return
+	}
 	idempotencyValues := request.Header.Values("Idempotency-Key")
 	if len(idempotencyValues) != 1 || idempotencyValues[0] != strings.TrimSpace(idempotencyValues[0]) || idempotency.ValidateKey(idempotencyValues[0]) != nil {
 		observe.Warn(request.Context(), "创建 Echo 的幂等键无效")
@@ -249,8 +260,11 @@ func (s *Server) createEcho(writer http.ResponseWriter, request *http.Request) {
 	intake, err := s.platformHub.Intake(request.Context(), access.InboundMessage{
 		AppID:             s.appID,
 		Platform:          "web",
+		PlatformChannel:   "private",
+		PlatformSpaceID:   webIdentity.PlatformSpaceID,
+		PlatformUserID:    webIdentity.PlatformUserID,
 		PlatformMessageID: input.IdempotencyKey,
-		PlatformSessionID: access.AnonymousSessionID,
+		PlatformSessionID: webIdentity.PlatformSessionID,
 		MessageType:       "text",
 		Text:              input.Message,
 		OccurredAt:        time.Now().UTC(),

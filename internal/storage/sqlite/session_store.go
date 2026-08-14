@@ -139,6 +139,120 @@ func (s *Store) CreateSession(ctx context.Context, sess session.Session) (result
 	return nil
 }
 
+// EnsureSession 原子创建会话，或在会话类型与平台绑定完全一致时补写成员。
+// 该操作供多入口 Hub 使用，避免“先创建再忽略已存在”导致群成员和绑定丢失。
+func (s *Store) EnsureSession(ctx context.Context, sess session.Session) (resultErr error) {
+	started := time.Now()
+	defer func() { observeStorageOperation(ctx, "ensure_session", started, resultErr) }()
+	if err := session.ValidateSession(sess); err != nil {
+		return err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin session ensure: %w", err)
+	}
+	defer finishTransaction(tx, &resultErr, "ensure session")
+	result, err := tx.ExecContext(ctx, `INSERT INTO sessions(app_id,session_id,type,created_at,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(app_id,session_id) DO NOTHING`,
+		sess.AppID, sess.SessionID, sess.Type,
+		sess.CreatedAt.UTC().Format(time.RFC3339Nano), sess.UpdatedAt.UTC().Format(time.RFC3339Nano),
+	)
+	if err != nil {
+		return fmt.Errorf("insert ensured session: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read ensured session result: %w", err)
+	}
+	if rows == 1 {
+		if err := insertSessionRelations(ctx, tx, sess); err != nil {
+			return err
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit ensured session creation: %w", err)
+		}
+		return nil
+	}
+	existing, err := readSession(ctx, tx, sess.AppID, sess.SessionID)
+	if err != nil {
+		return fmt.Errorf("read ensured session: %w", err)
+	}
+	if existing.Type != sess.Type || !sessionBindingsEqual(existing.PlatformBindings, sess.PlatformBindings) {
+		return session.ErrSessionExists
+	}
+	existingMembers := make(map[string]string, len(existing.Members))
+	for _, member := range existing.Members {
+		existingMembers[member.UserID] = member.Role
+	}
+	added := false
+	for _, member := range sess.Members {
+		if role, ok := existingMembers[member.UserID]; ok {
+			if role != member.Role {
+				return session.ErrSessionExists
+			}
+			continue
+		}
+		if len(existingMembers) >= session.MaxMembersPerSession {
+			return session.ErrInvalidSession
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO session_members(app_id,session_id,user_id,role,joined_at) VALUES(?,?,?,?,?)`,
+			sess.AppID, sess.SessionID, member.UserID, member.Role, member.JoinedAt.UTC().Format(time.RFC3339Nano),
+		); err != nil {
+			if isUniqueConstraint(err) {
+				return session.ErrSessionExists
+			}
+			return fmt.Errorf("insert ensured session member: %w", err)
+		}
+		existingMembers[member.UserID] = member.Role
+		added = true
+	}
+	if added {
+		updatedAt := sess.UpdatedAt.UTC().Format(time.RFC3339Nano)
+		if _, err := tx.ExecContext(ctx, `UPDATE sessions SET updated_at=CASE WHEN julianday(updated_at) < julianday(?) THEN ? ELSE updated_at END WHERE app_id=? AND session_id=?`,
+			updatedAt, updatedAt, sess.AppID, sess.SessionID,
+		); err != nil {
+			return fmt.Errorf("update ensured session: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit ensured session: %w", err)
+	}
+	return nil
+}
+
+func insertSessionRelations(ctx context.Context, tx *sql.Tx, sess session.Session) error {
+	for _, member := range sess.Members {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO session_members(app_id,session_id,user_id,role,joined_at) VALUES(?,?,?,?,?)`,
+			sess.AppID, sess.SessionID, member.UserID, member.Role, member.JoinedAt.UTC().Format(time.RFC3339Nano),
+		); err != nil {
+			return fmt.Errorf("insert ensured session member: %w", err)
+		}
+	}
+	for _, binding := range sess.PlatformBindings {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO session_bindings(app_id,session_id,platform,platform_id,bound_at) VALUES(?,?,?,?,?)`,
+			sess.AppID, sess.SessionID, binding.Platform, binding.PlatformID, binding.BoundAt.UTC().Format(time.RFC3339Nano),
+		); err != nil {
+			return fmt.Errorf("insert ensured session binding: %w", err)
+		}
+	}
+	return nil
+}
+
+func sessionBindingsEqual(left, right []session.PlatformBinding) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	bindings := make(map[string]struct{}, len(left))
+	for _, binding := range left {
+		bindings[binding.Platform+"\x1f"+binding.PlatformID] = struct{}{}
+	}
+	for _, binding := range right {
+		if _, ok := bindings[binding.Platform+"\x1f"+binding.PlatformID]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
 func (s *Store) GetSession(ctx context.Context, appID, sessionID string) (result session.Session, resultErr error) {
 	started := time.Now()
 	defer func() { observeStorageOperation(ctx, "get_session", started, resultErr) }()

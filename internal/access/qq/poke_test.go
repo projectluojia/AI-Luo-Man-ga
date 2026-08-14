@@ -18,7 +18,7 @@ func newPokeAdapter(t *testing.T, bot *fakeOneBot) *Adapter {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	hub := access.NewHub("campus-services", store, stubResolver{user: "user-1"})
+	hub := newQQTestHub(t, store, stubResolver{user: "user-1"})
 	adapter, err := New(Config{
 		AppID: "campus-services", WSURL: bot.wsURL(), BotQQID: "2647414417",
 		DialTimeout: 2 * time.Second, ReconnectDelay: 50 * time.Millisecond, RunTimeout: 5 * time.Second,
@@ -119,7 +119,7 @@ func TestQQAdapterIgnoresGroupMessageWithoutMention(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	hub := access.NewHub("campus-services", store, stubResolver{user: "user-1"})
+	hub := newQQTestHub(t, store, stubResolver{user: "user-1"})
 	orchestrator := &qqFakeOrchestrator{store: store, created: make(chan struct{})}
 	adapter, err := New(Config{
 		AppID: "campus-services", WSURL: bot.wsURL(), BotQQID: "2647414417",
@@ -147,6 +147,41 @@ func TestQQAdapterIgnoresGroupMessageWithoutMention(t *testing.T) {
 	}
 }
 
+// TestQQAdapterIgnoresMentionOfAnotherUser 验证群聊只 @ 其他用户时不会创建 Echo。
+func TestQQAdapterIgnoresMentionOfAnotherUser(t *testing.T) {
+	bot := newFakeOneBot(t)
+	store, err := sqlite.Open(filepath.Join(t.TempDir(), "qq-other-mention.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	hub := newQQTestHub(t, store, stubResolver{user: "user-1"})
+	orchestrator := &qqFakeOrchestrator{store: store, created: make(chan struct{})}
+	adapter, err := New(Config{
+		AppID: "campus-services", WSURL: bot.wsURL(), BotQQID: testBotQQID,
+		DialTimeout: 2 * time.Second, ReconnectDelay: 50 * time.Millisecond, RunTimeout: 5 * time.Second,
+	}, hub, access.NewEventHub(), orchestrator, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = adapter.Run(ctx) }()
+	select {
+	case <-bot.authHeader:
+	case <-time.After(5 * time.Second):
+		t.Fatal("adapter did not connect")
+	}
+
+	bot.sendEvent(t, `{"post_type":"message","message_type":"group","group_id":12345,"user_id":67890,"message_id":"qq-msg-other-mention","message":[{"type":"at","data":{"qq":"111111"}},{"type":"text","data":{"text":"有哪些线路"}}]}`)
+
+	select {
+	case <-orchestrator.created:
+		t.Fatal("mentioning another user unexpectedly created an Echo")
+	case <-time.After(500 * time.Millisecond):
+	}
+}
+
 // TestQQAdapterHandlesGroupMessageWithMention 验证群聊 @ 机器人后正常入站。
 func TestQQAdapterHandlesGroupMessageWithMention(t *testing.T) {
 	bot := newFakeOneBot(t)
@@ -155,7 +190,7 @@ func TestQQAdapterHandlesGroupMessageWithMention(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	hub := access.NewHub("campus-services", store, stubResolver{user: "user-1"})
+	hub := newQQTestHub(t, store, stubResolver{user: "user-1"})
 	orchestrator := &qqFakeOrchestrator{store: store, created: make(chan struct{})}
 	adapter, err := New(Config{
 		AppID: "campus-services", WSURL: bot.wsURL(), BotQQID: "2647414417",

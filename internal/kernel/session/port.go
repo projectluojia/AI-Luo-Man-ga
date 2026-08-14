@@ -29,6 +29,9 @@ var (
 type Store interface {
 	// CreateSession 创建会话；重复创建完全相同的会话为幂等成功，内容冲突返回 ErrSessionExists。
 	CreateSession(context.Context, Session) error
+	// EnsureSession 原子确保会话、平台绑定与成员关系存在。既有会话的类型或
+	// 平台绑定不一致时返回 ErrSessionExists；合法的新成员在同一事务内幂等补写。
+	EnsureSession(context.Context, Session) error
 	// GetSession 读取 App 内会话及其成员与平台绑定。
 	GetSession(context.Context, string, string) (Session, error)
 

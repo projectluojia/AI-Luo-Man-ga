@@ -63,7 +63,10 @@ func newHarness(t *testing.T) *harness {
 	}
 	t.Cleanup(func() { store.Close() })
 	ids := identity.NewService(store)
-	hub := access.NewHub(testAppID, store, ids)
+	hub, err := access.NewHub(testAppID, store, ids)
+	if err != nil {
+		t.Fatal(err)
+	}
 	echoes := &fakeEchoCreator{}
 	return &harness{store: store, ids: ids, echoes: echoes, server: ingress.NewServer(testAppID, hub, echoes)}
 }
@@ -97,6 +100,7 @@ func (h *harness) post(t *testing.T, platform, body string) *httptest.ResponseRe
 
 func sampleEvent(overrides map[string]string) string {
 	event := map[string]any{
+		"platform_channel":    "group",
 		"platform_user_id":    "qq-user-1",
 		"platform_space_id":   "qq-group-1",
 		"platform_session_id": "qq-session-1",
@@ -135,7 +139,8 @@ func TestIngressResolvesPlatformIdentityToUserSessionAndEcho(t *testing.T) {
 		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
 	}
 	response := decodeResponse(t, recorder)
-	if response["sender_user_id"] != "user-qq-1" || response["session_id"] != "session-user-qq-1" ||
+	sessionID, _ := response["session_id"].(string)
+	if response["sender_user_id"] != "user-qq-1" || !strings.HasPrefix(sessionID, "session-v1-") ||
 		response["created"] != true || response["echo_id"] != "echo-1" {
 		t.Fatalf("response = %#v", response)
 	}
@@ -143,13 +148,9 @@ func TestIngressResolvesPlatformIdentityToUserSessionAndEcho(t *testing.T) {
 		t.Fatalf("echo request = %#v", h.echoes.last)
 	}
 	// 消息归属身份用户的会话，不落入匿名会话。
-	messages, err := h.store.ListMessages(context.Background(), testAppID, "session-user-qq-1", session.MessageQuery{Limit: 10})
+	messages, err := h.store.ListMessages(context.Background(), testAppID, sessionID, session.MessageQuery{Limit: 10})
 	if err != nil || len(messages) != 1 || messages[0].SenderUserID != "user-qq-1" {
 		t.Fatalf("messages=%#v err=%v", messages, err)
-	}
-	anonymous, err := h.store.ListMessages(context.Background(), testAppID, access.AnonymousSessionID, session.MessageQuery{Limit: 10})
-	if err != nil || len(anonymous) != 0 {
-		t.Fatalf("anonymous messages=%#v err=%v", anonymous, err)
 	}
 }
 
@@ -170,7 +171,8 @@ func TestIngressDeduplicatesRepeatedPlatformDelivery(t *testing.T) {
 		t.Fatalf("replayed response = %#v, want created=false with same echo", response)
 	}
 	// 同一平台消息只落一条标准消息。
-	messages, err := h.store.ListMessages(context.Background(), testAppID, "session-user-qq-1", session.MessageQuery{Limit: 10})
+	sessionID, _ := response["session_id"].(string)
+	messages, err := h.store.ListMessages(context.Background(), testAppID, sessionID, session.MessageQuery{Limit: 10})
 	if err != nil || len(messages) != 1 {
 		t.Fatalf("messages=%#v err=%v, want single message", messages, err)
 	}
@@ -181,7 +183,8 @@ func TestIngressKeepsSessionAcrossDistinctMessages(t *testing.T) {
 	h.openIdentity(t, "user-qq-1", "qq", "qq-group-1", "qq-user-1")
 
 	first := h.post(t, "qq", sampleEvent(nil))
-	if first.Code != http.StatusOK || decodeResponse(t, first)["created"] != true {
+	firstResponse := decodeResponse(t, first)
+	if first.Code != http.StatusOK || firstResponse["created"] != true {
 		t.Fatalf("first delivery status=%d body=%s", first.Code, first.Body.String())
 	}
 	second := h.post(t, "qq", sampleEvent(map[string]string{
@@ -194,10 +197,11 @@ func TestIngressKeepsSessionAcrossDistinctMessages(t *testing.T) {
 	}
 	response := decodeResponse(t, second)
 	// 同一身份用户的不同消息必须归一到同一会话，且 Echo 是新建的。
-	if response["session_id"] != "session-user-qq-1" || response["created"] != true || response["echo_id"] != "echo-2" {
+	if response["session_id"] != firstResponse["session_id"] || response["created"] != true || response["echo_id"] != "echo-2" {
 		t.Fatalf("second response = %#v", response)
 	}
-	messages, err := h.store.ListMessages(context.Background(), testAppID, "session-user-qq-1", session.MessageQuery{Limit: 10})
+	sessionID, _ := response["session_id"].(string)
+	messages, err := h.store.ListMessages(context.Background(), testAppID, sessionID, session.MessageQuery{Limit: 10})
 	if err != nil || len(messages) != 2 {
 		t.Fatalf("messages=%#v err=%v, want two messages in one session", messages, err)
 	}
@@ -256,15 +260,14 @@ func TestIngressRejectsUnboundAndDisabledIdentity(t *testing.T) {
 	}
 }
 
-func TestIngressAllowsAnonymousChannelWithoutIdentity(t *testing.T) {
+func TestIngressRejectsMissingPlatformIdentity(t *testing.T) {
 	h := newHarness(t)
 	recorder := h.post(t, "qq", sampleEvent(map[string]string{"platform_user_id": ""}))
-	if recorder.Code != http.StatusOK {
+	if recorder.Code != http.StatusUnauthorized || decodeResponse(t, recorder)["code"] != "authentication_required" {
 		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
 	}
-	response := decodeResponse(t, recorder)
-	if response["sender_user_id"] != access.AnonymousSenderID || response["session_id"] != access.AnonymousSessionID {
-		t.Fatalf("response = %#v, want anonymous sender", response)
+	if h.echoes.calls != 0 {
+		t.Fatalf("echo calls = %d, want 0", h.echoes.calls)
 	}
 }
 

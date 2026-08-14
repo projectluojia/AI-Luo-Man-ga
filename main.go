@@ -548,9 +548,12 @@ func run() (resultErr error) {
 	)
 	readiness := health.Combined{store, health.ExecutorAppChecker{Client: executorClient, Source: store, AppID: campus.AppID}}
 	// 平台接入统一入口：标准消息 → 身份解析 → 会话/消息入库 → Echo。
-	// 当前 Web 演示无身份（匿名发送者），身份服务在携带平台身份的消息到达时才会被调用。
+	// Web 登录边界尚未接入时聊天创建入口返回 401，不降级为匿名用户。
 	identities := identity.NewService(store)
-	platformHub := access.NewHub(campus.AppID, store, identities)
+	platformHub, err := access.NewHub(campus.AppID, store, identities)
+	if err != nil {
+		return fmt.Errorf("configure platform access hub: %w", err)
+	}
 	webAccess := web.NewServer(ctx, orchestrator, store, readiness, reg, policy, campus.AppID, platformHub)
 	// 平台事件入口独立挂载：/api/v1/ingress/{platform} 由平台适配器规范化事件驱动，
 	// 其余路径全部交给 Web Access（健康检查、Echo/SSE、演示页面）。

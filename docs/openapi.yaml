@@ -9,7 +9,11 @@ paths:
   /api/v2/echoes:
     post:
       summary: Idempotently create and schedule an Echo
-      description: Echo, attempt-1 Run, and the App-scoped idempotency mapping are committed in one transaction.
+      description: >-
+        Requires a trusted server-side Web login identity. Request body fields never
+        establish user or session ownership. When no Web authenticator is configured,
+        this endpoint fails closed with 401. Echo, attempt-1 Run, and the App-scoped
+        idempotency mapping are committed in one transaction.
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
@@ -43,6 +47,18 @@ paths:
                 $ref: "#/components/schemas/EchoAccepted"
         "400":
           $ref: "#/components/responses/Error"
+        "401":
+          description: No valid trusted Web login identity is available.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: The resolved user is disabled or is not a member of the current App.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         "409":
           description: The Idempotency-Key is already bound to a different request body.
           content:
@@ -144,6 +160,9 @@ paths:
         event translation) and is delivered as a text/event-stream with events
         track, text_delta, final, error and done. The kernel echo events are
         translated; kernel event types are not exposed.
+        A trusted server-side Web login identity is required. The user_id,
+        user_name and session_id request fields are compatibility display fields only
+        and never establish identity or session ownership.
       requestBody:
         required: true
         content:
@@ -155,11 +174,13 @@ paths:
               properties:
                 session_id:
                   type: string
-                  description: Platform session binding record; identity is not derived from client fields.
+                  description: Compatibility field only; ignored for identity and session ownership.
                 user_id:
                   type: string
+                  description: Compatibility field only; never trusted as an identity credential.
                 user_name:
                   type: string
+                  description: Compatibility field only; never trusted as an identity credential.
                 text:
                   type: string
                   minLength: 1
@@ -188,7 +209,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
         "401":
-          description: Platform identity is not bound to an internal user.
+          description: No valid trusted Web login identity is available or it is not bound to an internal user.
           content:
             application/json:
               schema:
@@ -251,9 +272,9 @@ paths:
         Unified platform event entry. Platform adapters normalize raw events and POST
         them here; the kernel resolves the platform identity to an internal user,
         persists the standard session/message, and idempotently creates the Echo.
-        PlatformUserID empty means an anonymous channel and uses the reserved
-        anonymous sender. Repeated delivery with the same platform_message_id and
-        idempotency_key replays the stored Echo with created=false; the same
+        Empty or unbound user identities are rejected before any persistence; there is
+        no anonymous sender or anonymous session fallback. Repeated delivery with the
+        same platform_message_id and idempotency_key replays the stored Echo with created=false; the same
         platform_message_id with a different idempotency_key is rejected as a conflict.
       parameters:
         - name: platform
@@ -331,19 +352,27 @@ components:
     PlatformEvent:
       type: object
       additionalProperties: false
-      required: [platform_message_id, message_type, text, occurred_at, idempotency_key]
+      required: [platform_channel, platform_space_id, platform_user_id, platform_session_id, platform_message_id, message_type, text, occurred_at, idempotency_key]
       properties:
+        platform_channel:
+          type: string
+          enum: [private, group]
+          description: Determines direct versus group session semantics.
         platform_space_id:
           type: string
-          description: Platform space (group/channel) identifier; empty for anonymous channels.
+          description: Required platform space (group/channel) identifier.
+          minLength: 1
           maxLength: 128
         platform_user_id:
           type: string
-          description: Opaque platform user identifier; empty means anonymous channel. Control characters are rejected.
+          description: Required opaque platform user identifier. Control characters are rejected.
+          minLength: 1
           maxLength: 256
         platform_session_id:
           type: string
-          description: Platform-side session identifier recorded as a session binding.
+          description: Required platform-side session identifier used in the versioned session key.
+          minLength: 1
+          maxLength: 256
         platform_message_id:
           type: string
           description: Stable platform message identifier, deduplicated per App and platform.
@@ -377,12 +406,12 @@ components:
           type: string
         session_id:
           type: string
-          description: Normalized session identifier; identity users share one session per user.
+          description: Opaque session-v1 digest scoped by App, platform, channel, space and platform session; direct sessions also include the internal user.
         message_id:
           type: string
         sender_user_id:
           type: string
-          description: Resolved internal user, or the reserved anonymous sender for anonymous channels.
+          description: Resolved internal user. Anonymous senders are not supported.
         created:
           type: boolean
           description: False when the delivery replayed an already persisted message and Echo.

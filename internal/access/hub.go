@@ -13,6 +13,8 @@ package access
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -25,16 +27,20 @@ import (
 
 // 标准消息与载荷的边界限制。
 const (
-	MaxTextBytes       = 4000            // 单条消息最大字符数（与 Web 适配器既有限制一致）
-	AnonymousSenderID  = "anonymous"     // 无身份渠道的保留发送者标识（不是 User 记录）
-	AnonymousSessionID = "web-anonymous" // 无身份 Web 演示的共享会话标识
+	MaxTextBytes = 4000 // 单条消息最大字符数（与 Web 适配器既有限制一致）
 )
 
 var (
 	// ErrAppMismatch 消息 App 与 Hub 配置的 App 不一致。
 	ErrAppMismatch = errors.New("inbound message app does not match hub app")
-	// ErrAnonymousOnly Hub 未配置身份解析器时，携带平台身份的消息一律拒绝。
-	ErrAnonymousOnly = errors.New("platform identity is not resolvable in this hub")
+	// ErrIdentityRequired 用户消息缺少可解析的平台身份。
+	ErrIdentityRequired = errors.New("authenticated platform identity is required")
+	// ErrMembershipRequired 已绑定用户不是当前 App 的有效成员。
+	ErrMembershipRequired = errors.New("app membership is required")
+	// ErrIdentityContextInvalid 身份解析器返回了与请求边界不一致的上下文。
+	ErrIdentityContextInvalid = errors.New("resolved identity context is invalid")
+	// ErrHubConfiguration Hub 缺少身份解析器或会话存储等必要依赖。
+	ErrHubConfiguration = errors.New("invalid access hub configuration")
 )
 
 // InboundMessage 是平台无关的标准入站消息。平台适配器负责把原始事件转换为
@@ -42,9 +48,9 @@ var (
 type InboundMessage struct {
 	AppID             string
 	Platform          string
-	PlatformChannel   string // 平台渠道标识（QQ: group/private）；无渠道概念的平台留空
+	PlatformChannel   string // 平台渠道标识，当前闭集为 group/private
 	PlatformSpaceID   string
-	PlatformUserID    string // 平台侧不透明标识；空表示无身份渠道（匿名）
+	PlatformUserID    string // 平台侧不透明标识；用户消息必填
 	PlatformMessageID string // 平台消息标识，按 app_id+platform_message_id 去重
 	PlatformSessionID string // 平台侧会话标识
 	MessageType       string // 文本/图片/文件/事件等
@@ -56,12 +62,11 @@ type InboundMessage struct {
 
 // SessionStore 是 Hub 需要的会话/消息持久化窄端口，由 *sqlite.Store 实现。
 type SessionStore interface {
-	CreateSession(context.Context, session.Session) error
+	EnsureSession(context.Context, session.Session) error
 	CreateMessage(context.Context, session.Message, []byte) (session.Message, bool, error)
 }
 
 // IdentityResolver 是外部平台身份到内部用户的解析端口，由 identity.Service 实现。
-// 为 nil 时 Hub 只接受匿名消息，携带平台身份的消息一律拒绝（fail-closed）。
 type IdentityResolver interface {
 	ResolveIdentity(context.Context, string, string, string, string) (identity.IdentityContext, error)
 }
@@ -82,10 +87,13 @@ type Hub struct {
 	identities IdentityResolver
 }
 
-// NewHub 构造统一入口。identities 为 nil 表示匿名渠道专用（如当前无身份的
-// Web 演示），携带平台身份的消息会以 ErrAnonymousOnly 拒绝。
-func NewHub(appID string, sessions SessionStore, identities IdentityResolver) *Hub {
-	return &Hub{appID: appID, sessions: sessions, identities: identities}
+// NewHub 构造统一入口。会话存储与身份解析器均为必需依赖，缺失时拒绝构造，
+// 不提供匿名或临时身份降级路径。
+func NewHub(appID string, sessions SessionStore, identities IdentityResolver) (*Hub, error) {
+	if identity.ValidateAppID(appID) != nil || sessions == nil || identities == nil {
+		return nil, ErrHubConfiguration
+	}
+	return &Hub{appID: appID, sessions: sessions, identities: identities}, nil
 }
 
 // Intake 处理一条标准消息：校验 → 身份解析 → 会话找到或创建 → 消息持久化。
@@ -99,8 +107,9 @@ func (h *Hub) Intake(ctx context.Context, message InboundMessage) (IntakeResult,
 	if err != nil {
 		return IntakeResult{}, err
 	}
-	sessionID := h.sessionIDFor(message, userID)
-	if err := h.ensureSession(ctx, message, sessionID, userID); err != nil {
+	sessionType := sessionTypeFor(message.PlatformChannel)
+	sessionID := h.sessionIDFor(message, userID, sessionType)
+	if err := h.ensureSession(ctx, message, sessionID, userID, sessionType); err != nil {
 		return IntakeResult{}, err
 	}
 	stored, created, err := h.sessions.CreateMessage(ctx, h.toMessage(message, sessionID, userID), []byte(message.Text))
@@ -128,75 +137,113 @@ func (h *Hub) validate(message InboundMessage) error {
 	if message.AppID != h.appID {
 		return fmt.Errorf("%w: app_id=%q", ErrAppMismatch, message.AppID)
 	}
-	if message.Platform == "" || message.PlatformMessageID == "" || message.IdempotencyKey == "" {
+	if message.PlatformUserID == "" {
+		return ErrIdentityRequired
+	}
+	if message.Platform == "" || message.PlatformSpaceID == "" || message.PlatformSessionID == "" ||
+		message.PlatformMessageID == "" || message.IdempotencyKey == "" {
 		return fmt.Errorf("%w: inbound message is missing platform identity fields", session.ErrInvalidMessage)
+	}
+	if _, _, _, _, err := identity.NormalizeBindingKey(message.AppID, message.Platform, message.PlatformSpaceID, message.PlatformUserID); err != nil {
+		return err
+	}
+	if err := identity.ValidatePlatformUserID(message.PlatformSessionID); err != nil {
+		return err
+	}
+	if sessionTypeFor(message.PlatformChannel) == "" {
+		return fmt.Errorf("%w: inbound message has unsupported platform channel", session.ErrInvalidMessage)
 	}
 	if message.MessageType == "" {
 		return fmt.Errorf("%w: inbound message is missing message type", session.ErrInvalidMessage)
 	}
-	if utf8.RuneCountInString(message.Text) > MaxTextBytes {
+	if utf8.RuneCountInString(message.Text) == 0 || utf8.RuneCountInString(message.Text) > MaxTextBytes {
 		return fmt.Errorf("%w: inbound message text exceeds %d characters", session.ErrInvalidMessage, MaxTextBytes)
 	}
 	return nil
 }
 
 func (h *Hub) resolveUser(ctx context.Context, message InboundMessage) (string, error) {
-	if message.PlatformUserID == "" {
-		return AnonymousSenderID, nil
-	}
-	if h.identities == nil {
-		return "", ErrAnonymousOnly
-	}
 	resolved, err := h.identities.ResolveIdentity(ctx, message.AppID, message.Platform, message.PlatformSpaceID, message.PlatformUserID)
 	if err != nil {
 		return "", fmt.Errorf("resolve platform identity: %w", err)
 	}
+	if resolved.AppID != h.appID || !session.ValidStableID(resolved.UserID) {
+		return "", ErrIdentityContextInvalid
+	}
+	if resolved.Membership == nil {
+		return "", ErrMembershipRequired
+	}
+	if resolved.Membership.AppID != h.appID || resolved.Membership.UserID != resolved.UserID {
+		return "", ErrIdentityContextInvalid
+	}
 	return resolved.UserID, nil
 }
 
-// sessionIDFor 为消息确定会话标识：有身份时按 (app, platform, user) 派生，
-// 匿名时使用保留会话。平台来源不会改变会话类型。
-func (h *Hub) sessionIDFor(message InboundMessage, userID string) string {
-	if userID == AnonymousSenderID {
-		return AnonymousSessionID
+func sessionTypeFor(channel string) string {
+	switch channel {
+	case "private":
+		return session.SessionTypeDirect
+	case "group":
+		return session.SessionTypeGroup
+	default:
+		return ""
 	}
-	return "session-" + userID
 }
 
-func (h *Hub) ensureSession(ctx context.Context, message InboundMessage, sessionID, userID string) error {
+// sessionIDFor 使用版本化规范结构派生固定长度会话标识。群会话不包含单个
+// 发送者，因此同一群成员共享群历史；私聊包含内部用户，跨用户与跨渠道隔离。
+func (h *Hub) sessionIDFor(message InboundMessage, userID, sessionType string) string {
+	key := struct {
+		Version           int    `json:"version"`
+		AppID             string `json:"app_id"`
+		Platform          string `json:"platform"`
+		PlatformChannel   string `json:"platform_channel"`
+		SessionType       string `json:"session_type"`
+		PlatformSpaceID   string `json:"platform_space_id"`
+		PlatformSessionID string `json:"platform_session_id"`
+		UserID            string `json:"user_id,omitempty"`
+	}{
+		Version: 1, AppID: h.appID, Platform: message.Platform, PlatformChannel: message.PlatformChannel, SessionType: sessionType,
+		PlatformSpaceID: message.PlatformSpaceID, PlatformSessionID: message.PlatformSessionID,
+	}
+	if sessionType == session.SessionTypeDirect {
+		key.UserID = userID
+	}
+	encoded, _ := json.Marshal(key)
+	digest := sha256.Sum256(encoded)
+	return fmt.Sprintf("session-v1-%x", digest[:])
+}
+
+func (h *Hub) ensureSession(ctx context.Context, message InboundMessage, sessionID, userID, sessionType string) error {
 	now := message.OccurredAt.UTC()
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
-	platformID := message.PlatformSessionID
-	if platformID == "" {
-		platformID = sessionID
+	role := session.MemberRoleOwner
+	if sessionType == session.SessionTypeGroup {
+		role = session.MemberRoleMember
 	}
 	created := session.Session{
 		AppID:     h.appID,
 		SessionID: sessionID,
-		Type:      session.SessionTypeDirect,
+		Type:      sessionType,
 		Members: []session.Member{{
 			UserID:   userID,
-			Role:     session.MemberRoleOwner,
+			Role:     role,
 			JoinedAt: now,
 		}},
 		PlatformBindings: []session.PlatformBinding{{
 			Platform:   message.Platform,
-			PlatformID: platformID,
+			PlatformID: sessionID,
 			BoundAt:    now,
 		}},
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
-	err := h.sessions.CreateSession(ctx, created)
-	if err == nil {
-		return nil
+	if err := h.sessions.EnsureSession(ctx, created); err != nil {
+		return fmt.Errorf("ensure session: %w", err)
 	}
-	if errors.Is(err, session.ErrSessionExists) {
-		return nil // 幂等：会话已存在
-	}
-	return fmt.Errorf("create session: %w", err)
+	return nil
 }
 
 func (h *Hub) toMessage(message InboundMessage, sessionID, userID string) session.Message {

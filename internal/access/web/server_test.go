@@ -24,6 +24,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/appconfig"
 	kernelecho "github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/idempotency"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/identity"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/publicerror"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime"
@@ -46,10 +47,43 @@ type fakeOrchestrator struct {
 	maxActiveRuns atomic.Int32
 }
 
-// newTestHub 为 Web 测试构造平台接入入口：无身份渠道（nil 身份解析器），
-// 匿名消息可入库；携带平台身份的消息会被拒绝。
+type testWebResolver struct{}
+
+func (testWebResolver) ResolveIdentity(_ context.Context, appID, _, _, _ string) (identity.IdentityContext, error) {
+	return identity.IdentityContext{
+		AppID: appID, UserID: "web-test-user",
+		Membership: &identity.AppMembership{AppID: appID, UserID: "web-test-user"},
+	}, nil
+}
+
+type testWebAuthenticator struct{}
+
+func (testWebAuthenticator) Authenticate(*http.Request) (web.AuthenticatedWebIdentity, error) {
+	return web.AuthenticatedWebIdentity{
+		PlatformSpaceID: "web", PlatformUserID: "web-test-subject", PlatformSessionID: "web-test-session",
+	}, nil
+}
+
+// newTestHub 为 Web 测试构造需要受治理身份的接入入口。
 func newTestHub(store *sqlite.Store, appID string) *access.Hub {
-	return access.NewHub(appID, store, nil)
+	hub, err := access.NewHub(appID, store, testWebResolver{})
+	if err != nil {
+		panic(err)
+	}
+	return hub
+}
+
+func newAuthenticatedServer(
+	ctx context.Context,
+	orchestrator web.EchoOrchestrator,
+	reader web.EchoReader,
+	health web.HealthChecker,
+	reg *registry.Registry,
+	policy runtime.AppPolicy,
+	appID string,
+	platformHub *access.Hub,
+) *web.Server {
+	return web.NewServer(ctx, orchestrator, reader, health, reg, policy, appID, platformHub, web.WithWebAuthenticator(testWebAuthenticator{}))
 }
 
 // closeStore 关闭测试存储。Windows 上 modernc SQLite 的文件句柄由运行时
@@ -87,6 +121,7 @@ func (f *fakeOrchestrator) CreateIdempotent(ctx context.Context, request kernele
 		Status: kernelecho.StatusRunning, CreatedAt: now,
 	}, kernelecho.RunRecord{
 		ID: "run-" + id, RunGroupID: "run-" + id, AppID: "campus-services", EchoID: id, Attempt: 1,
+		SessionID: request.SessionID, UserID: request.UserID, MessageID: request.MessageID, Channel: request.Channel,
 		Status: kernelecho.RunStatusQueued, Model: "test-model", ModelConfigVersion: "test-config",
 		ProtocolVersion: "1.0", MaxSteps: 4, MaxToolCalls: 4,
 		MaxInputTokens: 1000, MaxOutputTokens: 1000, MaxTotalTokens: 2000,
@@ -238,6 +273,22 @@ func TestWebAccessRejectsUnknownFields(t *testing.T) {
 	}
 }
 
+func TestWebAccessRejectsUnauthenticatedEchoBeforePersistence(t *testing.T) {
+	store, err := sqlite.Open(filepath.Join(t.TempDir(), "unauthenticated.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	server := web.NewServer(
+		context.Background(), &fakeOrchestrator{store: store}, store, store,
+		registry.New(), runtimetest.NewStaticAppPolicy(), "campus-services", newTestHub(store, "campus-services"),
+	)
+	response := createEchoRequest(t, server.Handler(), "不应写入", "unauthenticated")
+	if response.Code != http.StatusUnauthorized || !strings.Contains(response.Body.String(), `"code":"authentication_required"`) {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
 func TestWebAccessRequiresAndReplaysEchoCreationIdempotency(t *testing.T) {
 	handler, store := newTestServer(t, false)
 
@@ -287,7 +338,7 @@ func TestWebAccessCopiesRequestContextIntoBackgroundRun(t *testing.T) {
 	policy := runtimetest.NewStaticAppPolicy()
 	observed := make(chan observedContext, 1)
 	backend := &fakeOrchestrator{store: store, observed: observed}
-	handler := web.NewServer(context.Background(), backend, store, store, reg, policy, "campus-services", newTestHub(store, "campus-services")).Handler()
+	handler := newAuthenticatedServer(context.Background(), backend, store, store, reg, policy, "campus-services", newTestHub(store, "campus-services")).Handler()
 	payload := strings.NewReader(`{"message":"查询校巴"}`)
 	request := httptest.NewRequest(http.MethodPost, "/api/v2/echoes", payload)
 	request.Header.Set("Content-Type", "application/json")
@@ -329,7 +380,7 @@ func TestWebAccessRecoversPersistedQueuedRun(t *testing.T) {
 		t.Fatalf("runs=%#v err=%v", runs, err)
 	}
 	backend.recovery = []kernelecho.RunWork{{Run: runs[0], InputMessage: "recover"}}
-	server := web.NewServer(context.Background(), backend, store, store, reg, policy, "campus-services", newTestHub(store, "campus-services"))
+	server := newAuthenticatedServer(context.Background(), backend, store, store, reg, policy, "campus-services", newTestHub(store, "campus-services"))
 	count, err := server.Recover(context.Background())
 	if err != nil || count != 1 {
 		t.Fatalf("count=%d err=%v", count, err)
@@ -370,7 +421,7 @@ func TestWebAccessDoesNotExposeCrossAppEcho(t *testing.T) {
 	reg := registry.New()
 	policy := runtimetest.NewStaticAppPolicy()
 	backend := &fakeOrchestrator{store: store}
-	handler := web.NewServer(context.Background(), backend, store, store, reg, policy, "app-a", newTestHub(store, "app-a")).Handler()
+	handler := newAuthenticatedServer(context.Background(), backend, store, store, reg, policy, "app-a", newTestHub(store, "app-a")).Handler()
 	for _, methodAndPath := range [][2]string{
 		{http.MethodGet, "/api/v1/echoes/other-app-echo"},
 		{http.MethodDelete, "/api/v1/echoes/other-app-echo"},
@@ -397,7 +448,7 @@ func TestWebAccessPublicErrorsDoNotDiscloseInternalDetails(t *testing.T) {
 	reg := registry.New()
 	policy := runtimetest.NewStaticAppPolicy()
 
-	createHandler := web.NewServer(
+	createHandler := newAuthenticatedServer(
 		context.Background(),
 		&fakeOrchestrator{store: store, createErr: errors.New(secret)},
 		store,
@@ -415,7 +466,7 @@ func TestWebAccessPublicErrorsDoNotDiscloseInternalDetails(t *testing.T) {
 		t.Fatalf("create response status=%d body=%s", createResponse.Code, createResponse.Body.String())
 	}
 
-	readHandler := web.NewServer(
+	readHandler := newAuthenticatedServer(
 		context.Background(),
 		&fakeOrchestrator{store: store},
 		failingReader{err: errors.New(secret)},
@@ -431,7 +482,7 @@ func TestWebAccessPublicErrorsDoNotDiscloseInternalDetails(t *testing.T) {
 		t.Fatalf("read response status=%d body=%s", readResponse.Code, readResponse.Body.String())
 	}
 
-	healthHandler := web.NewServer(
+	healthHandler := newAuthenticatedServer(
 		context.Background(),
 		&fakeOrchestrator{store: store},
 		store,
@@ -482,7 +533,7 @@ func TestCapabilitiesFailClosedForUnavailableOrDisabledAppPolicy(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Cleanup(func() { _ = store.Close() })
-			handler := web.NewServer(
+			handler := newAuthenticatedServer(
 				t.Context(),
 				&fakeOrchestrator{},
 				failingReader{err: errors.New("unused")},
@@ -516,7 +567,7 @@ func TestEchoCreationMapsAppConfigurationFailuresToSafeErrors(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Cleanup(func() { _ = store.Close() })
-			handler := web.NewServer(
+			handler := newAuthenticatedServer(
 				t.Context(),
 				&fakeOrchestrator{store: store, createErr: createErr},
 				store,
@@ -547,18 +598,22 @@ func TestEchoCreationPersistsStandardMessageToSessionStore(t *testing.T) {
 	reg := registry.New()
 	policy := runtimetest.NewStaticAppPolicy()
 	backend := &fakeOrchestrator{store: store}
-	handler := web.NewServer(context.Background(), backend, store, store, reg, policy, "campus-services", newTestHub(store, "campus-services")).Handler()
+	handler := newAuthenticatedServer(context.Background(), backend, store, store, reg, policy, "campus-services", newTestHub(store, "campus-services")).Handler()
 	first := createEchoRequest(t, handler, "有哪些校巴线路？", "persist-message")
 	if first.Code != http.StatusAccepted {
 		t.Fatalf("首次创建 status=%d body=%s", first.Code, first.Body.String())
 	}
-	messages, err := store.ListMessages(context.Background(), "campus-services", "web-anonymous", session.MessageQuery{Limit: 10})
-	if err != nil || len(messages) != 1 || messages[0].SenderUserID != "anonymous" || messages[0].PlatformMessageID != "persist-message" {
-		t.Fatalf("标准消息未持久化到会话台账: messages=%#v err=%v", messages, err)
-	}
 	var firstBody, secondBody map[string]string
 	if err := json.Unmarshal(first.Body.Bytes(), &firstBody); err != nil {
 		t.Fatal(err)
+	}
+	runs, err := store.ListRuns(context.Background(), "campus-services", firstBody["echo_id"])
+	if err != nil || len(runs) != 1 || !strings.HasPrefix(runs[0].SessionID, "session-v1-") {
+		t.Fatalf("run session=%#v err=%v", runs, err)
+	}
+	messages, err := store.ListMessages(context.Background(), "campus-services", runs[0].SessionID, session.MessageQuery{Limit: 10})
+	if err != nil || len(messages) != 1 || messages[0].SenderUserID != "web-test-user" || messages[0].PlatformMessageID != "persist-message" {
+		t.Fatalf("标准消息未持久化到会话台账: messages=%#v err=%v", messages, err)
 	}
 	replay := createEchoRequest(t, handler, "有哪些校巴线路？", "persist-message")
 	if replay.Code != http.StatusOK {
@@ -570,7 +625,7 @@ func TestEchoCreationPersistsStandardMessageToSessionStore(t *testing.T) {
 	if secondBody["echo_id"] != firstBody["echo_id"] {
 		t.Fatalf("重放返回不同 Echo: first=%s second=%s", firstBody["echo_id"], secondBody["echo_id"])
 	}
-	messages, err = store.ListMessages(context.Background(), "campus-services", "web-anonymous", session.MessageQuery{Limit: 10})
+	messages, err = store.ListMessages(context.Background(), "campus-services", runs[0].SessionID, session.MessageQuery{Limit: 10})
 	if err != nil || len(messages) != 1 {
 		t.Fatalf("重复投递产生多条标准消息: messages=%#v err=%v", messages, err)
 	}
@@ -582,7 +637,7 @@ func TestHealthzIsProcessLivenessAndReadyzChecksDependencies(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	handler := web.NewServer(
+	handler := newAuthenticatedServer(
 		context.Background(),
 		&fakeOrchestrator{},
 		failingReader{err: errors.New("unused")},
@@ -611,7 +666,7 @@ func TestWebAccessReturnsStableBackpressureResponse(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	server := web.NewServer(
+	server := newAuthenticatedServer(
 		context.Background(),
 		&fakeOrchestrator{store: store, createErr: kernelecho.ErrQueueFull},
 		store,
@@ -637,7 +692,7 @@ func TestMetricsEndpointUsesPrometheusFormatWithoutBusinessIdentifiers(t *testin
 		t.Fatal(err)
 	}
 	defer store.Close()
-	handler := web.NewServer(
+	handler := newAuthenticatedServer(
 		context.Background(),
 		&fakeOrchestrator{},
 		failingReader{err: errors.New("unused")},
@@ -665,7 +720,7 @@ func TestWebAccessShutdownStopsAdmissionAndDrainsActiveRuns(t *testing.T) {
 	}
 	defer closeStore(t, store)
 	backend := &fakeOrchestrator{store: store, block: true}
-	server := web.NewServer(
+	server := newAuthenticatedServer(
 		context.Background(),
 		backend,
 		store,
@@ -708,7 +763,7 @@ func TestPersistentSchedulerBoundsConcurrentRuns(t *testing.T) {
 	defer store.Close()
 	gate := make(chan struct{})
 	backend := &fakeOrchestrator{store: store, runGate: gate}
-	server := web.NewServer(
+	server := newAuthenticatedServer(
 		context.Background(), backend, store, store, registry.New(),
 		runtimetest.NewStaticAppPolicy(), "campus-services", newTestHub(store, "campus-services"),
 	)
@@ -769,7 +824,7 @@ func TestShutdownWaitsForAdmittedCreationBeforeCancellingRun(t *testing.T) {
 		createEntered: make(chan struct{}),
 		releaseCreate: make(chan struct{}),
 	}
-	server := web.NewServer(
+	server := newAuthenticatedServer(
 		context.Background(),
 		backend,
 		store,
@@ -830,7 +885,7 @@ func newTestServer(t *testing.T, block bool) (http.Handler, *sqlite.Store) {
 	reg := registry.New()
 	policy := runtimetest.NewStaticAppPolicy()
 	backend := &fakeOrchestrator{store: store, block: block}
-	return web.NewServer(context.Background(), backend, store, store, reg, policy, "campus-services", newTestHub(store, "campus-services")).Handler(), store
+	return newAuthenticatedServer(context.Background(), backend, store, store, reg, policy, "campus-services", newTestHub(store, "campus-services")).Handler(), store
 }
 
 func createEcho(t *testing.T, handler http.Handler, message string) (string, string) {

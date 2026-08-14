@@ -76,6 +76,46 @@ func TestSessionCreationIsIdempotentAndAppScoped(t *testing.T) {
 	}
 }
 
+func TestEnsureSessionAtomicallyAddsMembersAndRejectsBindingConflicts(t *testing.T) {
+	store := newSessionStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	base := session.Session{
+		AppID: "app-a", SessionID: "session-v1-group", Type: session.SessionTypeGroup,
+		Members:          []session.Member{{UserID: "user-1", Role: session.MemberRoleMember, JoinedAt: now}},
+		PlatformBindings: []session.PlatformBinding{{Platform: "qq", PlatformID: "binding-v1", BoundAt: now}},
+		CreatedAt:        now, UpdatedAt: now,
+	}
+	if err := store.EnsureSession(ctx, base); err != nil {
+		t.Fatal(err)
+	}
+	second := base
+	second.Members = []session.Member{{UserID: "user-2", Role: session.MemberRoleMember, JoinedAt: now.Add(time.Second)}}
+	second.UpdatedAt = now.Add(time.Second)
+	if err := store.EnsureSession(ctx, second); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.EnsureSession(ctx, second); err != nil {
+		t.Fatalf("member replay failed: %v", err)
+	}
+	conflicting := base
+	conflicting.Members = []session.Member{{UserID: "user-3", Role: session.MemberRoleMember, JoinedAt: now.Add(2 * time.Second)}}
+	conflicting.PlatformBindings = []session.PlatformBinding{{Platform: "qq", PlatformID: "other-binding", BoundAt: now}}
+	conflicting.UpdatedAt = now.Add(2 * time.Second)
+	if err := store.EnsureSession(ctx, conflicting); !errors.Is(err, session.ErrSessionExists) {
+		t.Fatalf("binding conflict error=%v, want ErrSessionExists", err)
+	}
+	stored, err := store.GetSession(ctx, "app-a", base.SessionID)
+	if err != nil || len(stored.Members) != 2 {
+		t.Fatalf("stored session=%#v err=%v", stored, err)
+	}
+	for _, member := range stored.Members {
+		if member.UserID == "user-3" {
+			t.Fatal("conflicting ensure partially inserted member")
+		}
+	}
+}
+
 func TestMessageReadsAndHistoryConstrainAppAndSession(t *testing.T) {
 	store := newSessionStore(t)
 	ctx := context.Background()

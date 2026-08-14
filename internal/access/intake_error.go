@@ -15,14 +15,20 @@ import (
 // （QQ 等）共用，保证跨入口的公共错误契约一致，不泄露内部细节。
 func IntakePublicError(err error) (status int, code, message string) {
 	switch {
-	case errors.Is(err, ErrAppMismatch), errors.Is(err, ErrAnonymousOnly):
+	case errors.Is(err, ErrAppMismatch):
 		return http.StatusForbidden, "platform_identity_rejected", "平台身份不被接受"
+	case errors.Is(err, ErrIdentityRequired):
+		return http.StatusUnauthorized, "authentication_required", "用户身份不能为空"
 	case errors.Is(err, identity.ErrNotFound):
 		return http.StatusUnauthorized, "identity_not_found", "平台身份未绑定"
 	case errors.Is(err, identity.ErrUserDisabled):
 		return http.StatusForbidden, "user_disabled", "用户已禁用"
+	case errors.Is(err, ErrMembershipRequired):
+		return http.StatusForbidden, "app_membership_required", "用户未加入当前 App"
 	case errors.Is(err, session.ErrMessageConflict):
 		return http.StatusConflict, "idempotency_conflict", "Idempotency-Key 已用于不同的创建请求"
+	case errors.Is(err, session.ErrSessionExists):
+		return http.StatusConflict, "session_conflict", "会话归属发生冲突"
 	case errors.Is(err, identity.ErrInvalid):
 		return http.StatusBadRequest, "invalid_platform_identity", "平台身份标识非法"
 	case errors.Is(err, session.ErrInvalidMessage), errors.Is(err, session.ErrInvalidSession):
@@ -38,7 +44,7 @@ func WriteIntakeError(writer http.ResponseWriter, request *http.Request, err err
 	if status >= 500 {
 		observe.Error(request.Context(), "标准消息入库失败", err)
 	} else {
-		observe.Warn(request.Context(), "平台消息入库被拒绝", observe.StringAttr("reason", err.Error()))
+		observe.Warn(request.Context(), "平台消息入库被拒绝", observe.StringAttr("error_code", code))
 	}
 	writeError(writer, status, code, message)
 }

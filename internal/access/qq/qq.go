@@ -30,7 +30,10 @@ const (
 	maxReplyChunk         = 4000 // QQ 单条消息安全长度上限
 )
 
-var cqCodePattern = regexp.MustCompile(`\[CQ:[^\]]*\]`)
+var (
+	cqCodePattern = regexp.MustCompile(`\[CQ:[^\]]*\]`)
+	cqAtPattern   = regexp.MustCompile(`\[CQ:at,([^\]]*)\]`)
+)
 
 // Config 装配 QQ 适配器。
 type Config struct {
@@ -71,6 +74,12 @@ func New(cfg Config, hub *access.Hub, events *access.EventHub, orchestrator Echo
 	if cfg.AppID == "" || cfg.WSURL == "" || hub == nil || events == nil || orchestrator == nil || reader == nil {
 		return nil, errors.New("qq adapter configuration is incomplete")
 	}
+	botQQID, valid := normalizeQQID(cfg.BotQQID)
+	if !valid {
+		return nil, errors.New("qq adapter bot qq id is invalid")
+	}
+	cfg.BotQQID = botQQID
+
 	if cfg.DialTimeout == 0 {
 		cfg.DialTimeout = defaultDialTimeout
 	}
@@ -152,7 +161,7 @@ func (a *Adapter) serve(ctx context.Context) error {
 // handleEvent 处理一条 OneBot 消息事件：标准入站 → 幂等 Echo 创建 → 等待
 // 终态回复 → 回发。未绑定身份等入站失败回发公共错误，不泄露内部细节。
 func (a *Adapter) handleEvent(ctx context.Context, raw map[string]any) {
-	inbound, mentioned := normalizeEvent(a.cfg.AppID, raw)
+	inbound, mentioned := normalizeEvent(a.cfg.AppID, a.cfg.BotQQID, raw)
 	if inbound == nil {
 		return
 	}
@@ -341,13 +350,17 @@ func splitReply(text string) []string {
 // normalizeEvent 把 OneBot v11 消息事件规范化为标准入站消息；非消息事件、
 // 无文本或缺失标识的消息返回 (nil, false)（忽略）。第二个返回值表示消息
 // 是否 @了 bot（array 模式的 at 段匹配，或 raw_message 含对应 CQ 码）。
-func normalizeEvent(appID string, raw map[string]any) (*access.InboundMessage, bool) {
+func normalizeEvent(appID, botQQID string, raw map[string]any) (*access.InboundMessage, bool) {
 	if str(raw, "post_type") != "message" {
 		return nil, false
 	}
+	if selfID := str(raw, "self_id"); selfID != "" && selfID != botQQID {
+		return nil, false
+	}
+
 	userID := str(raw, "user_id")
 	messageID := str(raw, "message_id")
-	if userID == "" || messageID == "" {
+	if userID == "" || messageID == "" || userID == botQQID {
 		return nil, false
 	}
 	var spaceID, channel, sessionID string
@@ -363,7 +376,7 @@ func normalizeEvent(appID string, raw map[string]any) (*access.InboundMessage, b
 	default:
 		return nil, false
 	}
-	text, mentioned := extractText(raw)
+	text, mentioned := extractText(raw, botQQID)
 	if text == "" {
 		return nil, false
 	}
@@ -384,7 +397,7 @@ func normalizeEvent(appID string, raw map[string]any) (*access.InboundMessage, b
 
 // extractText 从消息事件提取纯文本：优先拼接 array 模式的 text 段，退化时
 // 从 raw_message 剥离 CQ 码。同时返回是否包含 at 段（任意用户）。
-func extractText(raw map[string]any) (text string, mentioned bool) {
+func extractText(raw map[string]any, botQQID string) (text string, mentioned bool) {
 	if segments, ok := raw["message"].([]any); ok {
 		var builder strings.Builder
 		for _, segment := range segments {
@@ -392,20 +405,34 @@ func extractText(raw map[string]any) (text string, mentioned bool) {
 			if !ok {
 				continue
 			}
+			data, _ := seg["data"].(map[string]any)
 			switch str(seg, "type") {
 			case "text":
-				if data, ok := seg["data"].(map[string]any); ok {
-					builder.WriteString(str(data, "text"))
-				}
+				builder.WriteString(str(data, "text"))
 			case "at":
-				mentioned = true
+				if str(data, "qq") == botQQID {
+					mentioned = true
+				}
 			}
 		}
 		if text := strings.TrimSpace(builder.String()); text != "" {
 			return text, mentioned
 		}
 	}
-	return strings.TrimSpace(cqCodePattern.ReplaceAllString(str(raw, "raw_message"), "")), mentioned
+	rawMessage := str(raw, "raw_message")
+	return strings.TrimSpace(cqCodePattern.ReplaceAllString(rawMessage, "")), mentioned || rawMentionsBot(rawMessage, botQQID)
+}
+
+func rawMentionsBot(rawMessage, botQQID string) bool {
+	for _, match := range cqAtPattern.FindAllStringSubmatch(rawMessage, -1) {
+		for _, parameter := range strings.Split(match[1], ",") {
+			key, value, found := strings.Cut(parameter, "=")
+			if found && key == "qq" && value == botQQID {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // str 从 JSON 值读取字符串字段（OneBot 的群号/QQ 号可能是数字）。
@@ -428,4 +455,20 @@ func str(value map[string]any, key string) string {
 func onebotInt(value string) int64 {
 	number, _ := strconv.ParseInt(value, 10, 64)
 	return number
+}
+func normalizeQQID(value string) (string, bool) {
+	if value == "" || strings.TrimSpace(value) != value {
+		return "", false
+	}
+
+	number, err := strconv.ParseUint(value, 10, 64)
+	if err != nil || number == 0 {
+		return "", false
+	}
+
+	normalized := strconv.FormatUint(number, 10)
+	if normalized != value {
+		return "", false
+	}
+	return normalized, true
 }

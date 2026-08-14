@@ -87,7 +87,19 @@ func (r stubResolver) ResolveIdentity(context.Context, string, string, string, s
 	if r.err != nil {
 		return identity.IdentityContext{}, r.err
 	}
-	return identity.IdentityContext{UserID: r.user}, nil
+	return identity.IdentityContext{
+		AppID: "campus-services", UserID: r.user,
+		Membership: &identity.AppMembership{AppID: "campus-services", UserID: r.user},
+	}, nil
+}
+
+func newQQTestHub(t *testing.T, store *sqlite.Store, resolver access.IdentityResolver) *access.Hub {
+	t.Helper()
+	hub, err := access.NewHub("campus-services", store, resolver)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return hub
 }
 
 // qqFakeOrchestrator 是 EchoStarter 测试桩：真实写入 sqlite，成功后发信号。
@@ -122,6 +134,26 @@ func (f *qqFakeOrchestrator) CreateIdempotent(ctx context.Context, request kerne
 	return echoID, created, nil
 }
 
+func TestNewRejectsInvalidBotQQID(t *testing.T) {
+	store, err := sqlite.Open(filepath.Join(t.TempDir(), "qq-config.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	hub := newQQTestHub(t, store, stubResolver{user: "user-1"})
+	orchestrator := &qqFakeOrchestrator{store: store, created: make(chan struct{})}
+	for _, botQQID := range []string{"", " 2647414417", "02647414417", "-1", "all", "0"} {
+		t.Run(botQQID, func(t *testing.T) {
+			_, err := New(Config{
+				AppID: "campus-services", WSURL: "ws://127.0.0.1:1", BotQQID: botQQID,
+			}, hub, access.NewEventHub(), orchestrator, store)
+			if err == nil {
+				t.Fatal("invalid bot QQ ID was accepted")
+			}
+		})
+	}
+}
+
 // TestQQAdapterIntakesAndReplies 验证全链路：群消息事件 → 标准入站 →
 // 幂等 Echo → 订阅终态 → send_group_msg 回发。事件经 store 重放与实时
 // 发布双路径送达，消除订阅时序竞态。
@@ -132,11 +164,11 @@ func TestQQAdapterIntakesAndReplies(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 	bot := newFakeOneBot(t)
-	hub := access.NewHub("campus-services", store, stubResolver{user: "user-1"})
+	hub := newQQTestHub(t, store, stubResolver{user: "user-1"})
 	events := access.NewEventHub()
 	orchestrator := &qqFakeOrchestrator{store: store, created: make(chan struct{})}
 	adapter, err := New(Config{
-		AppID: "campus-services", WSURL: bot.wsURL(), Token: "secret",
+		AppID: "campus-services", WSURL: bot.wsURL(), Token: "secret", BotQQID: testBotQQID,
 		DialTimeout: 2 * time.Second, ReconnectDelay: 50 * time.Millisecond, RunTimeout: 5 * time.Second,
 	}, hub, events, orchestrator, store)
 	if err != nil {
@@ -206,9 +238,9 @@ func TestQQAdapterRepliesPublicErrorOnUnboundIdentity(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 	bot := newFakeOneBot(t)
-	hub := access.NewHub("campus-services", store, stubResolver{err: identity.ErrNotFound})
+	hub := newQQTestHub(t, store, stubResolver{err: identity.ErrNotFound})
 	adapter, err := New(Config{
-		AppID: "campus-services", WSURL: bot.wsURL(),
+		AppID: "campus-services", WSURL: bot.wsURL(), BotQQID: testBotQQID,
 		DialTimeout: 2 * time.Second, ReconnectDelay: 50 * time.Millisecond, RunTimeout: 5 * time.Second,
 	}, hub, access.NewEventHub(), &qqFakeOrchestrator{store: store, created: make(chan struct{})}, store)
 	if err != nil {
