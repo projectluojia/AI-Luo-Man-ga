@@ -193,24 +193,23 @@ The App-scoped storage/public-error, durable Echo/Run state, Go trust-boundary/i
 依据 `docs/AI珞地基框架PRD.md` 实现并测试了以下地基模块（全部为独立实现、尚未涉及真实校方身份/数据授权）：
 
 - SQLite 迁移改为版本注册表机制（`registerMigration(version, sql)`），多个模块可独立注册前向迁移，当前 Schema 版本 1–18 连续。
-- 身份与授权（迁移 15）：Deployment 级 User、App 级 ExternalIdentity/AppMembership/Role/PermissionGrant/IdentityBindingRevision；外部平台 ID 永不充当内部 user_id；同一外部身份并发绑定互斥（库唯一约束+race 测试）；撤权/禁用即时生效（查询时实时计算）；身份不存在返回 ErrNotFound 不自动创建；跨 App 权限 fail-closed。
+- 身份与授权（迁移 15）：Deployment 级 User、App 级 ExternalIdentity/AppMembership/Role/PermissionGrant/IdentityBindingRevision；外部平台 ID 永不充当内部 user_id；同一外部身份并发绑定互斥（库唯一约束+race 测试）；禁用即时生效（查询时实时计算）；身份不存在返回 ErrNotFound 不自动创建；跨 App 隔离 fail-closed。2026-08-14 审计清理移除角色/权限授予管理面（Service 与存储方法无生产调用者，角色无从创建、授予无从写入）；roles/permission_grants 表保留为 Schema 契约，SetMembership 仍内联校验角色存在性，ResolveIdentity 快照仍携带成员关系、生效权限与绑定修订号。
 - 会话、消息与附件（迁移 16）：Session（direct/group/system）、Message（content_ref、回复、编辑、软删除）、平台消息按 app_id+platform_message_id 去重（并发重复投递只产生一条）、历史查询约束 app_id+session_id、BlobStore 窄端口 + 安全本地文件系统实现（os.Root 沙箱、路径穿越/符号链接/超限拒绝）、消息正文不进日志与审计（redaction 负向测试）。
 - 确认与副作用治理（迁移 17）：持久 Confirmation 五态状态机（waiting/approved/rejected/expired/revoked），argument_digest 与范围绑定，CAS 决策、并发重复批准幂等、重启后待确认状态仍在、未知执行结果不伪报；Service 实现 `runtime.ConfirmationVerifier` 并已注入 Dispatcher（未批准 fail-closed）。
-- 后台任务与调度（迁移 18）：持久 Task 状态机（租约领取/续期/死亡恢复/有界重试/App 容量隔离/封闭类型注册表+参数 Schema 双重校验/Outbox 事件）；`main.go` 已装配调度器，首个真实消费者为确认过期清扫（`governance.confirmation.expiry`，5 分钟周期，任务自续链，启动播种一轮）。
+- 后台任务与调度（迁移 18）：持久 Task 状态机（租约领取/续期/死亡恢复/有界重试/App 容量隔离/封闭类型注册表+参数 Schema 双重校验；`task/outbox.go` 无消费者，2026-08-14 审计删除）；`main.go` 已装配调度器，首个真实消费者为确认过期清扫（`governance.confirmation.expiry`，5 分钟周期，任务自续链，启动播种一轮）。
 - 测试基建：`internal/kernel/strictschema` 共享严格 JSON Schema 编译/校验（Registry 与任务类型注册表共用，消除重复实现）；7 个 fuzz 目标（种子随 `go test` 常驻）；task.Event 与 SSE 信封两组 golden 契约。
 - 平台接入统一入口：`internal/access` 定义标准 `InboundMessage`/`OutboundMessage` 与 `Hub.Intake`（校验 → 身份解析 → 会话找到或创建 → 消息入库）。Web 适配器已接入该入口：HTTP 请求经标准消息 → 会话/消息持久化（SQLite，匿名发送者）→ Echo 创建，平台与 Agent 历史解耦；重复投递由同一幂等键在消息与 Echo 两侧去重，重放不产生重复消息或重复 Echo。身份服务已装配（匿名 Web 不触发，携带平台身份的消息到达时才解析）。
 
 该批模块的存储/服务/调度代码与测试全部合并并通过 Go 全量测试、`go vet`、`-race`、Python 测试与 e2e 集成门禁（e2e 断言 Web 消息已持久化到会话台账）。
 
-## 2026-08-12 三模式包接入基线（embedded / hosted / isolated）
+## 2026-08-12 两模式包接入基线（hosted / isolated）
 
-按"包 = 逻辑单元（Tool/Service）+ 运行模式"的统一架构，落地三种运行模式的 Loader 接入；**campus 完全重构为 hosted 内置包，无旧兼容**（`campus.Register` 直连注册已删除）：
+按"包 = 逻辑单元（Tool/Service）+ 运行模式"的统一架构，落地两种运行模式的 Loader 接入（`ModeEmbedded` 已随 2026-08-14 审计清理删除，无任何宿主服务该模式）；**campus 完全重构为 hosted 内置包，无旧兼容**（`campus.Register` 直连注册已删除）：
 
 - hosted 生产 Backend（wazero）：`internal/kernel/loader/wasm_host.go` 用 wazero 沙箱执行 wasm32-wasi 工件——线性内存上限（默认 128 MiB）、WASI 裁剪（无文件系统/网络/环境变量）、每次调用独立实例（调用之间零共享状态）、stdin/stdout JSON 信封 ABI（`{tool_id,payload}` → `{ok,result,code,message}`）、宿主函数（host function）线性内存 ABI 投影（guest 以 `//go:wasmimport` 调用），治理上下文按调用绑定（guest 无法伪造 app_id/权限/调用链）。
 - campus hosted 化：业务逻辑在 `internal/tools/bus`（纯 Go 原子 Tool 包，`bus.Store` 端口）；guest（`internal/services/campus/guest`，wasm32-wasi，`//go:build wasip1`）复用 bus handler，存储经宿主函数 `ailuo.bus.query` 投影（App 隔离/权限在宿主侧强制）；工件 `go:embed` 进内核（`internal/services/campus/builtin`，guest 的 build 脚本直接输出到该目录、不保留副本），`campus.Manifest/ReadArtifact` 以 digest 锁定工件防漂移；链路为 Dispatcher → Loader.Acquire → WasmHost → campus guest → 宿主函数 → bus.Store，Dispatcher 治理（Schema/权限/深度/取消/幂等）与 App 策略不变。
 - `CapabilitySpec` 新增 `ToolID`：Dispatcher 把 Capability 直接执行的工具注入治理上下文 `ToolID`，运行时级 Handler（含 hosted guest）据此分发。
 - 信封错误码闭环：guest 闭式错误码（`invalid_argument`/`data_unavailable`/`data_incomplete`/`data_untrusted`/`data_expired`/`internal`）由宿主映射为稳定内部错误（数据治理错误保留类别），未知错误码按协议违例拒绝。
-- embedded 机制：`internal/kernel/loader/embedded_host.go`（进程内 Runtime，Verify 校验内置包表，生命周期/治理与 hosted/isolated 一致）；当前无生产 embedded 业务包（为内核自有组件以包形式纳管预留），有完整单元测试。
 - isolated 资源限额：`ProcessSpec.Limits`（RLIMIT_AS/RLIMIT_CPU/RLIMIT_NOFILE/RLIMIT_FSIZE）由锁固定；Linux 用 `prlimit` 在子进程启动后立即应用，非 Linux Unix 与 Windows 对非零限额 fail-closed；合理上限校验 + Linux 真实进程集成测试（FSIZE 生效）。
 - 参考 hosted 包 `extensions/strings.tool`（纯计算字符串工具）演示沙箱契约与分发形态；`extensions/*/build.ps1|build.sh` 交叉编译 wasm32-wasi 工件。
 - 测试：campus 完整 hosted 链路行为测试（journey 排序/空结果/App 隔离/快照治理/Schema/取消/深度）、WasmHost 单元与并发隔离测试、host function 投影测试；orchestrator 与 e2e 均改走真实 hosted 链路（装配时 Warmup 提前编译，避免占用 Run deadline）。
@@ -222,7 +221,7 @@ The App-scoped storage/public-error, durable Echo/Run state, Go trust-boundary/i
 - 跨入口共享错误映射：`access.WriteIntakeError`/`WriteEchoError`/`SecurityHeaders` 从 Web 适配器抽取为共享函数，web 与 ingress 共用同一公共错误契约（身份未绑定 401 `identity_not_found`、用户禁用 403 `user_disabled`、平台消息去重键冲突 409 `idempotency_conflict`、队列满 429+Retry-After、App 禁用/配置不可用 503）。
 - 幂等闭环：同一平台消息重复投递（相同 platform_message_id + 幂等键）在消息与 Echo 两侧同时去重，重放返回既有 echo 且 created=false；同一 platform_message_id 配不同幂等键被拒绝（409），不产生新消息/新 Echo。
 - 会话归一：同一身份用户跨平台消息归一到同一 `session-<user_id>` 会话（消息在会话内按序累积），匿名渠道使用保留匿名会话。
-- `identity-bind` 维护命令：`main.go` 新增幂等身份开通（CreateUser 已存在则继续、同一外部身份重复绑定同一用户视为成功重放、绑定其他用户明确报错、成员关系 upsert），支持 --user/--app/--platform/--space/--platform-user/--roles，用于控制面开通内部用户与平台绑定。
+- `identity-bind` 维护命令：`main.go` 新增幂等身份开通（CreateUser 已存在则继续、同一外部身份重复绑定同一用户视为成功重放、绑定其他用户明确报错、成员关系 upsert），支持 --user/--app/--platform/--space/--platform-user，用于控制面开通内部用户与平台绑定（2026-08-14 移除 --roles：角色管理面已删，无角色可引用）。
 - HTTP 接线：外层 ServeMux 组合——`/api/v1/ingress/` 前缀交给 ingress，其余路径交给 Web Access（健康检查、Echo/SSE、演示页面）。
 - 测试：ingress 9 个用例（身份解析/去重/会话连续性/幂等冲突/未绑定与禁用/匿名/畸形事件/错误映射）+ identity-bind 幂等与冲突测试 + access 全量回归。
 
@@ -246,7 +245,7 @@ The App-scoped storage/public-error, durable Echo/Run state, Go trust-boundary/i
 ## 2026-08-13 hosted 生产边界基线
 
 - **hosted CPU 时间预算（强制终止，非协作式）**：wazero 无指令级计数（已核实 v1.12 及其全部历史版本），进程内无法预占 guest 忙循环。因此用 wazero 公共特性 `WithCloseOnContextDone(true)`——编译器与解释器**编译期插入周期检查**，调用 context 取消/超时即关闭模块强制终止执行——叠加**每次调用执行时间预算**（`WasmHostConfig.CallTimeout`，默认 30 秒，0 不表示不限时而是取默认）。预算耗尽按 `context.DeadlineExceeded` 归类（内核既有稳定超时分类），不视为协议违例；测试用死循环 guest 工件（`testdata/busy.wasm`，Go 交叉编译）验证 300ms 预算内被强制终止，且预算经外部 Runtime Host 协议同样生效。
-- **外部 Runtime Host 进程产品接线**：`RuntimeHostBackend` 生产实现 `hostedRuntimeBackend`（宿主进程内 wazero 执行，含内存上限与执行时间预算）；`RuntimeHostProtocolServer` 服务端首次拥有真实 Backend（此前只有测试 fake）；全链路测试（真实 wazero 执行经完整协议被内核 GRPCHost 调用，含预算强制跨协议生效）；`main.go` 新增 `runtime-host` 子命令（`--install-root` + `--address`，独立信号上下文，loopback/Unix socket 强制）。**host function 是内核特权**：需要宿主函数投影的工件（内置 campus）只能内核进程内执行，外部宿主承载无宿主函数的 hosted 包——这是架构契约，不是降级路径。安装目录配置了 hosted 包而宿主地址缺失时内核拒绝就绪（fail-closed，无进程内回退）。
+- **外部 Runtime Host 进程产品接线**：`RuntimeHostBackend` 生产实现 `hostedRuntimeBackend`（宿主进程内 wazero 执行，含内存上限与执行时间预算）；`RuntimeHostProtocolServer` 服务端首次拥有真实 Backend（此前只有测试 fake）；全链路测试（真实 wazero 执行经完整协议被内核 GRPCHost 调用，含预算强制跨协议生效）；`main.go` 新增 `runtime-host` 子命令（`--install-root` + `--address`，独立信号上下文，loopback/Unix socket 强制）。**host function 是内核特权**：需要宿主函数投影的工件（内置 campus）只能内核进程内执行，外部宿主承载无宿主函数的 hosted 包——这是架构契约，不是降级路径。安装目录配置了 hosted 包而宿主地址缺失时内核拒绝就绪（fail-closed，无进程内回退）。2026-08-14 修复 catalog 侧接线：`ReadArtifact` 运行时比对收窄为身份（ID/Version/Mode），新增 `runtime_host_wiring_test.go`（`//go:build unix`）覆盖 真实安装目录 + 真实 Backend → GRPCHost → 协议 → wazero 全链路。
 - **Windows Job Object 资源限额**（替换原 fail-closed）：`process_limits_windows.go` 用 Job Object 强制 `MaxAddressBytes`（JOB_OBJECT_LIMIT_PROCESS_MEMORY，等效 RLIMIT_AS）与 `MaxCPUSeconds`（JOB_OBJECT_LIMIT_JOB_TIME + 耗尽终止动作，等效 RLIMIT_CPU）；无论限额是否为零都创建 Job 并附加 KILL_ON_JOB_CLOSE（等效 Unix 进程组清理，且内核崩溃后由 OS 兜底防孤儿）；Job 句柄由 `loader.Process` 持有、子进程回收后经 `Process.Release()` 释放（提前释放会立即误杀，这是 `applyProcessLimits` 签名改为返回释放器的原因）。`max_open_files`/`max_file_bytes`：Windows 无对应进程级原语，非零值 fail-closed（正确语义而非降级）。集成测试验证 1 秒 CPU 限额下死循环子进程被系统强制终止。其余平台（macOS/BSD、Plan 9 等）维持非零限额 fail-closed。
 
 ## 2026-08-13 上下文与记忆装配基线（feat/context-assembly）
@@ -283,6 +282,27 @@ The App-scoped storage/public-error, durable Echo/Run state, Go trust-boundary/i
 - **渠道提示作为 App 配置持久化**：`appconfig.Config` 新增 `ChannelPrompts map[string]string`（渠道 → 提示段），随配置修订入库（`app_config_revisions.channel_prompts`，迁移 20）并进入摘要哈希（`Normalize` 校验渠道键 `^[a-z][a-z0-9._-]*$`、提示非空且 ≤8KiB）；`RunRequest`/`RunRecord` 新增 `Channel`（`json:"-"` 不进 HTTP 契约，Web 填 `web`、QQ 填 `qq_group`/`qq_private`，`runs.channel` 迁移 20）。orchestrator 装配时按 `run.Channel` 从持久化配置取渠道提示追加到基础提示后（子 Run 不装配渠道）；恢复/重试按 Run 记录的渠道重装配，摘要仍确定性。
 - **默认人格种子**：`seed_prompt.go` 迁移 LuoYingRebuild 人格与渠道端介绍/输出规则——基础提示（珞樱人格 + 系统指令最高优先级 + 行为准则/限定 + 通用事实）+ 三渠道提示（web/qq_group/qq_private 端介绍与输出特点）。不迁移：输出协议（executor 协议已替代 RETURN_PROTOCOL）、创建者身份硬编码（由身份系统替代，待实现）、风格系统与技能提示（无对应治理支撑）。首次播种走 `store.Ensure` 入库，之后数据库为权威（main.go 种子不覆盖既有配置）。
 - 测试：appconfig 渠道提示修订摘要（map 顺序无关/变化必改修订/非法键与空值拒绝）+ sqlite 渠道提示 Ensure/CAS/Revision 往返 + orchestrator 集成（持久化渠道提示按 Run 渠道进入装配后系统提示、渠道持久化到 runs）。
+
+## 2026-08-14 ponytail 审计清理基线
+
+按 `/ponytail-audit`（不要任何冗余兼容代码，用最干净逻辑）对全仓库审计并清理：删除无消费者/仅测试消费的机制，合并重复实现，修复审计发现的正确性问题。全部改动经 Go 全量测试、`-race`、`go vet`、Python 测试与集成门禁验证。
+
+**修复（原审计的功能/正确性项，全部闭环）**：
+
+- 外部 Runtime Host 生产接线：协议身份只携带 ID/Version/Mode，后端不再伪造 Role/LockedDigest/Pin/IdleTTL——`catalog.ReadArtifact` 运行时比对从全清单（`sameRuntimeManifest`）收窄为身份；新增 `runtime_host_wiring_test.go`（`//go:build unix`）用真实安装目录（manifest/lock + 真实 digest）+ 真实 `NewHostedRuntimeBackend` 验证 GRPCHost → 协议 → wazero 全链路（此前只有 stub ReadArtifact 的协议测试，`main.go` 真实接线从未被覆盖）。
+- 迁移 21 改为非破坏性：不再 `DELETE FROM app_config_heads`（会丢弃控制面调优的当前配置指针），改为保留表头的 no-op；`TestMigrationV21PreservesAppConfigHeads` 覆盖 20→21 升级保留已调优头与渠道提示。
+- 队列 Run 孤儿确定性失败：`loadRunWork` 对 Echo 非 running 的 queued Run 不再静默跳过，经 `failOrphanQueuedRun` 原子置 failed（`recovery_failed`）并释放 `(app_id,echo_id,attempt)` 唯一约束槽位；`TestOrphanedQueuedRunIsDeterministicallyFailed` 覆盖。
+- WAL 模式 fail-closed：`PRAGMA journal_mode = WAL` 后查询实际模式，非 `wal`/`memory` 拒绝启动（只读/不支持 WAL 的文件系统不再静默回退 rollback journal）。
+- Orchestrator 无合成配置 fallback：`AppConfigSource` 为 nil 时构造期显式 panic（`fallbackAppConfig` 删除），部署遗漏接线不再静默 fail-open；测试装配点改为显式播种配置。
+- QQ 重放不再静默跳过：`GetEcho` 存储读取失败记 `observe.Warn`（`publicErrorCode` 区分 echo_not_found/echo_read_failed），实时流无终态回复同样记警告。
+
+**删除（无消费者或仅测试消费）**：
+
+- 机制：`internal/kernel/loader/embedded_host.go` + 测试、`ModeEmbedded` 模式、`task/outbox.go` + golden、`Manager.Upgrade/SweepIdle/ResetFailed/Unload/Snapshot` 与 `retired` 字段、`Orchestrator.Create/Run`（测试便利）、`CreateEchoRunIdempotent` 纯委托、Web `/api/v1/echoes` 端点（保留 v2）、`observe.ContextWithRequestIDs/RecordWriteError/Hijack/SanitizeText` 与 HTTP 冗余计数器、`appconfig.Policy` 接口、`runtime.ToolCaller` 接口、`task.Scheduler.List`/`TypeRegistry.Len()`。
+- 重复实现：Dispatcher `InvokeCapability`/`UseTool` 合并为单一 `route()`（Schema/权限/幂等/确认/审计共享）；ID 正则收敛 `internal/kernel/id` 单包；canonical JSON→sha256 收敛 `internal/jsonutil.CanonicalJSON/CanonicalDigest`；publicerror 合并单错误码表；`process_limits_other*`/`publish_file_other*` 各合并为单文件；`hostedRuntimeBackend` 不再复制 WasmHost 配置；observe 指标写合并；`governance_tasks.go` 抽取 `confirmationSweepRequest` 共享。
+- Python agent：`ProviderFactory` 死类型、`_validate_text/_valid_token/_valid_code` 的 bool 返回与 `not` 包装（改纯抛异常）、`_model_result` 重复 JSON 校验（上游已校验）、observe 导入期读 env（改默认值，`configure` 才读）、`max_cost_microusd < 0`（proto uint64 不可能为负）、6 处重复帧构造收敛为 `_frame`/`_failure` 助手。
+
+**保留（有测试的 PRD 基线，删除会破坏既有契约）**：identity 用户/绑定/成员/禁用控制面（CreateUser/BindExternalIdentity/UnbindExternalIdentity/ResolveIdentity/SetMembership/DisableUser——支撑 403 user_disabled 公共错误契约）、session.Service 读路径（contextasm 装配入口）、Blob 沙箱存储（安全负向测试基线，附件接入落地前的写入原语）。**2026-08-14 二次清理已删**：identity 角色/权限授予管理面（14 个 Service 方法 + 8 个存储方法 + `--roles` 旗标）、`InboundMessage.Attachments`（无生产者）、session.Service 写路径（CreateMessage/EditMessage，Hub 直写 Store）、`runtime.StaticAppPolicy`（测试替身移入 `runtimetest`）。
 
 ## Known Production Blockers
 

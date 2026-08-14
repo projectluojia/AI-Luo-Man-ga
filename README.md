@@ -53,7 +53,6 @@ App 的启停状态、模型、系统提示、时区、运行预算、Capability
 ## API
 
 - `POST /api/v2/echoes`：使用必填 `Idempotency-Key` 原子创建 Echo 和排队 Run；相同请求可安全重放。
-- `POST /api/v1/echoes`：兼容入口，执行与 v2 相同的必填幂等契约；新调用方应使用 v2。
 - `GET /api/v1/echoes/{echo_id}/events`：SSE 事件流，支持 `Last-Event-ID` 重放。
 - `GET /api/v1/echoes/{echo_id}`：查询状态和完整事件。
 - `DELETE /api/v1/echoes/{echo_id}`：取消运行。
