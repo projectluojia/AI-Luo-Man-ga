@@ -31,8 +31,8 @@ _private_fields = {
     "tool_result",
     "user_message",
 }
-_max_length = int(os.getenv("AILUO_LOG_MAX_VALUE_LENGTH", "4096"))
-_environment = os.getenv("AILUO_ENVIRONMENT", "development")
+_max_length = 4096
+_environment = "development"
 _service = "ailuo-python-agent"
 
 # 正式配置完成前禁止 Python 的 lastResort handler 输出未脱敏异常。

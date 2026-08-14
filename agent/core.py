@@ -99,7 +99,6 @@ class AgentKernel:
             or max_output_tokens < 1
             or max_total_tokens < 1
             or max_output_bytes < 1
-            or max_cost_microusd < 0
             or provider_timeout_seconds <= 0
         ):
             raise ValueError("Agent budgets must be positive")
