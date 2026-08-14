@@ -26,7 +26,6 @@ import (
 // 标准消息与载荷的边界限制。
 const (
 	MaxTextBytes       = 4000            // 单条消息最大字符数（与 Web 适配器既有限制一致）
-	MaxAttachments     = 16              // 单条消息附件数量上限
 	AnonymousSenderID  = "anonymous"     // 无身份渠道的保留发送者标识（不是 User 记录）
 	AnonymousSessionID = "web-anonymous" // 无身份 Web 演示的共享会话标识
 )
@@ -37,14 +36,6 @@ var (
 	// ErrAnonymousOnly Hub 未配置身份解析器时，携带平台身份的消息一律拒绝。
 	ErrAnonymousOnly = errors.New("platform identity is not resolvable in this hub")
 )
-
-// AttachmentRef 是消息附件的引用元数据（不携带正文）。
-type AttachmentRef struct {
-	Filename string
-	MimeType string
-	Size     int64
-	BlobID   string
-}
 
 // InboundMessage 是平台无关的标准入站消息。平台适配器负责把原始事件转换为
 // 本标准消息；Hub 只消费本标准消息，不感知任何平台细节。
@@ -58,7 +49,6 @@ type InboundMessage struct {
 	PlatformSessionID string // 平台侧会话标识
 	MessageType       string // 文本/图片/文件/事件等
 	Text              string
-	Attachments       []AttachmentRef
 	ReplyTo           string
 	OccurredAt        time.Time
 	IdempotencyKey    string
@@ -146,9 +136,6 @@ func (h *Hub) validate(message InboundMessage) error {
 	}
 	if utf8.RuneCountInString(message.Text) > MaxTextBytes {
 		return fmt.Errorf("%w: inbound message text exceeds %d characters", session.ErrInvalidMessage, MaxTextBytes)
-	}
-	if len(message.Attachments) > MaxAttachments {
-		return fmt.Errorf("%w: inbound message has too many attachments", session.ErrInvalidMessage)
 	}
 	return nil
 }

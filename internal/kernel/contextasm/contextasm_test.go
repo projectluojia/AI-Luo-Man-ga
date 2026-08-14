@@ -16,7 +16,7 @@ import (
 
 const testAppID = "campus-services"
 
-func newHarness(t *testing.T) (*sqlite.Store, *session.Service) {
+func newHarness(t *testing.T) (*sqlite.Store, *session.Service, *blob.Store) {
 	t.Helper()
 	store, err := sqlite.Open(filepath.Join(t.TempDir(), "context.db"))
 	if err != nil {
@@ -32,7 +32,7 @@ func newHarness(t *testing.T) (*sqlite.Store, *session.Service) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return store, service
+	return store, service, blobs
 }
 
 // ensureSession 幂等创建测试会话：已存在则复用（时间戳不同不视为冲突）。
@@ -53,22 +53,22 @@ func ensureSession(t *testing.T, store *sqlite.Store, appID, sessionID string) {
 }
 
 // createMessage 写入一条标准消息（先确保会话存在）并检查错误。
-func createMessage(t *testing.T, store *sqlite.Store, service *session.Service, message session.Message, content []byte) {
+func createMessage(t *testing.T, store *sqlite.Store, message session.Message, content []byte) {
 	t.Helper()
 	ensureSession(t, store, message.AppID, message.SessionID)
-	if _, _, err := service.CreateMessage(context.Background(), message, content); err != nil {
+	if _, _, err := store.CreateMessage(context.Background(), message, content); err != nil {
 		t.Fatal(err)
 	}
 }
 
 // seedSession 创建会话并按文本顺序写入历史消息，消息标识为 message-0、message-1、
 // ……，时间从 0 分钟起逐条递增（message-0 最旧，最后一条最新）。
-func seedSession(t *testing.T, store *sqlite.Store, service *session.Service, sessionID string, texts ...string) {
+func seedSession(t *testing.T, store *sqlite.Store, sessionID string, texts ...string) {
 	t.Helper()
 	now := time.Now().UTC()
 	ensureSession(t, store, testAppID, sessionID)
 	for index, text := range texts {
-		createMessage(t, store, service, session.Message{
+		createMessage(t, store, session.Message{
 			AppID: testAppID, SessionID: sessionID, MessageID: "message-" + strconv.Itoa(index),
 			SenderUserID: "anonymous", Type: session.MessageTypeText,
 			ContentRef: session.ContentRef{Mode: session.ContentModeInline, Size: int64(len([]byte(text)))},
@@ -101,8 +101,8 @@ func input(sessionID, currentMessageID, message string) contextasm.Input {
 }
 
 func TestAssembleDeterministicDigest(t *testing.T) {
-	store, service := newHarness(t)
-	seedSession(t, store, service, "session-1", "早上好", "校巴几点发车")
+	store, service, _ := newHarness(t)
+	seedSession(t, store, "session-1", "早上好", "校巴几点发车")
 	assembler, err := contextasm.New(service, contextasm.DefaultBudget())
 	if err != nil {
 		t.Fatal(err)
@@ -122,8 +122,8 @@ func TestAssembleDeterministicDigest(t *testing.T) {
 }
 
 func TestAssembleExcludesCurrentMessage(t *testing.T) {
-	store, service := newHarness(t)
-	seedSession(t, store, service, "session-1", "之前的问题", "当前的问题")
+	store, service, _ := newHarness(t)
+	seedSession(t, store, "session-1", "之前的问题", "当前的问题")
 	assembler, _ := contextasm.New(service, contextasm.DefaultBudget())
 	snapshot := assemble(t, assembler, input("session-1", "message-1", "当前的问题"))
 	if len(snapshot.History.Entries) != 1 || snapshot.History.Entries[0].MessageID != "message-0" {
@@ -138,9 +138,9 @@ func TestAssembleExcludesCurrentMessage(t *testing.T) {
 }
 
 func TestAssembleAppIsolation(t *testing.T) {
-	store, service := newHarness(t)
-	seedSession(t, store, service, "session-1", "本应用历史")
-	createMessage(t, store, service, session.Message{
+	store, service, _ := newHarness(t)
+	seedSession(t, store, "session-1", "本应用历史")
+	createMessage(t, store, session.Message{
 		AppID: "other-app", SessionID: "other-session", MessageID: "other-1",
 		SenderUserID: "anonymous", Type: session.MessageTypeText,
 		ContentRef: session.ContentRef{Mode: session.ContentModeInline, Size: 12},
@@ -157,8 +157,8 @@ func TestAssembleAppIsolation(t *testing.T) {
 }
 
 func TestAssembleDeletedMessageExcluded(t *testing.T) {
-	store, service := newHarness(t)
-	seedSession(t, store, service, "session-1", "保留的消息", "待撤回的消息")
+	store, service, _ := newHarness(t)
+	seedSession(t, store, "session-1", "保留的消息", "待撤回的消息")
 	if err := store.RecallMessage(context.Background(), testAppID, "session-1", "message-1", time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
@@ -170,8 +170,8 @@ func TestAssembleDeletedMessageExcluded(t *testing.T) {
 }
 
 func TestAssembleEntryCountBudgetDropsOldest(t *testing.T) {
-	store, service := newHarness(t)
-	seedSession(t, store, service, "session-1", "一", "二", "三", "四")
+	store, service, _ := newHarness(t)
+	seedSession(t, store, "session-1", "一", "二", "三", "四")
 	assembler, _ := contextasm.New(service, contextasm.Budget{MaxMessages: 2})
 	snapshot := assemble(t, assembler, input("session-1", "", "请查询"))
 	if len(snapshot.History.Entries) != 2 {
@@ -186,9 +186,9 @@ func TestAssembleEntryCountBudgetDropsOldest(t *testing.T) {
 }
 
 func TestAssembleTotalCharsBudgetDropsOldest(t *testing.T) {
-	store, service := newHarness(t)
+	store, service, _ := newHarness(t)
 	long := strings.Repeat("长", 100)
-	seedSession(t, store, service, "session-1", long, "短")
+	seedSession(t, store, "session-1", long, "短")
 	assembler, _ := contextasm.New(service, contextasm.Budget{MaxTotalChars: 50})
 	snapshot := assemble(t, assembler, input("session-1", "", "请查询"))
 	if len(snapshot.History.Entries) != 1 || snapshot.History.Entries[0].MessageID != "message-1" {
@@ -200,8 +200,8 @@ func TestAssembleTotalCharsBudgetDropsOldest(t *testing.T) {
 }
 
 func TestAssemblePerMessageCharBudgetTruncates(t *testing.T) {
-	store, service := newHarness(t)
-	seedSession(t, store, service, "session-1", strings.Repeat("很", 100))
+	store, service, _ := newHarness(t)
+	seedSession(t, store, "session-1", strings.Repeat("很", 100))
 	assembler, _ := contextasm.New(service, contextasm.Budget{MaxCharsPerMsg: 10})
 	snapshot := assemble(t, assembler, input("session-1", "", "请查询"))
 	if len(snapshot.History.Entries) != 1 {
@@ -216,8 +216,8 @@ func TestAssemblePerMessageCharBudgetTruncates(t *testing.T) {
 }
 
 func TestAssembleMaxAgeBudget(t *testing.T) {
-	store, service := newHarness(t)
-	seedSession(t, store, service, "session-1", "很旧的消息", "很新的消息")
+	store, service, _ := newHarness(t)
+	seedSession(t, store, "session-1", "很旧的消息", "很新的消息")
 	assembler, _ := contextasm.New(service, contextasm.Budget{MaxAge: 90 * time.Second})
 	in := input("session-1", "", "请查询")
 	in.Now = time.Now().UTC().Add(2 * time.Minute) // 消息位于 now-2min 与 now-1min
@@ -228,7 +228,7 @@ func TestAssembleMaxAgeBudget(t *testing.T) {
 }
 
 func TestAssembleNoSessionSkipsHistory(t *testing.T) {
-	_, service := newHarness(t)
+	_, service, _ := newHarness(t)
 	assembler, _ := contextasm.New(service, contextasm.DefaultBudget())
 	snapshot := assemble(t, assembler, input("", "", "子任务"))
 	if len(snapshot.History.Entries) != 0 {
@@ -241,14 +241,22 @@ func TestAssembleNoSessionSkipsHistory(t *testing.T) {
 }
 
 func TestAssembleBlobMessageContent(t *testing.T) {
-	store, service := newHarness(t)
+	store, service, blobs := newHarness(t)
 	now := time.Now().UTC()
-	createMessage(t, store, service, session.Message{
+	// Blob 模式：正文先写入 BlobStore，消息持久化只保存引用。
+	body := []byte("二进制正文内容")
+	if err := blobs.Put(context.Background(), "messages/blob-1", body); err != nil {
+		t.Fatal(err)
+	}
+	ensureSession(t, store, testAppID, "session-1")
+	if _, _, err := store.CreateMessage(context.Background(), session.Message{
 		AppID: testAppID, SessionID: "session-1", MessageID: "blob-1",
 		SenderUserID: "anonymous", Type: session.MessageTypeText,
-		ContentRef: session.ContentRef{Mode: session.ContentModeBlob, BlobID: "messages/blob-1", Size: 21},
+		ContentRef: session.ContentRef{Mode: session.ContentModeBlob, BlobID: "messages/blob-1", Size: int64(len(body))},
 		CreatedAt:  now,
-	}, []byte("二进制正文内容"))
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
 	assembler, _ := contextasm.New(service, contextasm.DefaultBudget())
 	snapshot := assemble(t, assembler, input("session-1", "", "请查询"))
 	if len(snapshot.History.Entries) != 1 || snapshot.History.Entries[0].Content != "二进制正文内容" {
@@ -260,7 +268,7 @@ func TestAssembleBlobMessageContent(t *testing.T) {
 }
 
 func TestAssembleNonTextMessagesUsePlaceholder(t *testing.T) {
-	store, service := newHarness(t)
+	store, service, _ := newHarness(t)
 	now := time.Now().UTC()
 	messages := []session.Message{
 		{AppID: testAppID, SessionID: "session-1", MessageID: "image-1", SenderUserID: "anonymous",
@@ -269,7 +277,7 @@ func TestAssembleNonTextMessagesUsePlaceholder(t *testing.T) {
 			Type: session.MessageTypeSystem, ContentRef: session.ContentRef{Mode: session.ContentModeInline, Size: 4}, CreatedAt: now.Add(time.Minute)},
 	}
 	for _, message := range messages {
-		createMessage(t, store, service, message, []byte("abcd"))
+		createMessage(t, store, message, []byte("abcd"))
 	}
 	assembler, _ := contextasm.New(service, contextasm.DefaultBudget())
 	snapshot := assemble(t, assembler, input("session-1", "", "请查询"))
@@ -285,8 +293,8 @@ func TestAssembleNonTextMessagesUsePlaceholder(t *testing.T) {
 }
 
 func TestAssemblePromptBudgetDropsHistoryThenFails(t *testing.T) {
-	store, service := newHarness(t)
-	seedSession(t, store, service, "session-1", "历史一", "历史二")
+	store, service, _ := newHarness(t)
+	seedSession(t, store, "session-1", "历史一", "历史二")
 	// 提示总预算仅容纳基础提示：历史必须被全部丢弃，不静默超过预算。
 	assembler, _ := contextasm.New(service, contextasm.Budget{MaxPromptBytes: 128})
 	snapshot := assemble(t, assembler, input("session-1", "", "请查询"))
@@ -324,8 +332,8 @@ func TestNewRejectsNilSourceAndInvalidBudget(t *testing.T) {
 }
 
 func TestAssembleSourcesContract(t *testing.T) {
-	store, service := newHarness(t)
-	seedSession(t, store, service, "session-1", "历史消息")
+	store, service, _ := newHarness(t)
+	seedSession(t, store, "session-1", "历史消息")
 	assembler, _ := contextasm.New(service, contextasm.DefaultBudget())
 	snapshot := assemble(t, assembler, input("session-1", "", "请查询"))
 	if snapshot.Sources.Config.Version != "config-revision-1" {

@@ -125,7 +125,6 @@ func TestIntakeRejectsAppMismatchAndInvalidMessage(t *testing.T) {
 		{name: "missing message type", mutate: func(m *InboundMessage) { m.MessageType = "" }},
 		{name: "missing idempotency key", mutate: func(m *InboundMessage) { m.IdempotencyKey = "" }},
 		{name: "oversized text", mutate: func(m *InboundMessage) { m.Text = string(make([]byte, MaxTextBytes+1)) }},
-		{name: "too many attachments", mutate: func(m *InboundMessage) { m.Attachments = make([]AttachmentRef, MaxAttachments+1) }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

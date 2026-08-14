@@ -18,10 +18,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"regexp"
 	"time"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/appconfig"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/id"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/idempotency"
 )
 
@@ -60,7 +60,7 @@ var (
 	ErrLeaseLost           = errors.New("task execution lease was lost")
 )
 
-var taskIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
+var taskIDPattern = id.StableMixed
 
 const (
 	maxTaskIDBytes  = 128

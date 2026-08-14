@@ -45,7 +45,6 @@ type EchoOrchestrator interface {
 }
 
 type Server struct {
-	ctx          context.Context
 	schedulerCtx context.Context
 	stopSchedule context.CancelFunc
 	orchestrator EchoOrchestrator
@@ -91,7 +90,6 @@ func NewServer(
 ) *Server {
 	schedulerCtx, stopSchedule := context.WithCancel(ctx)
 	server := &Server{
-		ctx:          ctx,
 		schedulerCtx: schedulerCtx,
 		stopSchedule: stopSchedule,
 		orchestrator: orchestrator,
@@ -116,7 +114,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /readyz", s.readyz)
 	mux.Handle("GET /metrics", observe.DefaultMetrics())
 	mux.HandleFunc("GET /api/v1/capabilities", s.capabilities)
-	mux.HandleFunc("POST /api/v1/echoes", s.createEcho)
 	mux.HandleFunc("POST /api/v2/echoes", s.createEcho)
 	mux.HandleFunc("GET /api/v1/echoes/{echo_id}", s.getEcho)
 	mux.HandleFunc("DELETE /api/v1/echoes/{echo_id}", s.cancelEcho)
@@ -260,7 +257,7 @@ func (s *Server) createEcho(writer http.ResponseWriter, request *http.Request) {
 		IdempotencyKey:    input.IdempotencyKey,
 	})
 	if err != nil {
-		s.writeIntakeError(writer, request, err)
+		access.WriteIntakeError(writer, request, err)
 		return
 	}
 	// 会话上下文只来自受治理的 Intake 结果，覆盖客户端请求体中的任何同名字段
@@ -296,12 +293,6 @@ func (s *Server) createEcho(writer http.ResponseWriter, request *http.Request) {
 		"status_url": "/api/v1/echoes/" + echoID,
 		"events_url": "/api/v1/echoes/" + echoID + "/events",
 	})
-}
-
-// writeIntakeError 把标准消息入口（Hub.Intake）的错误映射为稳定的公共 HTTP 响应。
-// 身份未绑定、被禁用或 Hub 未配置身份解析时一律 fail-closed，不泄露内部细节。
-func (s *Server) writeIntakeError(writer http.ResponseWriter, request *http.Request, err error) {
-	access.WriteIntakeError(writer, request, err)
 }
 
 func (s *Server) queueEcho(parent context.Context, echoID string) {

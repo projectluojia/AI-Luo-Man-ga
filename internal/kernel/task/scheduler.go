@@ -128,7 +128,7 @@ func NewScheduler(store Store, registry *TypeRegistry, config Config) *Scheduler
 	}
 }
 
-// Start 启动轮询、死亡任务恢复与 Outbox 投递循环。
+// Start 启动轮询与死亡任务恢复循环。
 // ctx 取消后轮询停止接活；运行中任务由 Shutdown 决定排空或持久化。
 func (s *Scheduler) Start(ctx context.Context) error {
 	s.mu.Lock()
@@ -567,11 +567,6 @@ func (s *Scheduler) Cancel(ctx context.Context, appID, taskID string) (bool, err
 		cancel()
 	}
 	return true, nil
-}
-
-// List 按 App 列出任务（管理/重放用途）。
-func (s *Scheduler) List(ctx context.Context, appID string, limit int) ([]Task, error) {
-	return s.store.ListTasks(ctx, appID, limit)
 }
 
 // CreateRequest 描述一个新任务。

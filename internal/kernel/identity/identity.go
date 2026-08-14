@@ -6,22 +6,24 @@
 //   - ExternalIdentity 是 App 级外部平台身份到内部用户的绑定，唯一键为
 //     (app_id, platform, platform_space_id, platform_user_id)，同一外部身份
 //     在同一 App 内只能绑定一个内部用户；
-//   - AppMembership、Role 与 PermissionGrant 共同表达用户在 App 内的授权，
-//     全部按 app_id 隔离，跨 App 读取统一按不存在处理；
+//   - AppMembership 是用户在 App 内的成员关系，全部按 app_id 隔离，跨 App
+//     读取统一按不存在处理；roles/permission_grants 表保留为 Schema 契约，
+//     SetMembership 内联校验角色存在性；
 //   - IdentityBindingRevision 是 App 级单调递增的身份/授权变更修订号；
-//   - 生效权限在查询时实时计算，不缓存；撤权、禁用与解绑立即反映到下一次
-//     权限快照（IdentityContext / EffectivePermissions）；
+//   - 生效权限在查询时实时计算，不缓存；禁用与解绑立即反映到下一次
+//     身份快照（IdentityContext / EffectivePermissions）；
 //   - 身份不存在时返回明确的 ErrNotFound，绝不自动创建匿名权威用户。
 package identity
 
 import (
 	"context"
 	"errors"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/id"
 )
 
 // 用户状态。
@@ -40,15 +42,13 @@ var (
 	ErrAlreadyBound = errors.New("external identity is already bound to another user")
 	ErrUserDisabled = errors.New("user is disabled")
 	ErrRoleNotFound = errors.New("role is not found")
-	ErrRoleInUse    = errors.New("role is still referenced by app members")
 )
 
 var (
-	stableIDPattern   = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
-	appIDPattern      = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,127}$`)
-	platformPattern   = regexp.MustCompile(`^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$`)
-	roleIDPattern     = regexp.MustCompile(`^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$`)
-	permissionPattern = regexp.MustCompile(`^[a-z][a-z0-9]*(?:[._:-][a-z0-9]+)*$`)
+	appIDPattern    = id.AppID
+	stableIDPattern = id.StableMixed
+	platformPattern = id.StableLower
+	roleIDPattern   = id.StableLower
 )
 
 // User 是 Deployment 级内部用户。user_id 与任何外部平台标识都是不同的命名空间。
@@ -71,33 +71,13 @@ type ExternalIdentity struct {
 }
 
 // AppMembership 是用户在指定 App 内的成员关系，唯一键为 (app_id, user_id)。
-// 角色通过 RoleIDs 引用同 App 的 Role；直接权限通过 PermissionGrant（user subject）表达。
+// 角色通过 RoleIDs 引用同 App 的 Role（角色存在性由 SetMembership 内联校验）。
 type AppMembership struct {
 	AppID     string
 	UserID    string
 	RoleIDs   []string
 	CreatedAt time.Time
 	UpdatedAt time.Time
-}
-
-// Role 是 App 级角色定义，唯一键为 (app_id, role_id)。
-// 角色的权限通过 PermissionGrant（role subject）表达。
-type Role struct {
-	AppID       string
-	RoleID      string
-	Name        string
-	Description string
-	CreatedAt   time.Time
-}
-
-// PermissionGrant 是一条权限授予记录。subject 必须且只能是内部用户（UserID）
-// 或 App 角色（RoleID）之一。
-type PermissionGrant struct {
-	AppID      string
-	UserID     string
-	RoleID     string
-	Permission string
-	GrantedAt  time.Time
 }
 
 // IdentityContext 是接入事件解析后的受治理身份快照，供 Dispatcher 与知识库
@@ -125,18 +105,8 @@ type Store interface {
 	UnbindExternalIdentity(context.Context, string, string, string, string) error
 	GetExternalIdentity(context.Context, string, string, string, string) (ExternalIdentity, error)
 
-	EnsureRole(context.Context, Role) error
-	DeleteRole(context.Context, string, string) error
-	GetRole(context.Context, string, string) (Role, error)
-	ListRoles(context.Context, string) ([]Role, error)
-
 	SetMembership(context.Context, AppMembership) error
-	RemoveMembership(context.Context, string, string) error
 	GetMembership(context.Context, string, string) (AppMembership, error)
-	ListMemberships(context.Context, string) ([]AppMembership, error)
-
-	GrantPermission(context.Context, PermissionGrant) error
-	RevokePermission(context.Context, PermissionGrant) error
 
 	EffectivePermissions(context.Context, string, string) ([]string, error)
 	BindingRevision(context.Context, string) (int64, error)
@@ -193,27 +163,6 @@ func ValidateRoleID(roleID string) error {
 	return nil
 }
 
-func ValidatePermission(permission string) error {
-	if !permissionPattern.MatchString(permission) || len(permission) > 128 {
-		return ErrInvalid
-	}
-	return nil
-}
-
-func ValidateRoleName(name string) error {
-	if len(name) == 0 || len(name) > 256 || !utf8.ValidString(name) {
-		return ErrInvalid
-	}
-	return nil
-}
-
-func ValidateRoleDescription(description string) error {
-	if len(description) > 1024 || !utf8.ValidString(description) {
-		return ErrInvalid
-	}
-	return nil
-}
-
 // ValidateBindingKey 校验外部身份的唯一键字段。
 func ValidateBindingKey(appID, platform, platformSpaceID, platformUserID string) error {
 	if err := ValidateAppID(appID); err != nil {
@@ -254,19 +203,6 @@ func ValidateExternalIdentity(binding ExternalIdentity) error {
 	return ValidateUserID(binding.UserID)
 }
 
-func ValidateRole(role Role) error {
-	if err := ValidateAppID(role.AppID); err != nil {
-		return err
-	}
-	if err := ValidateRoleID(role.RoleID); err != nil {
-		return err
-	}
-	if err := ValidateRoleName(role.Name); err != nil {
-		return err
-	}
-	return ValidateRoleDescription(role.Description)
-}
-
 func ValidateAppMembership(membership AppMembership) error {
 	if err := ValidateAppID(membership.AppID); err != nil {
 		return err
@@ -286,26 +222,6 @@ func ValidateAppMembership(membership AppMembership) error {
 		return ErrInvalid
 	}
 	return nil
-}
-
-func ValidatePermissionGrant(grant PermissionGrant) error {
-	if err := ValidateAppID(grant.AppID); err != nil {
-		return err
-	}
-	if (grant.UserID == "") == (grant.RoleID == "") {
-		return ErrInvalid
-	}
-	if grant.UserID != "" {
-		if err := ValidateUserID(grant.UserID); err != nil {
-			return err
-		}
-	}
-	if grant.RoleID != "" {
-		if err := ValidateRoleID(grant.RoleID); err != nil {
-			return err
-		}
-	}
-	return ValidatePermission(grant.Permission)
 }
 
 // 规范化：裁剪空白并把集合整理为规范排序、去重形式，之后再做严格校验。
@@ -337,16 +253,6 @@ func NormalizeBindingKey(appID, platform, platformSpaceID, platformUserID string
 		return "", "", "", "", err
 	}
 	return appID, platform, platformSpaceID, platformUserID, nil
-}
-
-func NormalizeRole(role Role) (Role, error) {
-	role.AppID = strings.TrimSpace(role.AppID)
-	role.RoleID = strings.TrimSpace(role.RoleID)
-	role.Name = strings.TrimSpace(role.Name)
-	if err := ValidateRole(role); err != nil {
-		return Role{}, err
-	}
-	return role, nil
 }
 
 func NormalizeMembership(membership AppMembership) (AppMembership, error) {

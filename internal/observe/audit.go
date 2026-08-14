@@ -25,10 +25,6 @@ func SanitizeAuditJSON(payload []byte, maxBytes int) []byte {
 	return encoded
 }
 
-func SanitizeText(value string, maxLength int) string {
-	return truncate(value, maxLength)
-}
-
 func sanitizeJSONValue(value any) any {
 	switch typed := value.(type) {
 	case map[string]any:

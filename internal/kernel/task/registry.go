@@ -94,13 +94,6 @@ func (r *TypeRegistry) ValidateParams(typeID string, params json.RawMessage) err
 	return nil
 }
 
-// Len 返回已注册的任务类型数量。
-func (r *TypeRegistry) Len() int {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return len(r.types)
-}
-
 func compileParamsSchema(typeID string, raw json.RawMessage) (*jsonschema.Schema, error) {
 	return strictschema.CompileSchema(typeID, string(raw), "https://schema.invalid/ailuo/task/", maxSchemaBytes)
 }

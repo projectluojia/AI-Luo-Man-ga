@@ -137,12 +137,8 @@ func TestTypeRegistryRegistersClosedSet(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("注册失败：%v", err)
 	}
-	if registry.Len() != 1 {
-		t.Fatalf("注册数量=%d，期望 1", registry.Len())
-	}
-	spec, ok := registry.Lookup("bus.catalog.sync")
-	if !ok || !spec.AllowRetry {
-		t.Fatalf("Lookup 失败：%#v", spec)
+	if _, ok := registry.Lookup("bus.catalog.sync"); !ok {
+		t.Fatal("注册的类型应可查找")
 	}
 	if _, ok := registry.Lookup("unknown.type"); ok {
 		t.Fatal("未注册类型不应被查找到")

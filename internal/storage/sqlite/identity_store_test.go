@@ -40,10 +40,7 @@ func TestIdentityMigration15CreatesIdentitySchema(t *testing.T) {
 	ctx := context.Background()
 	mustCreateUser(t, store, "user-1")
 	mustCreateUser(t, store, "user-2")
-	if err := store.EnsureRole(ctx, identity.Role{AppID: "app-a", RoleID: "member", Name: "成员"}); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.SetMembership(ctx, identity.AppMembership{AppID: "app-a", UserID: "user-1", RoleIDs: []string{"member"}}); err != nil {
+	if err := store.SetMembership(ctx, identity.AppMembership{AppID: "app-a", UserID: "user-1"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.BindExternalIdentity(ctx, identity.ExternalIdentity{
@@ -51,15 +48,9 @@ func TestIdentityMigration15CreatesIdentitySchema(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.GrantPermission(ctx, identity.PermissionGrant{AppID: "app-a", RoleID: "member", Permission: "bus.read"}); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.GrantPermission(ctx, identity.PermissionGrant{AppID: "app-a", UserID: "user-1", Permission: "bus.write"}); err != nil {
-		t.Fatal(err)
-	}
 	permissions, err := store.EffectivePermissions(ctx, "app-a", "user-1")
-	if err != nil || len(permissions) != 2 {
-		t.Fatalf("effective permissions=%v err=%v", permissions, err)
+	if err != nil || len(permissions) != 0 {
+		t.Fatalf("effective permissions=%v err=%v, want empty", permissions, err)
 	}
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
@@ -188,10 +179,7 @@ func TestIdentityStoreEnforcesAppIsolation(t *testing.T) {
 	mustCreateUser(t, store, "user-1")
 	mustCreateUser(t, store, "user-2")
 
-	if err := store.EnsureRole(ctx, identity.Role{AppID: "app-a", RoleID: "member", Name: "成员"}); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.SetMembership(ctx, identity.AppMembership{AppID: "app-a", UserID: "user-1", RoleIDs: []string{"member"}}); err != nil {
+	if err := store.SetMembership(ctx, identity.AppMembership{AppID: "app-a", UserID: "user-1"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.BindExternalIdentity(ctx, identity.ExternalIdentity{
@@ -199,15 +187,9 @@ func TestIdentityStoreEnforcesAppIsolation(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.GrantPermission(ctx, identity.PermissionGrant{AppID: "app-a", RoleID: "member", Permission: "bus.read"}); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.GrantPermission(ctx, identity.PermissionGrant{AppID: "app-a", UserID: "user-1", Permission: "bus.write"}); err != nil {
-		t.Fatal(err)
-	}
 
 	permissions, err := store.EffectivePermissions(ctx, "app-a", "user-1")
-	if err != nil || len(permissions) != 2 {
+	if err != nil || len(permissions) != 0 {
 		t.Fatalf("app-a permissions=%v err=%v", permissions, err)
 	}
 	// 同一用户在 App B 没有任何权限与成员关系。
@@ -217,12 +199,6 @@ func TestIdentityStoreEnforcesAppIsolation(t *testing.T) {
 	}
 	if _, err := store.GetMembership(ctx, "app-b", "user-1"); !errors.Is(err, identity.ErrNotFound) {
 		t.Fatalf("cross-app membership error=%v, want ErrNotFound", err)
-	}
-	if memberships, err := store.ListMemberships(ctx, "app-b"); err != nil || len(memberships) != 0 {
-		t.Fatalf("app-b memberships=%#v err=%v", memberships, err)
-	}
-	if _, err := store.GetRole(ctx, "app-b", "member"); !errors.Is(err, identity.ErrNotFound) {
-		t.Fatalf("cross-app role error=%v, want ErrNotFound", err)
 	}
 	if _, err := store.GetExternalIdentity(ctx, "app-b", "qq", "space", "p1"); !errors.Is(err, identity.ErrNotFound) {
 		t.Fatalf("cross-app binding error=%v, want ErrNotFound", err)
@@ -236,14 +212,6 @@ func TestIdentityStoreEnforcesAppIsolation(t *testing.T) {
 	binding, err := store.GetExternalIdentity(ctx, "app-a", "qq", "space", "p1")
 	if err != nil || binding.UserID != "user-1" {
 		t.Fatalf("app-a binding=%#v err=%v", binding, err)
-	}
-	// 撤销 App A 的授予不影响 App B。
-	if err := store.RevokePermission(ctx, identity.PermissionGrant{AppID: "app-a", UserID: "user-1", Permission: "bus.write"}); err != nil {
-		t.Fatal(err)
-	}
-	permissionsA, err := store.EffectivePermissions(ctx, "app-a", "user-1")
-	if err != nil || len(permissionsA) != 1 {
-		t.Fatalf("app-a permissions after revoke=%v err=%v", permissionsA, err)
 	}
 }
 
@@ -292,63 +260,12 @@ func TestIdentityConcurrentBindIsMutuallyExclusive(t *testing.T) {
 	}
 }
 
-// 成员直接授予随成员删除级联清除；角色权限随角色删除级联清除。
-func TestPermissionGrantsCascadeOnMembershipAndRoleDeletion(t *testing.T) {
-	store := openIdentityStore(t)
-	ctx := context.Background()
-	mustCreateUser(t, store, "user-1")
-	if err := store.EnsureRole(ctx, identity.Role{AppID: "app-a", RoleID: "member", Name: "成员"}); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.SetMembership(ctx, identity.AppMembership{AppID: "app-a", UserID: "user-1", RoleIDs: []string{"member"}}); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.GrantPermission(ctx, identity.PermissionGrant{AppID: "app-a", UserID: "user-1", Permission: "bus.write"}); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.GrantPermission(ctx, identity.PermissionGrant{AppID: "app-a", RoleID: "member", Permission: "bus.read"}); err != nil {
-		t.Fatal(err)
-	}
-	check := func(want int) {
-		t.Helper()
-		permissions, err := store.EffectivePermissions(ctx, "app-a", "user-1")
-		if err != nil || len(permissions) != want {
-			t.Fatalf("permissions=%v err=%v, want %d", permissions, err, want)
-		}
-	}
-	check(2)
-	// 删除成员：直接授予级联清除，但角色与角色权限仍然存在。
-	if err := store.RemoveMembership(ctx, "app-a", "user-1"); err != nil {
-		t.Fatal(err)
-	}
-	check(0)
-	if _, err := store.GetRole(ctx, "app-a", "member"); err != nil {
-		t.Fatalf("role should survive member removal: %v", err)
-	}
-	// 重新加入成员并引用角色：角色权限恢复。
-	if err := store.SetMembership(ctx, identity.AppMembership{AppID: "app-a", UserID: "user-1", RoleIDs: []string{"member"}}); err != nil {
-		t.Fatal(err)
-	}
-	check(1)
-	// 删除角色：先移除引用该角色的成员，角色权限授予再级联清除。
-	if err := store.RemoveMembership(ctx, "app-a", "user-1"); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.DeleteRole(ctx, "app-a", "member"); err != nil {
-		t.Fatal(err)
-	}
-	check(0)
-}
-
 // 用户禁用/启用状态机在存储层保持一致性。
 func TestIdentityStoreUserStatusLifecycle(t *testing.T) {
 	store := openIdentityStore(t)
 	ctx := context.Background()
 	mustCreateUser(t, store, "user-1")
-	if err := store.EnsureRole(ctx, identity.Role{AppID: "app-a", RoleID: "member", Name: "成员"}); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.SetMembership(ctx, identity.AppMembership{AppID: "app-a", UserID: "user-1", RoleIDs: []string{"member"}}); err != nil {
+	if err := store.SetMembership(ctx, identity.AppMembership{AppID: "app-a", UserID: "user-1"}); err != nil {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()
@@ -409,23 +326,20 @@ func TestIdentityUserStatusBumpsRevisionInAllResolvableApps(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.EnsureRole(ctx, identity.Role{AppID: "app-member", RoleID: "member", Name: "成员"}); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.SetMembership(ctx, identity.AppMembership{AppID: "app-member", UserID: "user-1", RoleIDs: []string{"member"}}); err != nil {
+	if err := store.SetMembership(ctx, identity.AppMembership{AppID: "app-member", UserID: "user-1"}); err != nil {
 		t.Fatal(err)
 	}
 	if revision, err := store.BindingRevision(ctx, "app-bind"); err != nil || revision != 1 {
 		t.Fatalf("app-bind revision=%d err=%v, want 1", revision, err)
 	}
-	if revision, err := store.BindingRevision(ctx, "app-member"); err != nil || revision != 2 {
-		t.Fatalf("app-member revision=%d err=%v, want 2", revision, err)
+	if revision, err := store.BindingRevision(ctx, "app-member"); err != nil || revision != 1 {
+		t.Fatalf("app-member revision=%d err=%v, want 1", revision, err)
 	}
 	if _, err := store.SetUserStatus(ctx, "user-1", identity.UserStatusDisabled, time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
 	// 禁用后两个 App 的修订号都推进；启用同样覆盖绑定-only App。
-	for appID, want := range map[string]int64{"app-bind": 2, "app-member": 3} {
+	for appID, want := range map[string]int64{"app-bind": 2, "app-member": 2} {
 		revision, err := store.BindingRevision(ctx, appID)
 		if err != nil || revision != want {
 			t.Fatalf("%s revision after disable=%d err=%v, want %d", appID, revision, err, want)
@@ -434,7 +348,7 @@ func TestIdentityUserStatusBumpsRevisionInAllResolvableApps(t *testing.T) {
 	if _, err := store.SetUserStatus(ctx, "user-1", identity.UserStatusActive, time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
-	for appID, want := range map[string]int64{"app-bind": 3, "app-member": 4} {
+	for appID, want := range map[string]int64{"app-bind": 3, "app-member": 3} {
 		revision, err := store.BindingRevision(ctx, appID)
 		if err != nil || revision != want {
 			t.Fatalf("%s revision after enable=%d err=%v, want %d", appID, revision, err, want)

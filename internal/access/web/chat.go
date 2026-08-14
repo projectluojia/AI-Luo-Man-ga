@@ -143,7 +143,7 @@ func (s *Server) startChatRun(writer http.ResponseWriter, request *http.Request,
 		IdempotencyKey:    idempotencyKey,
 	})
 	if err != nil {
-		s.writeIntakeError(writer, request, err)
+		access.WriteIntakeError(writer, request, err)
 		return "", false, false
 	}
 	input := kernelecho.RunRequest{

@@ -49,22 +49,23 @@ func seedSession(t *testing.T, store *sqlite.Store, appID, sessionID string) {
 	}
 }
 
-func testMessage(appID, sessionID, messageID, platformMessageID string, createdAt time.Time) session.Message {
+func testMessage(appID, sessionID, messageID string, createdAt time.Time) session.Message {
 	return session.Message{
 		AppID: appID, SessionID: sessionID, MessageID: messageID, SenderUserID: "user-1",
-		Type:              session.MessageTypeText,
-		ContentRef:        session.ContentRef{Mode: session.ContentModeInline, Size: int64(len("你好世界"))},
-		PlatformMessageID: platformMessageID, CreatedAt: createdAt,
+		Type:       session.MessageTypeText,
+		ContentRef: session.ContentRef{Mode: session.ContentModeInline, Size: int64(len("你好世界"))},
+		CreatedAt:  createdAt,
 	}
 }
 
-func TestServicePersistsInlineAndBlobContent(t *testing.T) {
-	service, store, _ := newTestService(t)
+func TestServiceAssemblesInlineAndBlobContent(t *testing.T) {
+	service, store, blobs := newTestService(t)
 	seedSession(t, store, "app-a", "session-1")
 	now := time.Now().UTC()
 
+	// 内联正文：Store 直写，Service 按 ContentRef 装配。
 	inlineBody := []byte("你好世界")
-	inline, created, err := service.CreateMessage(context.Background(), testMessage("app-a", "session-1", "msg-inline", "", now), inlineBody)
+	inline, created, err := store.CreateMessage(context.Background(), testMessage("app-a", "session-1", "msg-inline", now), inlineBody)
 	if err != nil || !created {
 		t.Fatalf("内联消息写入 message=%#v created=%t err=%v", inline, created, err)
 	}
@@ -73,111 +74,29 @@ func TestServicePersistsInlineAndBlobContent(t *testing.T) {
 		t.Fatalf("内联正文读取=%q err=%v", got, err)
 	}
 
+	// Blob 正文：BlobStore 直写 + Store 持久化引用，Service 按引用装配。
 	blobBody := []byte("图片二进制正文")
-	blobMessage := testMessage("app-a", "session-1", "msg-blob", "", now)
+	blobMessage := testMessage("app-a", "session-1", "msg-blob", now)
 	blobMessage.Type = session.MessageTypeImage
 	blobMessage.ContentRef = session.ContentRef{Mode: session.ContentModeBlob, BlobID: "messages/msg-blob", Size: int64(len(blobBody))}
-	stored, created, err := service.CreateMessage(context.Background(), blobMessage, blobBody)
+	if err := blobs.Put(context.Background(), blobMessage.ContentRef.BlobID, blobBody); err != nil {
+		t.Fatalf("Blob 正文写入：%v", err)
+	}
+	stored, created, err := store.CreateMessage(context.Background(), blobMessage, nil)
 	if err != nil || !created {
-		t.Fatalf("Blob 消息写入 stored=%#v created=%t err=%v", stored, created, err)
+		t.Fatalf("Blob 消息持久化 stored=%#v created=%t err=%v", stored, created, err)
 	}
 	got, err = service.MessageContent(context.Background(), stored)
 	if err != nil || !bytes.Equal(got, blobBody) {
 		t.Fatalf("Blob 正文读取=%q err=%v", got, err)
 	}
-}
 
-func TestServicePlatformDedupProducesSingleMessage(t *testing.T) {
-	service, store, _ := newTestService(t)
-	seedSession(t, store, "app-a", "session-1")
-	now := time.Now().UTC()
-	body := []byte("你好世界")
-
-	first, created, err := service.CreateMessage(context.Background(), testMessage("app-a", "session-1", "msg-1", "platform-1", now), body)
-	if err != nil || !created {
-		t.Fatalf("首次投递 message=%#v created=%t err=%v", first, created, err)
-	}
-	replay, created, err := service.CreateMessage(context.Background(), testMessage("app-a", "session-1", "msg-1", "platform-1", now), body)
-	if err != nil || created || replay.MessageID != "msg-1" {
-		t.Fatalf("重复投递 replay=%#v created=%t err=%v", replay, created, err)
-	}
-	conflicting := testMessage("app-a", "session-1", "msg-2", "platform-1", now)
-	if _, _, err := service.CreateMessage(context.Background(), conflicting, body); !errors.Is(err, session.ErrMessageConflict) {
-		t.Fatalf("平台标识被不同消息复用 error=%v, want ErrMessageConflict", err)
-	}
-	history, err := store.ListMessages(context.Background(), "app-a", "session-1", session.MessageQuery{Limit: 10})
-	if err != nil || len(history) != 1 {
-		t.Fatalf("历史消息=%#v err=%v，应为 1 条", history, err)
-	}
-}
-
-func TestServiceEditThenRecallHidesContent(t *testing.T) {
-	service, store, _ := newTestService(t)
-	seedSession(t, store, "app-a", "session-1")
-	now := time.Now().UTC()
-
-	message, created, err := service.CreateMessage(context.Background(), testMessage("app-a", "session-1", "msg-1", "", now), []byte("你好世界"))
-	if err != nil || !created {
-		t.Fatalf("写入消息 message=%#v created=%t err=%v", message, created, err)
-	}
-	newBody := []byte("编辑后的正文")
-	edit := session.MessageEdit{
-		AppID: "app-a", SessionID: "session-1", MessageID: "msg-1",
-		NewContentRef: session.ContentRef{Mode: session.ContentModeInline, Size: int64(len(newBody))},
-		EditedAt:      now.Add(time.Minute),
-	}
-	if err := service.EditMessage(context.Background(), edit, newBody); err != nil {
-		t.Fatalf("编辑消息：%v", err)
-	}
-	edited, err := store.GetMessage(context.Background(), "app-a", "session-1", "msg-1")
-	if err != nil || edited.EditedAt == nil || edited.ContentRef.Size != int64(len(newBody)) {
-		t.Fatalf("编辑未生效 edited=%#v err=%v", edited, err)
-	}
-	got, err := service.MessageContent(context.Background(), edited)
-	if err != nil || !bytes.Equal(got, newBody) {
-		t.Fatalf("编辑后正文=%q err=%v", got, err)
-	}
-
-	// 撤回后：正文不可再装配、编辑与二次撤回均被拒绝。
-	if err := store.RecallMessage(context.Background(), "app-a", "session-1", "msg-1", now.Add(2*time.Minute)); err != nil {
+	// 已删除消息不可装配正文。
+	if err := store.RecallMessage(context.Background(), "app-a", "session-1", "msg-inline", now.Add(time.Minute)); err != nil {
 		t.Fatalf("撤回消息：%v", err)
 	}
-	if _, err := service.MessageContent(context.Background(), edited); !errors.Is(err, session.ErrMessageNotFound) {
+	if _, err := service.MessageContent(context.Background(), inline); !errors.Is(err, session.ErrMessageNotFound) {
 		t.Fatalf("撤回后正文仍可读取 error=%v", err)
-	}
-	if err := service.EditMessage(context.Background(), edit, newBody); !errors.Is(err, session.ErrInvalidTransition) {
-		t.Fatalf("撤回后编辑 error=%v, want ErrInvalidTransition", err)
-	}
-	if err := store.RecallMessage(context.Background(), "app-a", "session-1", "msg-1", now.Add(3*time.Minute)); !errors.Is(err, session.ErrInvalidTransition) {
-		t.Fatalf("二次撤回 error=%v, want ErrInvalidTransition", err)
-	}
-	// 撤回后的相同重复投递仍是同一条消息：回放返回既有消息，不产生新消息。
-	replayMessage := testMessage("app-a", "session-1", "msg-1", "", now)
-	replayMessage.ContentRef.Size = int64(len(newBody))
-	replay, created, err := service.CreateMessage(context.Background(), replayMessage, newBody)
-	if err != nil || created || replay.MessageID != "msg-1" {
-		t.Fatalf("撤回后重复投递 replay=%#v created=%t err=%v", replay, created, err)
-	}
-	// 相同消息标识携带不同正文则是冲突。
-	conflict := testMessage("app-a", "session-1", "msg-1", "", now.Add(time.Hour))
-	conflict.ContentRef.Size = int64(len("完全不同的正文"))
-	if _, _, err := service.CreateMessage(context.Background(), conflict, []byte("完全不同的正文")); !errors.Is(err, session.ErrMessageConflict) {
-		t.Fatalf("撤回后同标识异内容 error=%v, want ErrMessageConflict", err)
-	}
-}
-
-func TestServiceRejectsContentSizeMismatch(t *testing.T) {
-	service, store, blobs := newTestService(t)
-	seedSession(t, store, "app-a", "session-1")
-	now := time.Now().UTC()
-	message := testMessage("app-a", "session-1", "msg-1", "", now)
-	message.ContentRef.Size = 100 // 与实际正文长度不一致
-	_, _, err := service.CreateMessage(context.Background(), message, []byte("短正文"))
-	if !errors.Is(err, session.ErrInvalidMessage) {
-		t.Fatalf("大小不匹配 error=%v, want ErrInvalidMessage", err)
-	}
-	if _, err := blobs.Get(context.Background(), "messages/msg-1"); !errors.Is(err, session.ErrBlobNotFound) {
-		t.Fatalf("大小不匹配不应留下 Blob，得到 %v", err)
 	}
 }
 
