@@ -27,6 +27,8 @@ const (
 	defaultDialTimeout    = 10 * time.Second
 	defaultReconnectDelay = 5 * time.Second
 	defaultRunTimeout     = 3 * time.Minute
+	echoWorkerCount       = 4
+	echoQueueCapacity     = 32
 	maxReplyChunk         = 4000 // QQ 单条消息安全长度上限
 )
 
@@ -97,8 +99,21 @@ func New(cfg Config, hub *access.Hub, events *access.EventHub, orchestrator Echo
 // Run 连接 OneBot WebSocket 并处理消息；断线按 ReconnectDelay 重连，
 // ctx 取消时退出。
 func (a *Adapter) Run(ctx context.Context) error {
+	echoEvents := make(chan map[string]any, echoQueueCapacity)
+	var workerWG sync.WaitGroup
+	workerWG.Add(echoWorkerCount)
+	for range echoWorkerCount {
+		go func() {
+			defer workerWG.Done()
+			a.runEchoWorker(ctx, echoEvents)
+		}()
+	}
+	defer func() {
+		close(echoEvents)
+		workerWG.Wait()
+	}()
 	for {
-		err := a.serve(ctx)
+		err := a.serve(ctx, echoEvents)
 		if ctx.Err() != nil || err == nil {
 			return nil
 		}
@@ -114,7 +129,21 @@ func (a *Adapter) Run(ctx context.Context) error {
 	}
 }
 
-func (a *Adapter) serve(ctx context.Context) error {
+func (a *Adapter) runEchoWorker(ctx context.Context, events <-chan map[string]any) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case event, open := <-events:
+			if !open {
+				return
+			}
+			a.handleEvent(ctx, event)
+		}
+	}
+}
+
+func (a *Adapter) serve(ctx context.Context, echoEvents chan<- map[string]any) error {
 	header := http.Header{}
 	if a.cfg.Token != "" {
 		header.Set("Authorization", "Bearer "+a.cfg.Token)
@@ -125,10 +154,23 @@ func (a *Adapter) serve(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	a.sendMu.Lock()
 	a.conn = conn
+	a.sendMu.Unlock()
+	connectionDone := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = conn.Close()
+		case <-connectionDone:
+		}
+	}()
 	defer func() {
+		close(connectionDone)
 		a.sendMu.Lock()
-		a.conn = nil
+		if a.conn == conn {
+			a.conn = nil
+		}
 		a.sendMu.Unlock()
 		_ = conn.Close()
 	}()
@@ -154,7 +196,15 @@ func (a *Adapter) serve(ctx context.Context) error {
 			a.handleNotice(ctx, event)
 			continue
 		}
-		a.handleEvent(ctx, event)
+		select {
+		case echoEvents <- event:
+		case <-ctx.Done():
+			return nil
+		default:
+			observe.Warn(ctx, "QQ Echo 处理队列已满，拒绝新消息",
+				observe.StringAttr("platform_message_id", str(event, "message_id")),
+			)
+		}
 	}
 }
 

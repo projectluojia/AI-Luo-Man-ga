@@ -3,6 +3,8 @@ package qq
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -66,14 +68,39 @@ func (b *fakeOneBot) wsURL() string {
 }
 
 func (b *fakeOneBot) sendEvent(t *testing.T, payload string) {
+	b.sendEvents(t, payload)
+}
+
+func (b *fakeOneBot) sendEvents(t *testing.T, payloads ...string) {
 	t.Helper()
 	select {
 	case conn := <-b.conns:
-		if err := conn.WriteMessage(websocket.TextMessage, []byte(payload)); err != nil {
-			t.Fatalf("send event: %v", err)
+		for _, payload := range payloads {
+			if err := conn.WriteMessage(websocket.TextMessage, []byte(payload)); err != nil {
+				t.Fatalf("send event: %v", err)
+			}
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("adapter did not establish websocket")
+	}
+}
+
+type blockingEchoStarter struct {
+	started chan string
+	release chan struct{}
+}
+
+func (s *blockingEchoStarter) CreateIdempotent(ctx context.Context, request kernelecho.RunRequest) (string, bool, error) {
+	select {
+	case s.started <- request.IdempotencyKey:
+	case <-ctx.Done():
+		return "", false, ctx.Err()
+	}
+	select {
+	case <-s.release:
+		return "", false, errors.New("test release")
+	case <-ctx.Done():
+		return "", false, ctx.Err()
 	}
 }
 
@@ -226,6 +253,72 @@ func TestQQAdapterIntakesAndReplies(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("adapter did not send the reply")
+	}
+}
+
+// TestQQAdapterProcessesEchoesConcurrently 验证 WebSocket 读取循环不会等待单个
+// Echo 终态，且同时处理的 Echo 数量受固定 worker 上限约束。
+func TestQQAdapterProcessesEchoesConcurrently(t *testing.T) {
+	store, err := sqlite.Open(filepath.Join(t.TempDir(), "qq-concurrent.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	bot := newFakeOneBot(t)
+	hub := newQQTestHub(t, store, stubResolver{user: "user-1"})
+	orchestrator := &blockingEchoStarter{
+		started: make(chan string, echoWorkerCount+1),
+		release: make(chan struct{}),
+	}
+	adapter, err := New(Config{
+		AppID: "campus-services", WSURL: bot.wsURL(), BotQQID: testBotQQID,
+		DialTimeout: 2 * time.Second, ReconnectDelay: 50 * time.Millisecond, RunTimeout: 5 * time.Second,
+	}, hub, access.NewEventHub(), orchestrator, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = adapter.Run(ctx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatal("adapter did not stop")
+		}
+	})
+
+	select {
+	case <-bot.authHeader:
+	case <-time.After(5 * time.Second):
+		t.Fatal("adapter did not connect")
+	}
+	payloads := make([]string, 0, echoWorkerCount+1)
+	for index := 0; index < echoWorkerCount+1; index++ {
+		payloads = append(payloads, fmt.Sprintf(`{"post_type":"message","message_type":"private","user_id":67890,"message_id":"qq-concurrent-%d","message":[{"type":"text","data":{"text":"消息%d"}}]}`, index, index))
+	}
+	bot.sendEvents(t, payloads...)
+	for index := 0; index < echoWorkerCount; index++ {
+		select {
+		case <-orchestrator.started:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("only %d Echoes started concurrently", index)
+		}
+	}
+	select {
+	case <-orchestrator.started:
+		t.Fatalf("Echo concurrency exceeded worker limit %d", echoWorkerCount)
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(orchestrator.release)
+	select {
+	case <-orchestrator.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("queued Echo did not start after a worker became available")
 	}
 }
 

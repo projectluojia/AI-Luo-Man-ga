@@ -190,8 +190,29 @@ OpenAPI 声称平台消息“按 App 和平台去重”，与数据库实际约�
 ## PR2-005：QQ WebSocket 读取循环被单条 Run 同步阻塞
 
 - 优先级：P1
+- 状态：已修复并验证（2026-08-15）
 - 类型：可用性、背压、连接可靠性
 - 位置：`internal/access/qq/qq.go`
+
+### 修复结果
+
+- WebSocket 读取循环只负责解码、过滤动作响应并把消息投入有界 Echo 队列，不再同步等待 Run 终态；
+- 使用 4 个固定 worker 实现 Echo 级并发，不按群、私聊或会话串行，不创建无界 goroutine；
+- 队列容量固定为 32，满载时明确拒绝新消息并记录安全元数据；
+- OneBot 连接指针的设置、清理与并发回复统一经过发送锁；
+- 上下文取消会关闭正在读取的连接，worker 随后有界退出；
+- 新增真实 WebSocket 并发测试，证明 4 个 Echo 可同时处理、第 5 个等待 worker，且适配器可正常关闭。
+
+### 验证证据
+
+- `go test ./internal/access/qq`：通过；
+- `go test -race ./internal/access/qq`：通过；
+- `go test ./...`：通过；
+- `go test -race ./...`：通过；
+- `go vet ./...`：通过；
+- Python `py_compile` 与 28 项单元测试：通过；
+- Loader integration：通过；
+- Go → Python e2e integration：通过。
 
 ### 问题
 
@@ -338,8 +359,13 @@ QQ 处理器忽略 `CreateIdempotent` 返回的 `created`。平台重复投递�
 ## PR2-009：QQ Compose 使用不安全的部署默认值
 
 - 优先级：P2
+- 状态：用户确认忽略（2026-08-15）
 - 类型：部署安全、供应链、凭据管理
 - 位置：`docker/qq-onebot.compose.yaml`
+
+### 决策
+
+当前 PR 不修改 QQ Compose。已知默认端口绑定、固定 WebUI Token、镜像版本和容器权限风险由用户接受，不作为 PR #2 的合并阻塞项。
 
 ### 问题
 
