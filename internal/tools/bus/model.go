@@ -28,14 +28,10 @@ type SnapshotMetadata struct {
 	ValidUntil    time.Time `json:"valid_until"`
 }
 
+// DataStatus 是工具结果的治理状态：State 加快照元数据（嵌入展开为扁平 JSON）。
 type DataStatus struct {
-	State          string    `json:"state"`
-	SourceRevision string    `json:"source_revision"`
-	Source         string    `json:"source"`
-	Authoritative  bool      `json:"authoritative"`
-	Complete       bool      `json:"complete"`
-	ImportedAt     time.Time `json:"imported_at"`
-	ValidUntil     time.Time `json:"valid_until"`
+	State string `json:"state"`
+	SnapshotMetadata
 }
 
 func (m SnapshotMetadata) Govern(now time.Time) (DataStatus, error) {
@@ -49,15 +45,7 @@ func (m SnapshotMetadata) Govern(now time.Time) (DataStatus, error) {
 	if !now.Before(m.ValidUntil) {
 		return DataStatus{}, contracts.ErrDataExpired
 	}
-	return DataStatus{
-		State:          DataStateAuthoritativeFresh,
-		SourceRevision: m.Revision,
-		Source:         m.Source,
-		Authoritative:  true,
-		Complete:       true,
-		ImportedAt:     m.ImportedAt.UTC(),
-		ValidUntil:     m.ValidUntil.UTC(),
-	}, nil
+	return DataStatus{State: DataStateAuthoritativeFresh, SnapshotMetadata: m}, nil
 }
 
 type Stop struct {

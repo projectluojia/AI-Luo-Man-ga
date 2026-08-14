@@ -59,6 +59,17 @@ func ToolHandlers(store Store) map[string]registry.Handler {
 	}
 }
 
+// governedStatus 治理一次校巴快照读取：快照元数据未通过权威/新鲜度校验时
+// 记录拒绝日志并返回稳定数据治理错误。
+func governedStatus(ctx context.Context, kind string, metadata SnapshotMetadata, now time.Time) (DataStatus, error) {
+	dataStatus, err := metadata.Govern(now)
+	if err != nil {
+		logRejectedSnapshot(ctx, kind, metadata, err)
+		return DataStatus{}, err
+	}
+	return dataStatus, nil
+}
+
 func stopSearchHandler(store Store) registry.Handler {
 	return func(ctx context.Context, requestContext contracts.RequestContext, payload json.RawMessage) (json.RawMessage, error) {
 		started := time.Now()
@@ -78,9 +89,8 @@ func stopSearchHandler(store Store) registry.Handler {
 		if err != nil {
 			return nil, fmt.Errorf("search bus stops: %w", err)
 		}
-		dataStatus, err := snapshot.Metadata.Govern(time.Now())
+		dataStatus, err := governedStatus(ctx, "stops", snapshot.Metadata, time.Now())
 		if err != nil {
-			logRejectedSnapshot(ctx, "stops", snapshot.Metadata, err)
 			return nil, fmt.Errorf("govern bus stop snapshot: %w", err)
 		}
 		stops := snapshot.Stops
@@ -94,7 +104,7 @@ func stopSearchHandler(store Store) registry.Handler {
 		}
 		observe.Info(ctx, "校巴站点查询完成",
 			observe.IntAttr("result_count", len(stops)),
-			observe.StringAttr("source_revision", dataStatus.SourceRevision),
+			observe.StringAttr("source_revision", dataStatus.Revision),
 			observe.StringAttr("data_state", dataStatus.State),
 			observe.StringAttr("valid_until", dataStatus.ValidUntil.Format(time.RFC3339)),
 			observe.Duration(started),
@@ -123,9 +133,8 @@ func routeListHandler(store Store) registry.Handler {
 		if err != nil {
 			return nil, fmt.Errorf("list bus routes: %w", err)
 		}
-		dataStatus, err := snapshot.Metadata.Govern(time.Now())
+		dataStatus, err := governedStatus(ctx, "routes", snapshot.Metadata, time.Now())
 		if err != nil {
-			logRejectedSnapshot(ctx, "routes", snapshot.Metadata, err)
 			return nil, fmt.Errorf("govern bus route snapshot: %w", err)
 		}
 		routes := snapshot.Routes
@@ -139,7 +148,7 @@ func routeListHandler(store Store) registry.Handler {
 		}
 		observe.Info(ctx, "校巴线路查询完成",
 			observe.IntAttr("result_count", len(routes)),
-			observe.StringAttr("source_revision", dataStatus.SourceRevision),
+			observe.StringAttr("source_revision", dataStatus.Revision),
 			observe.StringAttr("data_state", dataStatus.State),
 			observe.StringAttr("valid_until", dataStatus.ValidUntil.Format(time.RFC3339)),
 			observe.Duration(started),
@@ -169,9 +178,8 @@ func journeySearchHandler(store Store, now func() time.Time) registry.Handler {
 		if err != nil {
 			return nil, fmt.Errorf("search bus journeys: %w", err)
 		}
-		dataStatus, err := snapshot.Metadata.Govern(now())
+		dataStatus, err := governedStatus(ctx, "journeys", snapshot.Metadata, now())
 		if err != nil {
-			logRejectedSnapshot(ctx, "journeys", snapshot.Metadata, err)
 			return nil, fmt.Errorf("govern bus journey snapshot: %w", err)
 		}
 		journeys := snapshot.Journeys
@@ -185,7 +193,7 @@ func journeySearchHandler(store Store, now func() time.Time) registry.Handler {
 		}
 		observe.Info(ctx, "校巴班次查询完成",
 			observe.IntAttr("result_count", len(journeys)),
-			observe.StringAttr("source_revision", dataStatus.SourceRevision),
+			observe.StringAttr("source_revision", dataStatus.Revision),
 			observe.StringAttr("data_state", dataStatus.State),
 			observe.StringAttr("valid_until", dataStatus.ValidUntil.Format(time.RFC3339)),
 			observe.Duration(started),

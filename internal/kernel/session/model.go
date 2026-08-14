@@ -17,6 +17,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/id"
 )
 
 const (
@@ -88,9 +90,9 @@ var (
 )
 
 var (
-	stableIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
-	platformPattern = regexp.MustCompile(`^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$`)
-	blobIDPattern   = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]*$`)
+	stableIDPattern = id.StableMixed
+	platformPattern = id.StableLower
+	blobIDPattern   = id.StableMixedUncapped
 	mimeTypePattern = regexp.MustCompile(`^[A-Za-z0-9.+-]+/[A-Za-z0-9.+-]+$`)
 )
 

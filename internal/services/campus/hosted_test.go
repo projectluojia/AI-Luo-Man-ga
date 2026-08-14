@@ -11,6 +11,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime/runtimetest"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus/campustest"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/memory"
@@ -198,7 +199,7 @@ func newHostedDispatcherWithDepth(t *testing.T, store bus.Store, maxCallDepth ui
 	t.Helper()
 	reg := registry.New()
 	campustest.RegisterHosted(t, reg, store)
-	policy := runtime.NewStaticAppPolicy()
+	policy := runtimetest.NewStaticAppPolicy()
 	for _, appID := range enabledApps {
 		policy.Enable(appID, campus.BusStopSearchCapabilityID)
 		policy.Enable(appID, campus.BusRouteListCapabilityID)

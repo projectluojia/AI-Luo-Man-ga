@@ -13,12 +13,13 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/idempotency"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime/runtimetest"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite"
 )
 
 func TestDispatcherRejectsNonProgressingCapabilityCycle(t *testing.T) {
 	reg := registry.New()
-	policy := runtime.NewStaticAppPolicy()
+	policy := runtimetest.NewStaticAppPolicy()
 	policy.Enable("app", "cycle")
 	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{})
 	if err := reg.RegisterService(registry.ServiceRegistration{
@@ -56,7 +57,7 @@ func TestDispatcherValidatesCapabilitySchemaBeforeHandler(t *testing.T) {
 	t.Parallel()
 
 	reg := registry.New()
-	policy := runtime.NewStaticAppPolicy()
+	policy := runtimetest.NewStaticAppPolicy()
 	policy.Enable("app", "capability")
 	called := false
 	registerCapability(t, reg, registry.CapabilitySpec{
@@ -84,7 +85,7 @@ func TestDispatcherEnforcesAndNarrowsPermissions(t *testing.T) {
 	t.Parallel()
 
 	reg := registry.New()
-	policy := runtime.NewStaticAppPolicy()
+	policy := runtimetest.NewStaticAppPolicy()
 	policy.Enable("app", "capability")
 	policy.Grant("app", "bus.read")
 	policy.Grant("app", "system.admin")
@@ -121,7 +122,7 @@ func TestDispatcherProjectsClosedTargetIdentityToHandlers(t *testing.T) {
 	t.Parallel()
 
 	reg := registry.New()
-	policy := runtime.NewStaticAppPolicy()
+	policy := runtimetest.NewStaticAppPolicy()
 	policy.Enable("app", "service.capability")
 	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{})
 	var capabilityContext, toolContext contracts.RequestContext
@@ -266,7 +267,7 @@ func TestDispatcherPreventsInternalPermissionGain(t *testing.T) {
 	t.Parallel()
 
 	reg := registry.New()
-	policy := runtime.NewStaticAppPolicy()
+	policy := runtimetest.NewStaticAppPolicy()
 	policy.Enable("app", "capability")
 	policy.Grant("app", "private.read")
 	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{})
@@ -323,7 +324,7 @@ func TestDispatcherEnforcesSideEffectIdempotency(t *testing.T) {
 	t.Parallel()
 
 	reg := registry.New()
-	policy := runtime.NewStaticAppPolicy()
+	policy := runtimetest.NewStaticAppPolicy()
 	policy.Enable("app", "write-capability")
 	called := 0
 	registerCapability(t, reg, registry.CapabilitySpec{
@@ -367,7 +368,7 @@ func TestDispatcherRequiresGovernedConfirmation(t *testing.T) {
 	t.Parallel()
 
 	reg := registry.New()
-	policy := runtime.NewStaticAppPolicy()
+	policy := runtimetest.NewStaticAppPolicy()
 	policy.Enable("app", "external-capability")
 	registerCapability(t, reg, registry.CapabilitySpec{
 		ID:                   "external-capability",
@@ -409,7 +410,7 @@ func TestDispatcherRevalidatesAtToolBoundary(t *testing.T) {
 	t.Parallel()
 
 	reg := registry.New()
-	policy := runtime.NewStaticAppPolicy()
+	policy := runtimetest.NewStaticAppPolicy()
 	policy.Enable("app", "capability")
 	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{})
 	toolCalled := false

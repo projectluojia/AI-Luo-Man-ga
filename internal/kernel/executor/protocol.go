@@ -9,6 +9,8 @@ import (
 
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
+
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/id"
 )
 
 const (
@@ -46,7 +48,7 @@ var (
 
 var (
 	codePattern  = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
-	tokenPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]*$`)
+	tokenPattern = id.StableMixedUncapped
 	tracePattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
 	spanPattern  = regexp.MustCompile(`^[0-9a-f]{16}$`)
 )

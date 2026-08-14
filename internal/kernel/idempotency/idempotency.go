@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/id"
 )
 
 var (
@@ -38,7 +40,7 @@ const (
 )
 
 var (
-	keyPattern   = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]*$`)
+	keyPattern   = id.StableMixedUncapped
 	scopePattern = regexp.MustCompile(`^[a-z][a-z0-9]*(?:[._:/-][A-Za-z0-9]+)*$`)
 )
 

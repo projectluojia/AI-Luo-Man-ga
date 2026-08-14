@@ -13,14 +13,16 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
 	"time"
 	"unicode/utf8"
 
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/jsonutil"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/id"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/idempotency"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime"
 )
 
@@ -34,16 +36,12 @@ const (
 	StatusRevoked  = "revoked"
 )
 
-// 确认目标类型，与 Registry 的目标标识保持闭式取值一致。
+// 确认目标类型与副作用类型复用 Registry 的闭式取值，避免双份常量漂移。
 const (
-	TargetTypeCapability = "capability"
-	TargetTypeTool       = "tool"
-)
-
-// 确认适用的副作用类型，与 Registry.SideEffectWrite/SideEffectExternal 一致。
-const (
-	SideEffectWrite    = "write"
-	SideEffectExternal = "external"
+	TargetTypeCapability = registry.TargetTypeCapability
+	TargetTypeTool       = registry.TargetTypeTool
+	SideEffectWrite      = registry.SideEffectWrite
+	SideEffectExternal   = registry.SideEffectExternal
 )
 
 // DefaultLifetime 是未显式指定有效期时待确认记录的默认有效时长。
@@ -69,7 +67,7 @@ var (
 )
 
 var (
-	stableIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]*$`)
+	stableIDPattern = id.StableMixedUncapped // 长度上限由 maxIDBytes（256）单独校验
 	digestPattern   = regexp.MustCompile(`^[0-9a-f]{64}$`)
 )
 
@@ -142,17 +140,10 @@ func Digest(arguments []byte) (string, error) {
 	if len(arguments) > maxArgumentBytes {
 		return "", fmt.Errorf("%w: arguments exceed %d bytes", ErrInvalidRequest, maxArgumentBytes)
 	}
-	var decoded any
-	if len(arguments) == 0 {
-		decoded = map[string]any{}
-	} else if err := json.Unmarshal(arguments, &decoded); err != nil {
+	sum, err := jsonutil.CanonicalDigest(arguments)
+	if err != nil {
 		return "", fmt.Errorf("%w: arguments are not valid JSON", ErrInvalidRequest)
 	}
-	canonical, err := json.Marshal(decoded)
-	if err != nil {
-		return "", fmt.Errorf("%w: arguments cannot be canonicalized", ErrInvalidRequest)
-	}
-	sum := sha256.Sum256(canonical)
 	return hex.EncodeToString(sum[:]), nil
 }
 

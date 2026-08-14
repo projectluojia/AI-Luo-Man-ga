@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/id"
 )
 
 var (
@@ -20,10 +22,10 @@ var (
 )
 
 var (
-	stableIDPattern   = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,127}$`)
-	capabilityPattern = regexp.MustCompile(`^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$`)
-	permissionPattern = regexp.MustCompile(`^[a-z][a-z0-9]*(?:[._:-][a-z0-9]+)*$`)
-	channelPattern    = regexp.MustCompile(`^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$`)
+	stableIDPattern   = id.AppID
+	capabilityPattern = id.StableLower
+	permissionPattern = id.Permission
+	channelPattern    = id.StableLower
 	modelPattern      = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$`)
 )
 
@@ -84,10 +86,6 @@ func (s PolicySnapshot) Verify(expectedAppID string) error {
 		return ErrInvalid
 	}
 	return nil
-}
-
-type Policy interface {
-	Snapshot(context.Context, string) (PolicySnapshot, error)
 }
 
 type PersistentPolicy struct {

@@ -18,6 +18,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/publicerror"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime/runtimetest"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite"
 )
 
@@ -689,7 +690,7 @@ func TestDispatcherExecutesApprovedSideEffectExactlyOnce(t *testing.T) {
 	}
 
 	reg := registry.New()
-	policy := runtime.NewStaticAppPolicy()
+	policy := runtimetest.NewStaticAppPolicy()
 	policy.Enable("app", "external-capability")
 	executions := 0
 	registerCapability(t, reg, registry.CapabilitySpec{
@@ -750,7 +751,7 @@ func TestDispatcherRejectsUnapprovedConfirmation(t *testing.T) {
 	}
 
 	reg := registry.New()
-	policy := runtime.NewStaticAppPolicy()
+	policy := runtimetest.NewStaticAppPolicy()
 	policy.Enable("app", "external-capability")
 	registerCapability(t, reg, registry.CapabilitySpec{
 		ID:                   "external-capability",
