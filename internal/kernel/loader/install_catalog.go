@@ -172,13 +172,16 @@ func (c *Catalog) VerifyProcess(ctx context.Context, manifest Manifest, process 
 }
 
 // ReadArtifact 读取与 manifest 锁定的 hosted 工件字节。
-// 每次读取都重新校验目录、属主、清单一致性与工件 digest，防止 TOCTOU 替换。
+// 每次读取都重新校验目录、属主、清单一致性、工件 digest 与大小，防止 TOCTOU 替换。
+// 与 manifest 的比较只限定身份字段（ID/Version/Mode）：工件 digest 已在 readRecord
+// 内重新校验，Role/Pin/IdleTTL 不参与工件装载；且外部 Runtime Host 协议身份只携带
+// ID/Version，携带完整清单字段的绑定校验由内核侧 VerifyRuntime 负责。
 func (c *Catalog) ReadArtifact(ctx context.Context, manifest Manifest) ([]byte, error) {
 	record, err := c.readRecordByID(ctx, manifest.ID)
 	if err != nil {
 		return nil, err
 	}
-	if !sameRuntimeManifest(record.Runtime, manifest) {
+	if !sameRuntimeIdentity(record.Runtime, manifest) {
 		return nil, ErrInstallChanged
 	}
 	if record.Runtime.Mode != ModeHosted {
@@ -591,6 +594,13 @@ func sameRuntimeManifest(left, right Manifest) bool {
 	return left.ID == right.ID && left.Version == right.Version && left.Mode == right.Mode &&
 		left.Role == right.Role && left.LockedDigest == right.LockedDigest &&
 		left.Pin == right.Pin && left.IdleTTL == right.IdleTTL
+}
+
+// sameRuntimeIdentity 只比较运行时身份字段（ID/Version/Mode），供 ReadArtifact
+// 在装载工件时使用；其余清单字段不参与工件装载，完整清单的一致性由
+// VerifyRuntime/readRecord 在各自边界校验。
+func sameRuntimeIdentity(left, right Manifest) bool {
+	return left.ID == right.ID && left.Version == right.Version && left.Mode == right.Mode
 }
 
 func cloneProcessSpec(spec ProcessSpec) ProcessSpec {

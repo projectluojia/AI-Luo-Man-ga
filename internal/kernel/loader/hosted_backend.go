@@ -4,41 +4,31 @@ import (
 	"context"
 	"encoding/json"
 	"sync"
-	"time"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 )
 
-// HostedBackendConfig 装配外部 Runtime Host 的 hosted 后端。
-// 外部宿主在独立进程内以 wazero 沙箱执行 hosted 工件（内存上限 + 执行时间预算）。
-// 需要宿主函数投影的工件（如内置 campus）只能在内核进程内执行：宿主函数是内核特权，
-// 跨进程无法投影权威存储，这是架构契约而非降级路径。
-type HostedBackendConfig struct {
-	// ReadArtifact 按 manifest 读取工件字节（digest 与大小校验由实现负责）。
-	ReadArtifact func(context.Context, Manifest) ([]byte, error)
-	// MemoryLimitPages 是 guest 线性内存上限（页）；0 使用默认值。
-	MemoryLimitPages uint32
-	// MaxArtifactBytes 是工件字节上限；0 使用默认值。
-	MaxArtifactBytes int64
-	// CallTimeout 是单次调用的执行时间预算；0 使用默认值。预算耗尽强制终止 guest。
-	CallTimeout time.Duration
-}
-
 // hostedRuntimeBackend 实现 RuntimeHostBackend：按 BackendIdentity 装载 hosted 工件，
 // 编译产物复用，每次调用独立实例化并受执行时间预算约束。
+// 外部宿主在独立进程内以 wazero 沙箱执行 hosted 工件；需要宿主函数投影的工件
+// （如内置 campus）只能在内核进程内执行：宿主函数是内核特权，跨进程无法投影
+// 权威存储，这是架构契约而非降级路径。
 type hostedRuntimeBackend struct {
-	config   HostedBackendConfig
+	host     *WasmHost
 	mu       sync.Mutex
 	runtimes map[BackendIdentity]*wasmRuntime
 }
 
 // NewHostedRuntimeBackend 构造 hosted 后端；配置非法时返回显式错误。
-func NewHostedRuntimeBackend(config HostedBackendConfig) (*hostedRuntimeBackend, error) {
-	if config.ReadArtifact == nil {
-		return nil, ErrUnavailable
+// 复用 WasmHostConfig 作为唯一沙箱配置（读工件/内存上限/工件上限/执行时间预算），
+// 不再定义重复的配置结构。
+func NewHostedRuntimeBackend(config WasmHostConfig) (*hostedRuntimeBackend, error) {
+	host, err := NewWasmHost(config)
+	if err != nil {
+		return nil, err
 	}
 	return &hostedRuntimeBackend{
-		config: config, runtimes: make(map[BackendIdentity]*wasmRuntime),
+		host: host, runtimes: make(map[BackendIdentity]*wasmRuntime),
 	}, nil
 }
 
@@ -92,16 +82,7 @@ func (b *hostedRuntimeBackend) load(ctx context.Context, identity BackendIdentit
 	if runtime := b.runtimes[identity]; runtime != nil {
 		return runtime, nil
 	}
-	host, err := NewWasmHost(WasmHostConfig{
-		ReadArtifact:     b.config.ReadArtifact,
-		MemoryLimitPages: b.config.MemoryLimitPages,
-		MaxArtifactBytes: b.config.MaxArtifactBytes,
-		CallTimeout:      b.config.CallTimeout,
-	})
-	if err != nil {
-		return nil, err
-	}
-	loaded, err := host.Load(ctx, Manifest{ID: identity.ID, Version: identity.Version, Mode: ModeHosted})
+	loaded, err := b.host.Load(ctx, Manifest{ID: identity.ID, Version: identity.Version, Mode: ModeHosted})
 	if err != nil {
 		return nil, err
 	}

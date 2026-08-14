@@ -277,7 +277,7 @@ func toolRuntimeRequest() contracts.RequestContext {
 // 这不是 fake——strings.tool 工件在宿主侧真实编译并以沙箱执行。
 func TestRuntimeHostServesHostedPackageOverProtocol(t *testing.T) {
 	artifact := stringToolArtifact(t)
-	backend, err := loader.NewHostedRuntimeBackend(loader.HostedBackendConfig{
+	backend, err := loader.NewHostedRuntimeBackend(loader.WasmHostConfig{
 		ReadArtifact: func(_ context.Context, manifest loader.Manifest) ([]byte, error) {
 			if manifest.ID != "strings.tool" {
 				return nil, loader.ErrNotFound
@@ -328,7 +328,7 @@ func TestRuntimeHostServesHostedPackageOverProtocol(t *testing.T) {
 // 死循环工件经协议调用在预算内被终止，归类为稳定超时。
 func TestRuntimeHostEnforcesExecutionBudgetOverProtocol(t *testing.T) {
 	artifact := hostedArtifact(t, "busy.wasm")
-	backend, err := loader.NewHostedRuntimeBackend(loader.HostedBackendConfig{
+	backend, err := loader.NewHostedRuntimeBackend(loader.WasmHostConfig{
 		ReadArtifact: func(_ context.Context, manifest loader.Manifest) ([]byte, error) {
 			if manifest.ID != "busy.host" {
 				return nil, loader.ErrNotFound

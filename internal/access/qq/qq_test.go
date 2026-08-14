@@ -101,7 +101,7 @@ type qqFakeOrchestrator struct {
 func (f *qqFakeOrchestrator) CreateIdempotent(ctx context.Context, request kernelecho.RunRequest) (string, bool, error) {
 	id := uuid.NewString()
 	now := time.Now().UTC()
-	echoID, created, err := f.store.CreateEchoRunIdempotent(
+	echoID, created, err := f.store.CreateEchoRunIdempotentLimited(
 		ctx, request.IdempotencyKey, idempotency.Fingerprint([]byte(request.Message)),
 		kernelecho.Record{ID: id, AppID: "campus-services", InputMessage: request.Message, Status: kernelecho.StatusRunning, CreatedAt: now},
 		kernelecho.RunRecord{
@@ -112,6 +112,7 @@ func (f *qqFakeOrchestrator) CreateIdempotent(ctx context.Context, request kerne
 			MaxOutputBytes: 4096, ProviderTimeoutMS: 5000, Deadline: now.Add(time.Minute), AvailableAt: now,
 			RecoverableState: []byte(`{}`), CreatedAt: now,
 		},
+		0,
 	)
 	if err != nil {
 		return "", false, err

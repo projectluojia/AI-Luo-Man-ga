@@ -42,29 +42,16 @@ var (
 type EventEmitter func(Event) error
 
 type Config struct {
-	AppID              string
-	Model              string
-	SystemPrompt       string
-	Timezone           string
-	MaxSteps           uint32
-	MaxToolCalls       uint32
-	MaxInputTokens     uint64
-	MaxOutputTokens    uint64
-	MaxTotalTokens     uint64
-	MaxOutputBytes     uint64
-	MaxCostMicrousd    uint64
-	ProviderTimeout    time.Duration
-	RunTimeout         time.Duration
-	LeaseDuration      time.Duration
-	MaxRunAttempts     uint32
-	RetryBaseDelay     time.Duration
-	RetryMaxDelay      time.Duration
-	QueueCapacity      int
-	ModelConfigVersion string
-	PermissionScope    []string
-	AppConfigSource    appconfig.Source
-	Context            contextasm.HistorySource
-	ContextBudget      contextasm.Budget
+	AppID           string
+	RunTimeout      time.Duration
+	LeaseDuration   time.Duration
+	MaxRunAttempts  uint32
+	RetryBaseDelay  time.Duration
+	RetryMaxDelay   time.Duration
+	QueueCapacity   int
+	AppConfigSource appconfig.Source
+	Context         contextasm.HistorySource
+	ContextBudget   contextasm.Budget
 }
 
 type Orchestrator struct {
@@ -87,27 +74,6 @@ func NewOrchestrator(
 	store Store,
 	config Config,
 ) *Orchestrator {
-	if config.MaxSteps == 0 {
-		config.MaxSteps = 8
-	}
-	if config.MaxToolCalls == 0 {
-		config.MaxToolCalls = 8
-	}
-	if config.MaxInputTokens == 0 {
-		config.MaxInputTokens = 32768
-	}
-	if config.MaxOutputTokens == 0 {
-		config.MaxOutputTokens = 8192
-	}
-	if config.MaxTotalTokens == 0 {
-		config.MaxTotalTokens = 40960
-	}
-	if config.MaxOutputBytes == 0 {
-		config.MaxOutputBytes = executor.MaxFinalMessageBytes
-	}
-	if config.ProviderTimeout == 0 {
-		config.ProviderTimeout = 30 * time.Second
-	}
 	if config.RunTimeout == 0 {
 		config.RunTimeout = 90 * time.Second
 	}
@@ -126,45 +92,9 @@ func NewOrchestrator(
 	if config.QueueCapacity == 0 {
 		config.QueueCapacity = 128
 	}
-	config.PermissionScope = append([]string(nil), config.PermissionScope...)
-	sort.Strings(config.PermissionScope)
-	if config.ModelConfigVersion == "" {
-		configBytes, _ := json.Marshal(struct {
-			Model           string
-			SystemPrompt    string
-			Timezone        string
-			MaxSteps        uint32
-			MaxToolCalls    uint32
-			MaxInputTokens  uint64
-			MaxOutputTokens uint64
-			MaxTotalTokens  uint64
-			MaxOutputBytes  uint64
-			MaxCostMicrousd uint64
-			ProviderTimeout time.Duration
-			LeaseDuration   time.Duration
-			MaxRunAttempts  uint32
-			RetryBaseDelay  time.Duration
-			RetryMaxDelay   time.Duration
-			PermissionScope []string
-		}{
-			Model:           config.Model,
-			SystemPrompt:    config.SystemPrompt,
-			Timezone:        config.Timezone,
-			MaxSteps:        config.MaxSteps,
-			MaxToolCalls:    config.MaxToolCalls,
-			MaxInputTokens:  config.MaxInputTokens,
-			MaxOutputTokens: config.MaxOutputTokens,
-			MaxTotalTokens:  config.MaxTotalTokens,
-			MaxOutputBytes:  config.MaxOutputBytes,
-			MaxCostMicrousd: config.MaxCostMicrousd,
-			ProviderTimeout: config.ProviderTimeout,
-			LeaseDuration:   config.LeaseDuration,
-			MaxRunAttempts:  config.MaxRunAttempts,
-			RetryBaseDelay:  config.RetryBaseDelay,
-			RetryMaxDelay:   config.RetryMaxDelay,
-			PermissionScope: config.PermissionScope,
-		})
-		config.ModelConfigVersion = fmt.Sprintf("%x", sha256.Sum256(configBytes))
+	if config.AppConfigSource == nil {
+		// 装配期编程错误：持久配置来源缺失时显式终止，不做合成配置回退。
+		panic("orchestrator requires an app config source")
 	}
 	assembler, err := contextasm.New(config.Context, config.ContextBudget)
 	if err != nil {
@@ -185,47 +115,25 @@ func NewOrchestrator(
 }
 
 func (o *Orchestrator) currentAppConfig(ctx context.Context) (appconfig.Config, error) {
-	if o.config.AppConfigSource != nil {
-		config, err := o.config.AppConfigSource.Current(ctx, o.config.AppID)
-		if err != nil {
-			return appconfig.Config{}, err
-		}
-		if err := appconfig.VerifyCurrent(config, o.config.AppID); err != nil {
-			return appconfig.Config{}, err
-		}
-		return config, nil
+	config, err := o.config.AppConfigSource.Current(ctx, o.config.AppID)
+	if err != nil {
+		return appconfig.Config{}, err
 	}
-	return o.fallbackAppConfig(), nil
-}
-
-func (o *Orchestrator) appConfigRevision(ctx context.Context, revision string) (appconfig.Config, error) {
-	if o.config.AppConfigSource != nil {
-		config, err := o.config.AppConfigSource.Revision(ctx, o.config.AppID, revision)
-		if err != nil {
-			return appconfig.Config{}, err
-		}
-		if err := appconfig.Verify(config, o.config.AppID, revision); err != nil {
-			return appconfig.Config{}, err
-		}
-		return config, nil
-	}
-	config := o.fallbackAppConfig()
-	if config.Revision != revision {
-		return appconfig.Config{}, appconfig.ErrNotFound
+	if err := appconfig.VerifyCurrent(config, o.config.AppID); err != nil {
+		return appconfig.Config{}, err
 	}
 	return config, nil
 }
 
-func (o *Orchestrator) fallbackAppConfig() appconfig.Config {
-	return appconfig.Config{
-		AppID: o.config.AppID, Revision: o.config.ModelConfigVersion, Generation: 1, Enabled: true,
-		Model: o.config.Model, SystemPrompt: o.config.SystemPrompt, Timezone: o.config.Timezone,
-		MaxSteps: o.config.MaxSteps, MaxToolCalls: o.config.MaxToolCalls,
-		MaxInputTokens: o.config.MaxInputTokens, MaxOutputTokens: o.config.MaxOutputTokens,
-		MaxTotalTokens: o.config.MaxTotalTokens, MaxOutputBytes: o.config.MaxOutputBytes,
-		MaxCostMicrousd: o.config.MaxCostMicrousd, ProviderTimeout: o.config.ProviderTimeout,
-		PermissionScope: append([]string(nil), o.config.PermissionScope...),
+func (o *Orchestrator) appConfigRevision(ctx context.Context, revision string) (appconfig.Config, error) {
+	config, err := o.config.AppConfigSource.Revision(ctx, o.config.AppID, revision)
+	if err != nil {
+		return appconfig.Config{}, err
 	}
+	if err := appconfig.Verify(config, o.config.AppID, revision); err != nil {
+		return appconfig.Config{}, err
+	}
+	return config, nil
 }
 
 func runMatchesAppConfig(run RunRecord, config appconfig.Config) bool {
@@ -247,17 +155,6 @@ func runMatchesAppConfig(run RunRecord, config appconfig.Config) bool {
 		run.MaxOutputBytes > 0 && run.MaxOutputBytes <= config.MaxOutputBytes &&
 		run.MaxCostMicrousd <= config.MaxCostMicrousd &&
 		run.ProviderTimeoutMS >= 100 && run.ProviderTimeoutMS <= uint32(config.ProviderTimeout.Milliseconds())
-}
-
-func (o *Orchestrator) Run(ctx context.Context, request RunRequest, emit EventEmitter) (string, error) {
-	echoID, created, err := o.CreateIdempotent(ctx, request)
-	if err != nil {
-		return "", err
-	}
-	if !created {
-		return echoID, nil
-	}
-	return echoID, o.RunExisting(ctx, echoID, request, emit)
 }
 
 func (o *Orchestrator) RunChild(ctx context.Context, request ChildRunRequest) (ChildRunResult, error) {
@@ -455,11 +352,6 @@ func (o *Orchestrator) Cancel(ctx context.Context, echoID string) (bool, error) 
 		observe.DefaultMetrics().QueueRemoved()
 	}
 	return cancelled, err
-}
-
-func (o *Orchestrator) Create(ctx context.Context, request RunRequest) (string, error) {
-	echoID, _, err := o.CreateIdempotent(ctx, request)
-	return echoID, err
 }
 
 func (o *Orchestrator) CreateIdempotent(ctx context.Context, request RunRequest) (string, bool, error) {

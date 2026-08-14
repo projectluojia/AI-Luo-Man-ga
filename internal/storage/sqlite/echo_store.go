@@ -13,17 +13,19 @@ import (
 
 	kernelecho "github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/executor"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/id"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/idempotency"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/publicerror"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/session"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
 )
 
 const maxChildRunsPerParent = 1
 
 var (
-	runIdentifierPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
-	capabilityIDPattern  = regexp.MustCompile(`^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$`)
-	permissionIDPattern  = regexp.MustCompile(`^[a-z][a-z0-9]*(?:[._:-][a-z0-9]+)*$`)
+	runIdentifierPattern = id.StableMixed
+	capabilityIDPattern  = id.StableLower
+	permissionIDPattern  = id.Permission
 )
 
 func (s *Store) CreateEchoRun(ctx context.Context, echo kernelecho.Record, run kernelecho.RunRecord) (resultErr error) {
@@ -47,16 +49,6 @@ func (s *Store) CreateEchoRun(ctx context.Context, echo kernelecho.Record, run k
 		return fmt.Errorf("commit Echo/Run creation: %w", err)
 	}
 	return nil
-}
-
-func (s *Store) CreateEchoRunIdempotent(
-	ctx context.Context,
-	key string,
-	fingerprint string,
-	echo kernelecho.Record,
-	run kernelecho.RunRecord,
-) (_ string, _ bool, resultErr error) {
-	return s.CreateEchoRunIdempotentLimited(ctx, key, fingerprint, echo, run, 0)
 }
 
 func (s *Store) CreateEchoRunIdempotentLimited(
@@ -830,10 +822,21 @@ func scanRuns(rows *sql.Rows, kind string) ([]kernelecho.RunRecord, error) {
 
 func (s *Store) loadRunWork(ctx context.Context, runs []kernelecho.RunRecord) ([]kernelecho.RunWork, error) {
 	work := make([]kernelecho.RunWork, 0, len(runs))
+	now := time.Now().UTC()
 	for _, run := range runs {
 		var inputMessage string
 		if err := s.db.QueryRowContext(ctx, `SELECT input_message FROM echoes WHERE app_id=? AND echo_id=? AND status=?`, run.AppID, run.EchoID, kernelecho.StatusRunning).Scan(&inputMessage); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
+				// Echo 已进入终态而 Run 仍排队（取消/崩溃窗口等边缘路径）：确定性
+				// 失败该 Run，释放 (app_id,echo_id,attempt) 唯一槽位，避免孤儿排队
+				// Run 永久占用槽位并阻塞后续 attempt 排队。
+				if failErr := s.failOrphanQueuedRun(ctx, run, now); failErr != nil {
+					observe.Warn(ctx, "孤儿排队 Run 确定性失败失败",
+						observe.StringAttr("app_id", run.AppID),
+						observe.StringAttr("echo_id", run.EchoID),
+						observe.StringAttr("run_id", run.ID),
+					)
+				}
 				continue
 			}
 			return nil, fmt.Errorf("read queued Run Echo input: %w", err)
@@ -841,6 +844,33 @@ func (s *Store) loadRunWork(ctx context.Context, runs []kernelecho.RunRecord) ([
 		work = append(work, kernelecho.RunWork{Run: run, InputMessage: inputMessage})
 	}
 	return work, nil
+}
+
+// failOrphanQueuedRun 把 Echo 已进入终态的排队 Run 确定性转移为失败
+// （仅从 queued 转移，幂等；并发已转移时 RowsAffected 为 0）。
+func (s *Store) failOrphanQueuedRun(ctx context.Context, run kernelecho.RunRecord, now time.Time) error {
+	public := publicerror.Echo("recovery_failed")
+	result, err := s.db.ExecContext(ctx, `
+UPDATE runs SET status=?,lease_token=NULL,lease_expires_at=NULL,result_message='',error_code=?,error_message=?,completed_at=?
+WHERE app_id=? AND run_id=? AND status=?`,
+		kernelecho.RunStatusFailed, public.Code, public.Message, now.Format(time.RFC3339Nano),
+		run.AppID, run.ID, kernelecho.RunStatusQueued,
+	)
+	if err != nil {
+		return fmt.Errorf("fail orphan queued run: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read orphan run update count: %w", err)
+	}
+	if affected == 1 {
+		observe.Info(ctx, "孤儿排队 Run 已确定性失败（Echo 已进入终态）",
+			observe.StringAttr("app_id", run.AppID),
+			observe.StringAttr("echo_id", run.EchoID),
+			observe.StringAttr("run_id", run.ID),
+		)
+	}
+	return nil
 }
 
 func (s *Store) ListRunnableRuns(ctx context.Context, appID string, now time.Time, limit int) (_ []kernelecho.RunWork, resultErr error) {

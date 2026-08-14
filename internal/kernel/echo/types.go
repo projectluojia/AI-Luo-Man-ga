@@ -154,7 +154,6 @@ type CapabilityAuditRecord struct {
 type Store interface {
 	idempotency.Store
 	CreateEchoRun(ctx context.Context, echo Record, run RunRecord) error
-	CreateEchoRunIdempotent(ctx context.Context, key, fingerprint string, echo Record, run RunRecord) (string, bool, error)
 	CreateEchoRunIdempotentLimited(ctx context.Context, key, fingerprint string, echo Record, run RunRecord, maxPending int) (string, bool, error)
 	CreateChildRun(ctx context.Context, parent, child RunRecord) error
 	ClaimRun(ctx context.Context, appID, echoID, leaseToken string, startedAt, leaseExpiresAt time.Time) (RunRecord, error)

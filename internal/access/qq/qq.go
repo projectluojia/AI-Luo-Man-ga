@@ -198,6 +198,13 @@ func (a *Adapter) waitReply(ctx context.Context, echoID string) string {
 				return *reply
 			}
 		}
+	} else {
+		// 重放读取失败（存储临时不可用等）：记录退化并继续等待实时事件，
+		// 不得静默跳过重放——Echo 若已终态，实时流关闭后将放弃回复。
+		observe.Warn(ctx, "QQ 回复重放读取失败，继续等待实时事件",
+			observe.StringAttr("echo_id", echoID),
+			observe.StringAttr("echo_error", publicErrorCode(err)),
+		)
 	}
 	timer := time.NewTimer(a.cfg.RunTimeout)
 	defer timer.Stop()
@@ -212,6 +219,9 @@ func (a *Adapter) waitReply(ctx context.Context, echoID string) string {
 			return ""
 		case event, open := <-live:
 			if !open {
+				observe.Warn(ctx, "QQ 回复事件流关闭但未收到终态回复",
+					observe.StringAttr("echo_id", echoID),
+				)
 				return ""
 			}
 			if reply := terminalReply(event); reply != nil {
@@ -219,6 +229,14 @@ func (a *Adapter) waitReply(ctx context.Context, echoID string) string {
 			}
 		}
 	}
+}
+
+// publicErrorCode 把重放读取错误归类为稳定日志字段，不输出原始错误正文。
+func publicErrorCode(err error) string {
+	if errors.Is(err, kernelecho.ErrEchoNotFound) {
+		return "echo_not_found"
+	}
+	return "echo_read_failed"
 }
 
 // terminalReply 提取终态回复文本：reply.final 返回正文，run.failed 返回安全消息。

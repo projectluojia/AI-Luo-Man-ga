@@ -66,6 +66,59 @@ INSERT INTO capability_audit(
 	}
 }
 
+func TestMigrationV21PreservesAppConfigHeads(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "upgrade-v20.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &Store{db: db}
+	if err := store.migrateThrough(t.Context(), 20); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	// 写入一个"控制面调优过"的当前配置修订与 head：迁移 21 不得清除当前指针。
+	if _, err := db.ExecContext(t.Context(), `
+INSERT INTO app_config_revisions(
+  app_id,revision,enabled,model,system_prompt,channel_prompts,timezone,max_steps,max_tool_calls,
+  max_input_tokens,max_output_tokens,max_total_tokens,max_output_bytes,max_cost_microusd,
+  provider_timeout_ms,enabled_capabilities,permission_scope,created_at
+) VALUES(
+  'app-a',lower(hex(randomblob(32))),1,'model-x','管理员调优提示','{"web":"自定义"}','Asia/Shanghai',
+  8,8,32768,8192,40960,65536,0,30000,'[]','[]',?
+);
+INSERT INTO app_config_heads(app_id,revision,generation,created_at,updated_at)
+SELECT app_id,revision,7,?,? FROM app_config_revisions WHERE app_id='app-a';`,
+		now, now, now,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	upgraded, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer upgraded.Close()
+	var revision string
+	var generation int
+	if err := upgraded.db.QueryRowContext(t.Context(),
+		`SELECT h.revision,h.generation FROM app_config_heads h WHERE h.app_id='app-a'`).
+		Scan(&revision, &generation); err != nil {
+		t.Fatalf("升级后 head 丢失（迁移 21 破坏性删除）：%v", err)
+	}
+	if generation != 7 {
+		t.Fatalf("升级后 generation=%d，期望 7", generation)
+	}
+	var channelPrompts string
+	if err := upgraded.db.QueryRowContext(t.Context(),
+		`SELECT channel_prompts FROM app_config_revisions WHERE app_id='app-a' AND revision=?`, revision).
+		Scan(&channelPrompts); err != nil || channelPrompts != `{"web":"自定义"}` {
+		t.Fatalf("升级后渠道提示=%q err=%v", channelPrompts, err)
+	}
+}
+
 func TestMigrationRegistryVersionOrderAndDuplicateDetection(t *testing.T) {
 	saved := registeredMigrations
 	registeredMigrations = make(map[int]string)

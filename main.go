@@ -131,7 +131,6 @@ func runMaintenanceCommand(arguments []string, output io.Writer) (bool, error) {
 		platform := flags.String("platform", "", "外部平台标识")
 		space := flags.String("space", "", "外部平台空间标识")
 		platformUser := flags.String("platform-user", "", "外部平台用户标识")
-		roles := flags.String("roles", "", "逗号分隔的角色标识列表（可选）")
 		if err := flags.Parse(arguments[1:]); err != nil || flags.NArg() != 0 || *database == "" || *userID == "" {
 			return true, fmt.Errorf("configuration error: identity-bind requires --database and --user")
 		}
@@ -142,12 +141,6 @@ func runMaintenanceCommand(arguments []string, output io.Writer) (bool, error) {
 		if platformConfigured && (*platform == "" || *space == "" || *platformUser == "") {
 			return true, fmt.Errorf("configuration error: --platform, --space and --platform-user must be provided together")
 		}
-		var roleIDs []string
-		for _, part := range strings.Split(*roles, ",") {
-			if part = strings.TrimSpace(part); part != "" {
-				roleIDs = append(roleIDs, part)
-			}
-		}
 		store, err := sqlite.Open(*database)
 		if err != nil {
 			return true, err
@@ -155,13 +148,12 @@ func runMaintenanceCommand(arguments []string, output io.Writer) (bool, error) {
 		provisionErr := provisionIdentity(ctx, store, identityProvision{
 			AppID: *appID, UserID: *userID,
 			Platform: *platform, PlatformSpaceID: *space, PlatformUserID: *platformUser,
-			RoleIDs: roleIDs,
 		})
 		closeErr := store.Close()
 		if err := errors.Join(provisionErr, closeErr); err != nil {
 			return true, err
 		}
-		_, err = fmt.Fprintf(output, "身份开通完成：user_id=%s app=%s 绑定平台=%s 角色=%d\n", *userID, *appID, *platform, len(roleIDs))
+		_, err = fmt.Fprintf(output, "身份开通完成：user_id=%s app=%s 绑定平台=%s\n", *userID, *appID, *platform)
 		return true, err
 	case "identity-unbind":
 		flags := flag.NewFlagSet("identity-unbind", flag.ContinueOnError)
@@ -200,11 +192,10 @@ type identityProvision struct {
 	Platform        string
 	PlatformSpaceID string
 	PlatformUserID  string
-	RoleIDs         []string
 }
 
-// provisionIdentity 幂等开通内部用户并写入 App 成员关系；可选绑定一个外部平台身份。
-// 用户已存在、同一外部身份重复绑定同一用户、成员角色未变化时都视为成功重放。
+// provisionIdentity 幂等开通内部用户并写入空角色成员关系；可选绑定一个外部平台身份。
+// 用户已存在、同一外部身份重复绑定同一用户时都视为成功重放。
 func provisionIdentity(ctx context.Context, store *sqlite.Store, request identityProvision) error {
 	service := identity.NewService(store)
 	if _, err := service.CreateUser(ctx, request.UserID); err != nil && !errors.Is(err, identity.ErrConflict) {
@@ -220,7 +211,7 @@ func provisionIdentity(ctx context.Context, store *sqlite.Store, request identit
 		}
 	}
 	if err := service.SetMembership(ctx, identity.AppMembership{
-		AppID: request.AppID, UserID: request.UserID, RoleIDs: request.RoleIDs,
+		AppID: request.AppID, UserID: request.UserID,
 	}); err != nil {
 		return fmt.Errorf("身份开通失败：写入 App 成员关系失败: %w", err)
 	}
@@ -274,7 +265,7 @@ func serveRuntimeHost(installRoot, address string, output io.Writer) error {
 	if hostedCount == 0 {
 		return fmt.Errorf("runtime host: install root contains no hosted runtimes")
 	}
-	backend, err := loader.NewHostedRuntimeBackend(loader.HostedBackendConfig{ReadArtifact: catalog.ReadArtifact})
+	backend, err := loader.NewHostedRuntimeBackend(loader.WasmHostConfig{ReadArtifact: catalog.ReadArtifact})
 	if err != nil {
 		return fmt.Errorf("create hosted backend: %w", err)
 	}
@@ -517,24 +508,12 @@ func run() (resultErr error) {
 	)
 
 	orchestrator := kernelecho.NewOrchestrator(executorClient, reg, dispatcher, policy, store, kernelecho.Config{
-		AppID:              campus.AppID,
-		Model:              app.Model,
-		SystemPrompt:       app.SystemPrompt,
-		Timezone:           app.Timezone,
-		MaxSteps:           app.MaxSteps,
-		MaxToolCalls:       app.MaxToolCalls,
-		MaxInputTokens:     app.MaxInputTokens,
-		MaxOutputTokens:    app.MaxOutputTokens,
-		MaxTotalTokens:     app.MaxTotalTokens,
-		MaxOutputBytes:     app.MaxOutputBytes,
-		MaxCostMicrousd:    app.MaxCostMicrousd,
-		ProviderTimeout:    app.ProviderTimeout,
-		ModelConfigVersion: app.Revision,
-		AppConfigSource:    store,
-		Context:            sessionService,
-		RunTimeout:         90 * time.Second,
-		MaxRunAttempts:     3,
-		QueueCapacity:      128,
+		AppID:           campus.AppID,
+		AppConfigSource: store,
+		Context:         sessionService,
+		RunTimeout:      90 * time.Second,
+		MaxRunAttempts:  3,
+		QueueCapacity:   128,
 	})
 	if err := agent.Register(reg, orchestrator); err != nil {
 		return fmt.Errorf("register governed Subagent service: %w", err)

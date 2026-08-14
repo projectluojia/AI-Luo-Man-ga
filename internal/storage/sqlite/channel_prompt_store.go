@@ -12,12 +12,13 @@ ALTER TABLE app_config_revisions ADD COLUMN channel_prompts TEXT NOT NULL DEFAUL
 `)
 }
 
-// 迁移 21：存量 App 配置重新播种。清空 app_config_heads（当前指针），使启动
-// Ensure 以含渠道提示的新种子重新播种当前配置。历史修订（app_config_revisions）
-// 保留供历史 Run 恢复；当前配置可由种子重建，属可恢复的破坏性迁移（备份由
-// 种子本身承担）。与迁移 20 分离，避免改写已应用的迁移。
+// 迁移 21：存量 App 配置保留（非破坏性）。
+// 渠道化系统提示由迁移 20 提供 channel_prompts 列，存量修订读回为空映射（'{}'），
+// 行为与迁移前一致；不再清空 app_config_heads——删除当前指针会丢失控制面调优的
+// 当前配置，且破坏"迁移不得毁坏当前权威状态"的规则。需要渠道提示的部署经配置
+// CAS 或全新播种获得，main.go 种子不覆盖既有配置。
 func init() {
 	registerMigration(21, `
-DELETE FROM app_config_heads;
+UPDATE app_config_heads SET updated_at = updated_at WHERE 1 = 0;
 `)
 }

@@ -20,12 +20,14 @@ import (
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access/web"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/appconfig"
 	kernelecho "github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/executor"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/health"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime/runtimetest"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/session"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/agent"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus"
@@ -175,7 +177,7 @@ func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 
 	busStore := memory.NewBusStore()
 	busStore.ReplaceCatalog(campus.AppID, nil, []bus.Route{{ID: "r1", Name: "测试线路", Direction: "去程"}})
-	policy := runtime.NewStaticAppPolicy()
+	policy := runtimetest.NewStaticAppPolicy()
 	policy.Enable(campus.AppID, campus.BusRouteListCapabilityID)
 	policy.Enable(campus.AppID, agent.CapabilityID)
 	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{IdempotencyStore: store})
@@ -190,11 +192,18 @@ func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new session service: %v", err)
 	}
+	if _, _, err := store.Ensure(ctx, appconfig.Config{
+		AppID: campus.AppID, Enabled: true, Model: "test-model", SystemPrompt: "test",
+		Timezone: "Asia/Shanghai", MaxSteps: 4, MaxToolCalls: 8, MaxInputTokens: 1000,
+		MaxOutputTokens: 500, MaxTotalTokens: 1500, MaxOutputBytes: 4096,
+		ProviderTimeout: 5 * time.Second,
+	}); err != nil {
+		t.Fatalf("seed app config: %v", err)
+	}
 	orchestrator := kernelecho.NewOrchestrator(agentClient, reg, dispatcher, policy, store, kernelecho.Config{
-		AppID: campus.AppID, Model: "test-model", SystemPrompt: "test", Timezone: "Asia/Shanghai",
-		MaxSteps: 4, MaxToolCalls: 8, MaxInputTokens: 1000, MaxOutputTokens: 500,
-		MaxTotalTokens: 1500, MaxOutputBytes: 4096, ProviderTimeout: 5 * time.Second,
-		Context: sessionService,
+		AppID:           campus.AppID,
+		AppConfigSource: store,
+		Context:         sessionService,
 	})
 	if err := agent.Register(reg, orchestrator); err != nil {
 		t.Fatal(err)
