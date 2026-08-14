@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"regexp"
 	"slices"
 	"sort"
 	"sync"
@@ -14,6 +13,7 @@ import (
 	"golang.org/x/mod/semver"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/id"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
 )
 
@@ -32,6 +32,12 @@ const (
 	SideEffectRead     = "read"
 	SideEffectWrite    = "write"
 	SideEffectExternal = "external"
+)
+
+// 治理目标类型：Dispatcher 子请求与 Runtime Host 协议共用的闭式取值。
+const (
+	TargetTypeCapability = "capability"
+	TargetTypeTool       = "tool"
 )
 
 type Handler func(context.Context, contracts.RequestContext, json.RawMessage) (json.RawMessage, error)
@@ -317,8 +323,8 @@ func (r *Registry) RegisterBatch(tools []ToolRegistration, services []ServiceReg
 }
 
 var (
-	stableIDPattern   = regexp.MustCompile(`^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$`)
-	permissionPattern = regexp.MustCompile(`^[a-z][a-z0-9]*(?:[._:-][a-z0-9]+)*$`)
+	stableIDPattern   = id.StableLower
+	permissionPattern = id.Permission
 )
 
 func validateToolSpec(spec ToolSpec, handler Handler) error {
