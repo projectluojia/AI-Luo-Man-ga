@@ -95,8 +95,8 @@ class OpenAICompatibleProvider:
             return False
         try:
             async with asyncio.timeout(self._readiness_timeout_seconds):
-                await self._client.models.retrieve(model)
-            return True
+                available = await self._client.models.list()
+            return any(getattr(candidate, "id", "") == model for candidate in available.data)
         except asyncio.CancelledError:
             raise
         except Exception as exc:

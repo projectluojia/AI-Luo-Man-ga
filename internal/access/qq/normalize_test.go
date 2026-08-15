@@ -2,7 +2,10 @@ package qq
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
+
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/session"
 )
 
 const testBotQQID = "2647414417"
@@ -153,6 +156,27 @@ func TestNormalizeQQID(t *testing.T) {
 		if valid && normalized != test.value {
 			t.Errorf("normalizeQQID(%q)=%q", test.value, normalized)
 		}
+	}
+}
+
+func TestNormalizeEventCanonicalizesNegativeLLBotMessageID(t *testing.T) {
+	var raw map[string]any
+	if err := json.Unmarshal([]byte(`{"post_type":"message","message_type":"group","group_id":111,"user_id":222,"message_id":-2147483648,"message":[{"type":"at","data":{"qq":"2647414417"}},{"type":"text","data":{"text":"你好"}}]}`), &raw); err != nil {
+		t.Fatal(err)
+	}
+	inbound, mentioned := normalizeEvent("campus-services", testBotQQID, raw)
+	if inbound == nil || !mentioned {
+		t.Fatalf("inbound=%#v mentioned=%t", inbound, mentioned)
+	}
+	if !strings.HasPrefix(inbound.PlatformMessageID, "qq-message-v1-") ||
+		inbound.IdempotencyKey != inbound.PlatformMessageID ||
+		!session.ValidStableID(inbound.PlatformMessageID) ||
+		!session.ValidPlatformMessageID(inbound.PlatformMessageID) {
+		t.Fatalf("platform_message_id=%q idempotency_key=%q", inbound.PlatformMessageID, inbound.IdempotencyKey)
+	}
+	again, _ := normalizeEvent("campus-services", testBotQQID, raw)
+	if again == nil || again.PlatformMessageID != inbound.PlatformMessageID {
+		t.Fatal("same LLBot message id did not produce a deterministic stable id")
 	}
 }
 

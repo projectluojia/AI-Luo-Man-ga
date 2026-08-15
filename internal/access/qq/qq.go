@@ -6,8 +6,10 @@ package qq
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -21,6 +23,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access"
 	qqsettings "github.com/projectluojia/AI-Luo-Man-ga/internal/access/qq/settings"
 	kernelecho "github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/session"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
 )
 
@@ -247,7 +250,11 @@ func (a *Adapter) handleEvent(ctx context.Context, raw map[string]any) {
 	}
 	intake, err := a.hub.Intake(ctx, *inbound)
 	if err != nil {
-		_, _, message := access.IntakePublicError(err)
+		_, code, message := access.IntakePublicError(err)
+		observe.Warn(ctx, "QQ 标准消息接入被拒绝",
+			observe.StringAttr("error_code", code),
+			observe.StringAttr("platform_message_id", inbound.PlatformMessageID),
+		)
 		a.reply(ctx, inbound, message)
 		return
 	}
@@ -459,10 +466,11 @@ func normalizeEvent(appID, botQQID string, raw map[string]any) (*access.InboundM
 	}
 
 	userID := str(raw, "user_id")
-	messageID := str(raw, "message_id")
-	if userID == "" || messageID == "" || userID == botQQID {
+	rawMessageID := str(raw, "message_id")
+	if userID == "" || rawMessageID == "" || userID == botQQID {
 		return nil, false
 	}
+	messageID := stablePlatformMessageID(rawMessageID)
 	var spaceID, channel, sessionID string
 	switch str(raw, "message_type") {
 	case "group":
@@ -493,6 +501,16 @@ func normalizeEvent(appID, botQQID string, raw map[string]any) (*access.InboundM
 		OccurredAt:        time.Now().UTC(),
 		IdempotencyKey:    messageID,
 	}, mentioned
+}
+
+// stablePlatformMessageID 保留已经满足内核稳定标识约束的平台消息号；LLBot
+// 等实现可能返回负整数或其他不透明值，此时使用确定性摘要承载幂等语义。
+func stablePlatformMessageID(value string) string {
+	if session.ValidStableID(value) && session.ValidPlatformMessageID(value) {
+		return value
+	}
+	digest := sha256.Sum256([]byte(value))
+	return fmt.Sprintf("qq-message-v1-%x", digest[:])
 }
 
 // extractText 从消息事件提取纯文本：优先拼接 array 模式的 text 段，退化时

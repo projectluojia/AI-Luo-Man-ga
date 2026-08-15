@@ -53,15 +53,16 @@ class ScriptedCompletions:
 
 
 class FakeModels:
-    def __init__(self, outcome=None):
+    def __init__(self, outcome=None, model_ids=None):
         self.outcome = outcome
-        self.models = []
+        self.model_ids = model_ids or ["test-model"]
+        self.list_calls = 0
 
-    async def retrieve(self, model):
-        self.models.append(model)
+    async def list(self):
+        self.list_calls += 1
         if isinstance(self.outcome, BaseException):
             raise self.outcome
-        return self.outcome or SimpleNamespace(id=model)
+        return self.outcome or SimpleNamespace(data=[SimpleNamespace(id=model_id) for model_id in self.model_ids])
 
 
 def chunk(*, content=None, tool_calls=None, finish_reason=None, usage=None):
@@ -274,7 +275,15 @@ class OpenAICompatibleProviderTest(unittest.IsolatedAsyncioTestCase):
             client=SimpleNamespace(models=models, chat=SimpleNamespace(completions=FakeCompletions([]))),
         )
         self.assertTrue(await provider.check_readiness("test-model"))
-        self.assertEqual(models.models, ["test-model"])
+        self.assertEqual(models.list_calls, 1)
+
+        missing = OpenAICompatibleProvider(
+            client=SimpleNamespace(
+                models=FakeModels(model_ids=["another-model"]),
+                chat=SimpleNamespace(completions=FakeCompletions([])),
+            ),
+        )
+        self.assertFalse(await missing.check_readiness("test-model"))
 
         unavailable = OpenAICompatibleProvider(
             client=SimpleNamespace(
