@@ -1,383 +1,127 @@
-# AI珞（爱珞） V3 Repository Instructions
-
-## Production-Grade Mandate
-
-AI珞（爱珞） V3 is a **production-grade project**. This is a mandatory engineering standard, not a future aspiration and not a label earned merely because a Demo runs.
-
-The delivered feature scope may remain narrow, but every implemented contract, trust boundary, state transition, persistence rule, error path, and test must be designed for long-term production use. Do not justify disposable code with “MVP”, “Demo first”, “temporary”, or “we can rewrite it later”. A narrow production-grade slice is acceptable; a broad prototype foundation is not.
-
-Be precise about status:
-
-- The current repository contains a reliable campus-bus vertical slice and proves the main Go → Python Agent → Capability → Service → Tool → storage → SSE path.
-- The repository is **not yet production-ready as a complete platform**. The 2026-07-26 audit P0 list is closed, but passing tests does not implement the P1 platform scope or replace deployment-specific acceptance.
-- Never describe an unimplemented design item as completed. Distinguish clearly between design contract, implemented baseline, test evidence, and remaining production blocker.
-- Never lower correctness, security, durability, isolation, or observability standards to accelerate a demonstration.
-
-The user is the acceptance owner. Treat the repository as a serious long-lived system that may later handle institutional data and multiple Apps.
-
-## Required Reading Order
-
-Before architecture, protocol, persistence, Agent-runtime, or security changes, read:
-
-1. `AGENTS.md` completely.
-2. `docs/v3_overall_design.md` as the primary architecture contract.
-3. `docs/校巴场景设计.md` as the first-scenario implementation baseline.
-4. `docs/日志与可观测性设计.md` for logging, tracing fields, and disclosure rules.
-5. `docs/数据需求与授权清单.md` before any real-data or ingestion work.
-
-Then inspect the current implementation and tests. Do not infer implementation status from design documents alone.
-
-## System Direction
-
-AI珞（爱珞） V3 is a multi-entry AI assistant platform. The Go kernel is the sole system core and source of truth. Python Agent runtimes provide cognition but do not own authorization, system state, external access, scheduling, or business persistence.
-
-The first product space is the `campus-services` App（校园综合服务 App）. Campus bus is its first Capability group, owned by the `campus` Service. The repository owns the Go backend and a minimal Web integration page only; it does not own the product frontend.
-
-The ordinary Go kernel, Web Access, SQLite, and Python Agent development path must remain buildable and testable on Windows, Linux, and macOS. Unix ownership, Unix Socket, and process-group isolation capabilities remain explicit Unix-only security boundaries until an equally strong native implementation exists; unsupported platforms fail closed. Python environments and dependencies are managed only through `uv`, `agent/pyproject.toml`, and the committed `agent/uv.lock`.
-
-## Non-Negotiable Architecture
-
-- Go owns Access, Echo/Run orchestration, authorization, Registry, routing, loading, persistence, scheduling, observability, audit, cancellation, and recovery.
-- Frontends and external platforms connect only to Go.
-- Python Agents may request actions only through Go-projected Capabilities. They never call Tools, databases, or external institutional systems directly.
-- Persistent connections, credentials, migrations, and physical storage choices remain behind the Go-managed storage layer.
-- Services and Tools never hold business database credentials or issue arbitrary SQL.
-- A Tool is a reusable atomic capability. A Service is a thin business composition that exposes Capabilities.
-- Agents and other external callers see Capabilities, not the internal Tool catalog.
-- All Capability, Service, and Tool calls pass through the kernel-recognized dispatcher and inherit governed request context.
-- Permissions and data scope may only narrow down a call chain. Internal calls never gain trust or privilege.
-- `Deployment` is the physical security boundary. `App` is the business, data, permission, Agent-configuration, and session boundary.
-- Cross-process communication uses versioned gRPC and Protobuf. Do not introduce a private transport protocol.
-- Logical Service and Tool boundaries do not imply one process, port, queue, or database per component.
-- Mutable business state must not live only in process memory. In-memory maps and channels may accelerate delivery but are never the source of truth.
-- The Go kernel remains authoritative even when an Agent runtime, Tool host, client connection, or process crashes.
-
-## First Scenario: Campus Bus
-
-- Zhihui Luojia（智慧珞珈）is the sole authoritative source of campus-bus business data.
-- The ingestion mechanism remains replaceable. Regardless of whether data arrives through pull, push, file exchange, or another authorized adapter, it is validated and written into Go-managed unified storage before business use.
-- Campus-bus Service and Tool code depends on storage ports, never on a concrete database or synchronization method.
-- Campus-bus business data currently has no user-state requirement. Do not invent anonymous users, login flows, or user persistence for this scenario.
-- No user state does not remove governance: calls still carry `app_id`, `echo_id`, `request_id`, `trace_id`, `run_id`, deadline, call depth, and other applicable context.
-- Initial scope covers routes, directions, stops, schedules, and time-based journey planning.
-- Real-time location, arrival prediction, proactive reminders, and operational claims require explicitly authorized source fields and must never be fabricated.
-- Stable identifiers are used for routes, stops, trips, Services, Tools, Capabilities, Echoes, Runs, and calls. Display names are not primary keys.
-- Demo data is always non-authoritative, visibly marked, isolated from production, and impossible to enable accidentally in a production environment.
-- Stale, expired, incomplete, or non-authoritative data must produce an explicit governed result; the Agent must not silently present it as current fact.
-
-## Production AI Agent Rules
-
-- The production Python Agent uses a real model and provider-native ToolCall.
-- Keyword matching, regex intent parsing, hard-coded business routing, or fixed workflows must never masquerade as an AI Agent.
-- Tests may inject deterministic `ModelProvider` implementations. Production must fail readiness when required model configuration is absent.
-- Go computes the exact Capability projection for each Run. Python rejects unprojected ToolCalls, malformed arguments, duplicate call IDs, and mismatched results.
-- ToolCall arguments must be validated again at the Go trust boundary against the registered Capability schema. Provider-side `strict` mode is not a security boundary.
-- Agent execution requires explicit budgets: total deadline, step count, ToolCall count, payload size, output size, token usage, and cost where the provider exposes it.
-- Provider calls require explicit timeouts, cancellation propagation, retry classification, bounded exponential backoff with jitter, rate limiting, and no retries for unsafe side effects.
-- Health and readiness must reflect actual runtime/provider ability, not merely successful object construction.
-- Provider errors are mapped to stable internal error codes and safe public messages. Raw provider bodies, headers, prompts, messages, and credentials never cross into logs or public APIs.
-- Multiple ToolCalls must have deterministic ordering and documented concurrency semantics.
-- Python process loss must not corrupt authoritative Go state. Durable recovery and retry decisions belong to Go.
-- Subagents, when implemented, are Go-created child Runs with `parent_run_id`, narrowed permissions, separate budgets, governed cancellation, and explicit result routing. Python must not create untracked private sub-runs.
-
-## Security And Isolation
-
-- Every storage read, write, update, delete, event subscription, cancellation, and audit query is scoped by `app_id` at the API and SQL boundary where applicable.
-- Do not rely on globally unique UUIDs as authorization or App isolation.
-- Required permissions declared by Capability and Tool specs must be enforced, not merely stored as metadata.
-- Side-effect metadata must drive confirmation, idempotency, retry, and cycle policy.
-- External input is untrusted. Enforce body, field, string, collection, frame, event, and gRPC message limits before allocation or persistence.
-- Validate structured input with strict decoders and schemas. Unknown fields are rejected unless the versioned contract explicitly permits them.
-- Public responses never expose raw internal errors, SQL details, filesystem paths, provider responses, stack traces, or secrets.
-- Never log or persist credentials, authorization headers, cookies, user/model message bodies, prompts, Tool arguments, Tool results, or raw sensitive payloads outside their explicitly governed business/audit store.
-- Audit storage is not ordinary logging. It requires centralized sanitization, App scoping, retention rules, access control, and deletion policy.
-- Insecure gRPC is acceptable only for an explicitly same-Deployment, loopback-only boundary. Any non-loopback or remote boundary requires authenticated transport and a documented trust model.
-- Secrets come from an approved secret source, are never committed, are not echoed at startup, and have a rotation/revocation path.
-- Real institutional data requires written authorization. Do not scrape, reverse engineer, or import unofficial copies.
-
-## Durable State And Reliability
-
-- Model Echo and Run as explicit durable state machines with validated transitions. State transitions must be atomic and reject invalid or duplicate terminal writes.
-- A Run is not merely an in-memory goroutine. Persist Run identity, parent relationship, status, attempt, deadlines, model/config version, sequence state, and recoverable execution metadata.
-- Event sequence semantics must support retries and multiple Runs for one Echo without primary-key collisions. Sequence allocation is authoritative and monotonic within its documented scope.
-- Creating an Echo and scheduling its Run must survive a process crash between the two operations. Use a durable work/lease/outbox design rather than relying only on `go func`.
-- On startup, reconcile abandoned `running` records deterministically: resume, retry, cancel, or fail them according to policy.
-- Writes and external side effects require idempotency keys and replay-safe handling. Duplicate client requests and duplicate Agent frames must not duplicate effects.
-- Cancellation and deadlines propagate through HTTP, Echo, Run, gRPC, Capability, Service, Tool, and storage operations.
-- Cleanup and terminal persistence may detach from a cancelled request only through a new bounded context. Never use unbounded background cleanup.
-- Do not ignore errors from state transitions, audit writes, stream sends, shutdown, or cleanup. If a secondary error cannot be returned, record it safely and preserve the primary cause.
-- Slow or disconnected SSE clients must not block Runs. Persisted events remain replayable, and subscriber eviction/reconnect behavior must be tested.
-- Graceful shutdown stops accepting work, cancels or drains active Runs according to policy, persists terminal/recoverable state, stops the Agent child process, and closes storage within bounded deadlines.
-- Liveness and readiness are different: liveness reports process health; readiness reports ability to accept work and may include dependencies.
-- Error classification must distinguish validation, permission, conflict, unavailable, timeout, cancelled, rate-limited, retryable dependency, protocol violation, and internal failure.
-
-## Storage And Data Rules
-
-- Domain code depends on narrow ports. Concrete SQLite or future production adapters implement those ports.
-- All business tables and queries enforce App isolation. Composite keys and indexes include `app_id` where the data is App-owned.
-- Use parameterized SQL. Dynamic identifiers are allowed only from closed, code-defined allowlists.
-- Schema changes use forward, reviewable migrations. Never rewrite an already-applied migration; add a new migration and test upgrades from the prior schema.
-- Migrations are bounded, observable, crash-safe, and validated against realistic data. Destructive migrations require an explicit backup/rollback plan.
-- Enforce relational integrity with appropriate foreign keys, uniqueness, checks, and state constraints; do not rely only on Go validation.
-- Snapshot ingestion validates stable IDs, references, time ordering, source revision, authority, freshness, duplicates, and completeness before atomic replacement.
-- Failed ingestion preserves the last complete valid revision. Readers never observe a partially imported catalog.
-- Time is stored in a documented UTC representation and converted using an explicit IANA time zone at boundaries.
-- Production storage requires documented backup, restore, retention, capacity, corruption recovery, and migration procedures.
-- SQLite may remain a supported adapter, but do not assume a single-process SQLite configuration satisfies every production deployment. Preserve ports for another Go-managed database adapter.
-- Do not add user persistence to the campus-bus scenario until the user confirms the institutional identity boundary.
-
-## Contracts And Versioning
-
-- Public HTTP APIs, SSE event types, Protobuf packages, Capability schemas, Tool specs, and persisted event shapes are versioned contracts.
-- Additive compatibility is preferred. Breaking changes require a new version and an explicit migration/compatibility plan.
-- Go and Python negotiate or validate protocol compatibility before a Run; a hard-coded unused version field is insufficient.
-- Validate frame ordering, identity, sequence, payload size, unknown event types, duplicate calls, late results, and terminal behavior on both sides of gRPC.
-- OpenAPI documents actual request and response schemas, error codes, headers, SSE event envelopes, status behavior, and compatibility expectations.
-- Generated Protobuf files are committed build artifacts in this repository. Never edit them manually. When `proto/executor.proto` changes, regenerate both Go and Python outputs and include them with tests.
-- Registry registration validates IDs, semantic versions, schemas, side-effect values, dependency declarations, and permission declarations atomically.
-
-## Observability And Comments
-
-- All handwritten code comments use Chinese. Generated files, `//go:build`, and `//go:embed` directives are exempt.
-- User-facing log messages use clear Chinese and prioritize readability. Stable field keys remain English for machine querying and cross-language consistency.
-- Go logs through `internal/observe`; Python Agent logs through `agent.observe`. Do not create component-private logging systems.
-- Important boundaries record lifecycle state, applicable IDs, counts, sizes, result status, error class, and duration.
-- Propagate `request_id`, `trace_id`, `app_id`, `echo_id`, `run_id`, `parent_run_id`, `call_id`, `capability_id`, `service_id`, and `tool_id` whenever applicable.
-- Background work copies only the necessary correlation context before detaching from an HTTP request.
-- Suppress or adapt third-party logs that violate Chinese readability, disclose provider endpoints unnecessarily, or bypass redaction policy.
-- Logs are necessary but not sufficient. Production observability also requires metrics and distributed tracing for request rate, success rate, model latency, first-token latency, Tool latency, storage latency, retries, cancellations, queue depth, active Runs, token use, and cost.
-- Console logs optimize local readability; JSON logs provide stable production ingestion fields.
-- Any new sensitive field must include redaction and negative tests proving the value does not appear in console or JSON output.
-
-## Current Implemented Baseline
-
-As of 2026-07-26, the repository implements and tests:
-
-- Go Web Access with Echo creation, status, cancellation, SSE replay/live delivery, health endpoints, and a minimal test page.
-- Go Echo/Run orchestration over bidirectional gRPC.
-- A real Python model-driven Agent loop using OpenAI-compatible native ToolCall.
-- Go Registry, persistent App Capability/permission policy, dispatcher routing, call-depth enforcement, and non-progressing cycle detection.
-- `campus` Service with stop, route, and journey Capabilities backed by reusable bus Tools.
-- Go-managed SQLite storage for campus-bus snapshots, Echoes, events, and Capability audit.
-- App-scoped Echo reads, terminal updates, event persistence/SSE, cancellation tracking, and audit access, with composite SQLite keys and a tested forward migration.
-- Stable safe public HTTP and Agent Capability errors; internal causes are excluded from public responses, persisted Echo errors, and SSE failure events.
-- Atomic Echo + queued Run creation, durable Run attempts, lease-token claims, validated transactional Run/Echo terminal transitions, queued cancellation, and startup reconciliation.
-- Single-Deployment durable Run scheduling with a fixed worker limit, App-scoped transactional capacity backpressure, persisted delayed attempts, periodic lease renewal, and bounded automatic retry only before any write/external Capability.
-- A Host-neutral Loader state machine plus Runtime Host 2.0 gRPC client/server validation, shared hosted connection and capacity limits, fatal-runtime fail-fast/recovery, and a real isolated-process supervisor with bounded process-group cleanup.
-- Owner-held persistent installed-manifest/lock discovery with strict JSON and digest validation, atomic Loader/Registry startup registration, pinned-runtime warmup, and bounded shutdown wired into the kernel. A real extension Host Backend and hosted OS resource isolation remain P1 blockers.
-- Immutable App configuration revisions with generation-based compare-and-swap, current-policy fail-closed enforcement, historical Run configuration recovery, immediate Capability/permission revocation, dynamic model readiness, and App disable behavior.
-- One governed Subagent level through the `agent.run` external-side-effect Capability: Go-created durable child Runs with parent/call identity, acceptance-time scope ceilings, current-policy narrowing, independent half budgets, one-child limit, no nested projection or retry, child-before-root cancellation, private result routing, root-only Echo/SSE events, and centralized task/result audit redaction.
-- Storage-authoritative Echo event sequencing that remains monotonic across multiple Run attempts and rejects late terminal events.
-- Registry-time compilation of strict Capability/Tool JSON Schemas, semantic metadata validation, and atomic Service registration.
-- Dispatcher-time Go Schema revalidation, required-permission enforcement and narrowing, and fail-closed SideEffect/idempotency/confirmation policy.
-- App-scoped durable idempotency for client Echo creation, Agent calls, audits, and future write/external Capability and Tool calls, including replay, conflict, concurrent wait, and unknown-outcome handling.
-- Negotiated Agent protocol version, explicit bidirectional frame sequences, bounded gRPC/frame/field payloads, strict unknown/duplicate/late-frame rejection, and persisted Agent sequence progress.
-- Provider timeouts, cancellation, bounded pre-stream retry/backoff with jitter, rate/concurrency limits, token/output/ToolCall budgets, durable usage capture, and model-backed readiness.
-- Stable Provider failure codes with accurate retryability, plus suppression of third-party plaintext logging.
-- Atomic campus-bus snapshot activation with strict ingestion validation, explicit completeness/authority/validity metadata, fail-closed stale/non-authoritative query governance, and production demo-data rejection.
-- Separate process liveness and dependency/model readiness, admission-safe bounded Run shutdown, and graceful managed Python child termination.
-- Fail-closed loopback-only insecure gRPC, owner-held restricted secret-file loading in production, and raw-secret environment rejection.
-- W3C HTTP trace propagation through Go Run and Python Agent spans, plus fixed low-cardinality Prometheus metrics for HTTP, Runs/queue, first Token, Provider retries, usage/cost, Capability, Tool, and storage.
-- Structured Chinese logging, correlation context, centralized raw-error/path suppression, audit sanitization, third-party log suppression, and HTTP request logs.
-- SQLite consistent backup, integrity/foreign-key/schema validation, no-overwrite offline restore, real migration-9-to-14 and previous-version-13-to-14 upgrade tests, parent-child Run restore coverage, and documented retention/DR drills.
-- Unit tests, Go race tests, `go vet`, Python tests, real isolated Runtime Host process tests, and a real Go → Python root/child Subagent → Capability → storage → SSE integration test.
-
-During the 2026-07-26 production audit, all listed Go unit tests, Python tests, Go race tests, `go vet`, and the cross-process integration test passed. This is baseline evidence for the current behavior, not a permanent waiver; rerun the gates after every relevant change.
-
-This baseline is valuable and must be preserved. It is not evidence that the P1 items below are implemented.
-
-The App-scoped storage/public-error, durable Echo/Run state, Go trust-boundary/idempotency, Agent protocol/Provider reliability, campus-bus source-governance, production-operations, single-Deployment durable scheduler, Runtime Host, persistent App configuration/policy, and one-level governed Subagent baselines were implemented and reverified on 2026-07-26. This closes the audit P0 list and the corresponding initial P1 foundation slices. It does not close governed confirmation storage, multi-entry scope, authorized ingestion, the remaining Loader deployment boundaries, or the other P1 work below.
-
-## 2026-08-12 地基框架基线（PRD 模块一/六/七/十二/十三）
-
-依据 `docs/AI珞地基框架PRD.md` 实现并测试了以下地基模块（全部为独立实现、尚未涉及真实校方身份/数据授权）：
-
-- SQLite 迁移改为版本注册表机制（`registerMigration(version, sql)`），多个模块可独立注册前向迁移，当前 Schema 版本 1–18 连续。
-- 身份与授权（迁移 15）：Deployment 级 User、App 级 ExternalIdentity/AppMembership/Role/PermissionGrant/IdentityBindingRevision；外部平台 ID 永不充当内部 user_id；同一外部身份并发绑定互斥（库唯一约束+race 测试）；禁用即时生效（查询时实时计算）；身份不存在返回 ErrNotFound 不自动创建；跨 App 隔离 fail-closed。2026-08-14 审计清理移除角色/权限授予管理面（Service 与存储方法无生产调用者，角色无从创建、授予无从写入）；roles/permission_grants 表保留为 Schema 契约，SetMembership 仍内联校验角色存在性，ResolveIdentity 快照仍携带成员关系、生效权限与绑定修订号。
-- 会话、消息与附件（迁移 16）：Session（direct/group/system）、Message（content_ref、回复、编辑、软删除）、平台消息按 app_id+platform_message_id 去重（并发重复投递只产生一条）、历史查询约束 app_id+session_id、BlobStore 窄端口 + 安全本地文件系统实现（os.Root 沙箱、路径穿越/符号链接/超限拒绝）、消息正文不进日志与审计（redaction 负向测试）。
-- 确认与副作用治理（迁移 17）：持久 Confirmation 五态状态机（waiting/approved/rejected/expired/revoked），argument_digest 与范围绑定，CAS 决策、并发重复批准幂等、重启后待确认状态仍在、未知执行结果不伪报；Service 实现 `runtime.ConfirmationVerifier` 并已注入 Dispatcher（未批准 fail-closed）。
-- 后台任务与调度（迁移 18）：持久 Task 状态机（租约领取/续期/死亡恢复/有界重试/App 容量隔离/封闭类型注册表+参数 Schema 双重校验；`task/outbox.go` 无消费者，2026-08-14 审计删除）；`main.go` 已装配调度器，首个真实消费者为确认过期清扫（`governance.confirmation.expiry`，5 分钟周期，任务自续链，启动播种一轮）。
-- 测试基建：`internal/kernel/strictschema` 共享严格 JSON Schema 编译/校验（Registry 与任务类型注册表共用，消除重复实现）；7 个 fuzz 目标（种子随 `go test` 常驻）；task.Event 与 SSE 信封两组 golden 契约。
-- 平台接入统一入口：`internal/access` 定义标准 `InboundMessage`/`OutboundMessage` 与 `Hub.Intake`（校验 → 身份解析 → 会话找到或创建 → 消息入库）。所有用户消息必须先解析为内部用户与有效 AppMembership，不存在匿名发送者或匿名会话降级；Web 仅接受可信认证器提供的登录态，主程序未接入认证器时聊天创建入口返回 401。重复投递仍由同一幂等键在消息与 Echo 两侧去重。
-
-该批模块的存储/服务/调度代码与测试全部合并并通过 Go 全量测试、`go vet`、`-race`、Python 测试与 e2e 集成门禁（e2e 断言 Web 消息已持久化到会话台账）。
-
-## 2026-08-12 两模式包接入基线（hosted / isolated）
-
-按"包 = 逻辑单元（Tool/Service）+ 运行模式"的统一架构，落地两种运行模式的 Loader 接入（`ModeEmbedded` 已随 2026-08-14 审计清理删除，无任何宿主服务该模式）；**campus 完全重构为 hosted 内置包，无旧兼容**（`campus.Register` 直连注册已删除）：
-
-- hosted 生产 Backend（wazero）：`internal/kernel/loader/wasm_host.go` 用 wazero 沙箱执行 wasm32-wasi 工件——线性内存上限（默认 128 MiB）、WASI 裁剪（无文件系统/网络/环境变量）、每次调用独立实例（调用之间零共享状态）、stdin/stdout JSON 信封 ABI（`{tool_id,payload}` → `{ok,result,code,message}`）、宿主函数（host function）线性内存 ABI 投影（guest 以 `//go:wasmimport` 调用），治理上下文按调用绑定（guest 无法伪造 app_id/权限/调用链）。
-- campus hosted 化：业务逻辑在 `internal/tools/bus`（纯 Go 原子 Tool 包，`bus.Store` 端口）；guest（`internal/services/campus/guest`，wasm32-wasi，`//go:build wasip1`）复用 bus handler，存储经宿主函数 `ailuo.bus.query` 投影（App 隔离/权限在宿主侧强制）；工件 `go:embed` 进内核（`internal/services/campus/builtin`，guest 的 build 脚本直接输出到该目录、不保留副本），`campus.Manifest/ReadArtifact` 以 digest 锁定工件防漂移；链路为 Dispatcher → Loader.Acquire → WasmHost → campus guest → 宿主函数 → bus.Store，Dispatcher 治理（Schema/权限/深度/取消/幂等）与 App 策略不变。
-- `CapabilitySpec` 新增 `ToolID`：Dispatcher 把 Capability 直接执行的工具注入治理上下文 `ToolID`，运行时级 Handler（含 hosted guest）据此分发。
-- 信封错误码闭环：guest 闭式错误码（`invalid_argument`/`data_unavailable`/`data_incomplete`/`data_untrusted`/`data_expired`/`internal`）由宿主映射为稳定内部错误（数据治理错误保留类别），未知错误码按协议违例拒绝。
-- isolated 资源限额：`ProcessSpec.Limits`（RLIMIT_AS/RLIMIT_CPU/RLIMIT_NOFILE/RLIMIT_FSIZE）由锁固定；Linux 用 `prlimit` 在子进程启动后立即应用，非 Linux Unix 与 Windows 对非零限额 fail-closed；合理上限校验 + Linux 真实进程集成测试（FSIZE 生效）。
-- 参考 hosted 包 `extensions/strings.tool`（纯计算字符串工具）演示沙箱契约与分发形态；`extensions/*/build.ps1|build.sh` 交叉编译 wasm32-wasi 工件。
-- 测试：campus 完整 hosted 链路行为测试（journey 排序/空结果/App 隔离/快照治理/Schema/取消/深度）、WasmHost 单元与并发隔离测试、host function 投影测试；orchestrator 与 e2e 均改走真实 hosted 链路（装配时 Warmup 提前编译，避免占用 Run deadline）。
-
-## 2026-08-13 多入口身份归一化基线
-
-- 平台事件统一入口：`internal/access/ingress` 提供 `POST /api/v1/ingress/{platform}`——平台适配器把原始事件规范化为标准 `Event` 后推送，内核经 Hub 走"校验 → 身份解析 → 会话找到或创建 → 标准消息入库 → 幂等 Echo 创建"的受治理链路；平台永远不直接创建 Echo、不写消息库、不解析身份（与 Web 适配器同约束）。
-- 严格入站契约：64KiB 请求体上限、`DisallowUnknownFields` 严格解码、单 JSON 对象 EOF 校验、平台路径标识正则、字段级校验（platform_message_id/message_type/text≤4000/幂等键复用 `idempotency.ValidateKey`）；非法平台身份标识（含控制字符）映射 400 `invalid_platform_identity`（此前会误落 500）。
-- 跨入口共享错误映射：`access.WriteIntakeError`/`WriteEchoError`/`SecurityHeaders` 从 Web 适配器抽取为共享函数，web 与 ingress 共用同一公共错误契约（身份未绑定 401 `identity_not_found`、用户禁用 403 `user_disabled`、平台消息去重键冲突 409 `idempotency_conflict`、队列满 429+Retry-After、App 禁用/配置不可用 503）。
-- 幂等闭环：同一平台消息重复投递（相同 platform_message_id + 幂等键）在消息与 Echo 两侧同时去重，重放返回既有 echo 且 created=false；同一 platform_message_id 配不同幂等键被拒绝（409），不产生新消息/新 Echo。
-- 会话归一：使用 `session-v1-<sha256>` 版本化会话键；direct 按 App、平台、渠道、空间、平台会话与内部用户隔离，group 按 App、平台、渠道、空间与平台会话共享群历史。SQLite 原子确保会话类型、平台绑定与群成员，旧 `session-<user_id>`/`web-anonymous` 历史不会进入新上下文。
-- `identity-bind` 维护命令：`main.go` 新增幂等身份开通（CreateUser 已存在则继续、同一外部身份重复绑定同一用户视为成功重放、绑定其他用户明确报错、成员关系 upsert），支持 --user/--app/--platform/--space/--platform-user，用于控制面开通内部用户与平台绑定（2026-08-14 移除 --roles：角色管理面已删，无角色可引用）。
-- HTTP 接线：外层 ServeMux 组合——`/api/v1/ingress/` 前缀交给 ingress，其余路径交给 Web Access（健康检查、Echo/SSE、演示页面）。
-- 测试：ingress 覆盖身份解析/去重/会话连续性/幂等冲突/身份缺失/未绑定与禁用/畸形事件/错误映射，Hub 覆盖跨群、群私聊、跨平台、群成员原子补写与旧会话隔离，另保留 identity-bind 幂等与冲突测试。
-
-## 2026-08-13 agent Service 最终结构（Agent 亦为一种 Service，统一 Loader）
-
-- **agent 是与其他 Service 同级的 `internal/services/agent` 包，且以插件形态注册**：运行实现（`agent.Host`/`agent.Runtime`，implements `loader.Host`/`loader.Runtime`）与能力面注册（`agent.Register`：ServiceID=`agent`、核心能力 `agent.run`）同包内聚；`internal/kernel/loader` 不包含任何 agent 特化代码（`loader/agent_host.go` 与 `internal/kernel/subagent` 已删除）。Python Agent 进程经 isolated Runtime 形态受监督：进程启动、资源限额、优雅停止与强制清理复用 loader 导出的进程原语（`StartProcess`/`Process` 的 `Reap`/`Terminate`/`Kill`/`Release` 与 `ValidProcessDuration`/`ValidProcessLimits`）。
-- **统一 Loader（共享 Manager）**：`loader.New(hosts ...Host)` 支持同一运行模式多个宿主（内置 campus 的 WasmHost、内置 agent 的 isolated 宿主、installed 的 GRPCHost/IsolatedProcessHost 同池），每个宿主经 `Mode()` 声明模式；清单注册时按 `Verify` 精确绑定唯一宿主（零匹配/歧义匹配都在注册期 fail-closed），绑定结果固化在条目上，加载期不再重新选择。main.go 只装配一个 `runtimeLoader`：内置包与 installed 包统一 `RegisterInstalled`、统一 `Warmup`、统一 `Shutdown`，不再按包分叉多个 Manager。
-- **agent 插件化（Go 核心不写死 agent，只使用执行者契约）**：`agent.Record(host)` 返回安装清单（单一来源：与宿主清单一致），与 `campus.Record()` 同一 `RegisterInstalled` 调用注册；agent 记录只携带运行时清单（`agent.run` 依赖 Orchestrator，由 `agent.Register` 在装配完成后单独注册），`RegisterInstalled` 对运行时专用记录跳过空 Registry 批注册。预热清单由各清单的 `Pin` 声明经 `runtimeLoader.Pinned()` 统一推导，不再硬编码运行时标识。内核契约迁入 `internal/kernel/executor`：`Client`（`Run`/`Health`，线协议生成类型经别名暴露）、`ClientProvider`（`Client()` 取执行者协议客户端）与 `ProcessLifecycle`（`Done`/`Err` 崩溃监控），任何实现该契约的运行时都可充当内核 AI 执行者——换语言执行者 = 新 Host + Record + 实现契约，内核零改动。
-- **配置无 `With*` 选项函数**：`runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{...})` 与 `confirmation.NewService(store, confirmation.Config{...})` 使用显式 Config 结构体，无函数式选项、无分叉默认逻辑。
-- 健康检查内聚到 `internal/kernel/health`：`ExecutorChecker`（协议协商 + 指定模型 Provider 就绪）、`ExecutorAppChecker`（读取当前 App 配置的模型与启停状态再检查），与 `Combined` 一起构成 readiness。
-- 停止语义与 isolated 扩展一致：Spawn 模式先优雅终止等待（stopGrace），超时强制清理（terminateGrace）；连接模式只关闭 gRPC 连接、不拥有进程。e2e 全链路（Go → Python Agent → 子任务 → Capability → 存储 → SSE）真实走 `agent.Host` Spawn 路径。
-
-## 2026-08-13 最终仓库结构与 tools 共享基线
-
-- **仓库布局按层命名空间**：`internal/kernel`（L2 治理/编排/协议/Loader/存储端口）、`internal/access`/`internal/storage`/`internal/observe`（平台基础设施）、`internal/tools`（L3 共享原子 Tool 包）、`internal/services`（L3 业务 Service，对应设计文档 `services/` 目录形态）。`internal/bootstrap` 并入 `internal/services/campus/demo`，`internal/campustest` 并入 `internal/services/campus/campustest`。
-- **tools 共享契约**：Tool 是**全局目录 + 跨 Service 共享**的原子包——`Registry` 以 tool ID 全局注册（`ResolveTool` 校验调用方 Service 是否在 `ToolDependencies` 声明依赖），同一 Tool 的 handler 被所有声明依赖的服务复用；`internal/tools/bus`（stops/routes/journeys 三个原子 Tool + `bus.Store` 端口）是首个共享工具包，campus 经 `ToolDependencies` 依赖它。规则：可被第二个 Service 复用的原子能力进 `internal/tools`，服务专属装配留在 `internal/services`，工具包绝不反向 import 服务；既有 `campus.bus.*` Tool/Capability ID 是持久化契约保持稳定，**新增共享工具使用无服务前缀的 ID**（如 `http.fetch`）。
-- **装配单一来源**：campus 的 `campus.Host(store)`（WasmHost 工厂）与 `campus.Record()`（运行时+Tool+Service+Capability 安装清单）由 main 与测试共用，`campustest.RegisterHosted` 只负责测试专属的 Loader 生命周期与预热。
-- **严格 JSON 解码共享原语**：`internal/jsonutil`（`DecodeStrict`/`EnsureEOF`）统一平台接入、Agent 能力参数、安装清单三处此前各自实现的"未知字段拒绝 + 单 JSON 对象 EOF"校验。
-- **工件单副本 + guest 归队**：campus wasm 只提交 `internal/services/campus/builtin/campus.wasm`（`go:embed` 唯一来源），guest 源码与 build 脚本随服务内聚于 `internal/services/campus/guest`（`//go:build wasip1`，主机构建自动忽略），`extensions/` 只保留真正可安装的包（如 `strings.tool`）。
-
-## 2026-08-13 hosted 生产边界基线
-
-- **hosted CPU 时间预算（强制终止，非协作式）**：wazero 无指令级计数（已核实 v1.12 及其全部历史版本），进程内无法预占 guest 忙循环。因此用 wazero 公共特性 `WithCloseOnContextDone(true)`——编译器与解释器**编译期插入周期检查**，调用 context 取消/超时即关闭模块强制终止执行——叠加**每次调用执行时间预算**（`WasmHostConfig.CallTimeout`，默认 30 秒，0 不表示不限时而是取默认）。预算耗尽按 `context.DeadlineExceeded` 归类（内核既有稳定超时分类），不视为协议违例；测试用死循环 guest 工件（`testdata/busy.wasm`，Go 交叉编译）验证 300ms 预算内被强制终止，且预算经外部 Runtime Host 协议同样生效。
-- **外部 Runtime Host 进程产品接线**：`RuntimeHostBackend` 生产实现 `hostedRuntimeBackend`（宿主进程内 wazero 执行，含内存上限与执行时间预算）；`RuntimeHostProtocolServer` 服务端首次拥有真实 Backend（此前只有测试 fake）；全链路测试（真实 wazero 执行经完整协议被内核 GRPCHost 调用，含预算强制跨协议生效）；`main.go` 新增 `runtime-host` 子命令（`--install-root` + `--address`，独立信号上下文，loopback/Unix socket 强制）。**host function 是内核特权**：需要宿主函数投影的工件（内置 campus）只能内核进程内执行，外部宿主承载无宿主函数的 hosted 包——这是架构契约，不是降级路径。安装目录配置了 hosted 包而宿主地址缺失时内核拒绝就绪（fail-closed，无进程内回退）。2026-08-14 修复 catalog 侧接线：`ReadArtifact` 运行时比对收窄为身份（ID/Version/Mode），新增 `runtime_host_wiring_test.go`（`//go:build unix`）覆盖 真实安装目录 + 真实 Backend → GRPCHost → 协议 → wazero 全链路。
-- **Windows Job Object 资源限额**（替换原 fail-closed）：`process_limits_windows.go` 用 Job Object 强制 `MaxAddressBytes`（JOB_OBJECT_LIMIT_PROCESS_MEMORY，等效 RLIMIT_AS）与 `MaxCPUSeconds`（JOB_OBJECT_LIMIT_JOB_TIME + 耗尽终止动作，等效 RLIMIT_CPU）；无论限额是否为零都创建 Job 并附加 KILL_ON_JOB_CLOSE（等效 Unix 进程组清理，且内核崩溃后由 OS 兜底防孤儿）；Job 句柄由 `loader.Process` 持有、子进程回收后经 `Process.Release()` 释放（提前释放会立即误杀，这是 `applyProcessLimits` 签名改为返回释放器的原因）。`max_open_files`/`max_file_bytes`：Windows 无对应进程级原语，非零值 fail-closed（正确语义而非降级）。集成测试验证 1 秒 CPU 限额下死循环子进程被系统强制终止。其余平台（macOS/BSD、Plan 9 等）维持非零限额 fail-closed。
-
-## 2026-08-13 上下文与记忆装配基线（feat/context-assembly）
-
-- **新模块 `internal/kernel/contextasm`**：由 Go 决定模型本次看到什么，Python 只接收装配完成的系统提示，不持有会话数据库凭据。按 Run 构造确定性上下文快照——配置系统提示修订 + 当前标准消息 + 受限会话历史 + 当前 Capability 投影；知识库证据与授权长期记忆分属独立模块，本包不为其预留空壳端口。
-- **预算与裁剪**：条目数（默认 20）、单条字符（2000）、总字符（12000）、时间范围（默认不限）、提示总字节（默认 24 KiB，不超过协议 32 KiB 上限）五类预算；裁剪策略固定保留最新、丢弃最旧，超龄消息直接排除；日志与事件只记录条数/字符/裁剪数，正文永不进入日志、审计载荷或公共 API（正文只以 sha256 摘要进入来源版本）。
-- **确定性快照与来源版本固化**：摘要（sha256）覆盖 App、配置修订、基础系统提示、时区、当前消息、历史条目（message_id+正文摘要+时间）与排序后的 Capability 投影，墙钟时间不进入摘要——相同配置修订与数据版本必然产生相同摘要。迁移 19 为 `runs` 增加 `session_id/user_id/message_id/context_digest/context_sources`；执行开始时 `SetRunContext` 一次性固化（set-once，重试新 attempt 重置并重新装配）。`run.context` SSE 事件携带摘要与数量（不含正文）。
-- **会话上下文归属**：`RunRequest` 新增会话字段但 `json:"-"`（不进入 HTTP 契约），Web/ingress 在受治理 Intake 成功后填充，客户端无法伪造会话归属；重试自动携带会话上下文（恢复时按原会话重新装配）。子 Run 是干净工作区（不携带会话、不装配历史），但同样固化自身上下文摘要。
-- **错误契约**：历史读取失败映射 `context_unavailable`（可重试，无副作用前自动重试）；基础提示单独超出预算映射 `context_budget_exceeded`（配置错误，不可重试）。装配器是强制接线：`NewOrchestrator` 缺少会话历史来源时显式终止，无静默降级。
-- 测试：contextasm 单测（确定性/预算裁剪/App 隔离/删除消息/Blob 正文/非文本占位/无会话/超预算失败/错误路径）+ orchestrator 集成测试（历史进入系统提示、当前消息排除、摘要与来源版本持久化、run.context 事件、子 Run 干净工作区）+ sqlite 迁移 19 与 SetRunContext set-once 测试。
-
-## 2026-08-13 执行者契约与角色轴基线（feat/executor-contract）
-
-- **执行者是内核一等角色，agent 只是其一实现**：`internal/kernel/agentprotocol` 迁名为 `internal/kernel/executor`——内核唯一执行者契约。`executor.Client`（`Run` 双向流 + `Health`）是内核消费执行者的协议客户端面，`ClientProvider`/`ProcessLifecycle` 是运行时契约；executorv1 生成类型经别名（`Frame`/`StartRun`/`CapabilityCall` 等）只从契约包暴露，内核逻辑（orchestrator/health/contextasm/sqlite）不再直接引用生成包。任何能驱动受治理 Run 会话的实现（LLM 智能体、规划器、工作流、远程服务、其他语言）都可充当执行者；Python agent 只是第一个实现。
-- **角色轴进入 Loader 清单**：`Manifest.Role`（`capability` 能力提供者 / `executor` 执行者）注册期校验；`Runtime` 接口只保留生命周期面（Describe/Start/Health/Stop），能力执行面拆为独立 `Invoker` 接口，执行者面为 `executor.ClientProvider`——角色与执行面一致性在加载期强制（能力提供者必须实现 Invoker，执行者必须实现契约），`ErrUnsupportedMode` 路径消除（agent 不再有"不适用"的 Invoke）。`Manager.Handler` 只服务能力提供者；`Manager.Executor(ctx)` 解析本 Deployment 唯一执行者运行时（零/多个 fail-closed），`Lease.ID()` 暴露清单标识。
-- **执行者选择是解析而非硬编码**：main.go 经 `runtimeLoader.Executor(ctx)` 获取执行者租约并按契约取客户端，不再出现 `agent.RuntimeID`/手动契约断言；catalog 构造的 installed 清单一律声明 capability 角色（runtime_host.proto 即能力执行协议，执行者会话协议由未来专门宿主承载）。升级拒绝角色变更（角色是运行时身份的一部分）。
-- 测试：executor 契约协议测试迁移 + 角色负向测试（无角色清单拒绝、能力角色缺 Invoker 加载失败、执行者角色缺契约加载失败、无/多重执行者 fail-closed、升级角色变更拒绝）+ e2e 全链路真实走 `Manager.Executor` 解析路径。
-
-## 2026-08-13 执行者协议中性化（proto 去 agent 特化）
-
-- **线协议契约改名**：`proto/agent.proto` → `proto/executor.proto`（package `ailuo.agent.v1` → `ailuo.executor.v1`，service `AgentRuntime` → `ExecutorRuntime`，消息 `AgentFrame` → `ExecutorFrame`），Go 生成包 `gen/agentv1` → `gen/executorv1`（`executorv1` 别名），Python 生成 `agent_pb2*` → `executor_pb2*`、实现类 `AgentRuntime` → `ExecutorRuntime`。协议逻辑版本 2.0 → 3.0（双端一致，服务全名变更属破坏性，明确不保留旧兼容）。生成工具链：protoc 35.1（grpc_tools 内置）+ `protoc-gen-go`/`protoc-gen-go-grpc`（go install），Makefile `generate` 目标已更新；生成文件仍为提交构件。
-- **残留清理**：`agent/generated/__init__.py`、Makefile、README/docs 引用同步；全仓无 agentv1/agent.proto/agent_pb2 残留（staticcheck U1000 零未用代码）。`RuntimeID = "ailuo.agent"` 保留——这是该具体实现（Python Agent 运行时）的稳定标识，非协议名。
-
-## 2026-08-13 前端聊天 API 与 QQ 平台适配器基线
-
-- **产品前端聊天契约**：`internal/access/web` 新增 `POST /chat/stream`（SSE），对接独立产品仓库 LuoYing-Frontend 的流式协议（`track`/`text_delta`/`final`/`error`/`done`），内核 Echo 事件（echo.started/capability.completed/reply.delta/reply.final/run.failed）翻译为前端事件，不暴露内核事件类型。请求经受治理标准链路：严格解码（未知字段拒绝、单 JSON 对象、文本 1–4000 字符、附件非空拒绝）→ `Hub.Intake`（匿名）→ 幂等 Echo 创建 → 事件订阅 → 翻译写出。前端经 vite dev 代理 `/luoying-api` → Go（默认 8080），本仓库不搬运前端产物。
-- **共享事件中心**：`internal/access.EventHub` 按 App+Echo 键控的进程内事件订阅/发布（订阅先于调度、断线重放走存储层），由 Web 与平台适配器共享；`web.Server.Hub()` 暴露给装配。
-- **QQ 平台适配器**：`internal/access/qq`，进程内 OneBot v11 WebSocket 客户端（`gorilla/websocket` v1.5.3，stdlib 无 WS 客户端，固定版本）。消息事件先做 QQ Access 白名单准入（群号和私聊 QQ 号分开配置，空白名单 fail-closed），再规范化（array 段拼接/raw_message 剥离 CQ 码，群/私聊映射 space/user/session，`at` 段只匹配机器人 QQ 号）→ QQ Access 幂等开通内部用户/AppMembership/空间绑定 → `Hub.Intake` → 幂等 Echo → 订阅终态（先重放持久化事件再等实时，消除创建-订阅竞态）→ `send_group_msg`/`send_private_msg` 回发。未允许来源不会创建 Message/Echo，也不会自动回复；群聊仍需 @机器人。戳一戳只对允许来源处理。断线按 5 秒退避重连，适配器失败不影响内核就绪。AI珞根路径提供仅 loopback 的 QQ Access WebUI，配置持久化在迁移 22 中，保存后只热更新适配器；NapCat 登录、账号和 OneBot WebUI 保持独立。Token 仍来自 `AILUO_QQ_WS_TOKEN`，不进入管理 API。
-- 测试：前端聊天契约（事件翻译全链路、严格校验负向）+ 假 OneBot WS 服务端全链路（白名单准入、群消息→入站→Echo→回发、自动身份开通、@提及过滤、戳一戳群/私聊/戳他人忽略）+ 配置 CAS/热更新/迁移与消息规范化/CQ 剥离/切块单测。
-- 已知边界：匿名 Web 渠道共享保留匿名会话（跨浏览器用户共享会话历史，多用户 Web 身份未实现前是既有设计状态）。
-
-## 2026-08-13 渠道化系统提示与默认人格基线（feat/qq-platform）
-
-- **渠道提示作为 App 配置持久化**：`appconfig.Config` 新增 `ChannelPrompts map[string]string`（渠道 → 提示段），随配置修订入库（`app_config_revisions.channel_prompts`，迁移 20）并进入摘要哈希（`Normalize` 校验渠道键 `^[a-z][a-z0-9._-]*$`、提示非空且 ≤8KiB）；`RunRequest`/`RunRecord` 新增 `Channel`（`json:"-"` 不进 HTTP 契约，Web 填 `web`、QQ 填 `qq_group`/`qq_private`，`runs.channel` 迁移 20）。orchestrator 装配时按 `run.Channel` 从持久化配置取渠道提示追加到基础提示后（子 Run 不装配渠道）；恢复/重试按 Run 记录的渠道重装配，摘要仍确定性。
-- **默认人格种子**：`seed_prompt.go` 迁移 LuoYingRebuild 人格与渠道端介绍/输出规则——基础提示（珞樱人格 + 系统指令最高优先级 + 行为准则/限定 + 通用事实）+ 三渠道提示（web/qq_group/qq_private 端介绍与输出特点）。不迁移：输出协议（executor 协议已替代 RETURN_PROTOCOL）、创建者身份硬编码（由身份系统替代，待实现）、风格系统与技能提示（无对应治理支撑）。首次播种走 `store.Ensure` 入库，之后数据库为权威（main.go 种子不覆盖既有配置）。
-- 测试：appconfig 渠道提示修订摘要（map 顺序无关/变化必改修订/非法键与空值拒绝）+ sqlite 渠道提示 Ensure/CAS/Revision 往返 + orchestrator 集成（持久化渠道提示按 Run 渠道进入装配后系统提示、渠道持久化到 runs）。
-
-## 2026-08-14 ponytail 审计清理基线
-
-按 `/ponytail-audit`（不要任何冗余兼容代码，用最干净逻辑）对全仓库审计并清理：删除无消费者/仅测试消费的机制，合并重复实现，修复审计发现的正确性问题。全部改动经 Go 全量测试、`-race`、`go vet`、Python 测试与集成门禁验证。
-
-**修复（原审计的功能/正确性项，全部闭环）**：
-
-- 外部 Runtime Host 生产接线：协议身份只携带 ID/Version/Mode，后端不再伪造 Role/LockedDigest/Pin/IdleTTL——`catalog.ReadArtifact` 运行时比对从全清单（`sameRuntimeManifest`）收窄为身份；新增 `runtime_host_wiring_test.go`（`//go:build unix`）用真实安装目录（manifest/lock + 真实 digest）+ 真实 `NewHostedRuntimeBackend` 验证 GRPCHost → 协议 → wazero 全链路（此前只有 stub ReadArtifact 的协议测试，`main.go` 真实接线从未被覆盖）。
-- 迁移 21 改为非破坏性：不再 `DELETE FROM app_config_heads`（会丢弃控制面调优的当前配置指针），改为保留表头的 no-op；`TestMigrationV21PreservesAppConfigHeads` 覆盖 20→21 升级保留已调优头与渠道提示。
-- 队列 Run 孤儿确定性失败：`loadRunWork` 对 Echo 非 running 的 queued Run 不再静默跳过，经 `failOrphanQueuedRun` 原子置 failed（`recovery_failed`）并释放 `(app_id,echo_id,attempt)` 唯一约束槽位；`TestOrphanedQueuedRunIsDeterministicallyFailed` 覆盖。
-- WAL 模式 fail-closed：`PRAGMA journal_mode = WAL` 后查询实际模式，非 `wal`/`memory` 拒绝启动（只读/不支持 WAL 的文件系统不再静默回退 rollback journal）。
-- Orchestrator 无合成配置 fallback：`AppConfigSource` 为 nil 时构造期显式 panic（`fallbackAppConfig` 删除），部署遗漏接线不再静默 fail-open；测试装配点改为显式播种配置。
-- QQ 重放不再静默跳过：`GetEcho` 存储读取失败记 `observe.Warn`（`publicErrorCode` 区分 echo_not_found/echo_read_failed），实时流无终态回复同样记警告。
-
-**删除（无消费者或仅测试消费）**：
-
-- 机制：`internal/kernel/loader/embedded_host.go` + 测试、`ModeEmbedded` 模式、`task/outbox.go` + golden、`Manager.Upgrade/SweepIdle/ResetFailed/Unload/Snapshot` 与 `retired` 字段、`Orchestrator.Create/Run`（测试便利）、`CreateEchoRunIdempotent` 纯委托、Web `/api/v1/echoes` 端点（保留 v2）、`observe.ContextWithRequestIDs/RecordWriteError/Hijack/SanitizeText` 与 HTTP 冗余计数器、`appconfig.Policy` 接口、`runtime.ToolCaller` 接口、`task.Scheduler.List`/`TypeRegistry.Len()`。
-- 重复实现：Dispatcher `InvokeCapability`/`UseTool` 合并为单一 `route()`（Schema/权限/幂等/确认/审计共享）；ID 正则收敛 `internal/kernel/id` 单包；canonical JSON→sha256 收敛 `internal/jsonutil.CanonicalJSON/CanonicalDigest`；publicerror 合并单错误码表；`process_limits_other*`/`publish_file_other*` 各合并为单文件；`hostedRuntimeBackend` 不再复制 WasmHost 配置；observe 指标写合并；`governance_tasks.go` 抽取 `confirmationSweepRequest` 共享。
-- Python agent：`ProviderFactory` 死类型、`_validate_text/_valid_token/_valid_code` 的 bool 返回与 `not` 包装（改纯抛异常）、`_model_result` 重复 JSON 校验（上游已校验）、observe 导入期读 env（改默认值，`configure` 才读）、`max_cost_microusd < 0`（proto uint64 不可能为负）、6 处重复帧构造收敛为 `_frame`/`_failure` 助手。
-
-**保留（有测试的 PRD 基线，删除会破坏既有契约）**：identity 用户/绑定/成员/禁用控制面（CreateUser/BindExternalIdentity/UnbindExternalIdentity/ResolveIdentity/SetMembership/DisableUser——支撑 403 user_disabled 公共错误契约）、session.Service 读路径（contextasm 装配入口）、Blob 沙箱存储（安全负向测试基线，附件接入落地前的写入原语）。**2026-08-14 二次清理已删**：identity 角色/权限授予管理面（14 个 Service 方法 + 8 个存储方法 + `--roles` 旗标）、`InboundMessage.Attachments`（无生产者）、session.Service 写路径（CreateMessage/EditMessage，Hub 直写 Store）、`runtime.StaticAppPolicy`（测试替身移入 `runtimetest`）。
-
-## 2026-08-15 提示词 Service 与 V2 个性化迁移基线
-
-- **L3 prompt Service**：新增 `internal/services/prompt`，以 Service 形式注册 `prompt.preference.get/set/reset` 三个 Capability（读/写副作用，写走 Dispatcher 幂等与审计）；用户偏好按 `(app_id, user_id)` 持久化在 `user_prompt_settings`（迁移 23），默认值完全来自 V2。
-- **内核系统端口**：`echo.Config.Prompts` 接收窄接口 `PromptRenderer`。Orchestrator 在 Run 启动前调用它渲染基础提示、渠道提示与用户个性化段；contextasm 继续追加时间、历史和 Capability 投影。该渲染入口不注册为模型可见 Capability。
-- **V2 迁移范围**：`seed_prompt.go` 迁移完整 BASE_PERSONA_PROMPT 与 web/qq_group/qq_private 渠道规则；`internal/promptcatalog` 迁移七种基本风格与四项额外特征（每项三档）的全部正文。旧 RETURN_PROTOCOL、image_agent/文件工作区/knowledge 提示、发送者昵称与创建者硬编码不迁移，原因见 `seed_prompt.go` 注释。
-- **WebUI 提示词配置**：9178 控制面新增提示词选项编辑区，默认目录为 V2 正文；目录随 Deployment 配置保存并触发内核重启。基础系统提示可在 WebUI 编辑；默认值为 V2 原文，留空保存会恢复默认。
-- **既有部署升级**：main.go 在启动时补齐 campus App 配置中的 prompt Capability，并把 App 基础提示与渠道提示升级为本次迁移后的 V2 基线；内容未变化时 `CompareAndSwap` 保持原修订不变。
-
-## Known Production Blockers
-
-Unless the user explicitly reprioritizes, address these before expanding product breadth.
-
-### P0
-
-No unresolved item remains from the 2026-07-26 P0 audit. This is dated evidence, not a permanent waiver; a new failure, threat model, deployment boundary, or audit finding becomes P0 when its impact warrants it.
-
-### P1 — Designed But Not Yet Implemented
-
-- Hosted 包余下的生产边界：外部 hosted 包安装目录分发在非 Unix 平台受属主校验 fail-closed 限制（内置 hosted 包如 campus 不受影响）。CPU 执行时间预算（2026-08-13 基线）、外部 Runtime Host 进程接线（`runtime-host` 子命令）与 Windows Job Object 资源限额（2026-08-13 基线）已落地；wazero 指令级计数为上游缺失能力，进程内以时间预算强制替代，更细粒度预算依赖上游提供。
-- A production database adapter if deployment requirements exceed SQLite.
-- Authorized Zhihui Luojia ingestion adapter.
-
-Do not implement the alternative Tool/package-management comparison owned by another person unless the user explicitly reassigns it.
-
-## Repository Conventions
-
-- Keep kernel contracts under `internal/kernel`.
-- Keep platform access/storage/observability under `internal/access`, `internal/storage`, `internal/observe`.
-- Keep L3 能力面按角色分层：`internal/tools` 放**跨 Service 可复用**的原子 Tool 包（`internal/tools/bus` 是首个共享工具包）；`internal/services` 放业务 Service 装配（`agent`、`campus`），服务通过 `ToolDependencies` 依赖工具，工具包绝不反向依赖服务。
-- 内置服务的测试装配入口单一来源：campus 的 `campus.Host(store)`/`campus.Record()` 由 main 与 `internal/services/campus/campustest` 共用，不得在调用点重复构造边界。
-- Keep storage implementations behind domain/kernel ports; test adapters may live under `internal/storage/memory`.
-- Prefer the Go standard library unless a maintained dependency materially reduces security or correctness risk.
-- Pin dependencies intentionally, review release notes, and do not perform unrelated bulk upgrades.
-- Use structured serialization APIs. Do not build protocol or persisted data with ad hoc strings.
-- Validate inputs at every trust boundary and preserve wrapped internal error causes while returning safe external errors.
-- Thread `context.Context` through every blocking or external Go operation. Python async operations must preserve cancellation and deadlines.
-- Avoid hidden mutable global business state. Centralized immutable/configured infrastructure such as the logging facade is the exception, not a pattern for domain state.
-- No panic in production request paths. Startup invariant failures must produce explicit actionable errors.
-- Preserve user changes in a dirty worktree and do not rewrite unrelated code.
-- Never commit credentials, `.env`, local databases, real campus data, caches, virtual environments, or temporary output.
-- Do not manually edit generated files.
-
-## 提交与工程规范
-
-- 提交信息遵循 Conventional Commits，类型限定 `feat`/`fix`/`docs`/`style`/`refactor`/`perf`/`test`/`build`/`ci`/`chore`/`revert`。强制点位于 PR 标题与 squash 合并消息（`.github/workflows/pr-title.yml` 校验），开发分支上的逐条提交不强制。
-- `main` 仅接受 squash 合并（`main-protection` 规则集强制），main 历史中一条 PR 对应一条提交；合并前必须通过 required status checks（核心测试 ubuntu + Linux 完整质量门禁）。
-- 提交原子性：一个 commit 是一个自洽的逻辑单元——可独立构建、独立回滚（例如迁移 + 存取代码 + 测试同处一个 commit）。scope 纯净性由 squash 消息保证，不在开发分支上硬性禁止混 scope。
-- 分支命名使用前缀：`feat/`、`fix/`、`chore/`、`docs/`、`refactor/`。
-- 依赖升级由 Renovate 管理（`renovate.json5`）：Go / Python / GitHub Actions 的 minor/patch 各自分组、每周批量；major 单独 PR；升级一律人工评审（main 规则集要求 1 人审批），不自动合并。`grpcio-tools`/`protobuf` 属代码生成工具链，排除自动更新——升级必须人工重新生成并提交生成物。
-- 修改工程配置（CI、规则集、依赖机器人、模板）时，同步更新本文件与相关文档。
-
-## Testing And Quality Gates
-
-A happy-path test is not production evidence. Add focused negative and failure-path tests alongside implementation.
-
-Required coverage includes, where applicable:
-
-- registration atomicity and invalid specs;
-- strict schema and boundary validation;
-- App isolation on every read and write path;
-- permission narrowing and denial;
-- idempotency and duplicate delivery;
-- valid and invalid state transitions;
-- retries, restart recovery, and abandoned Runs;
-- cancellation, timeout, late results, and cleanup failure;
-- event ordering, SSE reconnect, slow subscribers, and backpressure;
-- data freshness, source revision, invalid references, and atomic ingestion;
-- model rate limit, timeout, malformed stream, partial ToolCall, and provider failure;
-- protocol mismatch, duplicate frames, oversized payloads, and unknown frame types;
-- concurrency-sensitive code under the race detector;
-- migrations from the previous schema, backup, and restore behavior;
-- logging and public-error non-disclosure.
-
-Before considering a change complete, run the relevant focused tests and then the full gates:
+# AI珞（爱珞）V3 Repository Instructions
+
+## Production Standard
+
+AI珞 V3 是长期维护的生产级项目。功能范围可以窄，但已实现的契约、信任边界、状态转换、持久化、错误路径和测试必须可长期保留。不得以 “MVP”“临时方案” 或 “以后重写” 降低正确性、安全性、耐久性、隔离性与可观测性。
+
+必须准确描述状态：区分设计、已实现基线、测试证据和剩余生产阻塞项。当前状态与路线图见 `docs/仓库状态与路线图.md`，不得把未实现设计描述为已完成。
+
+用户是验收负责人。涉及产品范围、机构数据授权、部署信任边界或外部协调的重大决定由用户确认；普通实现细节自主完成。
+
+## Required Reading
+
+架构、协议、持久化、Agent Runtime 或安全改动前依次阅读：
+
+1. `AGENTS.md`
+2. `docs/v3_overall_design.md`
+3. `docs/仓库状态与路线图.md`
+4. `docs/校巴场景设计.md`
+5. `docs/日志与可观测性设计.md`
+6. `docs/数据需求与授权清单.md`（真实数据或采集工作）
+
+设计文档不是实现证据；必须检查当前代码与测试。
+
+## Architecture
+
+- Go kernel 是唯一系统核心和事实来源，负责 Access、Echo/Run 编排、授权、Registry、路由、Loader、持久化、调度、审计、取消和恢复。
+- 前端与外部平台只连接 Go。Python Agent 只负责认知，通过 Go 投影的 Capability 请求动作，不拥有授权、系统状态、外部访问、调度或业务持久化。
+- Tool 是可复用原子能力；Service 是薄业务组合并暴露 Capability。Agent 和外部调用方只看 Capability，不看内部 Tool 目录。
+- 所有 Capability、Service、Tool 调用经过内核 Dispatcher，并携带受治理上下文。权限和数据范围只能收窄，内部调用不得提权。
+- `Deployment` 是物理安全边界；`App` 是业务、数据、权限、Agent 配置和会话边界。
+- 跨进程通信使用版本化 gRPC/Protobuf，不引入私有传输协议。
+- 逻辑边界不等于一组件一进程、一端口、一队列或一数据库。
+- 可变业务状态不得只存在内存。Go 在 Agent、Tool Host、客户端或进程崩溃后仍保持权威。
+- Subagent 是 Go 创建的持久 child Run，具有 `parent_run_id`、收窄权限、独立预算、受治理取消和显式结果路由；Python 不得私建未跟踪子任务。
+
+## Repository Layout
+
+- `internal/kernel`：治理、编排、协议、Registry、Loader 和领域端口。
+- `internal/access`、`internal/storage`、`internal/observe`：平台基础设施。
+- `internal/tools`：跨 Service 可复用的原子 Tool，绝不反向依赖 Service。
+- `internal/services`：业务 Service 与运行时装配；通过 `ToolDependencies` 使用 Tool。
+- 具体存储实现位于领域/内核窄端口之后；测试适配器可放 `internal/storage/memory`。
+- Python 环境和依赖仅由 `uv`、`agent/pyproject.toml` 与提交的 `agent/uv.lock` 管理。
+- 普通 Go/Web/SQLite/Python 开发路径须兼容 Windows、Linux、macOS；平台专属强安全边界在不支持的平台 fail closed。
+
+## Campus Bus Boundary
+
+- 智慧珞珈是校巴业务数据唯一权威来源。真实数据必须有书面授权，不抓取、逆向或导入非官方副本。
+- 数据先校验并写入 Go 管理的统一存储，再供业务使用；Service/Tool 依赖存储端口，不依赖具体同步方式或数据库。
+- 当前校巴业务没有用户状态需求，不发明匿名用户、登录流程或用户持久化；调用仍携带完整治理上下文。
+- 实时位置、到站预测、提醒和运营结论必须有明确授权字段，不得编造。
+- Demo 数据必须非权威、显式标记、与生产隔离且不能在生产环境误启用。
+- 过期、不完整、非权威数据必须返回明确受治理结果，不得静默当作当前事实。
+
+## Agent And Protocol Rules
+
+- 生产 Agent 使用真实模型和 Provider 原生 ToolCall；关键词、正则或固定流程不得伪装为 AI Agent。
+- Go 为每个 Run 计算精确 Capability 投影；Python 拒绝未投影调用、畸形参数、重复 call ID 和错配结果。
+- ToolCall 参数在 Go 信任边界再次按注册 Schema 验证；Provider strict mode 不是安全边界。
+- Run 必须具备 deadline、步骤、ToolCall、载荷、输出、Token 和可用成本预算。
+- Provider 调用具备超时、取消传播、稳定错误分类、限流、并发限制和有界退避；不安全副作用不自动重试。
+- readiness 反映真实模型/Provider 能力，不得只检查对象构造成功。
+- 原始 Provider 响应、Headers、提示词、消息和凭据不得进入日志或公共 API。
+- 多 ToolCall 的顺序与并发语义必须确定并有测试。
+- Protobuf 是版本化契约；修改 `proto/executor.proto` 后重新生成并提交 Go/Python 生成物，禁止手改生成文件。
+
+## Security And Data
+
+- 所有适用的存储读写、事件订阅、取消和审计查询在 API 与 SQL 边界按 `app_id` 隔离；UUID 唯一性不是授权。
+- 外部输入不可信。分配或持久化前限制 body、字段、字符串、集合、帧、事件和 gRPC 消息大小。
+- 使用严格解码和 Schema；除非版本化契约允许，否则拒绝未知字段。
+- 公共响应不得泄露内部错误、SQL、文件路径、Provider 响应、堆栈或秘密。
+- 不在普通日志或非授权存储记录凭据、认证头、Cookie、用户/模型正文、提示词、Tool 参数或 Tool 结果。
+- 审计不是普通日志，必须集中净化、App 隔离，并具备保留、访问与删除策略。
+- 非 loopback/远程边界需要认证传输和文档化信任模型；明文 gRPC 仅限显式同 Deployment loopback。
+- Secret 来自批准的秘密源，不提交、不启动回显，并具备轮换和撤销路径。
+
+## Durable State
+
+- Echo、Run、Task、Confirmation 等使用显式持久状态机；转换原子化，拒绝非法转换和重复终态写。
+- Run 持久化身份、父子关系、状态、attempt、deadline、配置版本、序号、预算和恢复元数据，不只是 goroutine。
+- Echo 创建与 Run 入队必须跨崩溃安全；调度使用持久 work/lease，不只依赖 `go func`。
+- 启动时确定性处理遗留 `running` 记录；重试、恢复、取消或失败策略必须明确。
+- 写入和外部副作用使用幂等键并支持重放安全；未知执行结果不得伪报成功或失败。
+- 取消和 deadline 贯穿 HTTP、Echo、Run、gRPC、Capability、Service、Tool 与存储。
+- 取消后的终态/清理只能用新的有界 context，不使用无界后台清理。
+- 慢或断开的 SSE 客户端不得阻塞 Run；事件持久可重放，驱逐与重连有测试。
+- 优雅关闭停止接入、取消或排空活动工作、保存状态、停止 Agent 子进程并在期限内关闭存储。
+
+## Storage And Contracts
+
+- 使用参数化 SQL；动态标识仅来自闭式代码 allowlist。
+- Schema 只做新的前向迁移，不改写已应用迁移；测试从上一版本升级。
+- 表结构使用外键、唯一约束、检查约束和包含 `app_id` 的复合键/索引，不只依赖 Go 校验。
+- 快照导入在原子替换前验证稳定 ID、引用、时间、来源修订、权威性、完整性和重复项；失败保留上一完整版本。
+- 时间使用文档化 UTC 表示，边界转换使用显式 IANA 时区。
+- 保持数据库适配端口；SQLite 支持不代表适合所有生产部署。
+- 公共 HTTP、SSE、Protobuf、Capability Schema、Tool spec 和持久事件都是版本化契约；优先加法兼容。
+- OpenAPI 必须描述真实请求、响应、错误、Headers、SSE 信封和状态行为。
+
+## Code And Observability
+
+- 所有手写代码注释使用中文；生成文件、`//go:build`、`//go:embed` 例外。
+- Go 日志统一使用 `internal/observe`，Python 使用 `agent.observe`，不创建组件私有日志系统。
+- 用户可见日志使用清晰中文；稳定字段键保持英文。
+- 适用时传播 `request_id`、`trace_id`、`app_id`、`echo_id`、`run_id`、`parent_run_id`、`call_id`、`capability_id`、`service_id`、`tool_id`。
+- 新敏感字段必须加入净化并有 console/JSON 负向测试。
+- 优先标准库；仅在维护良好的依赖显著降低风险时引入，并有意锁定版本。
+- 所有阻塞或外部 Go 操作传递 `context.Context`；Python async 保留取消和 deadline。
+- 生产请求路径不 panic；启动不变量失败返回明确可行动错误。
+- 保留 dirty worktree 中的用户改动，不改无关代码；不提交凭据、`.env`、本地数据库、真实校方数据、缓存、虚拟环境或临时输出。
+
+## Git Conventions
+
+- 提交信息遵循 Conventional Commits：`feat`、`fix`、`docs`、`style`、`refactor`、`perf`、`test`、`build`、`ci`、`chore`、`revert`。
+- `main` 使用 squash 合并和 required checks；一个提交应是可独立构建、回滚的自洽逻辑单元。
+- 分支使用 `feat/`、`fix/`、`chore/`、`docs/`、`refactor/` 前缀。
+- 依赖升级遵循 `renovate.json5`；Protobuf/grpc 生成工具链升级必须人工重新生成并评审。
+
+## Validation
+
+新增功能按适用范围覆盖：严格边界、App 隔离、权限收窄、幂等、状态转换、重启恢复、取消/超时、事件顺序、SSE 重连、背压、协议违例、并发/race、迁移/备份恢复和敏感信息不泄露。
+
+先跑最相关测试，再跑完整门禁：
 
 ```bash
 gofmt -w .
@@ -391,53 +135,8 @@ GOCACHE=/tmp/github.com/projectluojia/AI-Luo-Man-ga-gocache go test -tags=integr
 GOCACHE=/tmp/github.com/projectluojia/AI-Luo-Man-ga-gocache go test -tags=integration ./e2e -v -timeout=30s
 ```
 
-If a gate cannot run, report exactly why. Do not claim it passed. Do not weaken or delete tests merely to obtain green output.
+门禁无法运行时准确说明原因，不声称通过，不通过削弱测试换绿。
 
 ## Definition Of Done
 
-A task is complete only when:
-
-- the root cause or durable contract is addressed rather than patched around;
-- trust boundaries, App isolation, cancellation, concurrency, and failure behavior have been considered;
-- state changes are atomic and recoverable where required;
-- external errors are stable and safe;
-- observability is detailed without leaking protected content;
-- focused positive, negative, and failure-path tests exist;
-- affected design, OpenAPI, Protobuf, migrations, and operational documentation are updated;
-- formatting, unit tests, race tests, vet, Python tests, and applicable integration tests pass;
-- the final report distinguishes completed work, remaining production blockers, and validation evidence.
-
-Production-grade does not mean implementing every future feature in every task. It means that every feature actually implemented is safe to keep.
-
-## Communication And Decisions
-
-- Make ordinary technical decisions autonomously: package layout, types, algorithms, validation, tests, and implementation details do not require user confirmation.
-- Ask only about macro decisions that materially change product scope, ownership, institutional coordination, data authorization, delivery targets, deployment trust boundaries, or architecture ownership.
-- The user validates outcomes. Report important tradeoffs, migration impact, security impact, validation evidence, and genuine blockers directly.
-- When a macro decision is confirmed, update this file or the relevant design document so future sessions inherit it.
-- Do not overstate maturity. Say “implemented and verified” only with evidence, and say “designed” or “planned” when that is the truth.
-
-## Current Work Order
-
-When the user says only “continue”, begin with the highest unresolved P0 blocker. If no P0 exists, continue the P1 platform foundation before adding product breadth. The recommended order is:
-
-```text
-Product Host Backend wiring and hosted OS resource isolation
-  -> multi-entry identity/session/message normalization
-  -> authorized real-data ingestion
-  -> additional product capabilities
-```
-
-Preserve the current durable vertical slice:
-
-```text
-request context
-  -> App Capability policy
-  -> Registry Capability route
-  -> campus Service
-  -> campus bus Tool
-  -> Go-managed storage port
-  -> structured result
-```
-
-Web Access, Python Agent, future persistent storage adapters, and the authorized Zhihui Luojia ingestion adapter attach to this slice without moving its ownership boundaries.
+完成意味着：解决根因和可持久契约；考虑信任边界、App 隔离、取消、并发和失败；状态原子可恢复；公共错误稳定安全；可观测但不泄密；正向、负向与失败测试到位；设计/OpenAPI/迁移/运维文档同步；相关门禁通过；最终报告区分已完成、证据与剩余阻塞。
