@@ -21,6 +21,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access/ingress"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access/qq"
+	qqsettings "github.com/projectluojia/AI-Luo-Man-ga/internal/access/qq/settings"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access/web"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/appconfig"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/confirmation"
@@ -554,32 +555,47 @@ func run() (resultErr error) {
 	if err != nil {
 		return fmt.Errorf("configure platform access hub: %w", err)
 	}
-	webAccess := web.NewServer(ctx, orchestrator, store, readiness, reg, policy, campus.AppID, platformHub)
+	qqProvisioner, err := qq.NewProvisioner(identities)
+	if err != nil {
+		return fmt.Errorf("configure QQ identity provisioner: %w", err)
+	}
+	qqEvents := access.NewEventHub()
+	qqManager, err := qq.NewManager(store, func(settings qqsettings.Settings, connectionChange func(bool)) (qq.Runner, error) {
+		return qq.New(qq.Config{
+			AppID: settings.AppID, WSURL: settings.WSURL, Token: config.qqToken, BotQQID: settings.BotQQID,
+			AllowedGroupIDs: settings.AllowedGroupIDs, AllowedPrivateUserIDs: settings.AllowedPrivateUserIDs,
+			Provisioner: qqProvisioner, OnConnectionChange: connectionChange,
+		}, platformHub, qqEvents, orchestrator, store)
+	})
+	if err != nil {
+		return fmt.Errorf("configure QQ access manager: %w", err)
+	}
+	webAccess := web.NewServer(ctx, orchestrator, store, readiness, reg, policy, campus.AppID, platformHub,
+		web.WithEventHub(qqEvents), web.WithQQAccessAdmin(qqManager))
 	// 平台事件入口独立挂载：/api/v1/ingress/{platform} 由平台适配器规范化事件驱动，
 	// 其余路径全部交给 Web Access（健康检查、Echo/SSE、演示页面）。
 	ingressServer := ingress.NewServer(campus.AppID, platformHub, orchestrator)
 	if _, err := webAccess.Recover(ctx); err != nil {
 		return fmt.Errorf("recover durable runs: %w", err)
 	}
-	// QQ 平台适配器（可选）：OneBot v11 WebSocket 客户端，配置 AILUO_QQ_WS_URL
-	// 时启动。消息经标准 Intake 入站，回复经共享事件中心回发；适配器断线
-	// 自行重连，失败不影响内核就绪与退出。
-	if config.qqWSURL != "" {
-		qqAdapter, err := qq.New(qq.Config{
-			AppID: campus.AppID, WSURL: config.qqWSURL, Token: config.qqToken, BotQQID: config.qqBotID,
-		}, platformHub, webAccess.Hub(), orchestrator, store)
-		if err != nil {
-			return fmt.Errorf("configure QQ adapter: %w", err)
-		}
-		go func() {
-			if err := qqAdapter.Run(ctx); err != nil {
-				observe.Error(ctx, "QQ 适配器退出", err)
-			}
-		}()
-		observe.Info(ctx, "QQ 平台适配器已启动",
-			observe.StringAttr("ws_url", config.qqWSURL),
-		)
+	if err := qqManager.Start(ctx, qqsettings.Settings{
+		AppID: campus.AppID, Enabled: config.qqWSURL != "", WSURL: config.qqWSURL, BotQQID: config.qqBotID,
+		AllowedGroupIDs: config.qqAllowedGroupIDs, AllowedPrivateUserIDs: config.qqAllowedPrivateIDs,
+	}); err != nil {
+		return fmt.Errorf("start QQ access manager: %w", err)
 	}
+	defer func() {
+		shutdownContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		resultErr = errors.Join(resultErr, qqManager.Shutdown(shutdownContext))
+	}()
+	qqCurrent, qqStatus, _ := qqManager.Snapshot(ctx)
+	observe.Info(ctx, "QQ Access 管理器已就绪",
+		observe.BoolAttr("enabled", qqCurrent.Enabled),
+		observe.BoolAttr("running", qqStatus.Running),
+		observe.IntAttr("allowed_group_count", len(qqCurrent.AllowedGroupIDs)),
+		observe.IntAttr("allowed_private_user_count", len(qqCurrent.AllowedPrivateUserIDs)),
+	)
 	outer := http.NewServeMux()
 	outer.Handle("/api/v1/ingress/", ingressServer.Handler())
 	outer.Handle("/", webAccess.Handler())
@@ -620,23 +636,25 @@ func run() (resultErr error) {
 }
 
 type config struct {
-	httpAddress        string
-	agentAddress       string
-	pythonPath         string
-	databasePath       string
-	model              string
-	manageAgent        bool
-	loadDemoData       bool
-	environment        string
-	logLevel           slog.Level
-	logFormat          string
-	logSource          bool
-	logMaxValueLength  int
-	runtimeInstallRoot string
-	runtimeHostAddress string
-	qqWSURL            string
-	qqToken            string
-	qqBotID            string
+	httpAddress         string
+	agentAddress        string
+	pythonPath          string
+	databasePath        string
+	model               string
+	manageAgent         bool
+	loadDemoData        bool
+	environment         string
+	logLevel            slog.Level
+	logFormat           string
+	logSource           bool
+	logMaxValueLength   int
+	runtimeInstallRoot  string
+	runtimeHostAddress  string
+	qqWSURL             string
+	qqToken             string
+	qqBotID             string
+	qqAllowedGroupIDs   []string
+	qqAllowedPrivateIDs []string
 }
 
 func loadConfig() (config, error) {
@@ -664,23 +682,25 @@ func loadConfig() (config, error) {
 		return config{}, err
 	}
 	result := config{
-		httpAddress:        envOr("AILUO_HTTP_ADDRESS", "127.0.0.1:8080"),
-		agentAddress:       envOr("AILUO_AGENT_ADDRESS", "127.0.0.1:50051"),
-		pythonPath:         envOr("AILUO_PYTHON", agent.DefaultPythonPath(".")),
-		databasePath:       envOr("AILUO_DATABASE_PATH", "var/ailuo.db"),
-		model:              os.Getenv("AILUO_MODEL"),
-		manageAgent:        manageAgent,
-		loadDemoData:       loadDemoData,
-		environment:        envOr("AILUO_ENVIRONMENT", "development"),
-		logLevel:           logLevel,
-		logFormat:          envOr("AILUO_LOG_FORMAT", "console"),
-		logSource:          logSource,
-		logMaxValueLength:  logMaxValueLength,
-		runtimeInstallRoot: os.Getenv("AILUO_RUNTIME_INSTALL_ROOT"),
-		runtimeHostAddress: os.Getenv("AILUO_RUNTIME_HOST_ADDRESS"),
-		qqWSURL:            os.Getenv("AILUO_QQ_WS_URL"),
-		qqToken:            os.Getenv("AILUO_QQ_WS_TOKEN"),
-		qqBotID:            os.Getenv("AILUO_QQ_BOT_ID"),
+		httpAddress:         envOr("AILUO_HTTP_ADDRESS", "127.0.0.1:8080"),
+		agentAddress:        envOr("AILUO_AGENT_ADDRESS", "127.0.0.1:50051"),
+		pythonPath:          envOr("AILUO_PYTHON", agent.DefaultPythonPath(".")),
+		databasePath:        envOr("AILUO_DATABASE_PATH", "var/ailuo.db"),
+		model:               os.Getenv("AILUO_MODEL"),
+		manageAgent:         manageAgent,
+		loadDemoData:        loadDemoData,
+		environment:         envOr("AILUO_ENVIRONMENT", "development"),
+		logLevel:            logLevel,
+		logFormat:           envOr("AILUO_LOG_FORMAT", "console"),
+		logSource:           logSource,
+		logMaxValueLength:   logMaxValueLength,
+		runtimeInstallRoot:  os.Getenv("AILUO_RUNTIME_INSTALL_ROOT"),
+		runtimeHostAddress:  os.Getenv("AILUO_RUNTIME_HOST_ADDRESS"),
+		qqWSURL:             os.Getenv("AILUO_QQ_WS_URL"),
+		qqToken:             os.Getenv("AILUO_QQ_WS_TOKEN"),
+		qqBotID:             os.Getenv("AILUO_QQ_BOT_ID"),
+		qqAllowedGroupIDs:   envCSV("AILUO_QQ_ALLOWED_GROUP_IDS"),
+		qqAllowedPrivateIDs: envCSV("AILUO_QQ_ALLOWED_PRIVATE_USER_IDS"),
 	}
 	// Agent 进程规格要求绝对 Python 路径（Spawn 模式校验）；默认值与用户配置
 	// 都可能为相对路径，统一在装配前解析为绝对路径。
@@ -827,4 +847,18 @@ func envInt(name string, fallback int) (int, error) {
 		return 0, fmt.Errorf("配置错误：%s 必须是正整数", name)
 	}
 	return parsed, nil
+}
+
+func envCSV(name string) []string {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return nil
+	}
+	values := make([]string, 0)
+	for _, value := range strings.Split(raw, ",") {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			values = append(values, trimmed)
+		}
+	}
+	return values
 }

@@ -273,8 +273,8 @@ The App-scoped storage/public-error, durable Echo/Run state, Go trust-boundary/i
 
 - **产品前端聊天契约**：`internal/access/web` 新增 `POST /chat/stream`（SSE），对接独立产品仓库 LuoYing-Frontend 的流式协议（`track`/`text_delta`/`final`/`error`/`done`），内核 Echo 事件（echo.started/capability.completed/reply.delta/reply.final/run.failed）翻译为前端事件，不暴露内核事件类型。请求经受治理标准链路：严格解码（未知字段拒绝、单 JSON 对象、文本 1–4000 字符、附件非空拒绝）→ `Hub.Intake`（匿名）→ 幂等 Echo 创建 → 事件订阅 → 翻译写出。前端经 vite dev 代理 `/luoying-api` → Go（默认 8080），本仓库不搬运前端产物。
 - **共享事件中心**：`internal/access.EventHub` 按 App+Echo 键控的进程内事件订阅/发布（订阅先于调度、断线重放走存储层），由 Web 与平台适配器共享；`web.Server.Hub()` 暴露给装配。
-- **QQ 平台适配器**：`internal/access/qq`，进程内 OneBot v11 WebSocket 客户端（`gorilla/websocket` v1.5.3，stdlib 无 WS 客户端，固定版本）。消息事件规范化（array 段拼接/raw_message 剥离 CQ 码，群/私聊映射 space/user/session，`at` 段识别）→ `Hub.Intake`（平台身份经 identity-bind 解析，未绑定回发 `identity_not_found` 公共错误）→ 幂等 Echo → 订阅终态（先重放持久化事件再等实时，消除创建-订阅竞态）→ `send_group_msg`/`send_private_msg` 回发（回复剥离 CQ 注入码、超长按 4000 字符切块）。群聊默认只响应 @机器人 的消息（防刷屏）；戳一戳（notice/notify/poke，`target_id` 匹配 `AILUO_QQ_BOT_ID`）随机文案回复、群聊内 `group_poke` 戳回去，纯平台事件处理不经 Echo/Agent。断线按 5 秒退避重连，适配器失败不影响内核就绪。装配：`AILUO_QQ_WS_URL`/`AILUO_QQ_WS_TOKEN`/`AILUO_QQ_BOT_ID`（ws/wss 校验，URL 缺失时不启动）。
-- 测试：前端聊天契约（事件翻译全链路、严格校验负向）+ 假 OneBot WS 服务端全链路（群消息→入站→Echo→回发、未绑定身份公共错误、@提及过滤、戳一戳群/私聊/戳他人忽略）+ 消息规范化/CQ 剥离/切块单测。
+- **QQ 平台适配器**：`internal/access/qq`，进程内 OneBot v11 WebSocket 客户端（`gorilla/websocket` v1.5.3，stdlib 无 WS 客户端，固定版本）。消息事件先做 QQ Access 白名单准入（群号和私聊 QQ 号分开配置，空白名单 fail-closed），再规范化（array 段拼接/raw_message 剥离 CQ 码，群/私聊映射 space/user/session，`at` 段只匹配机器人 QQ 号）→ QQ Access 幂等开通内部用户/AppMembership/空间绑定 → `Hub.Intake` → 幂等 Echo → 订阅终态（先重放持久化事件再等实时，消除创建-订阅竞态）→ `send_group_msg`/`send_private_msg` 回发。未允许来源不会创建 Message/Echo，也不会自动回复；群聊仍需 @机器人。戳一戳只对允许来源处理。断线按 5 秒退避重连，适配器失败不影响内核就绪。AI珞根路径提供仅 loopback 的 QQ Access WebUI，配置持久化在迁移 22 中，保存后只热更新适配器；NapCat 登录、账号和 OneBot WebUI 保持独立。Token 仍来自 `AILUO_QQ_WS_TOKEN`，不进入管理 API。
+- 测试：前端聊天契约（事件翻译全链路、严格校验负向）+ 假 OneBot WS 服务端全链路（白名单准入、群消息→入站→Echo→回发、自动身份开通、@提及过滤、戳一戳群/私聊/戳他人忽略）+ 配置 CAS/热更新/迁移与消息规范化/CQ 剥离/切块单测。
 - 已知边界：匿名 Web 渠道共享保留匿名会话（跨浏览器用户共享会话历史，多用户 Web 身份未实现前是既有设计状态）。
 
 ## 2026-08-13 渠道化系统提示与默认人格基线（feat/qq-platform）

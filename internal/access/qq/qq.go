@@ -1,7 +1,7 @@
 // Package qq 提供 QQ 平台适配器（OneBot v11 WebSocket 客户端）：把 QQ 消息
 // 事件规范化为标准 InboundMessage 经 Hub 入站，订阅 Echo 事件并把最终回复
-// 回发。适配器不创建 Echo 之外的任何状态，不解析身份（身份绑定由控制面
-// identity-bind 完成，未绑定身份的消息被安全拒绝并回发公共错误）。
+// 回发。QQ 白名单与允许来源的身份开通都在本 Access 包完成，未允许来源不会
+// 进入 Hub、Message 或 Echo。
 package qq
 
 import (
@@ -19,6 +19,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access"
+	qqsettings "github.com/projectluojia/AI-Luo-Man-ga/internal/access/qq/settings"
 	kernelecho "github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
 )
@@ -39,13 +40,17 @@ var (
 
 // Config 装配 QQ 适配器。
 type Config struct {
-	AppID          string
-	WSURL          string
-	Token          string
-	BotQQID        string // 机器人 QQ 号：戳一戳识别 target_id、@提及匹配
-	DialTimeout    time.Duration
-	ReconnectDelay time.Duration
-	RunTimeout     time.Duration
+	AppID                 string
+	WSURL                 string
+	Token                 string
+	BotQQID               string // 机器人 QQ 号：戳一戳识别 target_id、@提及匹配
+	AllowedGroupIDs       []string
+	AllowedPrivateUserIDs []string
+	Provisioner           IdentityProvisioner
+	OnConnectionChange    func(bool)
+	DialTimeout           time.Duration
+	ReconnectDelay        time.Duration
+	RunTimeout            time.Duration
 }
 
 // EchoStarter 是适配器所需的 Echo 创建端口（*kernel/echo.Orchestrator 满足）。
@@ -61,11 +66,13 @@ type EchoReader interface {
 
 // Adapter 是进程内 QQ 适配器：一条 OneBot 连接，消息事件循环 + 回复回发。
 type Adapter struct {
-	cfg          Config
-	hub          *access.Hub
-	events       *access.EventHub
-	orchestrator EchoStarter
-	reader       EchoReader
+	cfg                 Config
+	hub                 *access.Hub
+	events              *access.EventHub
+	orchestrator        EchoStarter
+	reader              EchoReader
+	allowedGroups       map[string]struct{}
+	allowedPrivateUsers map[string]struct{}
 
 	conn   *websocket.Conn
 	sendMu sync.Mutex
@@ -73,14 +80,19 @@ type Adapter struct {
 
 // New 构造 QQ 适配器；配置缺失时返回显式错误。
 func New(cfg Config, hub *access.Hub, events *access.EventHub, orchestrator EchoStarter, reader EchoReader) (*Adapter, error) {
-	if cfg.AppID == "" || cfg.WSURL == "" || hub == nil || events == nil || orchestrator == nil || reader == nil {
+	if cfg.AppID == "" || cfg.WSURL == "" || cfg.Provisioner == nil || hub == nil || events == nil || orchestrator == nil || reader == nil {
 		return nil, errors.New("qq adapter configuration is incomplete")
 	}
-	botQQID, valid := normalizeQQID(cfg.BotQQID)
-	if !valid {
+	normalized, err := qqsettings.Normalize(qqsettings.Settings{
+		AppID: cfg.AppID, Enabled: true, WSURL: cfg.WSURL, BotQQID: cfg.BotQQID,
+		AllowedGroupIDs: cfg.AllowedGroupIDs, AllowedPrivateUserIDs: cfg.AllowedPrivateUserIDs,
+	})
+	if err != nil {
 		return nil, errors.New("qq adapter bot qq id is invalid")
 	}
-	cfg.BotQQID = botQQID
+	cfg.AppID, cfg.WSURL, cfg.BotQQID = normalized.AppID, normalized.WSURL, normalized.BotQQID
+	cfg.AllowedGroupIDs = normalized.AllowedGroupIDs
+	cfg.AllowedPrivateUserIDs = normalized.AllowedPrivateUserIDs
 
 	if cfg.DialTimeout == 0 {
 		cfg.DialTimeout = defaultDialTimeout
@@ -93,6 +105,7 @@ func New(cfg Config, hub *access.Hub, events *access.EventHub, orchestrator Echo
 	}
 	return &Adapter{
 		cfg: cfg, hub: hub, events: events, orchestrator: orchestrator, reader: reader,
+		allowedGroups: toSet(cfg.AllowedGroupIDs), allowedPrivateUsers: toSet(cfg.AllowedPrivateUserIDs),
 	}, nil
 }
 
@@ -157,6 +170,9 @@ func (a *Adapter) serve(ctx context.Context, echoEvents chan<- map[string]any) e
 	a.sendMu.Lock()
 	a.conn = conn
 	a.sendMu.Unlock()
+	if a.cfg.OnConnectionChange != nil {
+		a.cfg.OnConnectionChange(true)
+	}
 	connectionDone := make(chan struct{})
 	go func() {
 		select {
@@ -173,6 +189,9 @@ func (a *Adapter) serve(ctx context.Context, echoEvents chan<- map[string]any) e
 		}
 		a.sendMu.Unlock()
 		_ = conn.Close()
+		if a.cfg.OnConnectionChange != nil {
+			a.cfg.OnConnectionChange(false)
+		}
 	}()
 	observe.Info(ctx, "QQ 适配器已连接 OneBot",
 		observe.StringAttr("app_id", a.cfg.AppID),
@@ -217,6 +236,14 @@ func (a *Adapter) handleEvent(ctx context.Context, raw map[string]any) {
 	}
 	if inbound.PlatformChannel == "group" && !mentioned {
 		return // 群聊默认只响应 @提及，避免刷屏
+	}
+	if !a.allowed(inbound) {
+		return
+	}
+	if err := a.cfg.Provisioner.EnsureQQIdentity(ctx, *inbound); err != nil {
+		_, _, message := access.IntakePublicError(err)
+		a.reply(ctx, inbound, message)
+		return
 	}
 	intake, err := a.hub.Intake(ctx, *inbound)
 	if err != nil {
@@ -356,6 +383,29 @@ func (a *Adapter) send(payload any) error {
 		return errors.New("qq adapter is not connected")
 	}
 	return a.conn.WriteJSON(payload)
+}
+
+func (a *Adapter) allowed(inbound *access.InboundMessage) bool {
+	if inbound == nil {
+		return false
+	}
+	if inbound.PlatformChannel == "group" {
+		_, allowed := a.allowedGroups[inbound.PlatformSpaceID]
+		return allowed
+	}
+	if inbound.PlatformChannel == "private" {
+		_, allowed := a.allowedPrivateUsers[inbound.PlatformUserID]
+		return allowed
+	}
+	return false
+}
+
+func toSet(values []string) map[string]struct{} {
+	result := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		result[value] = struct{}{}
+	}
+	return result
 }
 
 // sanitizeReply 把回复转为 QQ 安全纯文本：移除可能注入 CQ 码的片段并折叠空行。
@@ -507,18 +557,5 @@ func onebotInt(value string) int64 {
 	return number
 }
 func normalizeQQID(value string) (string, bool) {
-	if value == "" || strings.TrimSpace(value) != value {
-		return "", false
-	}
-
-	number, err := strconv.ParseUint(value, 10, 64)
-	if err != nil || number == 0 {
-		return "", false
-	}
-
-	normalized := strconv.FormatUint(number, 10)
-	if normalized != value {
-		return "", false
-	}
-	return normalized, true
+	return qqsettings.NormalizeQQID(value)
 }

@@ -120,6 +120,10 @@ func (r stubResolver) ResolveIdentity(context.Context, string, string, string, s
 	}, nil
 }
 
+type testProvisioner struct{}
+
+func (testProvisioner) EnsureQQIdentity(context.Context, access.InboundMessage) error { return nil }
+
 func newQQTestHub(t *testing.T, store *sqlite.Store, resolver access.IdentityResolver) *access.Hub {
 	t.Helper()
 	hub, err := access.NewHub("campus-services", store, resolver)
@@ -173,6 +177,7 @@ func TestNewRejectsInvalidBotQQID(t *testing.T) {
 		t.Run(botQQID, func(t *testing.T) {
 			_, err := New(Config{
 				AppID: "campus-services", WSURL: "ws://127.0.0.1:1", BotQQID: botQQID,
+				Provisioner: testProvisioner{},
 			}, hub, access.NewEventHub(), orchestrator, store)
 			if err == nil {
 				t.Fatal("invalid bot QQ ID was accepted")
@@ -196,6 +201,7 @@ func TestQQAdapterIntakesAndReplies(t *testing.T) {
 	orchestrator := &qqFakeOrchestrator{store: store, created: make(chan struct{})}
 	adapter, err := New(Config{
 		AppID: "campus-services", WSURL: bot.wsURL(), Token: "secret", BotQQID: testBotQQID,
+		AllowedGroupIDs: []string{"12345"}, AllowedPrivateUserIDs: []string{"67890"}, Provisioner: testProvisioner{},
 		DialTimeout: 2 * time.Second, ReconnectDelay: 50 * time.Millisecond, RunTimeout: 5 * time.Second,
 	}, hub, events, orchestrator, store)
 	if err != nil {
@@ -272,6 +278,7 @@ func TestQQAdapterProcessesEchoesConcurrently(t *testing.T) {
 	}
 	adapter, err := New(Config{
 		AppID: "campus-services", WSURL: bot.wsURL(), BotQQID: testBotQQID,
+		AllowedGroupIDs: []string{"12345"}, AllowedPrivateUserIDs: []string{"67890"}, Provisioner: testProvisioner{},
 		DialTimeout: 2 * time.Second, ReconnectDelay: 50 * time.Millisecond, RunTimeout: 5 * time.Second,
 	}, hub, access.NewEventHub(), orchestrator, store)
 	if err != nil {
@@ -334,6 +341,7 @@ func TestQQAdapterRepliesPublicErrorOnUnboundIdentity(t *testing.T) {
 	hub := newQQTestHub(t, store, stubResolver{err: identity.ErrNotFound})
 	adapter, err := New(Config{
 		AppID: "campus-services", WSURL: bot.wsURL(), BotQQID: testBotQQID,
+		AllowedGroupIDs: []string{"12345"}, AllowedPrivateUserIDs: []string{"67890"}, Provisioner: testProvisioner{},
 		DialTimeout: 2 * time.Second, ReconnectDelay: 50 * time.Millisecond, RunTimeout: 5 * time.Second,
 	}, hub, access.NewEventHub(), &qqFakeOrchestrator{store: store, created: make(chan struct{})}, store)
 	if err != nil {

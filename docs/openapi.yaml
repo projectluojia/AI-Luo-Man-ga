@@ -151,6 +151,48 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+  /api/v1/admin/qq-access:
+    get:
+      summary: Read local QQ Access configuration
+      description: >-
+        Loopback-only management endpoint embedded in the Go process. It manages
+        AI珞's OneBot connection and admission lists; NapCat login and its WebUI
+        remain independent. Tokens are never returned.
+      responses:
+        "200":
+          description: Current QQ Access settings and runtime status.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QQAccessSnapshot"
+        "403":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+    put:
+      summary: Compare-and-swap QQ Access configuration
+      description: Saving a valid configuration persists it and hot-restarts only the QQ Access adapter.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/QQAccessUpdate"
+      responses:
+        "200":
+          description: Configuration applied.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QQAccessSnapshot"
+        "400":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
   /chat/stream:
     post:
       summary: Stream a product-frontend chat message (SSE)
@@ -349,6 +391,75 @@ components:
         type: string
         format: uuid
   schemas:
+    QQAccessUpdate:
+      type: object
+      additionalProperties: false
+      required: [generation, enabled, ws_url, bot_qq_id, allowed_group_ids, allowed_private_user_ids]
+      properties:
+        generation:
+          type: integer
+          minimum: 1
+        enabled:
+          type: boolean
+        ws_url:
+          type: string
+          description: OneBot v11 ws:// or wss:// endpoint exposed independently by NapCat.
+        bot_qq_id:
+          type: string
+          pattern: "^[1-9][0-9]{0,19}$"
+        allowed_group_ids:
+          type: array
+          maxItems: 1024
+          items:
+            type: string
+            pattern: "^[1-9][0-9]{0,19}$"
+        allowed_private_user_ids:
+          type: array
+          maxItems: 1024
+          items:
+            type: string
+            pattern: "^[1-9][0-9]{0,19}$"
+    QQAccessSnapshot:
+      type: object
+      additionalProperties: false
+      required: [settings, runtime]
+      properties:
+        settings:
+          type: object
+          additionalProperties: false
+          required: [app_id, generation, enabled, ws_url, bot_qq_id, allowed_group_ids, allowed_private_user_ids, updated_at]
+          properties:
+            app_id:
+              type: string
+            generation:
+              type: integer
+              minimum: 1
+            enabled:
+              type: boolean
+            ws_url:
+              type: string
+            bot_qq_id:
+              type: string
+            allowed_group_ids:
+              type: array
+              items:
+                type: string
+            allowed_private_user_ids:
+              type: array
+              items:
+                type: string
+            updated_at:
+              type: string
+              format: date-time
+        runtime:
+          type: object
+          additionalProperties: false
+          required: [running, connected]
+          properties:
+            running:
+              type: boolean
+            connected:
+              type: boolean
     PlatformEvent:
       type: object
       additionalProperties: false

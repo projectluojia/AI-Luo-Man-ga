@@ -3,20 +3,52 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>AI珞（爱珞） V3 Web Access 测试</title>
+  <meta name="color-scheme" content="light">
+  <title>AI珞 · 接入控制台</title>
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-  <main>
-    <h1>AI珞（爱珞） V3 · Web Access 测试</h1>
-    <p id="status">检查服务状态中…</p>
-    <form id="form">
-      <label for="message">消息</label>
-      <textarea id="message" rows="4" required>请查询从文理学部到信息学部下一班校巴。</textarea>
-      <button type="submit">创建 Echo</button>
-      <button type="button" id="cancel" disabled>取消</button>
-    </form>
-    <pre id="output" aria-live="polite"></pre>
+  <main class="shell">
+    <header class="masthead">
+      <div class="eyebrow"><span class="signal-dot"></span> AI珞 V3 · 本机控制台</div>
+      <h1>让消息沿着<br><em>许可的路径</em>抵达。</h1>
+      <p class="intro">这里管理 AI珞 自己的 QQ 接入。NapCat 的登录、账号和 OneBot 服务仍由 NapCat 独立配置。</p>
+    </header>
+
+    <section class="layout" aria-label="QQ 接入设置">
+      <aside class="rail">
+        <div class="status-panel">
+          <div class="panel-label">连接状态</div>
+          <div id="connection" class="connection offline"><span class="status-light"></span><strong>读取中</strong></div>
+          <p id="status-detail">正在读取本地配置…</p>
+        </div>
+        <div class="route-map" aria-hidden="true">
+          <span class="route-line"></span><i class="route-node node-a"></i><i class="route-node node-b"></i><i class="route-node node-c"></i>
+          <span class="route-caption">QQ Access<br><b>→</b> Hub <b>→</b> Echo</span>
+        </div>
+        <div class="side-note"><span>安全边界</span><p>只有本机浏览器可以修改准入清单。未获准的消息不会进入会话或 AI 处理。</p></div>
+      </aside>
+
+      <form id="qq-form" class="settings-form">
+        <div class="form-heading"><div><div class="panel-label">QQ 接入</div><h2>配置消息入口</h2></div><button id="save" class="save-button" type="submit">保存并应用 <span>↗</span></button></div>
+        <div id="notice" class="notice" role="status" aria-live="polite"></div>
+
+        <label class="switch-row"><span><strong>启用 QQ 接入</strong><small>AI珞将连接 NapCat 暴露的 OneBot 正向 WebSocket。</small></span><input id="enabled" type="checkbox"><span class="switch" aria-hidden="true"></span></label>
+
+        <div class="field-grid">
+          <label class="field"><span>OneBot WebSocket 地址</span><input id="ws-url" name="ws_url" type="url" placeholder="ws://127.0.0.1:3001" autocomplete="off"><small>NapCat 的地址；NapCat 不由 AI珞 启动。</small></label>
+          <label class="field"><span>机器人 QQ 号</span><input id="bot-qq-id" name="bot_qq_id" inputmode="numeric" placeholder="例如 2647414417" autocomplete="off"><small>用于识别 @机器人 和戳一戳。</small></label>
+        </div>
+
+        <div class="allowlist-heading"><div><div class="panel-label">准入清单</div><h2>谁可以说话</h2></div><span class="closed-mark">空白 = 全部拒绝</span></div>
+        <div class="field-grid">
+          <label class="field"><span>允许的群号</span><textarea id="groups" rows="7" placeholder="每行一个群号"></textarea><small>群内仍需 @机器人；未列出的群完全静默。</small></label>
+          <label class="field"><span>允许私聊的 QQ 号</span><textarea id="private-users" rows="7" placeholder="每行一个 QQ 号"></textarea><small>每行一个 QQ 号；不会自动放开其他人。</small></label>
+        </div>
+
+        <footer class="form-footer"><span id="revision">配置读取中</span><span>密钥继续由环境变量管理，不在页面显示。</span></footer>
+      </form>
+    </section>
   </main>
   <script src="/app.js"></script>
 </body>

@@ -1216,3 +1216,9 @@ SQLite 迁移 8 新增 `bus_current_snapshots`，以 `(app_id, revision)` 外键
 演示快照继续使用独立的 `demo-fixture-*` 修订、`demo-fixture-not-zhihui-luojia` 来源和 `authoritative=false`。生产配置同时启用 `AILUO_LOAD_DEMO_DATA` 会在启动配置校验阶段失败；开发环境可以载入演示快照来验证治理路径，但查询只会得到明确的非权威数据错误，不会得到可作为当前事实的班次或线路。
 
 已应用迁移 9 前存在的来源修订无法追溯证明“完整”，升级时默认 `complete=false` 并保持 fail-closed；必须由受授权适配器重新导入并验证后才能成为活动权威快照。校方尚未确认的更新频率和最大允许延迟不会由代码擅自假定，当前新鲜度严格以授权来源提供且通过校验的 `valid_until` 为准。
+
+### QQ Access 与 NapCat 边界实现基线（2026-08-15）
+
+NapCat 保持独立运行、独立登录和独立 WebUI；AI珞只连接 NapCat 暴露的 OneBot v11 正向 WebSocket。AI珞根路径的本机 WebUI 只管理自己的 `enabled`、OneBot 地址、机器人 QQ 号、允许群号和允许私聊 QQ 号，Token 仍由环境变量提供且不会回显。配置以迁移 22 的 App-scoped 当前记录和 generation CAS 持久化，保存后有界停止旧 QQ Adapter 并热启动新 Adapter，不重启 Go 主进程。
+
+QQ 白名单是 `internal/access/qq` 的 Access admission，不是 Kernel、Service、Tool 或 Capability 权限：群聊先要求 @机器人，再检查群号；私聊检查 QQ 号；戳一戳使用同一准入规则。空白名单 fail-closed，未允许来源在进入 `Hub`、Message、Echo 之前被静默丢弃。允许来源由 QQ Access 幂等创建稳定内部用户、AppMembership 和空间绑定后再进入统一 `Hub.Intake`，不需要手工 `identity-bind`；身份事实仍由 Go 管理的 identity Store 持久化。
