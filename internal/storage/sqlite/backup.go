@@ -218,6 +218,16 @@ FROM runs LIMIT 0`
 			return fmt.Errorf("close Capability audit schema probe: %w", err)
 		}
 	}
+	if version >= 24 {
+		runColumns = `
+SELECT app_id,run_id,run_group_id,echo_id,parent_run_id,origin_call_id,attempt,status,
+       model,model_config_version,protocol_version,max_steps,max_tool_calls,max_input_tokens,
+       max_output_tokens,max_total_tokens,max_output_bytes,max_cost_microusd,provider_timeout_ms,
+       used_input_tokens,used_output_tokens,used_total_tokens,used_cost_microusd,
+       used_provider_retries,available_at,capability_scope,permission_scope,result_message,
+       task_message,last_agent_sequence
+FROM runs LIMIT 0`
+	}
 	rows, err := db.QueryContext(ctx, runColumns)
 	if err != nil {
 		return fmt.Errorf("required Run schema is unavailable")

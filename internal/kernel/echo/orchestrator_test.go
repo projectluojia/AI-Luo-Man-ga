@@ -149,8 +149,11 @@ func (a *cancellingNestedAgent) Run(stream executorv1.ExecutorRuntime_RunServer)
 	}); err != nil {
 		return err
 	}
-	_, err = stream.Recv()
-	return err
+	if _, err = stream.Recv(); err != nil {
+		return err
+	}
+	<-stream.Context().Done()
+	return stream.Context().Err()
 }
 
 func (a *nestedRunAgent) Run(stream executorv1.ExecutorRuntime_RunServer) error {
@@ -245,7 +248,7 @@ func (a *nestedRunAgent) runRoot(stream executorv1.ExecutorRuntime_RunServer, st
 		return err
 	}
 	if !result.GetCapabilityResult().GetSuccess() ||
-		!strings.Contains(string(result.GetCapabilityResult().GetPayloadJson()), `"result":"子任务完成"`) {
+		!strings.Contains(string(result.GetCapabilityResult().GetPayloadJson()), `"status":"queued"`) {
 		a.testing.Errorf("root subagent result=%#v", result.GetCapabilityResult())
 	}
 	if err := stream.Send(usageFrame(start, 3, 6, 3)); err != nil {
@@ -936,11 +939,21 @@ func TestOrchestratorRunsOneGovernedChildWithNarrowedProjection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	work, err := orchestrator.Runnable(ctx, 10)
+	if err != nil || len(work) != 1 || work[0].Run.ParentRunID == "" || work[0].InputMessage != "只查询线路并总结" {
+		t.Fatalf("异步 child 队列=%#v err=%v", work, err)
+	}
+	if err := orchestrator.RunQueued(ctx, work[0], func(event kernelecho.Event) error {
+		delivered = append(delivered, event)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
 	record, persisted, err := store.GetEcho(ctx, campus.AppID, echoID)
 	if err != nil || record.Status != kernelecho.StatusSucceeded || record.FinalMessage != "父任务完成" {
 		t.Fatalf("Echo=%#v err=%v", record, err)
 	}
-	if len(delivered) != 5 || len(persisted) != len(delivered) {
+	if len(delivered) < 8 || len(persisted) != len(delivered) {
 		t.Fatalf("delivered=%#v persisted=%#v", delivered, persisted)
 	}
 	runs, err := store.ListRuns(ctx, campus.AppID, echoID)
@@ -1034,15 +1047,50 @@ func TestParentCancellationPropagatesAndPersistsChildThenRootTerminalState(t *te
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	go func() {
 		<-agentServer.childStarted
 		cancel()
 	}()
-	echoID, err := runOrchestrator(orchestrator, ctx, kernelecho.RunRequest{
+	echoID, created, err := orchestrator.CreateIdempotent(ctx, kernelecho.RunRequest{
 		Message: "取消父任务", IdempotencyKey: "cancel-governed-child",
-	}, nil)
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("run error=%v", err)
+	})
+	if err != nil || !created {
+		t.Fatalf("create Echo id=%q created=%v err=%v", echoID, created, err)
+	}
+	rootDone := make(chan error, 1)
+	go func() {
+		rootDone <- orchestrator.RunExisting(ctx, echoID, kernelecho.RunRequest{}, nil)
+	}()
+	var childWork kernelecho.RunWork
+	deadline := time.Now().Add(2 * time.Second)
+	for childWork.Run.ID == "" && time.Now().Before(deadline) {
+		work, runnableErr := orchestrator.Runnable(context.Background(), 10)
+		if runnableErr != nil {
+			t.Fatal(runnableErr)
+		}
+		for _, item := range work {
+			if item.Run.ParentRunID != "" {
+				childWork = item
+				break
+			}
+		}
+		if childWork.Run.ID == "" {
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+	if childWork.Run.ID == "" {
+		t.Fatal("child Run 未进入持久队列")
+	}
+	childDone := make(chan error, 1)
+	go func() {
+		childDone <- orchestrator.RunQueued(ctx, childWork, nil)
+	}()
+	if err := <-rootDone; !errors.Is(err, context.Canceled) {
+		t.Fatalf("root run error=%v", err)
+	}
+	if err := <-childDone; !errors.Is(err, context.Canceled) {
+		t.Fatalf("child run error=%v", err)
 	}
 	record, _, readErr := store.GetEcho(context.Background(), campus.AppID, echoID)
 	if readErr != nil || record.Status != kernelecho.StatusCancelled {
@@ -1806,5 +1854,69 @@ func TestOrchestratorDoesNotExposeAgentOrCapabilityInternalErrors(t *testing.T) 
 	}
 	if audits[0].ErrorMessage != "当前 App 未启用该 Capability" {
 		t.Fatalf("audit stored unsafe error: %#v", audits[0])
+	}
+}
+
+type promptCaptureRenderer struct {
+	requests chan kernelecho.PromptRenderRequest
+}
+
+func (r promptCaptureRenderer) RenderSystemPrompt(_ context.Context, request kernelecho.PromptRenderRequest) (string, error) {
+	r.requests <- request
+	return request.BaseSystemPrompt + "\n\n【基本风格与语调】\n测试：渲染成功", nil
+}
+
+func TestOrchestratorUsesPromptServiceRenderer(t *testing.T) {
+	listener := bufconn.Listen(1 << 20)
+	grpcServer := grpc.NewServer()
+	agentServer := &configCaptureAgent{starts: make(chan *executorv1.StartRun, 1)}
+	executorv1.RegisterExecutorRuntimeServer(grpcServer, agentServer)
+	go grpcServer.Serve(listener)
+	t.Cleanup(grpcServer.Stop)
+	connection, err := grpc.DialContext(t.Context(), "bufnet",
+		grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) { return listener.Dial() }),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = connection.Close() })
+	store, err := sqlite.Open(filepath.Join(t.TempDir(), "prompt-renderer.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	seed := orchestratorAppConfig()
+	seed.ChannelPrompts = map[string]string{"qq_group": "【群聊规则】"}
+	if _, _, err := store.Ensure(t.Context(), seed); err != nil {
+		t.Fatal(err)
+	}
+	policy, err := appconfig.NewPersistentPolicy(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg := registry.New()
+	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{})
+	renderer := promptCaptureRenderer{requests: make(chan kernelecho.PromptRenderRequest, 1)}
+	orchestrator := kernelecho.NewOrchestrator(
+		executorv1.NewExecutorRuntimeClient(connection), reg, dispatcher, policy, store,
+		kernelecho.Config{
+			AppID: campus.AppID, AppConfigSource: store, RunTimeout: 5 * time.Second,
+			Context: newSessionSource(t, store), Prompts: renderer,
+		},
+	)
+	if _, err := runOrchestrator(orchestrator, t.Context(), kernelecho.RunRequest{
+		Message: "提示词服务测试", IdempotencyKey: "prompt-service-render", Channel: "qq_group",
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	request := <-renderer.requests
+	if request.AppID != campus.AppID || request.Channel != "qq_group" || request.ChannelPrompts["qq_group"] != "【群聊规则】" {
+		t.Fatalf("render request=%#v", request)
+	}
+	start := <-agentServer.starts
+	if !strings.Contains(start.GetSystemPrompt(), "测试：渲染成功") ||
+		strings.Contains(start.GetSystemPrompt(), "【群聊规则】") {
+		t.Fatalf("渲染结果未进入最终系统提示或渠道段被重复拼接: %q", start.GetSystemPrompt())
 	}
 }

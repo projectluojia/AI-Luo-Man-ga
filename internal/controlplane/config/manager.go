@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-const maxSettingsFileBytes = 64 << 10
+const maxSettingsFileBytes = 256 << 10
 
 // Service 持久化本机配置与秘密，并向内核监督循环发布配置修订。
 type Service struct {

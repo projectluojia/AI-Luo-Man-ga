@@ -32,6 +32,10 @@ type EchoReader interface {
 	ListRuns(context.Context, string, string) ([]kernelecho.RunRecord, error)
 }
 
+type runReader interface {
+	GetRun(context.Context, string, string) (kernelecho.RunRecord, error)
+}
+
 type HealthChecker interface {
 	Ping(context.Context) error
 }
@@ -42,6 +46,10 @@ type EchoOrchestrator interface {
 	Recoverable(context.Context) ([]kernelecho.RunWork, error)
 	Runnable(context.Context, int) ([]kernelecho.RunWork, error)
 	Cancel(context.Context, string) (bool, error)
+}
+
+type queuedRunOrchestrator interface {
+	RunQueued(context.Context, kernelecho.RunWork, kernelecho.EventEmitter) error
 }
 
 type Server struct {
@@ -58,7 +66,7 @@ type Server struct {
 	qqAccessAdmin    QQAccessAdmin
 	hub              *access.EventHub
 	activeMu         sync.Mutex
-	active           map[echoKey]context.CancelFunc
+	active           map[runKey]context.CancelFunc
 	pending          map[echoKey]context.Context
 	activeWG         sync.WaitGroup
 	workerWG         sync.WaitGroup
@@ -78,6 +86,13 @@ const (
 type echoKey struct {
 	appID  string
 	echoID string
+}
+
+// runKey 允许同一 Echo 的 root 与 child Run 同时处于活动状态。
+type runKey struct {
+	appID  string
+	echoID string
+	runID  string
 }
 
 func NewServer(
@@ -103,7 +118,7 @@ func NewServer(
 		appID:        appID,
 		platformHub:  platformHub,
 		hub:          access.NewEventHub(),
-		active:       make(map[echoKey]context.CancelFunc),
+		active:       make(map[runKey]context.CancelFunc),
 		pending:      make(map[echoKey]context.Context),
 		workSignal:   make(chan struct{}, 1),
 		accepting:    true,
@@ -126,6 +141,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/v1/admin/qq-access", s.updateQQAccess)
 	mux.HandleFunc("POST /api/v2/echoes", s.createEcho)
 	mux.HandleFunc("GET /api/v1/echoes/{echo_id}", s.getEcho)
+	mux.HandleFunc("GET /api/v1/runs/{run_id}", s.getRun)
 	mux.HandleFunc("DELETE /api/v1/echoes/{echo_id}", s.cancelEcho)
 	mux.HandleFunc("GET /api/v1/echoes/{echo_id}/events", s.echoEvents)
 	// 产品前端聊天契约（LuoYing-Frontend）：流式接口，经标准 Intake → Echo →
@@ -317,7 +333,14 @@ func (s *Server) queueEcho(parent context.Context, echoID string) {
 	key := echoKey{appID: s.appID, echoID: echoID}
 	runContext := observe.Copy(parent, s.schedulerCtx)
 	s.activeMu.Lock()
-	if _, active := s.active[key]; !active {
+	active := false
+	for run := range s.active {
+		if run.appID == key.appID && run.echoID == key.echoID {
+			active = true
+			break
+		}
+	}
+	if !active {
 		s.pending[key] = runContext
 	}
 	s.activeMu.Unlock()
@@ -369,19 +392,21 @@ func (s *Server) runNext() bool {
 	s.activeMu.Lock()
 	if s.schedulerCtx.Err() == nil {
 		for index := range work {
-			key := echoKey{appID: s.appID, echoID: work[index].Run.EchoID}
+			key := runKey{appID: s.appID, echoID: work[index].Run.EchoID, runID: work[index].Run.ID}
 			if _, running := s.active[key]; running {
 				continue
 			}
 			selected = &work[index]
 			base := s.schedulerCtx
-			if pendingContext, exists := s.pending[key]; exists {
+			echo := echoKey{appID: key.appID, echoID: key.echoID}
+			if pendingContext, exists := s.pending[echo]; exists && work[index].Run.ParentRunID == "" {
 				base = observe.Copy(pendingContext, s.schedulerCtx)
-				delete(s.pending, key)
+				delete(s.pending, echo)
 			}
 			runContext = observe.With(base,
 				observe.StringAttr("app_id", s.appID),
 				observe.StringAttr("echo_id", key.echoID),
+				observe.StringAttr("run_id", key.runID),
 			)
 			runContext, cancel = context.WithCancel(runContext)
 			s.active[key] = cancel
@@ -393,23 +418,43 @@ func (s *Server) runNext() bool {
 	if selected == nil {
 		return false
 	}
-	key := echoKey{appID: s.appID, echoID: selected.Run.EchoID}
-	runErr := s.orchestrator.RunExisting(runContext, key.echoID, kernelecho.RunRequest{Message: selected.InputMessage}, func(event kernelecho.Event) error {
+	key := runKey{appID: s.appID, echoID: selected.Run.EchoID, runID: selected.Run.ID}
+	emit := func(event kernelecho.Event) error {
 		s.hub.Publish(event)
 		return nil
-	})
-	cancel()
+	}
+	var runErr error
+	if queued, ok := s.orchestrator.(queuedRunOrchestrator); ok {
+		runErr = queued.RunQueued(runContext, *selected, emit)
+	} else {
+		runErr = s.orchestrator.RunExisting(runContext, key.echoID, kernelecho.RunRequest{Message: selected.InputMessage}, emit)
+	}
 	s.activeMu.Lock()
 	delete(s.active, key)
 	s.activeMu.Unlock()
 	s.activeWG.Done()
-	s.hub.Finish(s.appID, key.echoID)
+	s.finishEchoIfTerminal(runContext, key.echoID)
+	cancel()
 	if runErr != nil && !errors.Is(runErr, context.Canceled) && !errors.Is(runErr, kernelecho.ErrInvalidTransition) &&
 		!errors.Is(runErr, kernelecho.ErrRunRetryScheduled) {
 		observe.Error(runContext, "持久调度 Run 执行失败", runErr)
 	}
 	s.signalWork()
 	return true
+}
+
+func (s *Server) finishEchoIfTerminal(ctx context.Context, echoID string) {
+	record, _, err := s.reader.GetEcho(ctx, s.appID, echoID)
+	if err != nil {
+		observe.Error(ctx, "Run 结束后读取 Echo 状态失败", err,
+			observe.StringAttr("app_id", s.appID),
+			observe.StringAttr("echo_id", echoID),
+		)
+		return
+	}
+	if record.Status != kernelecho.StatusRunning {
+		s.hub.Finish(s.appID, echoID)
+	}
 }
 
 func (s *Server) signalWork() {
@@ -524,7 +569,34 @@ func (s *Server) getEcho(writer http.ResponseWriter, request *http.Request) {
 		access.WriteJSON(writer, http.StatusInternalServerError, map[string]string{"code": "internal_error", "message": "Echo 状态读取失败"})
 		return
 	}
-	access.WriteJSON(writer, http.StatusOK, map[string]any{"echo": record, "runs": runs, "events": events})
+	publicRuns := make([]kernelecho.PublicRun, 0, len(runs))
+	for _, run := range runs {
+		publicRuns = append(publicRuns, kernelecho.PublicRunRecord(run))
+	}
+	access.WriteJSON(writer, http.StatusOK, map[string]any{"echo": record, "runs": publicRuns, "events": events})
+}
+
+func (s *Server) getRun(writer http.ResponseWriter, request *http.Request) {
+	reader, ok := s.reader.(runReader)
+	if !ok {
+		access.WriteJSON(writer, http.StatusServiceUnavailable, map[string]string{"code": "run_status_unavailable", "message": "Run 状态查询暂不可用"})
+		return
+	}
+	runID := request.PathValue("run_id")
+	run, err := reader.GetRun(request.Context(), s.appID, runID)
+	if err != nil {
+		if errors.Is(err, kernelecho.ErrRunNotFound) {
+			access.WriteJSON(writer, http.StatusNotFound, map[string]string{"code": "run_not_found", "message": "Run 不存在"})
+			return
+		}
+		observe.Error(request.Context(), "读取 Run 状态失败", err,
+			observe.StringAttr("app_id", s.appID),
+			observe.StringAttr("run_id", runID),
+		)
+		access.WriteJSON(writer, http.StatusInternalServerError, map[string]string{"code": "internal_error", "message": "Run 状态读取失败"})
+		return
+	}
+	access.WriteJSON(writer, http.StatusOK, map[string]any{"run": kernelecho.PublicRunRecord(run)})
 }
 
 func (s *Server) cancelEcho(writer http.ResponseWriter, request *http.Request) {
@@ -541,7 +613,6 @@ func (s *Server) cancelEcho(writer http.ResponseWriter, request *http.Request) {
 		access.WriteJSON(writer, http.StatusNotFound, map[string]string{"code": "echo_not_found", "message": "Echo 不存在"})
 		return
 	}
-	key := echoKey{appID: s.appID, echoID: echoID}
 	cancelledQueued, err := s.orchestrator.Cancel(request.Context(), echoID)
 	if err != nil {
 		if errors.Is(err, kernelecho.ErrInvalidTransition) {
@@ -556,16 +627,21 @@ func (s *Server) cancelEcho(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	s.activeMu.Lock()
-	cancel := s.active[key]
+	cancellations := make([]context.CancelFunc, 0, 2)
+	for key, cancel := range s.active {
+		if key.appID == s.appID && key.echoID == echoID {
+			cancellations = append(cancellations, cancel)
+		}
+	}
 	s.activeMu.Unlock()
-	if cancel == nil && !cancelledQueued {
+	if len(cancellations) == 0 && !cancelledQueued {
 		observe.Warn(request.Context(), "无法取消未运行的 Echo",
 			observe.StringAttr("echo_id", echoID),
 		)
 		access.WriteJSON(writer, http.StatusConflict, map[string]string{"code": "echo_not_running", "message": "Echo 当前不在运行"})
 		return
 	}
-	if cancel != nil {
+	for _, cancel := range cancellations {
 		cancel()
 	}
 	observe.Info(request.Context(), "已请求取消 Echo",

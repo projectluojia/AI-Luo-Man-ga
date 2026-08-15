@@ -99,7 +99,7 @@ func (s *Server) updateConfig(writer http.ResponseWriter, request *http.Request)
 	if !authorizeLocal(writer, request) {
 		return
 	}
-	request.Body = http.MaxBytesReader(writer, request.Body, 64<<10)
+	request.Body = http.MaxBytesReader(writer, request.Body, 256<<10)
 	decoder := json.NewDecoder(request.Body)
 	decoder.DisallowUnknownFields()
 	var input SaveInput

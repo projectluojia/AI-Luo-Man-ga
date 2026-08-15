@@ -2,6 +2,7 @@ const byId = id => document.getElementById(id);
 const form = byId('settings-form');
 const saveButton = byId('save-button');
 const notice = byId('notice');
+const promptCatalogEditor = byId('prompt-catalog-editor');
 let revision = 0;
 
 function listValue(value) {
@@ -21,6 +22,60 @@ function parseQuickReplies(value) {
     if (!trigger || !reply) throw new Error(`快速回复格式错误：${line}`);
     return {trigger, reply};
   });
+}
+
+function escapeHTML(value) {
+  return String(value ?? '').replace(/[&<>"']/g, character => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  })[character]);
+}
+
+function renderPromptCatalog(catalog, preserveInputs = false) {
+  if (preserveInputs) return;
+  const styles = (catalog?.basic_styles || []).map(style => `
+    <div class="prompt-card" data-style-key="${escapeHTML(style.key)}">
+      <div class="prompt-card-head">
+        <strong>基本风格 · ${escapeHTML(style.key)}</strong>
+        <input data-field="style-name" value="${escapeHTML(style.name)}" maxlength="64" aria-label="${escapeHTML(style.key)} 名称">
+      </div>
+      <textarea data-field="style-text" rows="5" maxlength="2048" aria-label="${escapeHTML(style.key)} 提示词正文">${escapeHTML(style.text)}</textarea>
+    </div>`).join('');
+  const traits = (catalog?.extra_traits || []).map(trait => `
+    <div class="prompt-card prompt-trait-card" data-trait-key="${escapeHTML(trait.key)}">
+      <div class="prompt-card-head">
+        <strong>额外特征 · ${escapeHTML(trait.key)}</strong>
+        <input data-field="trait-name" value="${escapeHTML(trait.name)}" maxlength="64" aria-label="${escapeHTML(trait.key)} 名称">
+      </div>
+      <div class="trait-level-grid">
+        <label><span>增强</span><textarea data-level="enhanced" rows="5" maxlength="2048">${escapeHTML(trait.enhanced)}</textarea></label>
+        <label><span>默认</span><textarea data-level="default" rows="5" maxlength="2048">${escapeHTML(trait.default)}</textarea></label>
+        <label><span>减弱</span><textarea data-level="reduced" rows="5" maxlength="2048">${escapeHTML(trait.reduced)}</textarea></label>
+      </div>
+    </div>`).join('');
+  promptCatalogEditor.innerHTML = `<div class="prompt-catalog-block">${styles}</div><div class="prompt-catalog-block">${traits}</div>`;
+}
+
+function collectPromptCatalog() {
+  const basicStyles = [...promptCatalogEditor.querySelectorAll('[data-style-key]')].map(card => {
+    const key = card.dataset.styleKey;
+    const name = card.querySelector('[data-field="style-name"]').value.trim();
+    const text = card.querySelector('[data-field="style-text"]').value.trim();
+    if (!name || !text) throw new Error(`基本风格 ${key} 的名称和正文不能为空`);
+    return {key, name, text};
+  });
+  const extraTraits = [...promptCatalogEditor.querySelectorAll('[data-trait-key]')].map(card => {
+    const key = card.dataset.traitKey;
+    const name = card.querySelector('[data-field="trait-name"]').value.trim();
+    const levels = {};
+    for (const field of card.querySelectorAll('[data-level]')) {
+      const value = field.value.trim();
+      if (!value) throw new Error(`额外特征 ${key} 的「${field.dataset.level}」档不能为空`);
+      levels[field.dataset.level] = value;
+    }
+    if (!name) throw new Error(`额外特征 ${key} 的名称不能为空`);
+    return {key, name, ...levels};
+  });
+  return {basic_styles: basicStyles, extra_traits: extraTraits};
 }
 
 function setNotice(message, kind = '') {
@@ -48,7 +103,9 @@ function render(snapshot, preserveInputs = false) {
     byId('qq-private-users').value = (settings.qq_allowed_private_user_ids || []).join('\n');
     byId('qq-quick-replies').value = quickReplyLines(settings.qq_quick_replies);
     byId('qq-poke-replies').value = (settings.qq_poke_replies || []).join('\n');
+    byId('prompt-base').value = settings.base_system_prompt || '';
   }
+  renderPromptCatalog(settings.prompt_catalog, preserveInputs);
   byId('model-key-state').textContent = snapshot.model_api_key_configured ? '已安全保存' : '未配置';
   byId('qq-token-state').textContent = snapshot.qq_ws_token_configured ? '已安全保存' : '未配置';
   byId('revision').textContent = revision ? `配置修订 ${revision}` : '首次配置';
@@ -76,8 +133,10 @@ form.addEventListener('submit', async event => {
   saveButton.disabled = true;
   setNotice('正在安全保存，并通知主进程应用配置…');
   let quickReplies;
+  let promptCatalog;
   try {
     quickReplies = parseQuickReplies(byId('qq-quick-replies').value);
+    promptCatalog = collectPromptCatalog();
   } catch (error) {
     setNotice(error.message, 'error');
     saveButton.disabled = false;
@@ -103,7 +162,9 @@ form.addEventListener('submit', async event => {
     qq_allowed_group_ids: listValue(byId('qq-groups').value),
     qq_allowed_private_user_ids: listValue(byId('qq-private-users').value),
     qq_quick_replies: quickReplies,
-    qq_poke_replies: listValue(byId('qq-poke-replies').value)
+    qq_poke_replies: listValue(byId('qq-poke-replies').value),
+    prompt_catalog: promptCatalog,
+    base_system_prompt: byId('prompt-base').value.trim()
   };
   try {
     const snapshot = await readJSON(await fetch('/api/v1/config', {method: 'PUT', headers: {'Content-Type': 'application/json', Accept: 'application/json'}, body: JSON.stringify(payload)}));

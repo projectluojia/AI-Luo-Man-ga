@@ -286,11 +286,90 @@ func (a *Adapter) handleEvent(ctx context.Context, raw map[string]any) {
 		a.reply(ctx, inbound, "处理失败，请稍后重试")
 		return
 	}
-	reply := a.waitReply(ctx, echoID)
-	if reply == "" {
-		return
+	a.forwardReplies(ctx, inbound, echoID)
+}
+
+// forwardReplies 按持久事件序号转发 root 回复和子 Agent 生命周期通知。
+// root 回复保留群聊 @，子 Agent 的创建与终态通知始终使用纯文本发送。
+func (a *Adapter) forwardReplies(ctx context.Context, inbound *access.InboundMessage, echoID string) {
+	live, unsubscribe := a.events.Subscribe(a.cfg.AppID, echoID)
+	defer unsubscribe()
+	hasChild := false
+	childTerminal := false
+	rootTerminal := false
+	lastSequence := uint64(0)
+	process := func(event kernelecho.Event) {
+		if event.Sequence <= lastSequence {
+			return
+		}
+		lastSequence = event.Sequence
+		switch event.Type {
+		case "subagent.created":
+			hasChild = true
+			a.replyPlain(ctx, inbound, "已派出子 Agent")
+		case "subagent.completed":
+			hasChild, childTerminal = true, true
+			var payload struct {
+				Text string `json:"text"`
+			}
+			if json.Unmarshal(event.Payload, &payload) == nil && strings.TrimSpace(payload.Text) != "" {
+				a.replyPlain(ctx, inbound, "子 Agent 已完成："+payload.Text)
+			} else {
+				a.replyPlain(ctx, inbound, "子 Agent 已完成")
+			}
+		case "subagent.failed":
+			hasChild, childTerminal = true, true
+			var payload struct {
+				Message string `json:"message"`
+			}
+			message := "子 Agent 执行失败"
+			if json.Unmarshal(event.Payload, &payload) == nil && strings.TrimSpace(payload.Message) != "" {
+				message = payload.Message
+			}
+			a.replyPlain(ctx, inbound, message)
+		case "subagent.cancelled":
+			hasChild, childTerminal = true, true
+			a.replyPlain(ctx, inbound, "子 Agent 已取消")
+		default:
+			if reply := terminalReply(event); reply != nil {
+				rootTerminal = true
+				a.reply(ctx, inbound, *reply)
+			}
+		}
 	}
-	a.reply(ctx, inbound, reply)
+	record, persisted, err := a.reader.GetEcho(ctx, a.cfg.AppID, echoID)
+	if err == nil {
+		for _, event := range persisted {
+			process(event)
+		}
+		if record.Status != kernelecho.StatusRunning || (rootTerminal && (!hasChild || childTerminal)) {
+			return
+		}
+	} else {
+		observe.Warn(ctx, "QQ 回复重放读取失败，继续等待实时事件",
+			observe.StringAttr("echo_id", echoID),
+			observe.StringAttr("echo_error", publicErrorCode(err)),
+		)
+	}
+	timer := time.NewTimer(a.cfg.RunTimeout)
+	defer timer.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+			observe.Warn(ctx, "等待 QQ Echo 事件超时", observe.StringAttr("echo_id", echoID))
+			return
+		case event, open := <-live:
+			if !open {
+				return
+			}
+			process(event)
+			if rootTerminal && (!hasChild || childTerminal) {
+				return
+			}
+		}
+	}
 }
 
 // waitReply 订阅 Echo 事件并等待终态：先重放已持久化事件，再等待实时事件。

@@ -862,7 +862,7 @@ SubagentPolicy
 
 当前已实现的是这一设计的窄而可保留基线：只允许一层且每个 parent 最多创建一个 child。`agent.run` 注册为 `external` SideEffect，输入只含最长 4000 字符的任务与至多 16 个 Capability ID；父 `run_id` 和 `call_id` 只能取自 Go 治理的调用上下文，不能由模型参数指定。root 在接受时持久化 Capability/权限上界，后续只允许因当前 App 策略撤权而收窄，不能因运行中新增授权而扩张；child 的 Capability 必须同时属于该上界与当前策略，权限取所选 Capability 要求的并集并再次验证为 parent/current 的子集。
 
-child 使用独立 `run_id`、`run_group_id`、lease、Agent 序号、Token/输出/成本预算与终态。初始策略把 parent 的时间、步数、ToolCall、Token、输出和非零成本上限各取不大于一半，并限制为一个 child，因此树的资源扩张有显式有限上界；child 不自动重试。取消和 deadline 共用父调用上下文，持久化终态顺序为 child 后 root。child 的最终正文只写入 Go 管理的 Run 业务状态并序列化为 parent 的 `CapabilityResult`，不会写 Echo 事件、SSE 或公共 Run 状态响应；`agent.run` 审计中的 `task` 和结果正文键由集中清洗器脱敏。即使恶意 Agent 发送未投影或嵌套的调用，Go 仍会拒绝并写入按 Run 隔离的审计。
+child 使用独立 `run_id`、`run_group_id`、lease、Agent 序号、Token/输出/成本预算与终态。初始策略把 parent 的时间、步数、ToolCall、Token、输出和非零成本上限各取不大于一半，并限制为一个 child，因此树的资源扩张有显式有限上界；child 不自动重试。`agent.run` 只原子创建持久化的 queued child 并立即返回 `run_id/status`，root 不等待 child；root 可通过只读 `agent.status` 查询直接 child，也可直接结束。child 的任务正文只保存在 Go 管理的 Run 业务状态中；生命周期、Capability 完成步骤、模型输出片段与最终安全结果通过 App-scoped Echo 事件和 Run 查询对 Access 可见，但提示词、思维链和 Tool 参数不公开。`agent.run` 审计中的 `task` 由集中清洗器脱敏。即使恶意 Agent 发送未投影或嵌套的调用，Go 仍会拒绝并写入按 Run 隔离的审计。
 
 ### 运行结束
 
@@ -1129,7 +1129,7 @@ queued -> running -> succeeded | failed | cancelled | timed_out
 queued -> cancelled
 ```
 
-root Run 与 Echo 的终态在同一事务内提交；仍有 queued/running child 时 root 不能结束。child 终态只更新 child Run，成功结果显式路由回 parent，不改变 Echo。非法状态组合、错误 lease、重复认领和重复终态写均返回冲突并回滚。root 重试会结束当前 attempt 并原子创建同一 `run_group_id` 的下一 attempt；child 不重试，Echo 在 root 结束前保持 `running`。
+root Run 可以在 child 仍 queued/running 时提交自身终态，此时 Echo 继续保持 `running`，持久事件流不关闭；最后一个 child 结束后，存储根据 root 的持久终态收敛 Echo。若 child 先结束，则 root 后续提交时直接收敛 Echo。非法状态组合、错误 lease、重复认领和重复终态写均返回冲突并回滚。root 重试会结束当前 attempt 并原子创建同一 `run_group_id` 的下一 attempt；child 不重试。
 
 Echo 事件序号由存储层在 `app_id + echo_id` 范围内事务分配。不同 root Run attempt 不会从 1 重新开始；事件只允许由同一 App/Echo 下仍在运行的 root Run 追加，child 和终态后的迟到事件均被拒绝。
 

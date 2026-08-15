@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/promptcatalog"
 )
 
 func TestManagerStartsInSetupModeAndPersistsSecretsPrivately(t *testing.T) {
@@ -130,5 +132,65 @@ func validInput() SaveInput {
 		QQEnabled: true, QQWSURL: "ws://127.0.0.1:3001", QQWSToken: "qq-secret", QQBotID: "2647414417",
 		QQAllowedGroupIDs: []string{"123456"}, QQAllowedPrivateUserIDs: []string{"654321"},
 		QQQuickReplies: []QQQuickReply{{Trigger: " ping ", Reply: " pong "}}, QQPokeReplies: []string{" 在呢 "},
+	}
+}
+
+func TestManagerPersistsPromptCatalogAndDefaultsLegacySettings(t *testing.T) {
+	root := t.TempDir()
+	manager, err := NewService(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := validInput()
+	input.PromptCatalog = promptcatalog.Default()
+	input.PromptCatalog.BasicStyles[0].Text = "自定义默认风格"
+	input.BaseSystemPrompt = "自定义基础系统提示"
+	snapshot, err := manager.Save(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Settings.PromptCatalog.BasicStyles[0].Text != "自定义默认风格" || snapshot.Settings.BaseSystemPrompt != "自定义基础系统提示" {
+		t.Fatalf("prompt catalog=%#v base=%q", snapshot.Settings.PromptCatalog.BasicStyles[0], snapshot.Settings.BaseSystemPrompt)
+	}
+	reloaded, err := NewService(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved, ready := reloaded.CurrentResolved(); !ready || resolved.Settings.PromptCatalog.BasicStyles[0].Text != "自定义默认风格" || resolved.Settings.BaseSystemPrompt != "自定义基础系统提示" {
+		t.Fatalf("reloaded prompt catalog=%#v base=%q ready=%v", resolved.Settings.PromptCatalog.BasicStyles[0], resolved.Settings.BaseSystemPrompt, ready)
+	}
+	// 旧配置文件没有 prompt_catalog 字段：加载时自动补默认目录。
+	legacy := SaveInput{
+		Model: "legacy-model", ModelAPIKey: "legacy-key",
+		ModelRequestTimeoutSeconds: 30, ModelReadinessTimeoutSeconds: 3,
+		ModelMaxRetries: 2, ModelRetryBaseSeconds: 0.25, ModelRetryMaxSeconds: 2,
+		ModelRequestsPerMinute: 60, ModelMaxConcurrency: 4,
+	}
+	legacyManager, err := NewService(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacySnapshot, err := legacyManager.Save(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(legacySnapshot.Settings.PromptCatalog.BasicStyles) != len(promptcatalog.Default().BasicStyles) {
+		t.Fatalf("legacy prompt catalog=%#v", legacySnapshot.Settings.PromptCatalog)
+	}
+	if legacySnapshot.Settings.BaseSystemPrompt != promptcatalog.DefaultBaseSystemPrompt {
+		t.Fatal("legacy settings did not receive default base system prompt")
+	}
+}
+
+func TestManagerRejectsInvalidPromptCatalog(t *testing.T) {
+	manager, err := NewService(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := validInput()
+	input.PromptCatalog = promptcatalog.Default()
+	input.PromptCatalog.BasicStyles[0].Key = "changed"
+	if _, err := manager.Save(input); err != ErrInvalid {
+		t.Fatalf("invalid prompt catalog error=%v", err)
 	}
 }

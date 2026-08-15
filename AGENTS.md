@@ -304,6 +304,14 @@ The App-scoped storage/public-error, durable Echo/Run state, Go trust-boundary/i
 
 **保留（有测试的 PRD 基线，删除会破坏既有契约）**：identity 用户/绑定/成员/禁用控制面（CreateUser/BindExternalIdentity/UnbindExternalIdentity/ResolveIdentity/SetMembership/DisableUser——支撑 403 user_disabled 公共错误契约）、session.Service 读路径（contextasm 装配入口）、Blob 沙箱存储（安全负向测试基线，附件接入落地前的写入原语）。**2026-08-14 二次清理已删**：identity 角色/权限授予管理面（14 个 Service 方法 + 8 个存储方法 + `--roles` 旗标）、`InboundMessage.Attachments`（无生产者）、session.Service 写路径（CreateMessage/EditMessage，Hub 直写 Store）、`runtime.StaticAppPolicy`（测试替身移入 `runtimetest`）。
 
+## 2026-08-15 提示词 Service 与 V2 个性化迁移基线
+
+- **L3 prompt Service**：新增 `internal/services/prompt`，以 Service 形式注册 `prompt.preference.get/set/reset` 三个 Capability（读/写副作用，写走 Dispatcher 幂等与审计）；用户偏好按 `(app_id, user_id)` 持久化在 `user_prompt_settings`（迁移 23），默认值完全来自 V2。
+- **内核系统端口**：`echo.Config.Prompts` 接收窄接口 `PromptRenderer`。Orchestrator 在 Run 启动前调用它渲染基础提示、渠道提示与用户个性化段；contextasm 继续追加时间、历史和 Capability 投影。该渲染入口不注册为模型可见 Capability。
+- **V2 迁移范围**：`seed_prompt.go` 迁移完整 BASE_PERSONA_PROMPT 与 web/qq_group/qq_private 渠道规则；`internal/promptcatalog` 迁移七种基本风格与四项额外特征（每项三档）的全部正文。旧 RETURN_PROTOCOL、image_agent/文件工作区/knowledge 提示、发送者昵称与创建者硬编码不迁移，原因见 `seed_prompt.go` 注释。
+- **WebUI 提示词配置**：9178 控制面新增提示词选项编辑区，默认目录为 V2 正文；目录随 Deployment 配置保存并触发内核重启。基础系统提示可在 WebUI 编辑；默认值为 V2 原文，留空保存会恢复默认。
+- **既有部署升级**：main.go 在启动时补齐 campus App 配置中的 prompt Capability，并把 App 基础提示与渠道提示升级为本次迁移后的 V2 基线；内容未变化时 `CompareAndSwap` 保持原修订不变。
+
 ## Known Production Blockers
 
 Unless the user explicitly reprioritizes, address these before expanding product breadth.

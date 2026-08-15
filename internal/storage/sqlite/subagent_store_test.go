@@ -29,8 +29,8 @@ func TestChildRunStateIsDurableScopedAndDoesNotCompleteEcho(t *testing.T) {
 	if err := store.CreateChildRun(ctx, parent, child); err != nil {
 		t.Fatal(err)
 	}
-	if work, err := store.ListQueuedRuns(ctx, "app", 10); err != nil || len(work) != 0 {
-		t.Fatalf("queued root work=%#v err=%v", work, err)
+	if work, err := store.ListQueuedRuns(ctx, "app", 10); err != nil || len(work) != 1 || work[0].InputMessage != "child task" {
+		t.Fatalf("queued child work=%#v err=%v", work, err)
 	}
 	if _, err := store.GetRun(ctx, "other-app", child.ID); !errors.Is(err, kernelecho.ErrRunNotFound) {
 		t.Fatalf("cross-App child read error=%v", err)
@@ -42,10 +42,10 @@ func TestChildRunStateIsDurableScopedAndDoesNotCompleteEcho(t *testing.T) {
 	if _, err := store.AppendEchoEvent(ctx, kernelecho.Event{
 		AppID: "app", EchoID: "echo", RunID: claimed.ID, Type: "reply.delta",
 		Payload: []byte(`{"text":"private"}`), CreatedAt: now,
-	}); !errors.Is(err, kernelecho.ErrInvalidTransition) {
+	}); err != nil {
 		t.Fatalf("child event error=%v", err)
 	}
-	if err := store.CompleteRun(ctx, parent, kernelecho.RunStatusSucceeded, kernelecho.StatusSucceeded, "too early", publicerror.Error{}, now.Add(time.Second)); !errors.Is(err, kernelecho.ErrInvalidTransition) {
+	if err := store.CompleteRun(ctx, parent, kernelecho.RunStatusSucceeded, kernelecho.StatusSucceeded, "done", publicerror.Error{}, now.Add(time.Second)); err != nil {
 		t.Fatalf("parent completion error=%v", err)
 	}
 	if err := store.RecordCapabilityCall(ctx, "same-call", parent.ID, "echo", "app", "capability", []byte(`{"root":true}`), true, publicerror.Error{}, time.Millisecond); err != nil {
@@ -58,7 +58,7 @@ func TestChildRunStateIsDurableScopedAndDoesNotCompleteEcho(t *testing.T) {
 		t.Fatal(err)
 	}
 	echoRecord, _, err := store.GetEcho(ctx, "app", "echo")
-	if err != nil || echoRecord.Status != kernelecho.StatusRunning {
+	if err != nil || echoRecord.Status != kernelecho.StatusSucceeded || echoRecord.FinalMessage != "done" {
 		t.Fatalf("Echo=%#v err=%v", echoRecord, err)
 	}
 	storedChild, err := store.GetRun(ctx, "app", child.ID)
@@ -69,9 +69,6 @@ func TestChildRunStateIsDurableScopedAndDoesNotCompleteEcho(t *testing.T) {
 	audits, err := store.ListCapabilityCalls(ctx, "app", "echo")
 	if err != nil || len(audits) != 2 || audits[0].RunID == audits[1].RunID {
 		t.Fatalf("audits=%#v err=%v", audits, err)
-	}
-	if err := store.CompleteRun(ctx, parent, kernelecho.RunStatusSucceeded, kernelecho.StatusSucceeded, "done", publicerror.Error{}, now.Add(3*time.Second)); err != nil {
-		t.Fatal(err)
 	}
 }
 
@@ -162,17 +159,19 @@ func TestRecoveryFailsRunningRootAndOrphanChildAtomically(t *testing.T) {
 		t.Fatal(err)
 	}
 	failed, err := store.FailAbandonedRuns(ctx, "app", now.Add(time.Minute))
-	if err != nil || failed != 2 {
+	if err != nil || failed != 1 {
 		t.Fatalf("failed=%d err=%v", failed, err)
 	}
-	for _, runID := range []string{parent.ID, child.ID} {
-		run, err := store.GetRun(ctx, "app", runID)
-		if err != nil || run.Status != kernelecho.RunStatusFailed || run.ErrorCode != "recovery_failed" {
-			t.Fatalf("run=%#v err=%v", run, err)
-		}
+	storedParent, err := store.GetRun(ctx, "app", parent.ID)
+	if err != nil || storedParent.Status != kernelecho.RunStatusFailed || storedParent.ErrorCode != "recovery_failed" {
+		t.Fatalf("parent=%#v err=%v", storedParent, err)
+	}
+	storedChild, err := store.GetRun(ctx, "app", child.ID)
+	if err != nil || storedChild.Status != kernelecho.RunStatusQueued || storedChild.TaskMessage != "child task" {
+		t.Fatalf("child=%#v err=%v", storedChild, err)
 	}
 	echoRecord, _, err := store.GetEcho(ctx, "app", "echo")
-	if err != nil || echoRecord.Status != kernelecho.StatusFailed || echoRecord.ErrorCode != "recovery_failed" {
+	if err != nil || echoRecord.Status != kernelecho.StatusRunning {
 		t.Fatalf("Echo=%#v err=%v", echoRecord, err)
 	}
 }
@@ -181,7 +180,8 @@ func childRunRecord(parent kernelecho.RunRecord, runID, callID string, now time.
 	return kernelecho.RunRecord{
 		ID: runID, RunGroupID: runID, AppID: parent.AppID, EchoID: parent.EchoID,
 		ParentRunID: parent.ID, OriginCallID: callID, Attempt: 1, Status: kernelecho.RunStatusQueued,
-		Model: parent.Model, ModelConfigVersion: parent.ModelConfigVersion, ProtocolVersion: parent.ProtocolVersion,
+		TaskMessage: "child task",
+		Model:       parent.Model, ModelConfigVersion: parent.ModelConfigVersion, ProtocolVersion: parent.ProtocolVersion,
 		MaxSteps: 2, MaxToolCalls: 2, MaxInputTokens: 500, MaxOutputTokens: 500, MaxTotalTokens: 1000,
 		MaxOutputBytes: 2048, ProviderTimeoutMS: 2500,
 		Deadline: now.Add(30 * time.Second), AvailableAt: now,

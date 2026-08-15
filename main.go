@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -37,9 +38,11 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/session"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/task"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/promptcatalog"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/agent"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus/demo"
+	promptservice "github.com/projectluojia/AI-Luo-Man-ga/internal/services/prompt"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/blob"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite"
 
@@ -452,10 +455,14 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 		)
 	}
 
+	baseSystemPrompt := config.baseSystemPrompt
+	if strings.TrimSpace(baseSystemPrompt) == "" {
+		baseSystemPrompt = promptcatalog.DefaultBaseSystemPrompt
+	}
 	reg := registry.New()
 	app, created, err := store.Ensure(ctx, appconfig.Config{
 		AppID: campus.AppID, Enabled: true, Model: config.model,
-		SystemPrompt:   defaultSystemPrompt,
+		SystemPrompt:   baseSystemPrompt,
 		ChannelPrompts: defaultChannelPrompts,
 		Timezone:       "Asia/Shanghai", MaxSteps: 8, MaxToolCalls: 8,
 		MaxInputTokens: 32768, MaxOutputTokens: 8192, MaxTotalTokens: 40960,
@@ -465,18 +472,27 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 			campus.BusRouteListCapabilityID,
 			campus.BusJourneySearchCapabilityID,
 			agent.CapabilityID,
+			agent.StatusCapabilityID,
+			promptservice.PreferenceGetID,
+			promptservice.PreferenceSetID,
+			promptservice.PreferenceResetID,
 		},
 	})
 	if err != nil {
 		return fmt.Errorf("ensure campus App config: %w", err)
 	}
-	if !created && (app.Model != config.model || app.ProviderTimeout != config.modelRequestTimeout) {
+	if !created {
+		// 既有部署升级：把 V2 人格/渠道提示与 prompt 偏好 Capability 补齐到当前配置。
+		// CompareAndSwap 在内容未变化时直接返回原修订，不会反复增加 generation。
 		replacement := app
 		replacement.Model = config.model
 		replacement.ProviderTimeout = config.modelRequestTimeout
+		replacement.SystemPrompt = baseSystemPrompt
+		replacement.ChannelPrompts = defaultChannelPrompts
+		replacement.EnabledCapabilities = ensurePromptCapabilities(app.EnabledCapabilities)
 		app, err = store.CompareAndSwap(ctx, app.Generation, replacement)
 		if err != nil {
-			return fmt.Errorf("apply campus App model configuration: %w", err)
+			return fmt.Errorf("migrate campus App prompt configuration: %w", err)
 		}
 	}
 	observe.Info(ctx, "校园 App 持久配置已经就绪",
@@ -488,6 +504,14 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 	policy, err := appconfig.NewPersistentPolicy(store)
 	if err != nil {
 		return err
+	}
+	promptCatalog := config.promptCatalog
+	if promptCatalog.IsZero() {
+		promptCatalog = promptcatalog.Default()
+	}
+	promptService := promptservice.NewService(promptCatalog, store)
+	if err := promptservice.Register(reg, promptService); err != nil {
+		return fmt.Errorf("register prompt Service: %w", err)
 	}
 	// 确认与副作用治理：持久确认服务注入 Dispatcher，凡声明 write/external 副作用
 	// 的 Capability 在未获批准前 fail-closed（缺确认标识或验证失败一律拒绝执行）。
@@ -599,6 +623,7 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 		AppID:           campus.AppID,
 		AppConfigSource: store,
 		Context:         sessionService,
+		Prompts:         promptServiceRenderer{promptService},
 		RunTimeout:      90 * time.Second,
 		MaxRunAttempts:  3,
 		QueueCapacity:   128,
@@ -772,6 +797,8 @@ type config struct {
 	qqAllowedPrivateIDs []string
 	qqQuickReplies      []qq.QuickReply
 	qqPokeReplies       []string
+	promptCatalog       promptcatalog.Catalog
+	baseSystemPrompt    string
 }
 
 func loadConfig() (config, error) {
@@ -957,6 +984,8 @@ func applyLocalConfig(base config, resolved controlconfig.Resolved) (config, err
 		base.qqQuickReplies = append(base.qqQuickReplies, qq.QuickReply{Trigger: rule.Trigger, Reply: rule.Reply})
 	}
 	base.qqPokeReplies = append([]string(nil), settings.QQPokeReplies...)
+	base.promptCatalog = settings.PromptCatalog.Clone()
+	base.baseSystemPrompt = settings.BaseSystemPrompt
 	base.qqToken = ""
 	if resolved.QQWSTokenFile != "" {
 		content, err := os.ReadFile(resolved.QQWSTokenFile)
@@ -1127,4 +1156,33 @@ func envCSV(name string) []string {
 		}
 	}
 	return values
+}
+
+type promptServiceRenderer struct {
+	service *promptservice.Service
+}
+
+func (r promptServiceRenderer) RenderSystemPrompt(ctx context.Context, request kernelecho.PromptRenderRequest) (string, error) {
+	return r.service.RenderSystemPrompt(ctx, promptservice.RenderRequest{
+		AppID:            request.AppID,
+		UserID:           request.UserID,
+		BaseSystemPrompt: request.BaseSystemPrompt,
+		Channel:          request.Channel,
+		ChannelPrompts:   request.ChannelPrompts,
+	})
+}
+
+func ensurePromptCapabilities(existing []string) []string {
+	result := append([]string(nil), existing...)
+	for _, capabilityID := range []string{
+		agent.StatusCapabilityID,
+		promptservice.PreferenceGetID,
+		promptservice.PreferenceSetID,
+		promptservice.PreferenceResetID,
+	} {
+		if !slices.Contains(result, capabilityID) {
+			result = append(result, capabilityID)
+		}
+	}
+	return result
 }

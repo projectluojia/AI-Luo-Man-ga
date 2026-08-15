@@ -30,14 +30,32 @@ const inputSchemaJSON = `{
   }
 }`
 
+const statusInputSchemaJSON = `{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "type":"object",
+  "additionalProperties":false,
+  "required":["run_id"],
+  "properties":{
+    "run_id":{"type":"string","minLength":1,"maxLength":128}
+  }
+}`
+
 // Runner 是 Agent Service 的 child Run 执行方（由内核 Orchestrator 实现）。
 type Runner interface {
 	RunChild(context.Context, echo.ChildRunRequest) (echo.ChildRunResult, error)
 }
 
+type StatusRunner interface {
+	GetChild(context.Context, echo.ChildStatusRequest) (echo.ChildStatusResult, error)
+}
+
 type input struct {
 	Task          string   `json:"task"`
 	CapabilityIDs []string `json:"capability_ids"`
+}
+
+type statusInput struct {
+	RunID string `json:"run_id"`
 }
 
 // Register 把 Agent Service 注册进 Registry：ServiceID=agent、对外核心能力
@@ -47,7 +65,7 @@ func Register(reg *registry.Registry, runner Runner) error {
 	if reg == nil || runner == nil {
 		return registry.ErrInvalidSpec
 	}
-	handler := func(ctx context.Context, request contracts.RequestContext, payload json.RawMessage) (json.RawMessage, error) {
+	runHandler := func(ctx context.Context, request contracts.RequestContext, payload json.RawMessage) (json.RawMessage, error) {
 		var value input
 		if err := jsonutil.DecodeStrict(payload, &value); err != nil {
 			return nil, errors.Join(registry.ErrSchemaValidation, err)
@@ -67,6 +85,28 @@ func Register(reg *registry.Registry, runner Runner) error {
 		}
 		return encoded, nil
 	}
+	statusHandler := func(ctx context.Context, request contracts.RequestContext, payload json.RawMessage) (json.RawMessage, error) {
+		statusRunner, ok := runner.(StatusRunner)
+		if !ok {
+			return nil, echo.ErrChildRunUnavailable
+		}
+		var value statusInput
+		if err := jsonutil.DecodeStrict(payload, &value); err != nil {
+			return nil, errors.Join(registry.ErrSchemaValidation, err)
+		}
+		result, err := statusRunner.GetChild(ctx, echo.ChildStatusRequest{
+			ParentRunID: request.RunID,
+			RunID:       value.RunID,
+		})
+		if err != nil {
+			return nil, err
+		}
+		encoded, err := json.Marshal(result)
+		if err != nil {
+			return nil, fmt.Errorf("encode child Run status: %w", err)
+		}
+		return encoded, nil
+	}
 	return reg.RegisterService(registry.ServiceRegistration{
 		Spec: registry.ServiceSpec{
 			ID:          ServiceID,
@@ -82,12 +122,24 @@ func Register(reg *registry.Registry, runner Runner) error {
 					ID:              CapabilityID,
 					Version:         "1.0.0",
 					Name:            "委派受治理的子任务",
-					Description:     "Create one durable child Run with narrower Capabilities and an independent budget, then return its explicit result to the parent Run.",
+					Description:     "Create one durable queued child Run with narrower Capabilities and an independent budget, then immediately return its Run identity and status.",
 					ServiceID:       ServiceID,
 					InputSchemaJSON: inputSchemaJSON,
 					SideEffect:      registry.SideEffectExternal,
 				},
-				Handler: handler,
+				Handler: runHandler,
+			},
+			StatusCapabilityID: {
+				Spec: registry.CapabilitySpec{
+					ID:              StatusCapabilityID,
+					Version:         "1.0.0",
+					Name:            "查询子任务状态",
+					Description:     "Read the durable status and completed result of a direct child Run created by the current root Run.",
+					ServiceID:       ServiceID,
+					InputSchemaJSON: statusInputSchemaJSON,
+					SideEffect:      registry.SideEffectNone,
+				},
+				Handler: statusHandler,
 			},
 		},
 	})

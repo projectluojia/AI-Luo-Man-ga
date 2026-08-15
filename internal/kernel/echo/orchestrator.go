@@ -52,6 +52,24 @@ type Config struct {
 	AppConfigSource appconfig.Source
 	Context         contextasm.HistorySource
 	ContextBudget   contextasm.Budget
+	// Prompts 是可选的内核系统端口：由 L3 prompt Service 渲染基础提示、渠道提示
+	// 与用户个性化片段。nil 时保留旧的内联拼装路径，仅供存量测试使用。
+	Prompts PromptRenderer
+}
+
+// PromptRenderRequest 是内核向 L3 提示词 Service 投影的受治理输入。
+type PromptRenderRequest struct {
+	AppID            string
+	UserID           string
+	BaseSystemPrompt string
+	Channel          string
+	ChannelPrompts   map[string]string
+}
+
+// PromptRenderer 是提示词渲染系统端口。实现由 L3 prompt Service 提供，内核不依赖
+// 具体 Service 包，也不把渲染入口暴露为模型可调用的 Capability。
+type PromptRenderer interface {
+	RenderSystemPrompt(context.Context, PromptRenderRequest) (string, error)
 }
 
 type Orchestrator struct {
@@ -214,6 +232,8 @@ func (o *Orchestrator) RunChild(ctx context.Context, request ChildRunRequest) (C
 		EchoID:             parent.EchoID,
 		ParentRunID:        parent.ID,
 		OriginCallID:       request.OriginCallID,
+		UserID:             parent.UserID,
+		TaskMessage:        request.Task,
 		Attempt:            1,
 		Status:             RunStatusQueued,
 		Model:              parent.Model,
@@ -237,33 +257,39 @@ func (o *Orchestrator) RunChild(ctx context.Context, request ChildRunRequest) (C
 	if err := o.store.CreateChildRun(ctx, parent, child); err != nil {
 		return ChildRunResult{}, errors.Join(ErrChildRunUnavailable, err)
 	}
-	leaseToken := uuid.NewString()
-	claimed, err := o.store.ClaimChildRun(ctx, child.AppID, child.EchoID, child.ID, parent.ID, leaseToken, now, now.Add(o.config.LeaseDuration))
+	observe.DefaultMetrics().QueueAdded()
+	observe.Info(ctx, "受治理的子 Run 已持久化排队",
+		observe.StringAttr("app_id", child.AppID),
+		observe.StringAttr("echo_id", child.EchoID),
+		observe.StringAttr("run_id", child.ID),
+		observe.StringAttr("parent_run_id", child.ParentRunID),
+		observe.IntAttr("capability_count", len(child.CapabilityScope)),
+	)
+	return ChildRunResult{RunID: child.ID, Status: RunStatusQueued}, nil
+}
+
+func (o *Orchestrator) GetChild(ctx context.Context, request ChildStatusRequest) (ChildStatusResult, error) {
+	if request.ParentRunID == "" || request.RunID == "" {
+		return ChildStatusResult{}, ErrInvalidChildRun
+	}
+	run, err := o.store.GetRun(ctx, o.config.AppID, request.RunID)
 	if err != nil {
-		persisted, readErr := o.store.GetRun(ctx, child.AppID, child.ID)
-		if readErr == nil && persisted.Status == RunStatusRunning && persisted.LeaseToken == leaseToken {
-			claimed = persisted
-			err = nil
-		}
+		return ChildStatusResult{}, errors.Join(ErrChildRunUnavailable, err)
 	}
-	if err != nil {
-		cleanupContext, cleanupCancel := detachedContext(ctx)
-		cleanupErr := o.store.FailQueuedChildRun(cleanupContext, child, publicerror.Echo("recovery_failed"), o.now().UTC())
-		cleanupCancel()
-		return ChildRunResult{}, errors.Join(ErrChildRunUnavailable, err, cleanupErr)
+	if run.ParentRunID != request.ParentRunID {
+		return ChildStatusResult{}, ErrChildRunUnavailable
 	}
-	result := ""
-	runErr := o.executeClaimedRun(ctx, RunRequest{Message: request.Task}, nil, claimed, now, &result)
-	if runErr != nil {
-		return ChildRunResult{}, runErr
-	}
-	return ChildRunResult{RunID: child.ID, Result: result}, nil
+	return ChildStatusResult{
+		RunID: run.ID, ParentRunID: run.ParentRunID, Status: run.Status,
+		Result: run.ResultMessage, ErrorCode: run.ErrorCode, ErrorMessage: run.ErrorMessage,
+		CreatedAt: run.CreatedAt, StartedAt: run.StartedAt, CompletedAt: run.CompletedAt,
+	}, nil
 }
 
 func (o *Orchestrator) childScopes(policy appconfig.PolicySnapshot, parent RunRecord, requested []string) ([]string, []string, error) {
 	if len(requested) == 0 {
 		for _, capability := range o.projectCapabilities(policy, parent) {
-			if capability.Id != SubagentCapabilityID {
+			if capability.Id != SubagentCapabilityID && capability.Id != SubagentStatusCapabilityID {
 				requested = append(requested, capability.Id)
 			}
 		}
@@ -275,7 +301,8 @@ func (o *Orchestrator) childScopes(policy appconfig.PolicySnapshot, parent RunRe
 	sort.Strings(requested)
 	permissions := make(map[string]struct{})
 	for index, capabilityID := range requested {
-		if capabilityID == SubagentCapabilityID || (index > 0 && requested[index-1] == capabilityID) ||
+		if capabilityID == SubagentCapabilityID || capabilityID == SubagentStatusCapabilityID ||
+			(index > 0 && requested[index-1] == capabilityID) ||
 			!policy.CapabilityEnabled(capabilityID) {
 			return nil, nil, registry.ErrPermissionDenied
 		}
@@ -463,6 +490,35 @@ func (o *Orchestrator) RunExisting(ctx context.Context, echoID string, request R
 	return o.executeClaimedRun(ctx, request, emit, run, runStarted, nil)
 }
 
+// RunQueued 按持久队列返回的精确 run_id 认领并执行 root 或 child Run。
+// child 的任务正文只从 Run 业务状态读取，不能回退到 Echo 用户输入。
+func (o *Orchestrator) RunQueued(ctx context.Context, work RunWork, emit EventEmitter) (resultErr error) {
+	run := work.Run
+	if run.AppID != o.config.AppID || run.ID == "" || run.EchoID == "" ||
+		run.Status != RunStatusQueued || work.InputMessage == "" {
+		return ErrRunInputMismatch
+	}
+	runStarted := o.now().UTC()
+	leaseToken := uuid.NewString()
+	var claimed RunRecord
+	var err error
+	if run.ParentRunID == "" {
+		claimed, err = o.store.ClaimRun(ctx, o.config.AppID, run.EchoID, leaseToken, runStarted, runStarted.Add(o.config.LeaseDuration))
+	} else {
+		claimed, err = o.store.ClaimChildRun(ctx, o.config.AppID, run.EchoID, run.ID, run.ParentRunID, leaseToken, runStarted, runStarted.Add(o.config.LeaseDuration))
+	}
+	if err != nil {
+		return err
+	}
+	if claimed.ID != run.ID {
+		return ErrRunInputMismatch
+	}
+	if claimed.ParentRunID != "" && claimed.TaskMessage != work.InputMessage {
+		return errors.Join(ErrRunInputMismatch, o.fail(ctx, claimed, "recovery_failed", false))
+	}
+	return o.executeClaimedRun(ctx, RunRequest{Message: work.InputMessage}, emit, claimed, runStarted, nil)
+}
+
 func (o *Orchestrator) executeClaimedRun(ctx context.Context, request RunRequest, emit EventEmitter, run RunRecord, runStarted time.Time, childResult *string) (resultErr error) {
 	echoID := run.EchoID
 	observe.DefaultMetrics().RunStarted()
@@ -502,7 +558,23 @@ func (o *Orchestrator) executeClaimedRun(ctx context.Context, request RunRequest
 	)
 	emitEvent := func(eventType string, payload any) error {
 		if run.ParentRunID != "" {
-			return nil
+			switch eventType {
+			case "echo.started":
+				return nil
+			case "run.context":
+				eventType = "subagent.context"
+			case "run.started":
+				eventType = "subagent.started"
+			case "capability.completed":
+				eventType = "subagent.capability.completed"
+			case "reply.delta":
+				eventType = "subagent.reply.delta"
+			case "reply.final":
+				eventType = "subagent.completed"
+			case "run.failed":
+				eventType = "subagent.failed"
+			}
+			payload = childEventPayload(run, eventType, payload)
 		}
 		encoded, err := json.Marshal(payload)
 		if err != nil {
@@ -550,10 +622,24 @@ func (o *Orchestrator) executeClaimedRun(ctx context.Context, request RunRequest
 	// 上下文装配：由 Go 决定模型本次看到的内容（配置系统提示 + 渠道提示 +
 	// 当前标准消息 + 受限会话历史 + 当前 Capability 投影），Python 只接收
 	// 装配完成的系统提示。
-	basePrompt := app.SystemPrompt + "\n只能根据 Capability 返回的数据回答，不得编造班次、站点或线路。"
-	if channelPrompt := app.ChannelPrompts[run.Channel]; channelPrompt != "" {
+	basePrompt := app.SystemPrompt
+	if o.config.Prompts != nil {
+		rendered, err := o.config.Prompts.RenderSystemPrompt(runContext, PromptRenderRequest{
+			AppID:            o.config.AppID,
+			UserID:           run.UserID,
+			BaseSystemPrompt: app.SystemPrompt,
+			Channel:          run.Channel,
+			ChannelPrompts:   app.ChannelPrompts,
+		})
+		if err != nil {
+			observe.Error(ctx, "提示词 Service 渲染失败", err)
+			return errors.Join(err, o.fail(ctx, run, "context_unavailable", true))
+		}
+		basePrompt = rendered
+	} else if channelPrompt := app.ChannelPrompts[run.Channel]; channelPrompt != "" {
 		basePrompt += "\n" + channelPrompt
 	}
+	basePrompt += "\n只能根据 Capability 返回的数据回答，不得编造班次、站点或线路。"
 	if run.ParentRunID != "" {
 		basePrompt += "\n这是受治理的子 Run。只完成父 Run 指定任务；最终结果仅返回父 Run，不直接面向用户。"
 	}
@@ -634,6 +720,12 @@ func (o *Orchestrator) executeClaimedRun(ctx context.Context, request RunRequest
 		return errors.Join(runErr, o.fail(ctx, run, "agent_start_failed", true))
 	}
 	if err := emitEvent("run.started", map[string]any{"run_id": runID, "model": run.Model, "attempt": run.Attempt}); err != nil {
+		if errors.Is(runContext.Err(), context.Canceled) {
+			return errors.Join(context.Canceled, o.completeRun(ctx, run, RunStatusCancelled, StatusCancelled, "", publicerror.Echo("cancelled")))
+		}
+		if errors.Is(runContext.Err(), context.DeadlineExceeded) {
+			return errors.Join(context.DeadlineExceeded, o.completeRun(ctx, run, RunStatusTimedOut, StatusFailed, "", publicerror.Echo("deadline_exceeded")))
+		}
 		return errors.Join(err, o.fail(ctx, run, "event_delivery_failed", true))
 	}
 	observe.Info(ctx, "Run 输入已经发送",
@@ -661,10 +753,24 @@ func (o *Orchestrator) executeClaimedRun(ctx context.Context, request RunRequest
 				default:
 				}
 				observe.Warn(ctx, "Run 已取消", observe.Duration(runStarted))
+				if run.ParentRunID != "" {
+					if eventErr := emitEvent("subagent.cancelled", map[string]any{
+						"code": "cancelled", "message": "子 Agent 已取消",
+					}); eventErr != nil {
+						return errors.Join(context.Canceled, eventErr, o.completeRun(ctx, run, RunStatusCancelled, StatusCancelled, "", publicerror.Echo("cancelled")))
+					}
+				}
 				return errors.Join(context.Canceled, o.completeRun(ctx, run, RunStatusCancelled, StatusCancelled, "", publicerror.Echo("cancelled")))
 			}
 			if errors.Is(runContext.Err(), context.DeadlineExceeded) {
 				observe.Error(ctx, "Run 执行超时", context.DeadlineExceeded, observe.Duration(runStarted))
+				if run.ParentRunID != "" {
+					if eventErr := emitEvent("subagent.failed", map[string]any{
+						"code": "deadline_exceeded", "message": "子 Agent 执行超时", "retryable": false,
+					}); eventErr != nil {
+						return errors.Join(context.DeadlineExceeded, eventErr, o.completeRun(ctx, run, RunStatusTimedOut, StatusFailed, "", publicerror.Echo("deadline_exceeded")))
+					}
+				}
 				return errors.Join(context.DeadlineExceeded, o.completeRun(ctx, run, RunStatusTimedOut, StatusFailed, "", publicerror.Echo("deadline_exceeded")))
 			}
 			if errors.Is(receiveErr, io.EOF) && finalMessage != "" {
@@ -871,6 +977,17 @@ func (o *Orchestrator) executeClaimedRun(ctx context.Context, request RunRequest
 				runErr := fmt.Errorf("send capability result: %w", err)
 				return errors.Join(runErr, o.fail(ctx, run, "agent_stream_failed", automaticRetrySafe))
 			}
+			if run.ParentRunID == "" && body.CapabilityCall.CapabilityId == SubagentCapabilityID && result.Success {
+				var child ChildRunResult
+				if err := json.Unmarshal(result.PayloadJson, &child); err != nil || child.RunID == "" || child.Status != RunStatusQueued {
+					return errors.Join(ErrInvalidChildRun, o.fail(ctx, run, "protocol_violation", false))
+				}
+				if err := emitEvent("subagent.created", map[string]any{
+					"run_id": child.RunID, "parent_run_id": run.ID, "status": child.Status,
+				}); err != nil {
+					return errors.Join(err, o.fail(ctx, run, "event_delivery_failed", false))
+				}
+			}
 			if err := emitEvent("capability.completed", map[string]any{
 				"call_id":       result.CallId,
 				"capability_id": result.CapabilityId,
@@ -925,6 +1042,36 @@ func (o *Orchestrator) executeClaimedRun(ctx context.Context, request RunRequest
 	}
 }
 
+func childEventPayload(run RunRecord, eventType string, payload any) map[string]any {
+	result := map[string]any{
+		"run_id": run.ID, "parent_run_id": run.ParentRunID,
+	}
+	statusByEvent := map[string]string{
+		"subagent.context":              RunStatusRunning,
+		"subagent.started":              RunStatusRunning,
+		"subagent.capability.completed": RunStatusRunning,
+		"subagent.reply.delta":          RunStatusRunning,
+		"subagent.completed":            RunStatusSucceeded,
+		"subagent.failed":               RunStatusFailed,
+		"subagent.cancelled":            RunStatusCancelled,
+	}
+	if status := statusByEvent[eventType]; status != "" {
+		result["status"] = status
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return result
+	}
+	var fields map[string]any
+	if json.Unmarshal(encoded, &fields) != nil {
+		return result
+	}
+	for key, value := range fields {
+		result[key] = value
+	}
+	return result
+}
+
 func (o *Orchestrator) projectCapabilities(policy appconfig.PolicySnapshot, run RunRecord) []*executor.Capability {
 	all := o.registry.Capabilities()
 	projected := make([]*executor.Capability, 0, len(all))
@@ -939,7 +1086,7 @@ func (o *Orchestrator) projectCapabilities(policy appconfig.PolicySnapshot, run 
 		if _, enabled := scope[capability.ID]; !enabled {
 			continue
 		}
-		if run.ParentRunID != "" && capability.ID == SubagentCapabilityID {
+		if run.ParentRunID != "" && (capability.ID == SubagentCapabilityID || capability.ID == SubagentStatusCapabilityID) {
 			continue
 		}
 		if _, err := registry.NarrowPermissions(policy.PermissionScope, capability.RequiredPermissions); err != nil {
@@ -1060,7 +1207,7 @@ func (o *Orchestrator) invokeCapabilityOnce(ctx context.Context, run RunRecord, 
 		}
 	}
 	index := sort.SearchStrings(run.CapabilityScope, call.CapabilityId)
-	if (run.ParentRunID != "" && call.CapabilityId == SubagentCapabilityID) ||
+	if (run.ParentRunID != "" && (call.CapabilityId == SubagentCapabilityID || call.CapabilityId == SubagentStatusCapabilityID)) ||
 		index >= len(run.CapabilityScope) || run.CapabilityScope[index] != call.CapabilityId {
 		return o.rejectedCapability(ctx, run, call, started, runtime.ErrCapabilityDisabled)
 	}
@@ -1077,6 +1224,8 @@ func (o *Orchestrator) invokeCapabilityOnce(ctx context.Context, run RunRecord, 
 		EchoID:          echoID,
 		RequestID:       requestID,
 		TraceID:         firstNonEmpty(observe.String(ctx, "trace_id"), echoID),
+		UserID:          run.UserID,
+		SessionID:       run.SessionID,
 		RunID:           runID,
 		ParentRunID:     run.ParentRunID,
 		CallID:          call.CallId,

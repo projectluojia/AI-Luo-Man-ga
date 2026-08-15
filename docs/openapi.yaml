@@ -128,6 +128,31 @@ paths:
                 $ref: "#/components/schemas/Error"
         "500":
           $ref: "#/components/responses/Error"
+  /api/v1/runs/{run_id}:
+    get:
+      summary: Get an App-scoped root or child Run
+      parameters:
+        - name: run_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Durable Run status, including a completed user-visible result when present.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [run]
+                properties:
+                  run:
+                    $ref: "#/components/schemas/Run"
+        "404":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
   /api/v1/capabilities:
     get:
       summary: List capabilities enabled for the campus-services App
@@ -881,6 +906,9 @@ components:
         error_message:
           type: string
           description: Safe localized error message.
+        result:
+          type: string
+          description: Completed user-visible Run output; task text, prompts, reasoning, and Tool arguments are never included.
         created_at:
           type: string
           format: date-time

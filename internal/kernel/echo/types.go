@@ -11,7 +11,8 @@ import (
 )
 
 const (
-	SubagentCapabilityID = "agent.run"
+	SubagentCapabilityID       = "agent.run"
+	SubagentStatusCapabilityID = "agent.status"
 
 	StatusRunning   = "running"
 	StatusSucceeded = "succeeded"
@@ -69,6 +70,7 @@ type RunRecord struct {
 	ProtocolVersion     string          `json:"protocol_version"`
 	ContextDigest       string          `json:"context_digest,omitempty"`
 	ContextSources      json.RawMessage `json:"-"`
+	TaskMessage         string          `json:"-"`
 	MaxSteps            uint32          `json:"max_steps"`
 	MaxToolCalls        uint32          `json:"max_tool_calls"`
 	MaxInputTokens      uint64          `json:"max_input_tokens"`
@@ -134,7 +136,34 @@ type ChildRunRequest struct {
 
 type ChildRunResult struct {
 	RunID  string `json:"run_id"`
-	Result string `json:"result"`
+	Status string `json:"status"`
+	Result string `json:"result,omitempty"`
+}
+
+type ChildStatusRequest struct {
+	ParentRunID string
+	RunID       string
+}
+
+type ChildStatusResult struct {
+	RunID        string     `json:"run_id"`
+	ParentRunID  string     `json:"parent_run_id"`
+	Status       string     `json:"status"`
+	Result       string     `json:"result,omitempty"`
+	ErrorCode    string     `json:"error_code,omitempty"`
+	ErrorMessage string     `json:"error_message,omitempty"`
+	CreatedAt    time.Time  `json:"created_at"`
+	StartedAt    *time.Time `json:"started_at,omitempty"`
+	CompletedAt  *time.Time `json:"completed_at,omitempty"`
+}
+
+type PublicRun struct {
+	RunRecord
+	Result string `json:"result,omitempty"`
+}
+
+func PublicRunRecord(run RunRecord) PublicRun {
+	return PublicRun{RunRecord: run, Result: run.ResultMessage}
 }
 
 type CapabilityAuditRecord struct {

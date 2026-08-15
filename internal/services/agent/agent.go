@@ -27,6 +27,8 @@ const (
 	// 该标识由内核 child-Run 契约（echo.SubagentCapabilityID）定义，
 	// Agent Service 是其实现方。
 	CapabilityID = echo.SubagentCapabilityID
+	// StatusCapabilityID 查询当前 root Run 直接创建的 child Run 状态。
+	StatusCapabilityID = echo.SubagentStatusCapabilityID
 	// runtimeVersion 是内置 agent 运行时的版本。
 	runtimeVersion = "1.0.0"
 )

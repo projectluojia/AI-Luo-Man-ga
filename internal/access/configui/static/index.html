@@ -74,6 +74,18 @@
         </div>
       </section>
 
+      <section class="config-section prompt-section" aria-labelledby="prompt-title">
+        <div class="section-heading">
+          <div><span class="section-mark">PERSONA</span><h2 id="prompt-title">提示词配置</h2></div>
+          <p>默认文案来自 V2。基础系统提示、基本风格与额外特征都可以在此修改，保存后重启内核并应用到后续 Run。</p>
+        </div>
+        <label class="prompt-base-editor">
+          <span><strong>基础系统提示词</strong><small>人格、系统指令、行为准则与通用事实；留空则恢复 V2 默认。</small></span>
+          <textarea id="prompt-base" rows="18" maxlength="16384" placeholder="留空保存将恢复 V2 默认基础提示"></textarea>
+        </label>
+        <div id="prompt-catalog-editor" class="prompt-catalog-editor"></div>
+      </section>
+
       <footer class="action-bar">
         <div><strong id="revision">配置尚未保存</strong><span id="notice" role="status" aria-live="polite">所有参数一次保存并应用。</span></div>
         <button id="save-button" type="submit">保存并启动 <span>→</span></button>
