@@ -355,8 +355,8 @@ func terminalReply(event kernelecho.Event) *string {
 	return nil
 }
 
-// reply 把回复文本发送到消息来源（群消息回群，私聊回用户），按
-// PlatformChannel 选择 OneBot 动作，不依赖空间 ID 是否为空。
+// reply 把回复文本发送到消息来源。群消息使用 OneBot 消息段明确 @ 原发送人，
+// 私聊直接回用户；按 PlatformChannel 选择动作，不依赖空间 ID 是否为空。
 func (a *Adapter) reply(ctx context.Context, inbound *access.InboundMessage, text string) {
 	text = sanitizeReply(text)
 	if text == "" {
@@ -368,6 +368,10 @@ func (a *Adapter) reply(ctx context.Context, inbound *access.InboundMessage, tex
 		if inbound.PlatformChannel == "group" {
 			action = "send_group_msg"
 			params["group_id"] = onebotInt(inbound.PlatformSpaceID)
+			params["message"] = []any{
+				map[string]any{"type": "at", "data": map[string]any{"qq": inbound.PlatformUserID}},
+				map[string]any{"type": "text", "data": map[string]any{"text": " " + chunk}},
+			}
 		} else {
 			action = "send_private_msg"
 			params["user_id"] = onebotInt(inbound.PlatformUserID)

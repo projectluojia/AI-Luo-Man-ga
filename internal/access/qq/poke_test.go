@@ -56,10 +56,7 @@ func TestQQAdapterRepliesToGroupPoke(t *testing.T) {
 				if params["group_id"] != float64(12345) {
 					t.Fatalf("group reply params=%#v", params)
 				}
-				message, _ := params["message"].(string)
-				if message == "" {
-					t.Fatalf("empty poke reply")
-				}
+				assertGroupReply(t, params["message"], "67890", " ")
 				textSeen = true
 			case "group_poke":
 				params, _ := action["params"].(map[string]any)

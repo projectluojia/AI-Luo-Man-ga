@@ -253,12 +253,25 @@ func TestQQAdapterIntakesAndReplies(t *testing.T) {
 		if params["group_id"] != float64(12345) {
 			t.Fatalf("params=%#v", params)
 		}
-		message, _ := params["message"].(string)
-		if !strings.Contains(message, "你好呀") {
-			t.Fatalf("message=%q", message)
-		}
+		assertGroupReply(t, params["message"], "67890", "你好呀")
 	case <-time.After(5 * time.Second):
 		t.Fatal("adapter did not send the reply")
+	}
+}
+
+func assertGroupReply(t *testing.T, raw any, expectedUserID, expectedText string) {
+	t.Helper()
+	segments, ok := raw.([]any)
+	if !ok || len(segments) != 2 {
+		t.Fatalf("group reply segments=%#v", raw)
+	}
+	atSegment, _ := segments[0].(map[string]any)
+	atData, _ := atSegment["data"].(map[string]any)
+	textSegment, _ := segments[1].(map[string]any)
+	textData, _ := textSegment["data"].(map[string]any)
+	if atSegment["type"] != "at" || atData["qq"] != expectedUserID ||
+		textSegment["type"] != "text" || !strings.Contains(textData["text"].(string), expectedText) {
+		t.Fatalf("group reply segments=%#v", segments)
 	}
 }
 
