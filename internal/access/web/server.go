@@ -55,6 +55,7 @@ type Server struct {
 	appID            string
 	platformHub      *access.Hub
 	webAuthenticator WebAuthenticator
+	qqAccessAdmin    QQAccessAdmin
 	hub              *access.EventHub
 	activeMu         sync.Mutex
 	active           map[echoKey]context.CancelFunc
@@ -121,6 +122,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /readyz", s.readyz)
 	mux.Handle("GET /metrics", observe.DefaultMetrics())
 	mux.HandleFunc("GET /api/v1/capabilities", s.capabilities)
+	mux.HandleFunc("GET /api/v1/admin/qq-access", s.getQQAccess)
+	mux.HandleFunc("PUT /api/v1/admin/qq-access", s.updateQQAccess)
 	mux.HandleFunc("POST /api/v2/echoes", s.createEcho)
 	mux.HandleFunc("GET /api/v1/echoes/{echo_id}", s.getEcho)
 	mux.HandleFunc("DELETE /api/v1/echoes/{echo_id}", s.cancelEcho)

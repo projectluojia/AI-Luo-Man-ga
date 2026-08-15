@@ -1,9 +1,15 @@
 package web
 
 import (
+	"context"
+	"net"
 	"net/http"
+	"net/url"
+	"strings"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/access/qq"
+	qqsettings "github.com/projectluojia/AI-Luo-Man-ga/internal/access/qq/settings"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/identity"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
 )
@@ -24,12 +30,63 @@ type WebAuthenticator interface {
 // ServerOption 配置 Web Access 的可选生产依赖。
 type ServerOption func(*Server)
 
+// QQAccessAdmin 是 WebUI 管理 QQ Access 配置的窄端口。
+type QQAccessAdmin interface {
+	Snapshot(context.Context) (qqsettings.Settings, qq.RuntimeStatus, error)
+	Update(context.Context, uint64, qqsettings.Settings) (qqsettings.Settings, qq.RuntimeStatus, error)
+}
+
 // WithWebAuthenticator 注入可信 Web 登录态解析器。未注入时聊天创建入口
 // 返回 401，不降级为匿名用户。
 func WithWebAuthenticator(authenticator WebAuthenticator) ServerOption {
 	return func(server *Server) {
 		server.webAuthenticator = authenticator
 	}
+}
+
+// WithQQAccessAdmin 注入 QQ Access 本地管理面。NapCat 登录与 OneBot 配置不在此 API 内。
+func WithQQAccessAdmin(admin QQAccessAdmin) ServerOption {
+	return func(server *Server) { server.qqAccessAdmin = admin }
+}
+
+// WithEventHub 注入跨平台共享的 Echo 事件中心。
+func WithEventHub(hub *access.EventHub) ServerOption {
+	return func(server *Server) {
+		if hub != nil {
+			server.hub = hub
+		}
+	}
+}
+
+func loopbackAdminRequest(request *http.Request) bool {
+	remoteHost, _, err := net.SplitHostPort(request.RemoteAddr)
+	if err != nil {
+		remoteHost = request.RemoteAddr
+	}
+	remote := net.ParseIP(remoteHost)
+	if remote == nil || !remote.IsLoopback() {
+		return false
+	}
+	host := request.Host
+	if host != "" {
+		hostname, _, splitErr := net.SplitHostPort(host)
+		if splitErr != nil {
+			hostname = strings.Trim(host, "[]")
+		}
+		if hostname != "localhost" {
+			parsed := net.ParseIP(hostname)
+			if parsed == nil || !parsed.IsLoopback() {
+				return false
+			}
+		}
+	}
+	if origin := request.Header.Get("Origin"); origin != "" {
+		parsed, err := url.Parse(origin)
+		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host != request.Host {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Server) authenticateWeb(writer http.ResponseWriter, request *http.Request) (AuthenticatedWebIdentity, bool) {

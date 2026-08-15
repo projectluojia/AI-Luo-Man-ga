@@ -59,6 +59,9 @@ func (a *Adapter) handleNotice(ctx context.Context, raw map[string]any) {
 		MessageType:       "text",
 		Text:              "",
 	}
+	if !a.allowed(inbound) {
+		return
+	}
 	a.reply(ctx, inbound, pokeReplies[rand.IntN(len(pokeReplies))])
 	if channel == "group" {
 		// 群聊戳回去：向戳的人发送 group_poke。

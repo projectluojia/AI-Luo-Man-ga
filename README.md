@@ -40,7 +40,9 @@ set +a
 make run
 ```
 
-Web Access 默认监听 `http://127.0.0.1:8080`。根路径是极简联调页面，不是产品前端。
+Web Access 默认监听 `http://127.0.0.1:8080`。根路径是 AI珞本机接入控制台：可配置 QQ 的 OneBot 地址、机器人 QQ 号、允许的群号和允许私聊的 QQ 号，保存后只热更新 QQ Access，不重启 Go 主进程。
+
+NapCat 保持独立运行和独立 WebUI，负责 QQ 登录及 OneBot 服务；AI珞不接管 NapCat 配置。QQ 白名单属于 `internal/access/qq` 的入口准入，不是内核 Capability 权限。未列入白名单的消息会在进入 Hub、Message、Echo 之前静默丢弃；列入白名单的 QQ 用户由 QQ Access 自动建立内部身份，不需要手工执行 `identity-bind`。AI珞管理面只接受本机请求，Token 继续由环境变量提供且不会回显。
 
 Provider 默认对单次请求设置 30 秒超时、最多两次仅限首个流数据前的可重试退避、每分钟 60 次请求和 4 路并发上限；对应 `AILUO_MODEL_TIMEOUT_SECONDS`、`AILUO_MODEL_MAX_RETRIES`、`AILUO_MODEL_RETRY_BASE_SECONDS`、`AILUO_MODEL_RETRY_MAX_SECONDS`、`AILUO_MODEL_REQUESTS_PER_MINUTE` 与 `AILUO_MODEL_MAX_CONCURRENCY` 可按部署容量收窄。`/readyz` 会实际探测配置模型，不只检查 Python 进程存在。
 
