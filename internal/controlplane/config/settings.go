@@ -24,52 +24,68 @@ var (
 
 // Settings 是不含秘密的本机运行配置。
 type Settings struct {
-	Revision                     uint64                `json:"revision"`
-	Model                        string                `json:"model"`
-	ModelBaseURL                 string                `json:"model_base_url"`
-	ModelRequestTimeoutSeconds   float64               `json:"model_request_timeout_seconds"`
-	ModelReadinessTimeoutSeconds float64               `json:"model_readiness_timeout_seconds"`
-	ModelMaxRetries              int                   `json:"model_max_retries"`
-	ModelRetryBaseSeconds        float64               `json:"model_retry_base_seconds"`
-	ModelRetryMaxSeconds         float64               `json:"model_retry_max_seconds"`
-	ModelRequestsPerMinute       int                   `json:"model_requests_per_minute"`
-	ModelMaxConcurrency          int                   `json:"model_max_concurrency"`
-	QQEnabled                    bool                  `json:"qq_enabled"`
-	QQWSURL                      string                `json:"qq_ws_url"`
-	QQBotID                      string                `json:"qq_bot_id"`
-	QQAllowedGroupIDs            []string              `json:"qq_allowed_group_ids"`
-	QQAllowedPrivateUserIDs      []string              `json:"qq_allowed_private_user_ids"`
-	QQQuickReplies               []QQQuickReply        `json:"qq_quick_replies"`
-	QQPokeReplies                []string              `json:"qq_poke_replies"`
-	PromptCatalog                promptcatalog.Catalog `json:"prompt_catalog"`
-	BaseSystemPrompt             string                `json:"base_system_prompt"`
-	UpdatedAt                    time.Time             `json:"updated_at"`
+	Revision                     uint64                  `json:"revision"`
+	Model                        string                  `json:"model"`
+	ModelBaseURL                 string                  `json:"model_base_url"`
+	ModelRequestTimeoutSeconds   float64                 `json:"model_request_timeout_seconds"`
+	ModelReadinessTimeoutSeconds float64                 `json:"model_readiness_timeout_seconds"`
+	ModelMaxRetries              int                     `json:"model_max_retries"`
+	ModelRetryBaseSeconds        float64                 `json:"model_retry_base_seconds"`
+	ModelRetryMaxSeconds         float64                 `json:"model_retry_max_seconds"`
+	ModelRequestsPerMinute       int                     `json:"model_requests_per_minute"`
+	ModelMaxConcurrency          int                     `json:"model_max_concurrency"`
+	QQEnabled                    bool                    `json:"qq_enabled"`
+	QQWSURL                      string                  `json:"qq_ws_url"`
+	QQBotID                      string                  `json:"qq_bot_id"`
+	QQAllowedGroupIDs            []string                `json:"qq_allowed_group_ids"`
+	QQAllowedPrivateUserIDs      []string                `json:"qq_allowed_private_user_ids"`
+	QQQuickReplies               []QQQuickReply          `json:"qq_quick_replies"`
+	QQPokeReplies                []string                `json:"qq_poke_replies"`
+	PromptCatalog                promptcatalog.Catalog   `json:"prompt_catalog"`
+	BaseSystemPrompt             string                  `json:"base_system_prompt"`
+	ChannelPrompts               map[string]string       `json:"channel_prompts"`
+	AgentRun                     AgentRunSettings        `json:"agent_run"`
+	Orchestration                OrchestrationSettings   `json:"orchestration"`
+	ContextAssembly              ContextAssemblySettings `json:"context_assembly"`
+	Scheduler                    SchedulerSettings       `json:"scheduler"`
+	QQConnection                 QQConnectionSettings    `json:"qq_connection"`
+	AgentProcess                 AgentProcessSettings    `json:"agent_process"`
+	Governance                   GovernanceSettings      `json:"governance"`
+	UpdatedAt                    time.Time               `json:"updated_at"`
 }
 
 // SaveInput 是 WebUI 写入契约。秘密为空表示保留已有值。
 type SaveInput struct {
-	Revision                     uint64                `json:"revision"`
-	Model                        string                `json:"model"`
-	ModelBaseURL                 string                `json:"model_base_url"`
-	ModelAPIKey                  string                `json:"model_api_key"`
-	ModelRequestTimeoutSeconds   float64               `json:"model_request_timeout_seconds"`
-	ModelReadinessTimeoutSeconds float64               `json:"model_readiness_timeout_seconds"`
-	ModelMaxRetries              int                   `json:"model_max_retries"`
-	ModelRetryBaseSeconds        float64               `json:"model_retry_base_seconds"`
-	ModelRetryMaxSeconds         float64               `json:"model_retry_max_seconds"`
-	ModelRequestsPerMinute       int                   `json:"model_requests_per_minute"`
-	ModelMaxConcurrency          int                   `json:"model_max_concurrency"`
-	QQEnabled                    bool                  `json:"qq_enabled"`
-	QQWSURL                      string                `json:"qq_ws_url"`
-	QQWSToken                    string                `json:"qq_ws_token"`
-	ClearQQWSToken               bool                  `json:"clear_qq_ws_token"`
-	QQBotID                      string                `json:"qq_bot_id"`
-	QQAllowedGroupIDs            []string              `json:"qq_allowed_group_ids"`
-	QQAllowedPrivateUserIDs      []string              `json:"qq_allowed_private_user_ids"`
-	QQQuickReplies               []QQQuickReply        `json:"qq_quick_replies"`
-	QQPokeReplies                []string              `json:"qq_poke_replies"`
-	PromptCatalog                promptcatalog.Catalog `json:"prompt_catalog"`
-	BaseSystemPrompt             string                `json:"base_system_prompt"`
+	Revision                     uint64                  `json:"revision"`
+	Model                        string                  `json:"model"`
+	ModelBaseURL                 string                  `json:"model_base_url"`
+	ModelAPIKey                  string                  `json:"model_api_key"`
+	ModelRequestTimeoutSeconds   float64                 `json:"model_request_timeout_seconds"`
+	ModelReadinessTimeoutSeconds float64                 `json:"model_readiness_timeout_seconds"`
+	ModelMaxRetries              int                     `json:"model_max_retries"`
+	ModelRetryBaseSeconds        float64                 `json:"model_retry_base_seconds"`
+	ModelRetryMaxSeconds         float64                 `json:"model_retry_max_seconds"`
+	ModelRequestsPerMinute       int                     `json:"model_requests_per_minute"`
+	ModelMaxConcurrency          int                     `json:"model_max_concurrency"`
+	QQEnabled                    bool                    `json:"qq_enabled"`
+	QQWSURL                      string                  `json:"qq_ws_url"`
+	QQWSToken                    string                  `json:"qq_ws_token"`
+	ClearQQWSToken               bool                    `json:"clear_qq_ws_token"`
+	QQBotID                      string                  `json:"qq_bot_id"`
+	QQAllowedGroupIDs            []string                `json:"qq_allowed_group_ids"`
+	QQAllowedPrivateUserIDs      []string                `json:"qq_allowed_private_user_ids"`
+	QQQuickReplies               []QQQuickReply          `json:"qq_quick_replies"`
+	QQPokeReplies                []string                `json:"qq_poke_replies"`
+	PromptCatalog                promptcatalog.Catalog   `json:"prompt_catalog"`
+	BaseSystemPrompt             string                  `json:"base_system_prompt"`
+	ChannelPrompts               map[string]string       `json:"channel_prompts"`
+	AgentRun                     AgentRunSettings        `json:"agent_run"`
+	Orchestration                OrchestrationSettings   `json:"orchestration"`
+	ContextAssembly              ContextAssemblySettings `json:"context_assembly"`
+	Scheduler                    SchedulerSettings       `json:"scheduler"`
+	QQConnection                 QQConnectionSettings    `json:"qq_connection"`
+	AgentProcess                 AgentProcessSettings    `json:"agent_process"`
+	Governance                   GovernanceSettings      `json:"governance"`
 }
 
 // QQQuickReply 是本机控制面使用的 QQ 精确快速回复配置。
@@ -109,6 +125,14 @@ func DefaultSettings() Settings {
 		QQQuickReplies: []QQQuickReply{}, QQPokeReplies: qq.DefaultPokeReplies(),
 		PromptCatalog:    promptcatalog.Default(),
 		BaseSystemPrompt: promptcatalog.DefaultBaseSystemPrompt,
+		ChannelPrompts:   promptcatalog.DefaultChannelPrompts(),
+		AgentRun:         defaultAgentRunSettings(),
+		Orchestration:    defaultOrchestrationSettings(),
+		ContextAssembly:  defaultContextAssemblySettings(),
+		Scheduler:        defaultSchedulerSettings(),
+		QQConnection:     defaultQQConnectionSettings(),
+		AgentProcess:     defaultAgentProcessSettings(),
+		Governance:       defaultGovernanceSettings(),
 	}
 }
 
@@ -123,12 +147,52 @@ func normalize(input SaveInput) (Settings, error) {
 		QQAllowedPrivateUserIDs: input.QQAllowedPrivateUserIDs, QQQuickReplies: input.QQQuickReplies,
 		QQPokeReplies: input.QQPokeReplies, PromptCatalog: input.PromptCatalog,
 		BaseSystemPrompt: input.BaseSystemPrompt,
+		ChannelPrompts:   input.ChannelPrompts,
+		AgentRun:         input.AgentRun,
+		Orchestration:    input.Orchestration,
+		ContextAssembly:  input.ContextAssembly,
+		Scheduler:        input.Scheduler,
+		QQConnection:     input.QQConnection,
+		AgentProcess:     input.AgentProcess,
+		Governance:       input.Governance,
 	}
 	promptCatalog, err := promptcatalog.Normalize(input.PromptCatalog)
 	if err != nil {
 		return Settings{}, ErrInvalid
 	}
 	baseSystemPrompt, err := promptcatalog.NormalizeBaseSystemPrompt(input.BaseSystemPrompt)
+	if err != nil {
+		return Settings{}, ErrInvalid
+	}
+	channelPrompts, err := promptcatalog.NormalizeChannelPrompts(input.ChannelPrompts)
+	if err != nil {
+		return Settings{}, ErrInvalid
+	}
+	agentRun, err := normalizeAgentRun(input.AgentRun)
+	if err != nil {
+		return Settings{}, ErrInvalid
+	}
+	orchestration, err := normalizeOrchestration(input.Orchestration)
+	if err != nil {
+		return Settings{}, ErrInvalid
+	}
+	contextAssembly, err := normalizeContextAssembly(input.ContextAssembly)
+	if err != nil {
+		return Settings{}, ErrInvalid
+	}
+	scheduler, err := normalizeScheduler(input.Scheduler)
+	if err != nil {
+		return Settings{}, ErrInvalid
+	}
+	qqConnection, err := normalizeQQConnection(input.QQConnection)
+	if err != nil {
+		return Settings{}, ErrInvalid
+	}
+	agentProcess, err := normalizeAgentProcess(input.AgentProcess)
+	if err != nil {
+		return Settings{}, ErrInvalid
+	}
+	governance, err := normalizeGovernance(input.Governance)
 	if err != nil {
 		return Settings{}, ErrInvalid
 	}
@@ -143,6 +207,14 @@ func normalize(input SaveInput) (Settings, error) {
 	}
 	settings.PromptCatalog = promptCatalog
 	settings.BaseSystemPrompt = baseSystemPrompt
+	settings.ChannelPrompts = channelPrompts
+	settings.AgentRun = agentRun
+	settings.Orchestration = orchestration
+	settings.ContextAssembly = contextAssembly
+	settings.Scheduler = scheduler
+	settings.QQConnection = qqConnection
+	settings.AgentProcess = agentProcess
+	settings.Governance = governance
 	qqValue, err := qqsettings.Normalize(qqsettings.Settings{
 		AppID: "campus-services", Enabled: settings.QQEnabled, WSURL: settings.QQWSURL, BotQQID: settings.QQBotID,
 		AllowedGroupIDs: settings.QQAllowedGroupIDs, AllowedPrivateUserIDs: settings.QQAllowedPrivateUserIDs,
@@ -180,6 +252,14 @@ func validateStored(settings Settings) (Settings, error) {
 		QQAllowedPrivateUserIDs: settings.QQAllowedPrivateUserIDs, QQQuickReplies: settings.QQQuickReplies,
 		QQPokeReplies: settings.QQPokeReplies, PromptCatalog: settings.PromptCatalog,
 		BaseSystemPrompt: settings.BaseSystemPrompt,
+		ChannelPrompts:   settings.ChannelPrompts,
+		AgentRun:         settings.AgentRun,
+		Orchestration:    settings.Orchestration,
+		ContextAssembly:  settings.ContextAssembly,
+		Scheduler:        settings.Scheduler,
+		QQConnection:     settings.QQConnection,
+		AgentProcess:     settings.AgentProcess,
+		Governance:       settings.Governance,
 	})
 }
 

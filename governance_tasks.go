@@ -27,12 +27,12 @@ var (
 
 // confirmationSweepRequest 构造一轮确认过期清扫任务：周期对齐的幂等键保证
 // 同一轮次不会重复排队，可用时间与期限固定。
-func confirmationSweepRequest(appID string, nextAvailable time.Time) task.CreateRequest {
+func confirmationSweepRequest(appID string, interval time.Duration, nextAvailable time.Time) task.CreateRequest {
 	return task.CreateRequest{
 		AppID:          appID,
 		Type:           confirmationSweepType,
 		Params:         sweepParams,
-		IdempotencyKey: "confirmation.expiry." + nextAvailable.Truncate(confirmationSweepInterval).UTC().Format(time.RFC3339),
+		IdempotencyKey: "confirmation.expiry." + nextAvailable.Truncate(interval).UTC().Format(time.RFC3339),
 		Deadline:       nextAvailable.Add(2 * time.Hour),
 		AvailableAt:    nextAvailable,
 	}
@@ -62,7 +62,7 @@ func registerGovernanceTaskTypes(types *task.TypeRegistry, confirmations *confir
 				)
 			}
 			// 无条件安排下一轮：清扫链的生命周期独立于单次成败。
-			_, scheduleErr := scheduler.Create(ctx, confirmationSweepRequest(value.AppID, time.Now().UTC().Add(interval)))
+			_, scheduleErr := scheduler.Create(ctx, confirmationSweepRequest(value.AppID, interval, time.Now().UTC().Add(interval)))
 			if scheduleErr != nil {
 				observe.Error(ctx, "安排下一轮确认过期清扫失败", scheduleErr,
 					observe.StringAttr("app_id", value.AppID),
@@ -76,6 +76,6 @@ func registerGovernanceTaskTypes(types *task.TypeRegistry, confirmations *confir
 // seedConfirmationSweep 在启动时播种第一轮清扫任务。首个周期从 interval 后开始，
 // 避免进程刚起来就立刻清扫一遍。
 func seedConfirmationSweep(ctx context.Context, scheduler *task.Scheduler, appID string, interval time.Duration) error {
-	_, err := scheduler.Create(ctx, confirmationSweepRequest(appID, time.Now().UTC().Add(interval)))
+	_, err := scheduler.Create(ctx, confirmationSweepRequest(appID, interval, time.Now().UTC().Add(interval)))
 	return err
 }

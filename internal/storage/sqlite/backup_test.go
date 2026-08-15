@@ -61,7 +61,7 @@ func TestBackupAndRestorePreserveCompleteSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	child := childRunRecord(parent, "backup-child", "backup-call", now)
-	if err := store.CreateChildRun(t.Context(), parent, child); err != nil {
+	if err := store.CreateChildRun(t.Context(), parent, child, 1); err != nil {
 		t.Fatal(err)
 	}
 	claimedChild, err := store.ClaimChildRun(t.Context(), child.AppID, child.EchoID, child.ID, parent.ID, "child-lease", now, now.Add(time.Minute))

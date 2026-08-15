@@ -56,7 +56,7 @@ func TestManagerAppliesUpdatesWithoutRestartingGoProcess(t *testing.T) {
 		runner := &managerTestRunner{stopped: make(chan struct{})}
 		runners <- runner
 		return runner, nil
-	})
+	}, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}

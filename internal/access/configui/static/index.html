@@ -74,6 +74,69 @@
         </div>
       </section>
 
+      <section class="config-section runtime-section" aria-labelledby="agent-run-title">
+        <div class="section-heading">
+          <div><span class="section-mark">AGENT RUN</span><h2 id="agent-run-title">Agent 运行与编排</h2></div>
+          <p>决定单次 Run 的步数、调用数、Token 预算、时区、队列深度与调用链深度。</p>
+        </div>
+        <div class="metric-grid">
+          <label class="field"><span>时区</span><input id="agent-timezone" maxlength="128" placeholder="Asia/Shanghai" required></label>
+          <label class="field"><span>最大推理步数</span><input id="agent-max-steps" type="number" min="1" max="64" step="1" required></label>
+          <label class="field"><span>最大工具调用数</span><input id="agent-max-tool-calls" type="number" min="1" max="128" step="1" required></label>
+          <label class="field"><span>输入 Token 上限</span><input id="agent-max-input-tokens" type="number" min="1" max="10000000" step="1" required></label>
+          <label class="field"><span>输出 Token 上限</span><input id="agent-max-output-tokens" type="number" min="1" max="1000000" step="1" required></label>
+          <label class="field"><span>总 Token 上限</span><input id="agent-max-total-tokens" type="number" min="1" max="11000000" step="1" required></label>
+          <label class="field"><span>输出字节上限</span><input id="agent-max-output-bytes" type="number" min="1" max="262144" step="1" required></label>
+          <label class="field"><span>子 Agent 数量上限（默认 4）</span><input id="agent-max-child-runs" type="number" min="1" max="32" step="1" required></label>
+          <label class="field"><span>Run 超时（秒）</span><input id="run-timeout" type="number" min="1" max="600" step="1" required></label>
+          <label class="field"><span>最大重试次数</span><input id="run-max-attempts" type="number" min="1" max="10" step="1" required></label>
+          <label class="field"><span>队列容量</span><input id="run-queue-capacity" type="number" min="1" max="10000" step="1" required></label>
+          <label class="field"><span>调用链最大深度</span><input id="run-max-call-depth" type="number" min="1" max="64" step="1" required></label>
+        </div>
+      </section>
+
+      <section class="config-section runtime-section" aria-labelledby="context-title">
+        <div class="section-heading">
+          <div><span class="section-mark">CONTEXT</span><h2 id="context-title">上下文装配</h2></div>
+          <p>决定会话历史能进入系统提示的条数、字符与总预算；超出时保留最新、丢弃最旧。</p>
+        </div>
+        <div class="metric-grid">
+          <label class="field"><span>历史最大条数</span><input id="context-max-messages" type="number" min="1" max="1000" step="1" required></label>
+          <label class="field"><span>单条最大字符</span><input id="context-max-chars-per-msg" type="number" min="1" max="65536" step="1" required></label>
+          <label class="field"><span>历史总字符上限</span><input id="context-max-total-chars" type="number" min="1" max="1048576" step="1" required></label>
+          <label class="field"><span>系统提示字节上限</span><input id="context-max-prompt-bytes" type="number" min="1" max="32768" step="1" required></label>
+        </div>
+      </section>
+
+      <section class="config-section runtime-section" aria-labelledby="scheduler-title">
+        <div class="section-heading">
+          <div><span class="section-mark">SCHEDULER</span><h2 id="scheduler-title">调度与治理</h2></div>
+          <p>持久 Run 队列的消费速度，以及确认过期清扫周期。</p>
+        </div>
+        <div class="metric-grid">
+          <label class="field"><span>调度 worker 数</span><input id="scheduler-workers" type="number" min="1" max="64" step="1" required></label>
+          <label class="field"><span>轮询周期（毫秒）</span><input id="scheduler-poll-ms" type="number" min="10" max="60000" step="1" required></label>
+          <label class="field"><span>批处理大小</span><input id="scheduler-batch-size" type="number" min="1" max="1000" step="1" required></label>
+          <label class="field"><span>确认过期清扫（秒）</span><input id="governance-confirmation-sweep" type="number" min="10" max="86400" step="1" required></label>
+        </div>
+      </section>
+
+      <section class="config-section runtime-section" aria-labelledby="connections-title">
+        <div class="section-heading">
+          <div><span class="section-mark">CONNECTIONS</span><h2 id="connections-title">连接与进程监督</h2></div>
+          <p>QQ OneBot 连接参数，以及 Python Agent 进程的拨号与停止宽限。</p>
+        </div>
+        <div class="metric-grid">
+          <label class="field"><span>QQ 拨号超时（秒）</span><input id="qq-dial-timeout" type="number" min="0.1" max="120" step="0.1" required></label>
+          <label class="field"><span>QQ 重连延迟（秒）</span><input id="qq-reconnect-delay" type="number" min="0.1" max="600" step="0.1" required></label>
+          <label class="field"><span>QQ Run 超时（秒）</span><input id="qq-run-timeout" type="number" min="1" max="3600" step="1" required></label>
+          <label class="field"><span>QQ 管理器停止超时（秒）</span><input id="qq-manager-stop-timeout" type="number" min="1" max="120" step="1" required></label>
+          <label class="field"><span>Agent 拨号超时（秒）</span><input id="agent-dial-timeout" type="number" min="1" max="120" step="1" required></label>
+          <label class="field"><span>Agent 停止宽限（秒）</span><input id="agent-stop-grace" type="number" min="1" max="120" step="1" required></label>
+          <label class="field"><span>Agent 强杀宽限（秒）</span><input id="agent-terminate-grace" type="number" min="1" max="60" step="1" required></label>
+        </div>
+      </section>
+
       <section class="config-section prompt-section" aria-labelledby="prompt-title">
         <div class="section-heading">
           <div><span class="section-mark">PERSONA</span><h2 id="prompt-title">提示词配置</h2></div>
@@ -83,6 +146,11 @@
           <span><strong>基础系统提示词</strong><small>人格、系统指令、行为准则与通用事实；留空则恢复 V2 默认。</small></span>
           <textarea id="prompt-base" rows="18" maxlength="16384" placeholder="留空保存将恢复 V2 默认基础提示"></textarea>
         </label>
+        <div class="channel-prompts-grid">
+          <label class="field"><span>web 端渠道提示</span><textarea id="prompt-channel-web" rows="12" maxlength="8192"></textarea></label>
+          <label class="field"><span>QQ 群渠道提示</span><textarea id="prompt-channel-qq-group" rows="12" maxlength="8192"></textarea></label>
+          <label class="field"><span>QQ 私聊渠道提示</span><textarea id="prompt-channel-qq-private" rows="12" maxlength="8192"></textarea></label>
+        </div>
         <div id="prompt-catalog-editor" class="prompt-catalog-editor"></div>
       </section>
 

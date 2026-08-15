@@ -28,6 +28,7 @@ import (
 	controlconfig "github.com/projectluojia/AI-Luo-Man-ga/internal/controlplane/config"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/appconfig"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/confirmation"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contextasm"
 	kernelecho "github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/executor"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/health"
@@ -459,14 +460,23 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 	if strings.TrimSpace(baseSystemPrompt) == "" {
 		baseSystemPrompt = promptcatalog.DefaultBaseSystemPrompt
 	}
+	channelPrompts := config.channelPrompts
+	if len(channelPrompts) == 0 {
+		channelPrompts = promptcatalog.DefaultChannelPrompts()
+	}
 	reg := registry.New()
 	app, created, err := store.Ensure(ctx, appconfig.Config{
 		AppID: campus.AppID, Enabled: true, Model: config.model,
-		SystemPrompt:   baseSystemPrompt,
-		ChannelPrompts: defaultChannelPrompts,
-		Timezone:       "Asia/Shanghai", MaxSteps: 8, MaxToolCalls: 8,
-		MaxInputTokens: 32768, MaxOutputTokens: 8192, MaxTotalTokens: 40960,
-		MaxOutputBytes: 65536, ProviderTimeout: config.modelRequestTimeout,
+		SystemPrompt:    baseSystemPrompt,
+		ChannelPrompts:  channelPrompts,
+		Timezone:        config.agentRun.Timezone,
+		MaxSteps:        config.agentRun.MaxSteps,
+		MaxToolCalls:    config.agentRun.MaxToolCalls,
+		MaxInputTokens:  config.agentRun.MaxInputTokens,
+		MaxOutputTokens: config.agentRun.MaxOutputTokens,
+		MaxTotalTokens:  config.agentRun.MaxTotalTokens,
+		MaxOutputBytes:  config.agentRun.MaxOutputBytes,
+		ProviderTimeout: config.modelRequestTimeout,
 		EnabledCapabilities: []string{
 			campus.BusStopSearchCapabilityID,
 			campus.BusRouteListCapabilityID,
@@ -487,8 +497,15 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 		replacement := app
 		replacement.Model = config.model
 		replacement.ProviderTimeout = config.modelRequestTimeout
+		replacement.Timezone = config.agentRun.Timezone
+		replacement.MaxSteps = config.agentRun.MaxSteps
+		replacement.MaxToolCalls = config.agentRun.MaxToolCalls
+		replacement.MaxInputTokens = config.agentRun.MaxInputTokens
+		replacement.MaxOutputTokens = config.agentRun.MaxOutputTokens
+		replacement.MaxTotalTokens = config.agentRun.MaxTotalTokens
+		replacement.MaxOutputBytes = config.agentRun.MaxOutputBytes
 		replacement.SystemPrompt = baseSystemPrompt
-		replacement.ChannelPrompts = defaultChannelPrompts
+		replacement.ChannelPrompts = channelPrompts
 		replacement.EnabledCapabilities = ensurePromptCapabilities(app.EnabledCapabilities)
 		app, err = store.CompareAndSwap(ctx, app.Generation, replacement)
 		if err != nil {
@@ -517,7 +534,7 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 	// 的 Capability 在未获批准前 fail-closed（缺确认标识或验证失败一律拒绝执行）。
 	confirmations := confirmation.NewService(store, confirmation.Config{})
 	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{
-		MaxCallDepth:         16,
+		MaxCallDepth:         config.orchestration.MaxCallDepth,
 		IdempotencyStore:     store,
 		ConfirmationVerifier: confirmations,
 	})
@@ -546,9 +563,9 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 		Model:          app.Model,
 		Stdout:         os.Stdout,
 		Stderr:         os.Stderr,
-		DialTimeout:    15 * time.Second,
-		StopGrace:      5 * time.Second,
-		TerminateGrace: 2 * time.Second,
+		DialTimeout:    secondsDuration(config.agentProcess.DialTimeoutSeconds),
+		StopGrace:      secondsDuration(config.agentProcess.StopGraceSeconds),
+		TerminateGrace: secondsDuration(config.agentProcess.TerminateGraceSeconds),
 	})
 	if err != nil {
 		return fmt.Errorf("create built-in agent runtime: %w", err)
@@ -623,10 +640,17 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 		AppID:           campus.AppID,
 		AppConfigSource: store,
 		Context:         sessionService,
-		Prompts:         promptServiceRenderer{promptService},
-		RunTimeout:      90 * time.Second,
-		MaxRunAttempts:  3,
-		QueueCapacity:   128,
+		ContextBudget: contextasm.Budget{
+			MaxMessages:    config.contextAssembly.MaxMessages,
+			MaxCharsPerMsg: config.contextAssembly.MaxCharsPerMsg,
+			MaxTotalChars:  config.contextAssembly.MaxTotalChars,
+			MaxPromptBytes: config.contextAssembly.MaxPromptBytes,
+		},
+		Prompts:        promptServiceRenderer{promptService},
+		RunTimeout:     secondsDuration(config.orchestration.RunTimeoutSeconds),
+		MaxRunAttempts: config.orchestration.MaxRunAttempts,
+		QueueCapacity:  config.orchestration.QueueCapacity,
+		MaxChildRuns:   int(config.agentRun.MaxChildRuns),
 	})
 	if err := agent.Register(reg, orchestrator); err != nil {
 		return fmt.Errorf("register governed Subagent service: %w", err)
@@ -640,6 +664,7 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 	// 确认过期清扫（governance.confirmation.expiry），清扫链由任务自续，启动播种一轮。
 	taskTypes := task.NewTypeRegistry()
 	taskScheduler := task.NewScheduler(store, taskTypes, task.Config{})
+	confirmationSweepInterval := secondsDuration(config.governance.ConfirmationSweepSeconds)
 	if err := registerGovernanceTaskTypes(taskTypes, confirmations, taskScheduler, confirmationSweepInterval); err != nil {
 		return fmt.Errorf("register governance task types: %w", err)
 	}
@@ -678,13 +703,17 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 			AllowedGroupIDs: settings.AllowedGroupIDs, AllowedPrivateUserIDs: settings.AllowedPrivateUserIDs,
 			QuickReplies: config.qqQuickReplies, PokeReplies: config.qqPokeReplies,
 			Provisioner: qqProvisioner, OnConnectionChange: connectionChange,
+			DialTimeout:    secondsDuration(config.qqConnection.DialTimeoutSeconds),
+			ReconnectDelay: secondsDuration(config.qqConnection.ReconnectDelaySeconds),
+			RunTimeout:     secondsDuration(config.qqConnection.RunTimeoutSeconds),
 		}, platformHub, qqEvents, orchestrator, store)
-	})
+	}, secondsDuration(config.qqConnection.ManagerStopTimeoutSeconds))
 	if err != nil {
 		return fmt.Errorf("configure QQ access manager: %w", err)
 	}
 	webAccess := web.NewServer(ctx, orchestrator, store, readiness, reg, policy, campus.AppID, platformHub,
-		web.WithEventHub(qqEvents))
+		web.WithEventHub(qqEvents),
+		web.WithScheduler(config.scheduler.Workers, time.Duration(config.scheduler.PollMs)*time.Millisecond, config.scheduler.BatchSize))
 	// 平台事件入口独立挂载：/api/v1/ingress/{platform} 由平台适配器规范化事件驱动，
 	// 其余路径全部交给 Web Access（健康检查、Echo/SSE、演示页面）。
 	ingressServer := ingress.NewServer(campus.AppID, platformHub, orchestrator)
@@ -799,6 +828,14 @@ type config struct {
 	qqPokeReplies       []string
 	promptCatalog       promptcatalog.Catalog
 	baseSystemPrompt    string
+	channelPrompts      map[string]string
+	agentRun            controlconfig.AgentRunSettings
+	orchestration       controlconfig.OrchestrationSettings
+	contextAssembly     controlconfig.ContextAssemblySettings
+	scheduler           controlconfig.SchedulerSettings
+	qqConnection        controlconfig.QQConnectionSettings
+	agentProcess        controlconfig.AgentProcessSettings
+	governance          controlconfig.GovernanceSettings
 }
 
 func loadConfig() (config, error) {
@@ -986,6 +1023,14 @@ func applyLocalConfig(base config, resolved controlconfig.Resolved) (config, err
 	base.qqPokeReplies = append([]string(nil), settings.QQPokeReplies...)
 	base.promptCatalog = settings.PromptCatalog.Clone()
 	base.baseSystemPrompt = settings.BaseSystemPrompt
+	base.channelPrompts = cloneStringMap(settings.ChannelPrompts)
+	base.agentRun = settings.AgentRun
+	base.orchestration = settings.Orchestration
+	base.contextAssembly = settings.ContextAssembly
+	base.scheduler = settings.Scheduler
+	base.qqConnection = settings.QQConnection
+	base.agentProcess = settings.AgentProcess
+	base.governance = settings.Governance
 	base.qqToken = ""
 	if resolved.QQWSTokenFile != "" {
 		content, err := os.ReadFile(resolved.QQWSTokenFile)
@@ -1172,6 +1217,17 @@ func (r promptServiceRenderer) RenderSystemPrompt(ctx context.Context, request k
 	})
 }
 
+func cloneStringMap(values map[string]string) map[string]string {
+	if values == nil {
+		return nil
+	}
+	result := make(map[string]string, len(values))
+	for key, value := range values {
+		result[key] = value
+	}
+	return result
+}
+
 func ensurePromptCapabilities(existing []string) []string {
 	result := append([]string(nil), existing...)
 	for _, capabilityID := range []string{
@@ -1185,4 +1241,8 @@ func ensurePromptCapabilities(existing []string) []string {
 		}
 	}
 	return result
+}
+
+func secondsDuration(value float64) time.Duration {
+	return time.Duration(value * float64(time.Second))
 }

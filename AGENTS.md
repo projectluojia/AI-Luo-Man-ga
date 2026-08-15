@@ -31,7 +31,7 @@ AI珞 V3 是长期维护的生产级项目。功能范围可以窄，但已实�
 - 跨进程通信使用版本化 gRPC/Protobuf，不引入私有传输协议。
 - 逻辑边界不等于一组件一进程、一端口、一队列或一数据库。
 - 可变业务状态不得只存在内存。Go 在 Agent、Tool Host、客户端或进程崩溃后仍保持权威。
-- Subagent 是 Go 创建的持久 child Run，具有 `parent_run_id`、收窄权限、独立预算、受治理取消和显式结果路由；Python 不得私建未跟踪子任务。
+- Subagent 是 Go 创建的持久 child Run，具有 `parent_run_id`、收窄权限、独立预算、受治理取消和显式结果路由；root 可并行创建多个直接 child（默认最多 4 个，受配置上限约束），但 child 不得再创建 Subagent，Python 不得私建未跟踪子任务。
 
 ## Repository Layout
 

@@ -99,3 +99,6 @@ h1 em { color: var(--signal); font-style: normal; }
 .prompt-base-editor small { color: var(--muted); font-size: 12px; font-weight: 400; }
 .prompt-base-editor textarea { min-height: 320px; border: 1px solid #31545a; border-radius: 2px; background: #08191d; color: var(--text); padding: 13px; font: 400 14px/1.65 "IBM Plex Sans", "Noto Sans SC", "PingFang SC", system-ui, sans-serif; resize: vertical; }
 .prompt-base-editor textarea:focus { outline: 3px solid #77e4c022; border-color: var(--signal); }
+.channel-prompts-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin-bottom: 24px; }
+.channel-prompts-grid .field textarea { min-height: 240px; font: 400 13px/1.55 "IBM Plex Sans", "Noto Sans SC", "PingFang SC", system-ui, sans-serif; }
+@media (max-width: 980px) { .channel-prompts-grid { grid-template-columns: 1fr; } }

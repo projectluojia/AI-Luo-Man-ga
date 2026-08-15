@@ -37,7 +37,7 @@ func newFakeOneBot(t *testing.T) *fakeOneBot {
 	bot := &fakeOneBot{
 		authHeader: make(chan string, 1),
 		conns:      make(chan *websocket.Conn, 1),
-		received:   make(chan map[string]any, 8),
+		received:   make(chan map[string]any, 32),
 		upgrader:   websocket.Upgrader{},
 	}
 	bot.server = httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -256,6 +256,97 @@ func TestQQAdapterIntakesAndReplies(t *testing.T) {
 		assertGroupReply(t, params["message"], "67890", "你好呀")
 	case <-time.After(5 * time.Second):
 		t.Fatal("adapter did not send the reply")
+	}
+}
+
+func TestQQAdapterForwardsEverySubagentTerminalReply(t *testing.T) {
+	store, err := sqlite.Open(filepath.Join(t.TempDir(), "qq-subagents.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	bot := newFakeOneBot(t)
+	hub := newQQTestHub(t, store, stubResolver{user: "user-1"})
+	events := access.NewEventHub()
+	orchestrator := &qqFakeOrchestrator{store: store, created: make(chan struct{})}
+	adapter, err := New(Config{
+		AppID: "campus-services", WSURL: bot.wsURL(), BotQQID: testBotQQID,
+		AllowedGroupIDs: []string{"12345"}, Provisioner: testProvisioner{},
+		DialTimeout: 2 * time.Second, ReconnectDelay: 50 * time.Millisecond, RunTimeout: 5 * time.Second,
+	}, hub, events, orchestrator, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = adapter.Run(ctx) }()
+	select {
+	case <-bot.authHeader:
+	case <-time.After(5 * time.Second):
+		t.Fatal("adapter did not connect")
+	}
+	bot.sendEvent(t, `{"post_type":"message","message_type":"group","group_id":12345,"user_id":67890,"message_id":"qq-subagents-1","message":[{"type":"at","data":{"qq":"2647414417"}},{"type":"text","data":{"text":"创建四个子代理并立刻结束"}}]}`)
+	select {
+	case <-orchestrator.created:
+	case <-time.After(5 * time.Second):
+		t.Fatal("orchestrator was not invoked")
+	}
+	now := time.Now().UTC()
+	root, err := store.ClaimRun(ctx, "campus-services", orchestrator.echoID, "lease-root", now, now.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendAndPublish := func(runID, eventType, payload string) {
+		t.Helper()
+		stored, appendErr := store.AppendEchoEvent(ctx, kernelecho.Event{
+			AppID: "campus-services", EchoID: orchestrator.echoID, RunID: runID,
+			Type: eventType, Payload: []byte(payload), CreatedAt: time.Now().UTC(),
+		})
+		if appendErr != nil {
+			t.Fatal(appendErr)
+		}
+		events.Publish(stored)
+	}
+	for index := 1; index <= 4; index++ {
+		appendAndPublish(root.ID, "subagent.created", fmt.Sprintf(`{"run_id":"child-%d","parent_run_id":%q,"status":"queued"}`, index, root.ID))
+	}
+	appendAndPublish(root.ID, "reply.final", `{"text":"四个子 Agent 已派出"}`)
+	for _, index := range []int{2, 1, 4, 3} {
+		appendAndPublish(root.ID, "subagent.completed", fmt.Sprintf(`{"run_id":"child-%d","parent_run_id":%q,"status":"succeeded","text":"结果%d"}`, index, root.ID, index))
+	}
+
+	terminalReplies := make(map[string]bool, 4)
+	for received := 0; received < 9; received++ {
+		select {
+		case action := <-bot.received:
+			params, _ := action["params"].(map[string]any)
+			message := params["message"]
+			text, plain := message.(string)
+			if !plain {
+				continue
+			}
+			for index := 1; index <= 4; index++ {
+				expected := fmt.Sprintf("子 Agent 已完成：结果%d", index)
+				if text == expected {
+					terminalReplies[expected] = true
+				}
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("only received terminal replies=%v", terminalReplies)
+		}
+	}
+	if len(terminalReplies) != 4 {
+		t.Fatalf("terminal replies=%v, want all four", terminalReplies)
+	}
+}
+
+func TestSubagentReplyLifecycleHandlesTerminalBeforeCreated(t *testing.T) {
+	lifecycle := newSubagentReplyLifecycle()
+	lifecycle.observe(kernelecho.Event{Type: "subagent.completed", Payload: []byte(`{"run_id":"child-fast"}`)})
+	lifecycle.observe(kernelecho.Event{Type: "subagent.created", Payload: []byte(`{"run_id":"child-fast"}`)})
+	lifecycle.rootTerminal = true
+	if !lifecycle.complete() {
+		t.Fatal("terminal observed before created left the child pending")
 	}
 }
 

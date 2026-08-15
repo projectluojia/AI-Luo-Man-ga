@@ -184,7 +184,7 @@ type Store interface {
 	idempotency.Store
 	CreateEchoRun(ctx context.Context, echo Record, run RunRecord) error
 	CreateEchoRunIdempotentLimited(ctx context.Context, key, fingerprint string, echo Record, run RunRecord, maxPending int) (string, bool, error)
-	CreateChildRun(ctx context.Context, parent, child RunRecord) error
+	CreateChildRun(ctx context.Context, parent, child RunRecord, maxChildRuns int) error
 	ClaimRun(ctx context.Context, appID, echoID, leaseToken string, startedAt, leaseExpiresAt time.Time) (RunRecord, error)
 	ClaimChildRun(ctx context.Context, appID, echoID, runID, parentRunID, leaseToken string, startedAt, leaseExpiresAt time.Time) (RunRecord, error)
 	FailQueuedChildRun(ctx context.Context, child RunRecord, failure publicerror.Error, completedAt time.Time) error

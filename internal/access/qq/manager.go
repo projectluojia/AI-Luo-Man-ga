@@ -9,7 +9,7 @@ import (
 	qqsettings "github.com/projectluojia/AI-Luo-Man-ga/internal/access/qq/settings"
 )
 
-const managerStopTimeout = 5 * time.Second
+const defaultManagerStopTimeout = 5 * time.Second
 
 // Runner 是 QQ 连接运行端口，便于 Manager 与具体 WebSocket 实现解耦。
 type Runner interface {
@@ -28,8 +28,9 @@ type RuntimeStatus struct {
 
 // Manager 负责 QQ 配置的持久化、启动、停止和热更新。
 type Manager struct {
-	store   qqsettings.Store
-	factory RunnerFactory
+	store       qqsettings.Store
+	factory     RunnerFactory
+	stopTimeout time.Duration
 
 	operationMu sync.Mutex
 	mu          sync.Mutex
@@ -41,11 +42,14 @@ type Manager struct {
 	started     bool
 }
 
-func NewManager(store qqsettings.Store, factory RunnerFactory) (*Manager, error) {
+func NewManager(store qqsettings.Store, factory RunnerFactory, stopTimeout time.Duration) (*Manager, error) {
 	if store == nil || factory == nil {
 		return nil, errors.New("qq manager configuration is incomplete")
 	}
-	return &Manager{store: store, factory: factory}, nil
+	if stopTimeout <= 0 {
+		stopTimeout = defaultManagerStopTimeout
+	}
+	return &Manager{store: store, factory: factory, stopTimeout: stopTimeout}, nil
 }
 
 // Start 读取持久配置；首次启动时用 seed 建立默认记录。seed 只用于首次运行，
@@ -121,7 +125,7 @@ func (m *Manager) replaceLocked(settings qqsettings.Settings) error {
 		if oldDone != nil {
 			select {
 			case <-oldDone:
-			case <-time.After(managerStopTimeout):
+			case <-time.After(m.stopTimeout):
 				return errors.New("qq adapter did not stop before timeout")
 			}
 		}
@@ -177,7 +181,7 @@ func (m *Manager) Shutdown(ctx context.Context) error {
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
-	case <-time.After(managerStopTimeout):
+	case <-time.After(m.stopTimeout):
 		return errors.New("qq adapter did not stop before timeout")
 	}
 }

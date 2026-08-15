@@ -145,19 +145,22 @@ func TestManagerPersistsPromptCatalogAndDefaultsLegacySettings(t *testing.T) {
 	input.PromptCatalog = promptcatalog.Default()
 	input.PromptCatalog.BasicStyles[0].Text = "自定义默认风格"
 	input.BaseSystemPrompt = "自定义基础系统提示"
+	input.ChannelPrompts = map[string]string{"web": "自定义 web 渠道提示", "qq_group": "自定义群渠道提示", "qq_private": "自定义私聊渠道提示"}
 	snapshot, err := manager.Save(input)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snapshot.Settings.PromptCatalog.BasicStyles[0].Text != "自定义默认风格" || snapshot.Settings.BaseSystemPrompt != "自定义基础系统提示" {
-		t.Fatalf("prompt catalog=%#v base=%q", snapshot.Settings.PromptCatalog.BasicStyles[0], snapshot.Settings.BaseSystemPrompt)
+	if snapshot.Settings.PromptCatalog.BasicStyles[0].Text != "自定义默认风格" || snapshot.Settings.BaseSystemPrompt != "自定义基础系统提示" ||
+		snapshot.Settings.ChannelPrompts["web"] != "自定义 web 渠道提示" {
+		t.Fatalf("prompt catalog=%#v base=%q channels=%#v", snapshot.Settings.PromptCatalog.BasicStyles[0], snapshot.Settings.BaseSystemPrompt, snapshot.Settings.ChannelPrompts)
 	}
 	reloaded, err := NewService(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resolved, ready := reloaded.CurrentResolved(); !ready || resolved.Settings.PromptCatalog.BasicStyles[0].Text != "自定义默认风格" || resolved.Settings.BaseSystemPrompt != "自定义基础系统提示" {
-		t.Fatalf("reloaded prompt catalog=%#v base=%q ready=%v", resolved.Settings.PromptCatalog.BasicStyles[0], resolved.Settings.BaseSystemPrompt, ready)
+	if resolved, ready := reloaded.CurrentResolved(); !ready || resolved.Settings.PromptCatalog.BasicStyles[0].Text != "自定义默认风格" || resolved.Settings.BaseSystemPrompt != "自定义基础系统提示" ||
+		resolved.Settings.ChannelPrompts["web"] != "自定义 web 渠道提示" {
+		t.Fatalf("reloaded prompt catalog=%#v base=%q channels=%#v ready=%v", resolved.Settings.PromptCatalog.BasicStyles[0], resolved.Settings.BaseSystemPrompt, resolved.Settings.ChannelPrompts, ready)
 	}
 	// 旧配置文件没有 prompt_catalog 字段：加载时自动补默认目录。
 	legacy := SaveInput{
@@ -180,6 +183,9 @@ func TestManagerPersistsPromptCatalogAndDefaultsLegacySettings(t *testing.T) {
 	if legacySnapshot.Settings.BaseSystemPrompt != promptcatalog.DefaultBaseSystemPrompt {
 		t.Fatal("legacy settings did not receive default base system prompt")
 	}
+	if len(legacySnapshot.Settings.ChannelPrompts) != len(promptcatalog.DefaultChannelPrompts()) {
+		t.Fatal("legacy settings did not receive default channel prompts")
+	}
 }
 
 func TestManagerRejectsInvalidPromptCatalog(t *testing.T) {
@@ -192,5 +198,56 @@ func TestManagerRejectsInvalidPromptCatalog(t *testing.T) {
 	input.PromptCatalog.BasicStyles[0].Key = "changed"
 	if _, err := manager.Save(input); err != ErrInvalid {
 		t.Fatalf("invalid prompt catalog error=%v", err)
+	}
+}
+
+func TestManagerPersistsRuntimeSettingsAndDefaultsLegacyValues(t *testing.T) {
+	root := t.TempDir()
+	manager, err := NewService(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := validInput()
+	input.AgentRun = AgentRunSettings{
+		Timezone: "Asia/Tokyo", MaxSteps: 12, MaxToolCalls: 16, MaxInputTokens: 20000,
+		MaxOutputTokens: 6000, MaxTotalTokens: 26000, MaxOutputBytes: 32768, MaxChildRuns: 3,
+	}
+	input.Orchestration = OrchestrationSettings{RunTimeoutSeconds: 120, MaxRunAttempts: 4, QueueCapacity: 256, MaxCallDepth: 20}
+	input.ContextAssembly = ContextAssemblySettings{MaxMessages: 30, MaxCharsPerMsg: 3000, MaxTotalChars: 20000, MaxPromptBytes: 20000}
+	input.Scheduler = SchedulerSettings{Workers: 6, PollMs: 400, BatchSize: 40}
+	input.QQConnection = QQConnectionSettings{DialTimeoutSeconds: 12, ReconnectDelaySeconds: 8, RunTimeoutSeconds: 240, ManagerStopTimeoutSeconds: 9}
+	input.AgentProcess = AgentProcessSettings{DialTimeoutSeconds: 20, StopGraceSeconds: 8, TerminateGraceSeconds: 3}
+	input.Governance = GovernanceSettings{ConfirmationSweepSeconds: 600}
+	snapshot, err := manager.Save(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := NewService(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings := reloaded.Snapshot().Settings
+	if settings.AgentRun.Timezone != "Asia/Tokyo" || settings.AgentRun.MaxChildRuns != 3 ||
+		settings.Orchestration.RunTimeoutSeconds != 120 || settings.ContextAssembly.MaxMessages != 30 ||
+		settings.Scheduler.Workers != 6 || settings.QQConnection.ReconnectDelaySeconds != 8 || settings.QQConnection.ManagerStopTimeoutSeconds != 9 ||
+		settings.AgentProcess.StopGraceSeconds != 8 || settings.Governance.ConfirmationSweepSeconds != 600 {
+		t.Fatalf("runtime settings=%+v", settings)
+	}
+	if snapshot.Settings.AgentRun.MaxSteps != 12 {
+		t.Fatalf("snapshot agent run=%+v", snapshot.Settings.AgentRun)
+	}
+	// 旧配置没有嵌套运行时设置：自动补默认值。
+	legacy, err := NewService(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacySnapshot, err := legacy.Save(validInput())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if legacySnapshot.Settings.AgentRun.MaxChildRuns != 4 ||
+		legacySnapshot.Settings.Orchestration.QueueCapacity != 128 ||
+		legacySnapshot.Settings.ContextAssembly.MaxMessages != 20 {
+		t.Fatalf("legacy runtime defaults=%+v", legacySnapshot.Settings)
 	}
 }

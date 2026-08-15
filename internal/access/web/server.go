@@ -53,27 +53,30 @@ type queuedRunOrchestrator interface {
 }
 
 type Server struct {
-	schedulerCtx     context.Context
-	stopSchedule     context.CancelFunc
-	orchestrator     EchoOrchestrator
-	reader           EchoReader
-	health           HealthChecker
-	registry         *registry.Registry
-	policy           runtime.AppPolicy
-	appID            string
-	platformHub      *access.Hub
-	webAuthenticator WebAuthenticator
-	qqAccessAdmin    QQAccessAdmin
-	hub              *access.EventHub
-	activeMu         sync.Mutex
-	active           map[runKey]context.CancelFunc
-	pending          map[echoKey]context.Context
-	activeWG         sync.WaitGroup
-	workerWG         sync.WaitGroup
-	admissionWG      sync.WaitGroup
-	workSignal       chan struct{}
-	scheduleOnce     sync.Once
-	accepting        bool
+	schedulerCtx       context.Context
+	stopSchedule       context.CancelFunc
+	orchestrator       EchoOrchestrator
+	reader             EchoReader
+	health             HealthChecker
+	registry           *registry.Registry
+	policy             runtime.AppPolicy
+	appID              string
+	platformHub        *access.Hub
+	webAuthenticator   WebAuthenticator
+	qqAccessAdmin      QQAccessAdmin
+	hub                *access.EventHub
+	activeMu           sync.Mutex
+	active             map[runKey]context.CancelFunc
+	pending            map[echoKey]context.Context
+	activeWG           sync.WaitGroup
+	workerWG           sync.WaitGroup
+	admissionWG        sync.WaitGroup
+	workSignal         chan struct{}
+	scheduleOnce       sync.Once
+	accepting          bool
+	schedulerWorkers   int
+	schedulerPoll      time.Duration
+	schedulerBatchSize int
 }
 
 const (
@@ -81,6 +84,21 @@ const (
 	schedulerBatchSize = 32
 	schedulerPoll      = 250 * time.Millisecond
 )
+
+// WithScheduler 配置持久 Run 调度器的 worker 数量、轮询周期与批大小。
+func WithScheduler(workers int, poll time.Duration, batchSize int) ServerOption {
+	return func(server *Server) {
+		if workers > 0 {
+			server.schedulerWorkers = workers
+		}
+		if poll > 0 {
+			server.schedulerPoll = poll
+		}
+		if batchSize > 0 {
+			server.schedulerBatchSize = batchSize
+		}
+	}
+}
 
 // echoKey 是活动/待处理 Echo 的进程内键。
 type echoKey struct {
@@ -108,20 +126,23 @@ func NewServer(
 ) *Server {
 	schedulerCtx, stopSchedule := context.WithCancel(ctx)
 	server := &Server{
-		schedulerCtx: schedulerCtx,
-		stopSchedule: stopSchedule,
-		orchestrator: orchestrator,
-		reader:       reader,
-		health:       health,
-		registry:     reg,
-		policy:       policy,
-		appID:        appID,
-		platformHub:  platformHub,
-		hub:          access.NewEventHub(),
-		active:       make(map[runKey]context.CancelFunc),
-		pending:      make(map[echoKey]context.Context),
-		workSignal:   make(chan struct{}, 1),
-		accepting:    true,
+		schedulerCtx:       schedulerCtx,
+		stopSchedule:       stopSchedule,
+		orchestrator:       orchestrator,
+		reader:             reader,
+		health:             health,
+		registry:           reg,
+		policy:             policy,
+		appID:              appID,
+		platformHub:        platformHub,
+		hub:                access.NewEventHub(),
+		active:             make(map[runKey]context.CancelFunc),
+		pending:            make(map[echoKey]context.Context),
+		workSignal:         make(chan struct{}, 1),
+		accepting:          true,
+		schedulerWorkers:   schedulerWorkers,
+		schedulerPoll:      schedulerPoll,
+		schedulerBatchSize: schedulerBatchSize,
 	}
 	for _, option := range options {
 		if option != nil {
@@ -348,7 +369,7 @@ func (s *Server) queueEcho(parent context.Context, echoID string) {
 }
 
 func (s *Server) startWorkers() {
-	for worker := 0; worker < schedulerWorkers; worker++ {
+	for worker := 0; worker < s.schedulerWorkers; worker++ {
 		s.workerWG.Add(1)
 		go s.worker()
 	}
@@ -356,7 +377,7 @@ func (s *Server) startWorkers() {
 
 func (s *Server) worker() {
 	defer s.workerWG.Done()
-	ticker := time.NewTicker(schedulerPoll)
+	ticker := time.NewTicker(s.schedulerPoll)
 	defer ticker.Stop()
 	for {
 		select {
@@ -377,7 +398,7 @@ func (s *Server) activateScheduler() {
 }
 
 func (s *Server) runNext() bool {
-	work, err := s.orchestrator.Runnable(s.schedulerCtx, schedulerBatchSize)
+	work, err := s.orchestrator.Runnable(s.schedulerCtx, s.schedulerBatchSize)
 	if err != nil {
 		if s.schedulerCtx.Err() == nil {
 			observe.Error(s.schedulerCtx, "读取持久 Run 队列失败", err,

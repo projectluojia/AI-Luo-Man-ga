@@ -104,6 +104,36 @@ function render(snapshot, preserveInputs = false) {
     byId('qq-quick-replies').value = quickReplyLines(settings.qq_quick_replies);
     byId('qq-poke-replies').value = (settings.qq_poke_replies || []).join('\n');
     byId('prompt-base').value = settings.base_system_prompt || '';
+    byId('prompt-channel-web').value = settings.channel_prompts?.web || '';
+    byId('prompt-channel-qq-group').value = settings.channel_prompts?.qq_group || '';
+    byId('prompt-channel-qq-private').value = settings.channel_prompts?.qq_private || '';
+    byId('agent-timezone').value = settings.agent_run?.timezone || 'Asia/Shanghai';
+    byId('agent-max-steps').value = settings.agent_run?.max_steps;
+    byId('agent-max-tool-calls').value = settings.agent_run?.max_tool_calls;
+    byId('agent-max-input-tokens').value = settings.agent_run?.max_input_tokens;
+    byId('agent-max-output-tokens').value = settings.agent_run?.max_output_tokens;
+    byId('agent-max-total-tokens').value = settings.agent_run?.max_total_tokens;
+    byId('agent-max-output-bytes').value = settings.agent_run?.max_output_bytes;
+    byId('agent-max-child-runs').value = settings.agent_run?.max_child_runs;
+    byId('run-timeout').value = settings.orchestration?.run_timeout_seconds;
+    byId('run-max-attempts').value = settings.orchestration?.max_run_attempts;
+    byId('run-queue-capacity').value = settings.orchestration?.queue_capacity;
+    byId('run-max-call-depth').value = settings.orchestration?.max_call_depth;
+    byId('context-max-messages').value = settings.context_assembly?.max_messages;
+    byId('context-max-chars-per-msg').value = settings.context_assembly?.max_chars_per_msg;
+    byId('context-max-total-chars').value = settings.context_assembly?.max_total_chars;
+    byId('context-max-prompt-bytes').value = settings.context_assembly?.max_prompt_bytes;
+    byId('scheduler-workers').value = settings.scheduler?.workers;
+    byId('scheduler-poll-ms').value = settings.scheduler?.poll_ms;
+    byId('scheduler-batch-size').value = settings.scheduler?.batch_size;
+    byId('governance-confirmation-sweep').value = settings.governance?.confirmation_sweep_seconds;
+    byId('qq-dial-timeout').value = settings.qq_connection?.dial_timeout_seconds;
+    byId('qq-reconnect-delay').value = settings.qq_connection?.reconnect_delay_seconds;
+    byId('qq-run-timeout').value = settings.qq_connection?.run_timeout_seconds;
+    byId('qq-manager-stop-timeout').value = settings.qq_connection?.manager_stop_timeout_seconds;
+    byId('agent-dial-timeout').value = settings.agent_process?.dial_timeout_seconds;
+    byId('agent-stop-grace').value = settings.agent_process?.stop_grace_seconds;
+    byId('agent-terminate-grace').value = settings.agent_process?.terminate_grace_seconds;
   }
   renderPromptCatalog(settings.prompt_catalog, preserveInputs);
   byId('model-key-state').textContent = snapshot.model_api_key_configured ? '已安全保存' : '未配置';
@@ -164,7 +194,53 @@ form.addEventListener('submit', async event => {
     qq_quick_replies: quickReplies,
     qq_poke_replies: listValue(byId('qq-poke-replies').value),
     prompt_catalog: promptCatalog,
-    base_system_prompt: byId('prompt-base').value.trim()
+    base_system_prompt: byId('prompt-base').value.trim(),
+    channel_prompts: {
+      web: byId('prompt-channel-web').value.trim(),
+      qq_group: byId('prompt-channel-qq-group').value.trim(),
+      qq_private: byId('prompt-channel-qq-private').value.trim()
+    },
+    agent_run: {
+      timezone: byId('agent-timezone').value.trim(),
+      max_steps: Number(byId('agent-max-steps').value),
+      max_tool_calls: Number(byId('agent-max-tool-calls').value),
+      max_input_tokens: Number(byId('agent-max-input-tokens').value),
+      max_output_tokens: Number(byId('agent-max-output-tokens').value),
+      max_total_tokens: Number(byId('agent-max-total-tokens').value),
+      max_output_bytes: Number(byId('agent-max-output-bytes').value),
+      max_child_runs: Number(byId('agent-max-child-runs').value)
+    },
+    orchestration: {
+      run_timeout_seconds: Number(byId('run-timeout').value),
+      max_run_attempts: Number(byId('run-max-attempts').value),
+      queue_capacity: Number(byId('run-queue-capacity').value),
+      max_call_depth: Number(byId('run-max-call-depth').value)
+    },
+    context_assembly: {
+      max_messages: Number(byId('context-max-messages').value),
+      max_chars_per_msg: Number(byId('context-max-chars-per-msg').value),
+      max_total_chars: Number(byId('context-max-total-chars').value),
+      max_prompt_bytes: Number(byId('context-max-prompt-bytes').value)
+    },
+    scheduler: {
+      workers: Number(byId('scheduler-workers').value),
+      poll_ms: Number(byId('scheduler-poll-ms').value),
+      batch_size: Number(byId('scheduler-batch-size').value)
+    },
+    qq_connection: {
+      dial_timeout_seconds: Number(byId('qq-dial-timeout').value),
+      reconnect_delay_seconds: Number(byId('qq-reconnect-delay').value),
+      run_timeout_seconds: Number(byId('qq-run-timeout').value),
+      manager_stop_timeout_seconds: Number(byId('qq-manager-stop-timeout').value)
+    },
+    agent_process: {
+      dial_timeout_seconds: Number(byId('agent-dial-timeout').value),
+      stop_grace_seconds: Number(byId('agent-stop-grace').value),
+      terminate_grace_seconds: Number(byId('agent-terminate-grace').value)
+    },
+    governance: {
+      confirmation_sweep_seconds: Number(byId('governance-confirmation-sweep').value)
+    }
   };
   try {
     const snapshot = await readJSON(await fetch('/api/v1/config', {method: 'PUT', headers: {'Content-Type': 'application/json', Accept: 'application/json'}, body: JSON.stringify(payload)}));

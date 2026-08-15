@@ -22,8 +22,6 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
 )
 
-const maxChildRunsPerParent = 1
-
 var (
 	runIdentifierPattern = id.StableMixed
 	capabilityIDPattern  = id.StableLower
@@ -161,10 +159,10 @@ INSERT INTO runs(
 	return nil
 }
 
-func (s *Store) CreateChildRun(ctx context.Context, parent, child kernelecho.RunRecord) (resultErr error) {
+func (s *Store) CreateChildRun(ctx context.Context, parent, child kernelecho.RunRecord, maxChildRuns int) (resultErr error) {
 	started := time.Now()
 	defer func() { observeStorageOperation(ctx, "create_child_run", started, resultErr) }()
-	if parent.AppID == "" || parent.ID == "" || parent.EchoID == "" || parent.LeaseToken == "" ||
+	if maxChildRuns < 1 || parent.AppID == "" || parent.ID == "" || parent.EchoID == "" || parent.LeaseToken == "" ||
 		parent.ParentRunID != "" || parent.Status != kernelecho.RunStatusRunning ||
 		child.ParentRunID != parent.ID || child.AppID != parent.AppID || child.EchoID != parent.EchoID {
 		return kernelecho.ErrInvalidRunRecord
@@ -197,7 +195,7 @@ WHERE r.app_id=? AND r.run_id=? AND r.echo_id=? AND r.parent_run_id IS NULL
 	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM runs WHERE app_id=? AND parent_run_id=?`, parent.AppID, parent.ID).Scan(&childCount); err != nil {
 		return fmt.Errorf("count child Runs: %w", err)
 	}
-	if childCount >= maxChildRunsPerParent {
+	if childCount >= maxChildRuns {
 		return kernelecho.ErrChildRunLimit
 	}
 	if err := insertRun(ctx, tx, child); err != nil {

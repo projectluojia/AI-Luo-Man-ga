@@ -68,7 +68,8 @@ func TestNormalizeTrimsText(t *testing.T) {
 
 func TestDefaultBaseSystemPromptContainsV2Persona(t *testing.T) {
 	if !strings.Contains(DefaultBaseSystemPrompt, "你是“珞樱”（Luoying）") ||
-		!strings.Contains(DefaultBaseSystemPrompt, "武汉大学人工智能学院专属数字伙伴") {
+		!strings.Contains(DefaultBaseSystemPrompt, "武汉大学人工智能学院专属数字伙伴") ||
+		!strings.Contains(DefaultBaseSystemPrompt, "你可以一次性调用多个工具来提升效率") {
 		t.Fatalf("base prompt missing V2 persona: %q", DefaultBaseSystemPrompt)
 	}
 	if channels := DefaultChannelPrompts(); len(channels) != 3 || channels["web"] == "" || channels["qq_group"] == "" || channels["qq_private"] == "" {
@@ -89,5 +90,28 @@ func TestNormalizeBaseSystemPrompt(t *testing.T) {
 	}
 	if _, err := NormalizeBaseSystemPrompt("bad\x00prompt"); !errors.Is(err, ErrInvalidBasePrompt) {
 		t.Fatalf("nul base error=%v", err)
+	}
+}
+
+func TestNormalizeChannelPrompts(t *testing.T) {
+	prompts, err := NormalizeChannelPrompts(map[string]string{
+		"web":        " 自定义 web  ",
+		"qq_group":   " 自定义群 ",
+		"qq_private": " 自定义私聊 ",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prompts["web"] != "自定义 web" || prompts["qq_group"] != "自定义群" || prompts["qq_private"] != "自定义私聊" {
+		t.Fatalf("prompts=%#v", prompts)
+	}
+	if prompts, err = NormalizeChannelPrompts(nil); err != nil || len(prompts) != len(DefaultChannelPrompts()) {
+		t.Fatalf("empty prompts=%#v err=%v", prompts, err)
+	}
+	if _, err := NormalizeChannelPrompts(map[string]string{"web": "x", "unknown": "y"}); !errors.Is(err, ErrInvalidChannelPrompts) {
+		t.Fatalf("unknown channel error=%v", err)
+	}
+	if _, err := NormalizeChannelPrompts(map[string]string{"web": "x", "qq_group": "y"}); !errors.Is(err, ErrInvalidChannelPrompts) {
+		t.Fatalf("incomplete channel error=%v", err)
 	}
 }

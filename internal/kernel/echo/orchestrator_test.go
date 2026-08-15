@@ -720,6 +720,19 @@ func (f *fakeAgent) Run(stream executorv1.ExecutorRuntime_RunServer) error {
 	})
 }
 
+func TestOrchestratorRejectsInvalidChildRunLimit(t *testing.T) {
+	for _, limit := range []int{-1, kernelecho.MaxChildRunsPerRoot + 1} {
+		t.Run(strconv.Itoa(limit), func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Fatal("无效 child Run 上限未触发装配失败")
+				}
+			}()
+			kernelecho.NewOrchestrator(nil, nil, nil, nil, nil, kernelecho.Config{MaxChildRuns: limit})
+		})
+	}
+}
+
 func TestOrchestratorRunsAgentCapabilityLoop(t *testing.T) {
 	listener := bufconn.Listen(1 << 20)
 	grpcServer := grpc.NewServer()

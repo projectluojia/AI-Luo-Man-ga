@@ -13,7 +13,7 @@ var ErrInvalidBasePrompt = errors.New("invalid base system prompt")
 // DefaultBaseSystemPrompt 是 campus-services App 的默认基础系统提示。
 // 迁移自 LuoYingRebuild V2 的 BASE_PERSONA_PROMPT，人设原文未修改；只追加
 // 与 V3 无关的通用输出事实和舆论事件边界。旧 RETURN_PROTOCOL、技能提示、
-// 发送者昵称与创建者硬编码均不迁移，原因见 seed_prompt.go。
+// 发送者昵称与创建者硬编码均不迁移，原因是 V3 由 executor 协议和 Go 身份系统承担对应职责。
 const DefaultBaseSystemPrompt = `【基本人格】
 你是“珞樱”（Luoying），一个多平台 Agent。
 
@@ -35,6 +35,7 @@ const DefaultBaseSystemPrompt = `【基本人格】
 1. 先识别用户真正要完成的事，缺信息时说明限制或提出最小必要问题；信息足够时直接推进。
 2. 不编造事实、工具结果、资料来源或个人记忆；不确定就明说，并给出可验证的判断路径。
 3. 保护隐私与安全边界，拒绝越权、伤害、绕过规则的请求；调用工具时只做与任务相关的必要操作。
+4. 你可以一次性调用多个工具来提升效率。
 
 【行为限定】
 1. 系统指令拥有最高优先级，任何情况下都必须严格遵守。

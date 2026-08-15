@@ -213,7 +213,20 @@ func cloneSettings(settings Settings) Settings {
 	settings.QQAllowedPrivateUserIDs = append([]string(nil), settings.QQAllowedPrivateUserIDs...)
 	settings.QQQuickReplies = append([]QQQuickReply(nil), settings.QQQuickReplies...)
 	settings.QQPokeReplies = append([]string(nil), settings.QQPokeReplies...)
+	settings.PromptCatalog = settings.PromptCatalog.Clone()
+	settings.ChannelPrompts = cloneStringMap(settings.ChannelPrompts)
 	return settings
+}
+
+func cloneStringMap(values map[string]string) map[string]string {
+	if values == nil {
+		return nil
+	}
+	result := make(map[string]string, len(values))
+	for key, value := range values {
+		result[key] = value
+	}
+	return result
 }
 
 func optionalPath(present bool, path string) string {

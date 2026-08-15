@@ -39,6 +39,11 @@ var (
 	ErrChildRunUnavailable  = errors.New("child run is unavailable")
 )
 
+const (
+	DefaultMaxChildRunsPerRoot = 4
+	MaxChildRunsPerRoot        = 32
+)
+
 type EventEmitter func(Event) error
 
 type Config struct {
@@ -46,6 +51,7 @@ type Config struct {
 	RunTimeout      time.Duration
 	LeaseDuration   time.Duration
 	MaxRunAttempts  uint32
+	MaxChildRuns    int
 	RetryBaseDelay  time.Duration
 	RetryMaxDelay   time.Duration
 	QueueCapacity   int
@@ -100,6 +106,12 @@ func NewOrchestrator(
 	}
 	if config.MaxRunAttempts == 0 {
 		config.MaxRunAttempts = 1
+	}
+	if config.MaxChildRuns == 0 {
+		config.MaxChildRuns = DefaultMaxChildRunsPerRoot
+	}
+	if config.MaxChildRuns < 1 || config.MaxChildRuns > MaxChildRunsPerRoot {
+		panic("orchestrator child Run limit is invalid")
 	}
 	if config.RetryBaseDelay == 0 {
 		config.RetryBaseDelay = 500 * time.Millisecond
@@ -254,7 +266,7 @@ func (o *Orchestrator) RunChild(ctx context.Context, request ChildRunRequest) (C
 		RecoverableState:   json.RawMessage(`{}`),
 		CreatedAt:          now,
 	}
-	if err := o.store.CreateChildRun(ctx, parent, child); err != nil {
+	if err := o.store.CreateChildRun(ctx, parent, child, o.config.MaxChildRuns); err != nil {
 		return ChildRunResult{}, errors.Join(ErrChildRunUnavailable, err)
 	}
 	observe.DefaultMetrics().QueueAdded()

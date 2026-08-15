@@ -294,9 +294,7 @@ func (a *Adapter) handleEvent(ctx context.Context, raw map[string]any) {
 func (a *Adapter) forwardReplies(ctx context.Context, inbound *access.InboundMessage, echoID string) {
 	live, unsubscribe := a.events.Subscribe(a.cfg.AppID, echoID)
 	defer unsubscribe()
-	hasChild := false
-	childTerminal := false
-	rootTerminal := false
+	lifecycle := newSubagentReplyLifecycle()
 	lastSequence := uint64(0)
 	process := func(event kernelecho.Event) {
 		if event.Sequence <= lastSequence {
@@ -305,10 +303,14 @@ func (a *Adapter) forwardReplies(ctx context.Context, inbound *access.InboundMes
 		lastSequence = event.Sequence
 		switch event.Type {
 		case "subagent.created":
-			hasChild = true
+			if !lifecycle.observe(event) {
+				a.logInvalidSubagentLifecycle(ctx, echoID, event)
+			}
 			a.replyPlain(ctx, inbound, "已派出子 Agent")
 		case "subagent.completed":
-			hasChild, childTerminal = true, true
+			if !lifecycle.observe(event) {
+				a.logInvalidSubagentLifecycle(ctx, echoID, event)
+			}
 			var payload struct {
 				Text string `json:"text"`
 			}
@@ -318,7 +320,9 @@ func (a *Adapter) forwardReplies(ctx context.Context, inbound *access.InboundMes
 				a.replyPlain(ctx, inbound, "子 Agent 已完成")
 			}
 		case "subagent.failed":
-			hasChild, childTerminal = true, true
+			if !lifecycle.observe(event) {
+				a.logInvalidSubagentLifecycle(ctx, echoID, event)
+			}
 			var payload struct {
 				Message string `json:"message"`
 			}
@@ -328,11 +332,13 @@ func (a *Adapter) forwardReplies(ctx context.Context, inbound *access.InboundMes
 			}
 			a.replyPlain(ctx, inbound, message)
 		case "subagent.cancelled":
-			hasChild, childTerminal = true, true
+			if !lifecycle.observe(event) {
+				a.logInvalidSubagentLifecycle(ctx, echoID, event)
+			}
 			a.replyPlain(ctx, inbound, "子 Agent 已取消")
 		default:
 			if reply := terminalReply(event); reply != nil {
-				rootTerminal = true
+				lifecycle.rootTerminal = true
 				a.reply(ctx, inbound, *reply)
 			}
 		}
@@ -342,7 +348,7 @@ func (a *Adapter) forwardReplies(ctx context.Context, inbound *access.InboundMes
 		for _, event := range persisted {
 			process(event)
 		}
-		if record.Status != kernelecho.StatusRunning || (rootTerminal && (!hasChild || childTerminal)) {
+		if record.Status != kernelecho.StatusRunning || lifecycle.complete() {
 			return
 		}
 	} else {
@@ -365,11 +371,58 @@ func (a *Adapter) forwardReplies(ctx context.Context, inbound *access.InboundMes
 				return
 			}
 			process(event)
-			if rootTerminal && (!hasChild || childTerminal) {
+			if lifecycle.complete() {
 				return
 			}
 		}
 	}
+}
+
+type subagentReplyLifecycle struct {
+	pendingChildren   map[string]struct{}
+	terminalChildren  map[string]struct{}
+	untrackedChildren int
+	rootTerminal      bool
+}
+
+func newSubagentReplyLifecycle() *subagentReplyLifecycle {
+	return &subagentReplyLifecycle{
+		pendingChildren:  make(map[string]struct{}),
+		terminalChildren: make(map[string]struct{}),
+	}
+}
+
+func (l *subagentReplyLifecycle) observe(event kernelecho.Event) bool {
+	var payload struct {
+		RunID string `json:"run_id"`
+	}
+	if json.Unmarshal(event.Payload, &payload) != nil || strings.TrimSpace(payload.RunID) == "" {
+		if event.Type == "subagent.created" {
+			l.untrackedChildren++
+		}
+		return false
+	}
+	if event.Type == "subagent.created" {
+		if _, terminal := l.terminalChildren[payload.RunID]; !terminal {
+			l.pendingChildren[payload.RunID] = struct{}{}
+		}
+		return true
+	}
+	l.terminalChildren[payload.RunID] = struct{}{}
+	delete(l.pendingChildren, payload.RunID)
+	return true
+}
+
+func (l *subagentReplyLifecycle) complete() bool {
+	return l.rootTerminal && len(l.pendingChildren) == 0 && l.untrackedChildren == 0
+}
+
+func (a *Adapter) logInvalidSubagentLifecycle(ctx context.Context, echoID string, event kernelecho.Event) {
+	observe.Warn(ctx, "QQ 子 Agent 生命周期事件缺少有效 run_id",
+		observe.StringAttr("echo_id", echoID),
+		observe.StringAttr("event_type", event.Type),
+		observe.Int64Attr("event_sequence", int64(event.Sequence)),
+	)
 }
 
 // waitReply 订阅 Echo 事件并等待终态：先重放已持久化事件，再等待实时事件。

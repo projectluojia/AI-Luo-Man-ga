@@ -23,6 +23,7 @@ func TestConfigAPIStoresSecretsWithoutReturningThem(t *testing.T) {
 	payload := controlconfig.SaveInput{
 		Model: "test-model", ModelAPIKey: "never-return-this", ModelRequestTimeoutSeconds: 30,
 		BaseSystemPrompt:             "自定义基础系统提示",
+		ChannelPrompts:               map[string]string{"web": "自定义 web", "qq_group": "自定义群", "qq_private": "自定义私聊"},
 		ModelReadinessTimeoutSeconds: 3, ModelMaxRetries: 2, ModelRetryBaseSeconds: 0.25,
 		ModelRetryMaxSeconds: 2, ModelRequestsPerMinute: 60, ModelMaxConcurrency: 4,
 		QQEnabled: true, QQWSURL: "ws://127.0.0.1:3001", QQWSToken: "qq-never-return-this",
@@ -53,7 +54,8 @@ func TestConfigAPIStoresSecretsWithoutReturningThem(t *testing.T) {
 	}
 	if len(snapshot.Settings.QQQuickReplies) != 1 || snapshot.Settings.QQQuickReplies[0].Reply != "pong" ||
 		len(snapshot.Settings.QQPokeReplies) != 1 || snapshot.Settings.QQPokeReplies[0] != "在呢" ||
-		snapshot.Settings.BaseSystemPrompt != "自定义基础系统提示" {
+		snapshot.Settings.BaseSystemPrompt != "自定义基础系统提示" ||
+		snapshot.Settings.ChannelPrompts["web"] != "自定义 web" {
 		t.Fatalf("snapshot=%+v", snapshot.Settings)
 	}
 	getRequest := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:9178/api/v1/config", nil)

@@ -3,6 +3,7 @@ package sqlite_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -26,7 +27,7 @@ func TestChildRunStateIsDurableScopedAndDoesNotCompleteEcho(t *testing.T) {
 		t.Fatal(err)
 	}
 	child := childRunRecord(parent, "child", "call", now)
-	if err := store.CreateChildRun(ctx, parent, child); err != nil {
+	if err := store.CreateChildRun(ctx, parent, child, 1); err != nil {
 		t.Fatal(err)
 	}
 	if work, err := store.ListQueuedRuns(ctx, "app", 10); err != nil || len(work) != 1 || work[0].InputMessage != "child task" {
@@ -72,7 +73,7 @@ func TestChildRunStateIsDurableScopedAndDoesNotCompleteEcho(t *testing.T) {
 	}
 }
 
-func TestChildRunEnforcesOneLevelOneChildAndParentLease(t *testing.T) {
+func TestChildRunEnforcesOneLevelConfiguredLimitAndParentLease(t *testing.T) {
 	store, err := sqlite.Open(filepath.Join(t.TempDir(), "child-limits.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -87,14 +88,14 @@ func TestChildRunEnforcesOneLevelOneChildAndParentLease(t *testing.T) {
 	}
 	wrongLease := parent
 	wrongLease.LeaseToken = "wrong"
-	if err := store.CreateChildRun(ctx, wrongLease, childRunRecord(parent, "child-a", "call-a", now)); !errors.Is(err, kernelecho.ErrInvalidTransition) {
+	if err := store.CreateChildRun(ctx, wrongLease, childRunRecord(parent, "child-a", "call-a", now), 1); !errors.Is(err, kernelecho.ErrInvalidTransition) {
 		t.Fatalf("wrong parent lease error=%v", err)
 	}
 	first := childRunRecord(parent, "child-a", "call-a", now)
-	if err := store.CreateChildRun(ctx, parent, first); err != nil {
+	if err := store.CreateChildRun(ctx, parent, first, 1); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.CreateChildRun(ctx, parent, childRunRecord(parent, "child-b", "call-b", now)); !errors.Is(err, kernelecho.ErrChildRunLimit) {
+	if err := store.CreateChildRun(ctx, parent, childRunRecord(parent, "child-b", "call-b", now), 1); !errors.Is(err, kernelecho.ErrChildRunLimit) {
 		t.Fatalf("second child error=%v", err)
 	}
 	claimed, err := store.ClaimChildRun(ctx, "app", "echo", first.ID, parent.ID, "child-lease", now, now.Add(time.Minute))
@@ -102,7 +103,7 @@ func TestChildRunEnforcesOneLevelOneChildAndParentLease(t *testing.T) {
 		t.Fatal(err)
 	}
 	nested := childRunRecord(claimed, "nested", "nested-call", now)
-	if err := store.CreateChildRun(ctx, claimed, nested); !errors.Is(err, kernelecho.ErrInvalidRunRecord) {
+	if err := store.CreateChildRun(ctx, claimed, nested, 1); !errors.Is(err, kernelecho.ErrInvalidRunRecord) {
 		t.Fatalf("nested child error=%v", err)
 	}
 }
@@ -121,7 +122,7 @@ func TestQueuedChildClaimFailureCanBeClosedDurably(t *testing.T) {
 		t.Fatal(err)
 	}
 	child := childRunRecord(parent, "child", "call", now)
-	if err := store.CreateChildRun(ctx, parent, child); err != nil {
+	if err := store.CreateChildRun(ctx, parent, child, 1); err != nil {
 		t.Fatal(err)
 	}
 	failure := publicerror.Echo("recovery_failed")
@@ -155,7 +156,7 @@ func TestRecoveryFailsRunningRootAndOrphanChildAtomically(t *testing.T) {
 		t.Fatal(err)
 	}
 	child := childRunRecord(parent, "child", "call", now)
-	if err := store.CreateChildRun(ctx, parent, child); err != nil {
+	if err := store.CreateChildRun(ctx, parent, child, 1); err != nil {
 		t.Fatal(err)
 	}
 	failed, err := store.FailAbandonedRuns(ctx, "app", now.Add(time.Minute))
@@ -187,5 +188,30 @@ func childRunRecord(parent kernelecho.RunRecord, runID, callID string, now time.
 		Deadline: now.Add(30 * time.Second), AvailableAt: now,
 		CapabilityScope: []string{"capability"}, PermissionScope: []string{},
 		RecoverableState: []byte(`{}`), CreatedAt: now,
+	}
+}
+
+func TestChildRunHonorsConfigurableLimit(t *testing.T) {
+	store, err := sqlite.Open(filepath.Join(t.TempDir(), "child-limit-configurable.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	now := time.Now().UTC()
+	createTestEchoRun(t, store, "app", "echo", "task", now)
+	parent, err := store.ClaimRun(ctx, "app", "echo", "parent-lease", now, now.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := 1; index <= kernelecho.DefaultMaxChildRunsPerRoot; index++ {
+		runID := fmt.Sprintf("child-%d", index)
+		callID := fmt.Sprintf("call-%d", index)
+		if err := store.CreateChildRun(ctx, parent, childRunRecord(parent, runID, callID, now), kernelecho.DefaultMaxChildRunsPerRoot); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.CreateChildRun(ctx, parent, childRunRecord(parent, "child-over-limit", "call-over-limit", now), kernelecho.DefaultMaxChildRunsPerRoot); !errors.Is(err, kernelecho.ErrChildRunLimit) {
+		t.Fatalf("over-limit child error=%v", err)
 	}
 }

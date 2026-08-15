@@ -9,7 +9,6 @@ func TestNormalizeSettingsKeepsKnownValuesAndFallsBackUnknown(t *testing.T) {
 		ExtraTraitLevels: map[string]string{
 			"emoji":       "减弱",
 			"unknown":     "增强",
-			"温和体贴":        "增强",
 			"considerate": "减弱",
 		},
 	})

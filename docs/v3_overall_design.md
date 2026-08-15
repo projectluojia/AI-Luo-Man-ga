@@ -383,7 +383,7 @@ session 元数据、成员关系、标准消息、回复关系和完整历史。
 
 ### Agent 服务
 
-模型推理与工具调用循环；由 Go 按需调用；当前仅 root Run 可通过 `agent.run` Capability 创建一层受治理 Subagent。
+模型推理与工具调用循环；由 Go 按需调用；当前仅 root Run 可通过 `agent.run` Capability 创建一层受治理 Subagent，root 可并行创建多个直接 child，child 不可继续派生。
 
 ## 八、即插即用与包管理
 
@@ -860,9 +860,9 @@ SubagentPolicy
 3. Parent 取消/超时 → 整棵 Run 树取消。
 4. 禁止 Python 进程内私拉子模型环绕过 Go。
 
-当前已实现的是这一设计的窄而可保留基线：只允许一层且每个 parent 最多创建一个 child。`agent.run` 注册为 `external` SideEffect，输入只含最长 4000 字符的任务与至多 16 个 Capability ID；父 `run_id` 和 `call_id` 只能取自 Go 治理的调用上下文，不能由模型参数指定。root 在接受时持久化 Capability/权限上界，后续只允许因当前 App 策略撤权而收窄，不能因运行中新增授权而扩张；child 的 Capability 必须同时属于该上界与当前策略，权限取所选 Capability 要求的并集并再次验证为 parent/current 的子集。
+当前已实现的是这一设计的窄而可保留基线：只允许一层；每个 root 默认最多创建 4 个直接 child，控制面可在 1–32 范围内调整。`agent.run` 注册为 `external` SideEffect，输入只含最长 4000 字符的任务与至多 16 个 Capability ID；父 `run_id` 和 `call_id` 只能取自 Go 治理的调用上下文，不能由模型参数指定。root 在接受时持久化 Capability/权限上界，后续只允许因当前 App 策略撤权而收窄，不能因运行中新增授权而扩张；child 的 Capability 必须同时属于该上界与当前策略，权限取所选 Capability 要求的并集并再次验证为 parent/current 的子集。
 
-child 使用独立 `run_id`、`run_group_id`、lease、Agent 序号、Token/输出/成本预算与终态。初始策略把 parent 的时间、步数、ToolCall、Token、输出和非零成本上限各取不大于一半，并限制为一个 child，因此树的资源扩张有显式有限上界；child 不自动重试。`agent.run` 只原子创建持久化的 queued child 并立即返回 `run_id/status`，root 不等待 child；root 可通过只读 `agent.status` 查询直接 child，也可直接结束。child 的任务正文只保存在 Go 管理的 Run 业务状态中；生命周期、Capability 完成步骤、模型输出片段与最终安全结果通过 App-scoped Echo 事件和 Run 查询对 Access 可见，但提示词、思维链和 Tool 参数不公开。`agent.run` 审计中的 `task` 由集中清洗器脱敏。即使恶意 Agent 发送未投影或嵌套的调用，Go 仍会拒绝并写入按 Run 隔离的审计。
+child 使用独立 `run_id`、`run_group_id`、lease、Agent 序号、Token/输出/成本预算与终态。初始策略把 parent 的时间、步数、ToolCall、Token、输出和非零成本上限各取不大于一半；每个 root 的直接 child 数量受持久创建事务中的配置上限约束，默认最多 4 个，child 不自动重试且不能继续派生。`agent.run` 只原子创建持久化的 queued child 并立即返回 `run_id/status`，root 不等待 child；root 可通过只读 `agent.status` 查询直接 child，也可直接结束。child 的任务正文只保存在 Go 管理的 Run 业务状态中；生命周期、Capability 完成步骤、模型输出片段与最终安全结果通过 App-scoped Echo 事件和 Run 查询对 Access 可见，但提示词、思维链和 Tool 参数不公开。`agent.run` 审计中的 `task` 由集中清洗器脱敏。即使恶意 Agent 发送未投影或嵌套的调用，Go 仍会拒绝并写入按 Run 隔离的审计。
 
 ### 运行结束
 
@@ -1076,7 +1076,7 @@ Go、Python、Service、Tool 可独立发布；跨进程协议显式版本化。
 4. Service 与 Tool 分级：至少一个业务 Service 通过声明依赖装配 Tools，并对外只暴露 Capability。
 5. Registry 全量注册元数据；至少一个扩展实现启动时未装入，首次调用时懒加载，且不进入 Go 主进程地址空间（hosted 或 isolated）。
 6. Agent 的行动范围仅来自 Go 下发的 Capability 安全投影；模型通过原生 ToolCall 调用至少一个投影后的外部 Capability，并能完成流式回复与最终消息。
-7. 支持一层 Subagent：`agent.run` child 由 Go 创建，结果回 parent；默认仅 root 产生用户可见发送。
+7. 支持一层多 child Subagent：`agent.run` child 由 Go 异步创建，root 可并行委派多个直接 child，结果回 parent；默认仅 root 产生用户可见发送。
 8. 调用链具备 `app_id`、`echo_id`、`request_id`、`run_id`、`parent_run_id`（如有）、`call_id`、基础审计。
 9. 运行模式至少覆盖 embedded、hosted、isolated；不主动上 remote，不拆大量微服务。
 10. 不追求一次性迁完 V2 Skill；先钉住控制权、数据权、包边界与统一协议。
@@ -1092,7 +1092,7 @@ Go、Python、Service、Tool 可独立发布；跨进程协议显式版本化。
 7. Agent 全局记忆归属 Deployment 还是 App，以及写入审核与隐私边界。
 8. 同步调用最大深度、调用指纹规范、可重入声明、进展字段与熔断默认值。
 9. hosted 插件依赖隔离、资源限制、热更新与 Unload 策略参数。
-10. 在当前“一层、一个 child、半额预算、external SideEffect”基线上，是否需要可配置的多 child 策略及树级总预算。
+10. 在当前“一层、默认 4 个 child、半额预算、external SideEffect”基线上，继续验证不同并发规模下的树级总预算、队列容量和成本上限。
 11. Loader 预热与 idle TTL 的默认参数，以及对首轮对话体验的影响。
 12. V2 Skill 迁移优先级与兼容执行器生命周期。
 13. 何时允许 hosted/isolated 升级为 remote，以及对应判据。
@@ -1103,7 +1103,7 @@ AI珞（爱珞） V3 以 **Go 内核** 为系统主体：接入前端与外部�
 
 上层是 **Service + Tool** 的包式能力面：Tool 是原子可复用包，Service 是薄装配与对外 Capability；实现默认可懒加载，不进入“启动即塞满 Go”或“每个业务一个封闭小程序”的形态。逻辑复用走 Tool，跨业务协作走 Capability，调用必经 Go。
 
-Python Agent 是受 Go 管理的认知 Service。它负责思考，不掌握系统；可请求行动，不可绕过 Go；当前只有 root Run 可请求 `agent.run` 形成一层 Subagent，child Run 不获得该 Capability，且其权限、预算与副作用仍由 Go 约束。
+Python Agent 是受 Go 管理的认知 Service。它负责思考，不掌握系统；可请求行动，不可绕过 Go；当前只有 root Run 可请求 `agent.run` 形成一层 Subagent，root 可并行创建多个直接 child，child Run 不获得该 Capability，且其权限、预算与副作用仍由 Go 约束。
 
 Deployment 共享基础设施与安装单元，App 隔离数据、权限、Agent 配置与 Session。系统以 Echo 表示一次完整用户交互，以统一 Invoke 表示内部调用，以 gRPC + Protobuf 处理跨进程通信。
 
