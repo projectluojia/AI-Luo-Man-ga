@@ -284,7 +284,7 @@ func TestQQAdapterQuickReplySkipsAgentAndDoesNotMentionSender(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("adapter did not connect")
 	}
-	bot.sendEvent(t, `{"post_type":"message","message_type":"group","group_id":12345,"user_id":67890,"message_id":"qq-quick-1","message":[{"type":"at","data":{"qq":"2647414417"}},{"type":"text","data":{"text":"ping"}}]}`)
+	bot.sendEvent(t, `{"post_type":"message","message_type":"group","group_id":12345,"user_id":67890,"message_id":"qq-quick-1","message":[{"type":"text","data":{"text":"ping"}}]}`)
 	select {
 	case action := <-bot.received:
 		params, _ := action["params"].(map[string]any)

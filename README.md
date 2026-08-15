@@ -35,7 +35,7 @@ Go 主进程会立即在 `http://127.0.0.1:9178` 提供本机配置控制台。�
 
 非秘密配置写入 `var/ailuo-settings.json`；模型 API Key 与 QQ WebSocket Token 分别写入仅属主可访问的 `var/secrets/model-api-key` 和 `var/secrets/qq-ws-token`，GET API、页面、日志和普通配置文件都不返回秘密正文。既有环境变量配置会在首次启动时迁移进控制面，之后以受管配置修订为准，不再要求手工维护 `.env`。
 
-NapCat 保持独立运行和独立 WebUI，负责 QQ 登录及 OneBot 服务；AI珞不接管 NapCat 配置。QQ 白名单属于 `internal/access/qq` 的入口准入，不是内核 Capability 权限。未列入白名单的消息会在进入 Hub、Message、Echo 之前静默丢弃；列入白名单的 QQ 用户由 QQ Access 自动建立内部身份，不需要手工执行 `identity-bind`。9178 还可配置精确快速回复和戳一戳随机文案：快速回复在群内仍需先 @机器人，命中后不调用 Agent、不写会话且不 @发送人；戳一戳文本同样不 @，清空文案可关闭文本回复。9178 管理入口只绑定并接受本机同源请求。
+NapCat 保持独立运行和独立 WebUI，负责 QQ 登录及 OneBot 服务；AI珞不接管 NapCat 配置。QQ 白名单属于 `internal/access/qq` 的入口准入，不是内核 Capability 权限。未列入白名单的消息会在进入 Hub、Message、Echo 之前静默丢弃；列入白名单的 QQ 用户由 QQ Access 自动建立内部身份，不需要手工执行 `identity-bind`。9178 还可配置精确快速回复和戳一戳随机文案：白名单群内的快速回复无需 @机器人，命中后不调用 Agent、不写会话且不 @发送人；戳一戳文本同样不 @，清空文案可关闭文本回复。9178 管理入口只绑定并接受本机同源请求。
 
 Provider 默认对单次请求设置 30 秒超时、最多两次仅限首个流数据前的可重试退避、每分钟 60 次请求和 4 路并发上限；这些参数均可在 9178 控制台按部署容量收窄。`/readyz` 会实际探测配置模型，不只检查 Python 进程存在。
 

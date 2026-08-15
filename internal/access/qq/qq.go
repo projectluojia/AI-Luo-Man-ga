@@ -246,15 +246,15 @@ func (a *Adapter) handleEvent(ctx context.Context, raw map[string]any) {
 	if inbound == nil {
 		return
 	}
-	if inbound.PlatformChannel == "group" && !mentioned {
-		return // 群聊默认只响应 @提及，避免刷屏
-	}
 	if !a.allowed(inbound) {
 		return
 	}
 	if reply, matched := a.quickReplies[inbound.Text]; matched {
 		a.replyPlain(ctx, inbound, reply)
 		return
+	}
+	if inbound.PlatformChannel == "group" && !mentioned {
+		return // 普通群消息默认只响应 @提及，快速回复已在此前直接处理
 	}
 	if err := a.cfg.Provisioner.EnsureQQIdentity(ctx, *inbound); err != nil {
 		_, _, message := access.IntakePublicError(err)
