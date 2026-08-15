@@ -20,7 +20,7 @@ Web Access API
   → SSE 流式回复
 ```
 
-生产 Agent 不包含关键词、正则或固定业务流程。没有模型配置时服务拒绝启动，不会降级为规则机器人。测试使用可控 ModelProvider 验证调用链，但不进入生产运行路径。
+生产 Agent 不包含关键词、正则或固定业务流程。没有模型配置时业务内核与 Agent 不启动，也不会降级为规则机器人；本机配置控制台仍保持可用，等待完成配置。测试使用可控 ModelProvider 验证调用链，但不进入生产运行路径。
 
 ## 本地运行
 
@@ -28,23 +28,16 @@ Web Access API
 
 ```bash
 make setup-agent
-cp .env.example .env
-```
-
-填写 `.env` 中的 `AILUO_MODEL`。本地开发可临时填写 `AILUO_MODEL_API_KEY`；生产环境必须把密钥写入仅属主可读（`0600`）、不超过 16 KiB 的常规文件并设置 `AILUO_MODEL_API_KEY_FILE`，原始密钥环境变量会被拒绝。如使用兼容服务再填写 `AILUO_MODEL_BASE_URL`。加载环境后运行：
-
-```bash
-set -a
-source .env
-set +a
 make run
 ```
 
-Web Access 默认监听 `http://127.0.0.1:8080`。根路径是 AI珞本机接入控制台：可配置 QQ 的 OneBot 地址、机器人 QQ 号、允许的群号和允许私聊的 QQ 号，保存后只热更新 QQ Access，不重启 Go 主进程。
+Go 主进程会立即在 `http://127.0.0.1:9178` 提供本机配置控制台。首次运行只需在页面填写模型名称、API Base URL、API Key、Provider 超时/重试/限流/并发参数，以及可选的 QQ 接入参数；保存后主进程启动业务内核与 Python Agent。再次保存会有界关闭旧内核并按新修订重新启动，9178 控制台在整个过程中保持可用。普通 Web Access 仍监听 `http://127.0.0.1:8080`。
 
-NapCat 保持独立运行和独立 WebUI，负责 QQ 登录及 OneBot 服务；AI珞不接管 NapCat 配置。QQ 白名单属于 `internal/access/qq` 的入口准入，不是内核 Capability 权限。未列入白名单的消息会在进入 Hub、Message、Echo 之前静默丢弃；列入白名单的 QQ 用户由 QQ Access 自动建立内部身份，不需要手工执行 `identity-bind`。AI珞管理面只接受本机请求，Token 继续由环境变量提供且不会回显。
+非秘密配置写入 `var/ailuo-settings.json`；模型 API Key 与 QQ WebSocket Token 分别写入仅属主可访问的 `var/secrets/model-api-key` 和 `var/secrets/qq-ws-token`，GET API、页面、日志和普通配置文件都不返回秘密正文。既有环境变量配置会在首次启动时迁移进控制面，之后以受管配置修订为准，不再要求手工维护 `.env`。
 
-Provider 默认对单次请求设置 30 秒超时、最多两次仅限首个流数据前的可重试退避、每分钟 60 次请求和 4 路并发上限；对应 `AILUO_MODEL_TIMEOUT_SECONDS`、`AILUO_MODEL_MAX_RETRIES`、`AILUO_MODEL_RETRY_BASE_SECONDS`、`AILUO_MODEL_RETRY_MAX_SECONDS`、`AILUO_MODEL_REQUESTS_PER_MINUTE` 与 `AILUO_MODEL_MAX_CONCURRENCY` 可按部署容量收窄。`/readyz` 会实际探测配置模型，不只检查 Python 进程存在。
+NapCat 保持独立运行和独立 WebUI，负责 QQ 登录及 OneBot 服务；AI珞不接管 NapCat 配置。QQ 白名单属于 `internal/access/qq` 的入口准入，不是内核 Capability 权限。未列入白名单的消息会在进入 Hub、Message、Echo 之前静默丢弃；列入白名单的 QQ 用户由 QQ Access 自动建立内部身份，不需要手工执行 `identity-bind`。9178 管理入口只绑定并接受本机同源请求。
+
+Provider 默认对单次请求设置 30 秒超时、最多两次仅限首个流数据前的可重试退避、每分钟 60 次请求和 4 路并发上限；这些参数均可在 9178 控制台按部署容量收窄。`/readyz` 会实际探测配置模型，不只检查 Python 进程存在。
 
 Go Run 调度使用 SQLite 持久队列和固定 4 个 worker，默认每个 App 最多容纳 128 个 queued/running Run。超过容量时创建接口返回 HTTP 429 `queue_full` 和 `Retry-After: 1`；相同幂等请求仍可重放。默认最多 3 个 Run attempt，只有稳定错误标记为可重试且当前 attempt 未请求 write/external Capability 时才按持久 `available_at` 延迟重试；活动 Run 的 lease 会周期续期。当前合同面向单 Deployment，不宣称多节点 SQLite 调度。
 

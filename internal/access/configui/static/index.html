@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>AI珞 · 启动控制台</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <main class="console">
+    <header class="masthead">
+      <div>
+        <p class="kicker"><span class="pulse"></span>AI珞 V3 · Deployment 控制面</p>
+        <h1>先把连接接好，<br><em>再让 AI珞醒来。</em></h1>
+      </div>
+      <div class="runtime-card" aria-live="polite">
+        <span class="runtime-label">主进程状态</span>
+        <strong id="runtime-state">读取中</strong>
+        <p id="runtime-message">正在读取本机配置</p>
+      </div>
+    </header>
+
+    <form id="settings-form">
+      <section class="config-section model-section" aria-labelledby="model-title">
+        <div class="section-heading">
+          <div><span class="section-mark">MODEL</span><h2 id="model-title">模型连接</h2></div>
+          <p>AI珞通过兼容 OpenAI 的接口调用模型。API Key 只写入本机秘密文件，不会回显。</p>
+        </div>
+        <div class="field-grid">
+          <label class="field"><span>模型名称</span><input id="model" required maxlength="256" placeholder="例如 gpt-5.2" autocomplete="off"></label>
+          <label class="field"><span>API Base URL</span><input id="model-base-url" type="url" placeholder="留空使用提供方默认地址" autocomplete="off"></label>
+          <label class="field secret-field"><span>模型 API Key <i id="model-key-state">未配置</i></span><input id="model-api-key" type="password" maxlength="16384" placeholder="留空保留已有密钥" autocomplete="new-password"></label>
+          <label class="field"><span>单次请求超时（秒）</span><input id="request-timeout" type="number" min="0.1" max="120" step="0.1" required></label>
+        </div>
+      </section>
+
+      <section class="config-section provider-section" aria-labelledby="provider-title">
+        <div class="section-heading">
+          <div><span class="section-mark">GUARD</span><h2 id="provider-title">调用保护</h2></div>
+          <p>限制重试、请求频率和并发，避免故障时持续压垮模型提供方。</p>
+        </div>
+        <div class="metric-grid">
+          <label class="field"><span>就绪检查超时</span><input id="readiness-timeout" type="number" min="0.1" max="30" step="0.1" required><small>秒</small></label>
+          <label class="field"><span>最多重试</span><input id="max-retries" type="number" min="0" max="5" step="1" required><small>次</small></label>
+          <label class="field"><span>首次退避</span><input id="retry-base" type="number" min="0.01" max="30" step="0.01" required><small>秒</small></label>
+          <label class="field"><span>最大退避</span><input id="retry-max" type="number" min="0.01" max="30" step="0.01" required><small>秒</small></label>
+          <label class="field"><span>每分钟请求</span><input id="requests-per-minute" type="number" min="1" max="10000" step="1" required><small>次</small></label>
+          <label class="field"><span>最大并发</span><input id="max-concurrency" type="number" min="1" max="64" step="1" required><small>路</small></label>
+        </div>
+      </section>
+
+      <section class="config-section qq-section" aria-labelledby="qq-title">
+        <div class="section-heading">
+          <div><span class="section-mark">QQ ACCESS</span><h2 id="qq-title">QQ 接入</h2></div>
+          <p>NapCat 仍独立运行。这里仅配置 AI珞连接 NapCat 的方式，以及允许进入系统的群和私聊账号。</p>
+        </div>
+        <label class="switch-row"><span><strong>启用 QQ 接入</strong><small>保存后连接 OneBot 正向 WebSocket。</small></span><input id="qq-enabled" type="checkbox"><span class="switch" aria-hidden="true"></span></label>
+        <div class="field-grid">
+          <label class="field"><span>OneBot WebSocket 地址</span><input id="qq-ws-url" placeholder="ws://127.0.0.1:3001" autocomplete="off"></label>
+          <label class="field"><span>机器人 QQ 号</span><input id="qq-bot-id" inputmode="numeric" placeholder="用于识别 @ 和戳一戳" autocomplete="off"></label>
+          <div class="field secret-field"><label for="qq-token"><span>QQ WebSocket Token <i id="qq-token-state">未配置</i></span></label><input id="qq-token" type="password" maxlength="4096" placeholder="留空保留已有 Token" autocomplete="new-password"><label class="clear-secret"><input id="clear-qq-token" type="checkbox">清除已有 Token</label></div>
+          <div class="boundary-note"><strong>准入边界</strong><p>清单为空时全部拒绝。群消息还必须明确 @ 当前机器人，才会进入会话。</p></div>
+          <label class="field"><span>允许的 QQ 群号</span><textarea id="qq-groups" rows="6" placeholder="每行一个群号"></textarea></label>
+          <label class="field"><span>允许私聊的 QQ 号</span><textarea id="qq-private-users" rows="6" placeholder="每行一个 QQ 号"></textarea></label>
+        </div>
+      </section>
+
+      <footer class="action-bar">
+        <div><strong id="revision">配置尚未保存</strong><span id="notice" role="status" aria-live="polite">所有参数一次保存并应用。</span></div>
+        <button id="save-button" type="submit">保存并启动 <span>→</span></button>
+      </footer>
+    </form>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/access/configui"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/identity"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
@@ -61,12 +62,12 @@ func TestLoadDotEnvSkipsMissingFile(t *testing.T) {
 	loadDotEnv() // .env 不存在必须静默返回，不崩溃
 }
 
-func TestLoadConfigRequiresModel(t *testing.T) {
+func TestLoadConfigAllowsBootstrapWithoutModel(t *testing.T) {
 	t.Setenv("AILUO_MODEL", "")
 	t.Setenv("AILUO_MANAGE_AGENT", "false")
-	_, err := loadConfig()
-	if err == nil || !strings.Contains(err.Error(), "AILUO_MODEL is required") {
-		t.Fatalf("error=%v", err)
+	config, err := loadConfig()
+	if err != nil || config.configUIAddress != configui.DefaultAddress {
+		t.Fatalf("config=%+v error=%v", config, err)
 	}
 }
 
@@ -88,15 +89,14 @@ func TestLoadConfigRejectsSourcePathLogging(t *testing.T) {
 	}
 }
 
-func TestLoadConfigRequiresModelKeyForManagedAgent(t *testing.T) {
+func TestLoadConfigAllowsBootstrapWithoutModelKey(t *testing.T) {
 	t.Setenv("AILUO_MODEL", "test")
 	t.Setenv("AILUO_MANAGE_AGENT", "true")
 	t.Setenv("AILUO_MODEL_API_KEY", "")
 	t.Setenv("OPENAI_API_KEY", "")
 	t.Setenv("AILUO_MODEL_API_KEY_FILE", "")
-	_, err := loadConfig()
-	if err == nil || !strings.Contains(err.Error(), "MODEL_API_KEY") {
-		t.Fatalf("error=%v", err)
+	if _, err := loadConfig(); err != nil {
+		t.Fatalf("bootstrap config error=%v", err)
 	}
 }
 

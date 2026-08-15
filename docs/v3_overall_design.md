@@ -1143,11 +1143,11 @@ Echo 事件序号由存储层在 `app_id + echo_id` 范围内事务分配。不�
 
 ### 持久化 App 配置与权限策略实现基线（2026-07-26）
 
-迁移 13 新增 App 范围的不可变配置修订和当前 head。配置内容包含启停状态、模型、系统提示、时区、Run/Token/输出/成本/Provider 超时预算、启用 Capability 集合和 App 权限上界；写入前执行稳定 ID、IANA 时区、集合去重、UTF-8、长度和预算关系校验。内容经规范排序后生成 SHA-256 修订号，head 使用单调 generation 和 Compare-And-Swap 更新，因此并发管理写入不会静默覆盖。历史修订受外键保护且不自动删除，备份和恢复必须与 Run 一并保留。
+迁移 13 新增 App 范围的不可变配置修订和当前 head。配置内容包含启停状态、模型、系统提示、时区、Run/Token/输出/成本/Provider 超时预算、启用 Capability 集合和 App 权限上界；写入前执行稳定 ID、IANA 时区、集合去重、UTF-8、长度和预算关系校验。内容经规范排序后生成 SHA-256 修订号，head 使用单调 generation 和 Compare-And-Swap 更新，因此并发管理写入不会静默覆盖。历史修订受外键保护且不自动删除，备份和恢复必须与 Run 一并保留。Deployment 启动参数由 `internal/controlplane/config` 服务管理，9178 WebUI 仅是 `internal/access/configui` 管理入口；模型秘密不进入普通配置 JSON、管理响应或日志。
 
 创建 Echo 时读取当前配置并把模型、预算和不可变修订号写入 Run。恢复既有 Run 时只允许加载该历史修订，并逐项核对已持久化模型和预算；当前 head 后续变化不会改变已接受 Run 的认知配置。Capability 投影、App 启停和权限 scope 则在 Run 开始及每次 Capability 调用时重新读取当前策略，因此停用、撤权或收窄权限立即生效，读取失败一律 fail closed。`/readyz` 同样使用当前 App 模型配置进行真实 Provider 探测。
 
-系统提示只保存在 Go 管理的 App 配置表并投影给对应 Run，不进入普通日志、公共 HTTP、SSE 或审计载荷；日志只记录 App、修订、generation、模型和计数。当前没有公开的 App 配置管理 API，因为多入口管理员身份和授权边界尚未实现；配置更新只能由受信 Go 控制面通过 generation CAS 合同完成，不能直接改表或把前端输入接到该 Store。
+系统提示只保存在 Go 管理的 App 配置表并投影给对应 Run，不进入普通日志、公共 HTTP、SSE 或审计载荷；日志只记录 App、修订、generation、模型和计数。当前 9178 API 只接受 loopback、同源的 Deployment 本机管理请求，用于启动所需的模型/Provider/QQ 参数，不开放远程 App 管理权限；App 配置仍只能由受信 Go 控制面通过 generation CAS 合同更新，不能直接改表或把前端输入接到 Store。
 
 ### Go 调用信任边界实现基线（2026-07-26）
 
@@ -1219,6 +1219,6 @@ SQLite 迁移 8 新增 `bus_current_snapshots`，以 `(app_id, revision)` 外键
 
 ### QQ Access 与 NapCat 边界实现基线（2026-08-15）
 
-NapCat 保持独立运行、独立登录和独立 WebUI；AI珞只连接 NapCat 暴露的 OneBot v11 正向 WebSocket。AI珞根路径的本机 WebUI 只管理自己的 `enabled`、OneBot 地址、机器人 QQ 号、允许群号和允许私聊 QQ 号，Token 仍由环境变量提供且不会回显。配置以迁移 22 的 App-scoped 当前记录和 generation CAS 持久化，保存后有界停止旧 QQ Adapter 并热启动新 Adapter，不重启 Go 主进程。
+NapCat 保持独立运行、独立登录和独立 WebUI；AI珞只连接 NapCat 暴露的 OneBot v11 正向 WebSocket。AI珞的 9178 本机控制台统一管理模型、Provider 和自身的 QQ 接入参数；QQ Token 写入 Go 管理的受限秘密文件且不会回显。QQ 非秘密配置仍以迁移 22 的 App-scoped 当前记录和 generation CAS 持久化，配置重启时由 QQ Manager 应用；群号、私聊 QQ 号、机器人 QQ 号与 `@` 判断全部留在 `internal/access/qq`，不会进入 Kernel、Service 或 Tool。
 
 QQ 白名单是 `internal/access/qq` 的 Access admission，不是 Kernel、Service、Tool 或 Capability 权限：群聊先要求 @机器人，再检查群号；私聊检查 QQ 号；戳一戳使用同一准入规则。空白名单 fail-closed，未允许来源在进入 `Hub`、Message、Echo 之前被静默丢弃。允许来源由 QQ Access 幂等创建稳定内部用户、AppMembership 和空间绑定后再进入统一 `Hub.Intake`，不需要手工 `identity-bind`；身份事实仍由 Go 管理的 identity Store 持久化。

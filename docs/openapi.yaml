@@ -151,47 +151,50 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
-  /api/v1/admin/qq-access:
+  /api/v1/config:
+    servers:
+      - url: http://127.0.0.1:9178
     get:
-      summary: Read local QQ Access configuration
+      summary: Read the local Deployment startup configuration
       description: >-
-        Loopback-only management endpoint embedded in the Go process. It manages
-        AI珞's OneBot connection and admission lists; NapCat login and its WebUI
-        remain independent. Tokens are never returned.
+        Loopback-only, same-origin management endpoint. It remains available while
+        the business kernel is waiting for configuration or restarting. Secret
+        values are never returned; only configured flags are exposed.
       responses:
         "200":
-          description: Current QQ Access settings and runtime status.
+          description: Current non-secret settings, secret presence, and runtime status.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/QQAccessSnapshot"
+                $ref: "#/components/schemas/DeploymentConfigSnapshot"
         "403":
           $ref: "#/components/responses/Error"
-        "503":
-          $ref: "#/components/responses/Error"
     put:
-      summary: Compare-and-swap QQ Access configuration
-      description: Saving a valid configuration persists it and hot-restarts only the QQ Access adapter.
+      summary: Compare-and-swap the local Deployment startup configuration
+      description: >-
+        A successful write stores a new revision and asks the Go supervisor to
+        start or restart the business kernel. Empty secret fields preserve existing
+        values. NapCat itself remains an independently managed process.
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/QQAccessUpdate"
+              $ref: "#/components/schemas/DeploymentConfigUpdate"
       responses:
         "200":
-          description: Configuration applied.
+          description: Configuration persisted and scheduled for application.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/QQAccessSnapshot"
+                $ref: "#/components/schemas/DeploymentConfigSnapshot"
         "400":
           $ref: "#/components/responses/Error"
         "403":
           $ref: "#/components/responses/Error"
         "409":
           $ref: "#/components/responses/Error"
-        "503":
+        "500":
           $ref: "#/components/responses/Error"
   /chat/stream:
     post:
@@ -391,75 +394,180 @@ components:
         type: string
         format: uuid
   schemas:
-    QQAccessUpdate:
+    DeploymentConfigUpdate:
       type: object
       additionalProperties: false
-      required: [generation, enabled, ws_url, bot_qq_id, allowed_group_ids, allowed_private_user_ids]
+      required:
+        - revision
+        - model
+        - model_base_url
+        - model_api_key
+        - model_request_timeout_seconds
+        - model_readiness_timeout_seconds
+        - model_max_retries
+        - model_retry_base_seconds
+        - model_retry_max_seconds
+        - model_requests_per_minute
+        - model_max_concurrency
+        - qq_enabled
+        - qq_ws_url
+        - qq_ws_token
+        - clear_qq_ws_token
+        - qq_bot_id
+        - qq_allowed_group_ids
+        - qq_allowed_private_user_ids
       properties:
-        generation:
+        revision:
+          type: integer
+          minimum: 0
+        model:
+          type: string
+          minLength: 1
+          maxLength: 256
+        model_base_url:
+          type: string
+          description: Optional OpenAI-compatible HTTP(S) base URL; empty selects the provider default.
+        model_api_key:
+          type: string
+          writeOnly: true
+          maxLength: 16384
+          description: Empty preserves the currently stored model secret.
+        model_request_timeout_seconds:
+          type: number
+          minimum: 0.1
+          maximum: 120
+        model_readiness_timeout_seconds:
+          type: number
+          minimum: 0.1
+          maximum: 30
+        model_max_retries:
+          type: integer
+          minimum: 0
+          maximum: 5
+        model_retry_base_seconds:
+          type: number
+          exclusiveMinimum: 0
+          maximum: 30
+        model_retry_max_seconds:
+          type: number
+          exclusiveMinimum: 0
+          maximum: 30
+        model_requests_per_minute:
           type: integer
           minimum: 1
-        enabled:
+          maximum: 10000
+        model_max_concurrency:
+          type: integer
+          minimum: 1
+          maximum: 64
+        qq_enabled:
           type: boolean
-        ws_url:
+        qq_ws_url:
           type: string
           description: OneBot v11 ws:// or wss:// endpoint exposed independently by NapCat.
-        bot_qq_id:
+        qq_ws_token:
+          type: string
+          writeOnly: true
+          maxLength: 4096
+          description: Empty preserves the current token unless clear_qq_ws_token is true.
+        clear_qq_ws_token:
+          type: boolean
+        qq_bot_id:
           type: string
           pattern: "^[1-9][0-9]{0,19}$"
-        allowed_group_ids:
+        qq_allowed_group_ids:
           type: array
           maxItems: 1024
           items:
             type: string
             pattern: "^[1-9][0-9]{0,19}$"
-        allowed_private_user_ids:
+        qq_allowed_private_user_ids:
           type: array
           maxItems: 1024
           items:
             type: string
             pattern: "^[1-9][0-9]{0,19}$"
-    QQAccessSnapshot:
+    DeploymentConfigSnapshot:
       type: object
       additionalProperties: false
-      required: [settings, runtime]
+      required: [settings, model_api_key_configured, qq_ws_token_configured, runtime]
       properties:
         settings:
           type: object
           additionalProperties: false
-          required: [app_id, generation, enabled, ws_url, bot_qq_id, allowed_group_ids, allowed_private_user_ids, updated_at]
+          required:
+            - revision
+            - model
+            - model_base_url
+            - model_request_timeout_seconds
+            - model_readiness_timeout_seconds
+            - model_max_retries
+            - model_retry_base_seconds
+            - model_retry_max_seconds
+            - model_requests_per_minute
+            - model_max_concurrency
+            - qq_enabled
+            - qq_ws_url
+            - qq_bot_id
+            - qq_allowed_group_ids
+            - qq_allowed_private_user_ids
+            - updated_at
           properties:
-            app_id:
-              type: string
-            generation:
+            revision:
               type: integer
-              minimum: 1
-            enabled:
+              minimum: 0
+            model:
+              type: string
+            model_base_url:
+              type: string
+            model_request_timeout_seconds:
+              type: number
+            model_readiness_timeout_seconds:
+              type: number
+            model_max_retries:
+              type: integer
+            model_retry_base_seconds:
+              type: number
+            model_retry_max_seconds:
+              type: number
+            model_requests_per_minute:
+              type: integer
+            model_max_concurrency:
+              type: integer
+            qq_enabled:
               type: boolean
-            ws_url:
+            qq_ws_url:
               type: string
-            bot_qq_id:
+            qq_bot_id:
               type: string
-            allowed_group_ids:
+            qq_allowed_group_ids:
               type: array
               items:
                 type: string
-            allowed_private_user_ids:
+            qq_allowed_private_user_ids:
               type: array
               items:
                 type: string
             updated_at:
               type: string
               format: date-time
+        model_api_key_configured:
+          type: boolean
+        qq_ws_token_configured:
+          type: boolean
         runtime:
           type: object
           additionalProperties: false
-          required: [running, connected]
+          required: [state, message, revision]
           properties:
-            running:
-              type: boolean
-            connected:
-              type: boolean
+            state:
+              type: string
+              enum: [setup_required, starting, restarting, ready, failed]
+            message:
+              type: string
+            revision:
+              type: integer
+              minimum: 0
     PlatformEvent:
       type: object
       additionalProperties: false

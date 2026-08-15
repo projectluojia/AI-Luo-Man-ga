@@ -19,10 +19,12 @@ import (
 
 	runtimev1 "github.com/projectluojia/AI-Luo-Man-ga/gen/runtimev1"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/access/configui"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access/ingress"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access/qq"
 	qqsettings "github.com/projectluojia/AI-Luo-Man-ga/internal/access/qq/settings"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access/web"
+	controlconfig "github.com/projectluojia/AI-Luo-Man-ga/internal/controlplane/config"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/appconfig"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/confirmation"
 	kernelecho "github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
@@ -314,26 +316,101 @@ func listenRuntimeHost(address string) (net.Listener, error) {
 	return net.Listen("tcp", address)
 }
 
-func run() (resultErr error) {
+func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-
-	config, err := loadConfig()
+	baseConfig, err := loadConfig()
 	if err != nil {
 		return err
 	}
 	if _, err := observe.Configure(observe.Config{
 		Service:        "ailuo-kernel",
-		Environment:    config.environment,
-		Level:          config.logLevel,
-		Format:         config.logFormat,
-		AddSource:      config.logSource,
-		MaxValueLength: config.logMaxValueLength,
+		Environment:    baseConfig.environment,
+		Level:          baseConfig.logLevel,
+		Format:         baseConfig.logFormat,
+		AddSource:      baseConfig.logSource,
+		MaxValueLength: baseConfig.logMaxValueLength,
 		Writer:         os.Stdout,
 	}); err != nil {
 		return err
 	}
 	ctx = observe.With(ctx, observe.Component("kernel"))
+	manager, err := controlconfig.NewService(baseConfig.localConfigRoot)
+	if err != nil {
+		return fmt.Errorf("open deployment configuration: %w", err)
+	}
+	if err := seedLocalConfigFromEnvironment(manager, baseConfig); err != nil {
+		return err
+	}
+	select {
+	case <-manager.Changes():
+	default:
+	}
+	configServer, err := configui.NewServer(manager)
+	if err != nil {
+		return err
+	}
+	configServerErrors := make(chan error, 1)
+	go func() {
+		observe.Info(ctx, "本机配置控制台开始监听", observe.StringAttr("address", baseConfig.configUIAddress))
+		configServerErrors <- configServer.Run(ctx, baseConfig.configUIAddress)
+	}()
+	for {
+		resolved, err := manager.WaitReady(ctx)
+		if err != nil {
+			return nil
+		}
+		current, err := applyLocalConfig(baseConfig, resolved)
+		if err != nil {
+			manager.SetRuntime("failed", "配置文件无法安全读取，请重新保存", resolved.Settings.Revision)
+			if err := waitForConfigurationChange(ctx, manager, configServerErrors); err != nil {
+				return err
+			}
+			continue
+		}
+		manager.SetRuntime("starting", "正在启动内核与接入服务", resolved.Settings.Revision)
+		coreContext, cancelCore := context.WithCancel(ctx)
+		coreErrors := make(chan error, 1)
+		go func() { coreErrors <- runCore(coreContext, cancelCore, current, manager) }()
+		select {
+		case <-ctx.Done():
+			cancelCore()
+			return <-coreErrors
+		case err := <-configServerErrors:
+			cancelCore()
+			<-coreErrors
+			return err
+		case <-manager.Changes():
+			manager.SetRuntime("restarting", "正在重启内核以应用新配置", manager.Snapshot().Settings.Revision)
+			cancelCore()
+			if err := <-coreErrors; err != nil && !errors.Is(err, context.Canceled) {
+				observe.Error(ctx, "旧配置内核关闭时发生错误", err)
+			}
+		case err := <-coreErrors:
+			if ctx.Err() != nil {
+				return nil
+			}
+			observe.Error(ctx, "内核启动或运行失败，配置控制台继续可用", err)
+			manager.SetRuntime("failed", "启动失败，请检查配置后重新保存", resolved.Settings.Revision)
+			if err := waitForConfigurationChange(ctx, manager, configServerErrors); err != nil {
+				return err
+			}
+		}
+	}
+}
+
+func waitForConfigurationChange(ctx context.Context, manager *controlconfig.Service, serverErrors <-chan error) error {
+	select {
+	case <-ctx.Done():
+		return nil
+	case err := <-serverErrors:
+		return err
+	case <-manager.Changes():
+		return nil
+	}
+}
+
+func runCore(ctx context.Context, stop context.CancelFunc, config config, localConfig *controlconfig.Service) (resultErr error) {
 	observe.Info(ctx, "正在启动AI珞（爱珞）内核",
 		observe.StringAttr("http_address", config.httpAddress),
 		observe.StringAttr("agent_address", config.agentAddress),
@@ -382,7 +459,7 @@ func run() (resultErr error) {
 		ChannelPrompts: defaultChannelPrompts,
 		Timezone:       "Asia/Shanghai", MaxSteps: 8, MaxToolCalls: 8,
 		MaxInputTokens: 32768, MaxOutputTokens: 8192, MaxTotalTokens: 40960,
-		MaxOutputBytes: 65536, ProviderTimeout: 30 * time.Second,
+		MaxOutputBytes: 65536, ProviderTimeout: config.modelRequestTimeout,
 		EnabledCapabilities: []string{
 			campus.BusStopSearchCapabilityID,
 			campus.BusRouteListCapabilityID,
@@ -392,6 +469,15 @@ func run() (resultErr error) {
 	})
 	if err != nil {
 		return fmt.Errorf("ensure campus App config: %w", err)
+	}
+	if !created && (app.Model != config.model || app.ProviderTimeout != config.modelRequestTimeout) {
+		replacement := app
+		replacement.Model = config.model
+		replacement.ProviderTimeout = config.modelRequestTimeout
+		app, err = store.CompareAndSwap(ctx, app.Generation, replacement)
+		if err != nil {
+			return fmt.Errorf("apply campus App model configuration: %w", err)
+		}
 	}
 	observe.Info(ctx, "校园 App 持久配置已经就绪",
 		observe.StringAttr("app_id", app.AppID),
@@ -428,6 +514,7 @@ func run() (resultErr error) {
 				PythonPath: config.pythonPath,
 				WorkDir:    workDir,
 				Address:    config.agentAddress,
+				Env:        agentEnvironment(config),
 				Limits:     loader.ProcessLimits{},
 			}, nil
 		},
@@ -571,7 +658,7 @@ func run() (resultErr error) {
 		return fmt.Errorf("configure QQ access manager: %w", err)
 	}
 	webAccess := web.NewServer(ctx, orchestrator, store, readiness, reg, policy, campus.AppID, platformHub,
-		web.WithEventHub(qqEvents), web.WithQQAccessAdmin(qqManager))
+		web.WithEventHub(qqEvents))
 	// 平台事件入口独立挂载：/api/v1/ingress/{platform} 由平台适配器规范化事件驱动，
 	// 其余路径全部交给 Web Access（健康检查、Echo/SSE、演示页面）。
 	ingressServer := ingress.NewServer(campus.AppID, platformHub, orchestrator)
@@ -579,10 +666,23 @@ func run() (resultErr error) {
 		return fmt.Errorf("recover durable runs: %w", err)
 	}
 	if err := qqManager.Start(ctx, qqsettings.Settings{
-		AppID: campus.AppID, Enabled: config.qqWSURL != "", WSURL: config.qqWSURL, BotQQID: config.qqBotID,
+		AppID: campus.AppID, Enabled: config.qqEnabled, WSURL: config.qqWSURL, BotQQID: config.qqBotID,
 		AllowedGroupIDs: config.qqAllowedGroupIDs, AllowedPrivateUserIDs: config.qqAllowedPrivateIDs,
 	}); err != nil {
 		return fmt.Errorf("start QQ access manager: %w", err)
+	}
+	qqDesired := qqsettings.Settings{
+		AppID: campus.AppID, Enabled: config.qqEnabled, WSURL: config.qqWSURL, BotQQID: config.qqBotID,
+		AllowedGroupIDs: config.qqAllowedGroupIDs, AllowedPrivateUserIDs: config.qqAllowedPrivateIDs,
+	}
+	qqCurrent, _, err := qqManager.Snapshot(ctx)
+	if err != nil {
+		return fmt.Errorf("read QQ access configuration: %w", err)
+	}
+	if !qqsettings.EqualContent(qqCurrent, qqDesired) {
+		if _, _, err := qqManager.Update(ctx, qqCurrent.Generation, qqDesired); err != nil {
+			return fmt.Errorf("apply QQ access configuration: %w", err)
+		}
 	}
 	defer func() {
 		shutdownContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -614,6 +714,7 @@ func run() (resultErr error) {
 		)
 		serverErrors <- server.ListenAndServe()
 	}()
+	localConfig.SetRuntime("ready", "内核与接入服务正在运行", localConfig.Snapshot().Settings.Revision)
 	select {
 	case <-ctx.Done():
 		observe.Info(ctx, "收到停止信号，正在关闭服务")
@@ -637,10 +738,22 @@ func run() (resultErr error) {
 
 type config struct {
 	httpAddress         string
+	configUIAddress     string
+	localConfigRoot     string
 	agentAddress        string
 	pythonPath          string
 	databasePath        string
 	model               string
+	modelBaseURL        string
+	modelAPIKey         string
+	modelAPIKeyFile     string
+	modelRequestTimeout time.Duration
+	modelReadyTimeout   time.Duration
+	modelMaxRetries     int
+	modelRetryBase      time.Duration
+	modelRetryMax       time.Duration
+	modelRequestsMinute int
+	modelMaxConcurrency int
 	manageAgent         bool
 	loadDemoData        bool
 	environment         string
@@ -651,6 +764,7 @@ type config struct {
 	runtimeInstallRoot  string
 	runtimeHostAddress  string
 	qqWSURL             string
+	qqEnabled           bool
 	qqToken             string
 	qqBotID             string
 	qqAllowedGroupIDs   []string
@@ -681,12 +795,52 @@ func loadConfig() (config, error) {
 	if err != nil {
 		return config{}, err
 	}
+	requestTimeout, err := envFloat("AILUO_MODEL_TIMEOUT_SECONDS", 30)
+	if err != nil {
+		return config{}, err
+	}
+	readinessTimeout, err := envFloat("AILUO_MODEL_READINESS_TIMEOUT_SECONDS", 3)
+	if err != nil {
+		return config{}, err
+	}
+	retryBase, err := envFloat("AILUO_MODEL_RETRY_BASE_SECONDS", 0.25)
+	if err != nil {
+		return config{}, err
+	}
+	retryMax, err := envFloat("AILUO_MODEL_RETRY_MAX_SECONDS", 2)
+	if err != nil {
+		return config{}, err
+	}
+	maxRetries, err := envIntRange("AILUO_MODEL_MAX_RETRIES", 2, 0, 5)
+	if err != nil {
+		return config{}, err
+	}
+	requestsMinute, err := envIntRange("AILUO_MODEL_REQUESTS_PER_MINUTE", 60, 1, 10_000)
+	if err != nil {
+		return config{}, err
+	}
+	maxConcurrency, err := envIntRange("AILUO_MODEL_MAX_CONCURRENCY", 4, 1, 64)
+	if err != nil {
+		return config{}, err
+	}
 	result := config{
 		httpAddress:         envOr("AILUO_HTTP_ADDRESS", "127.0.0.1:8080"),
+		configUIAddress:     envOr("AILUO_CONFIG_UI_ADDRESS", configui.DefaultAddress),
+		localConfigRoot:     envOr("AILUO_CONFIG_DIR", "var"),
 		agentAddress:        envOr("AILUO_AGENT_ADDRESS", "127.0.0.1:50051"),
 		pythonPath:          envOr("AILUO_PYTHON", agent.DefaultPythonPath(".")),
 		databasePath:        envOr("AILUO_DATABASE_PATH", "var/ailuo.db"),
 		model:               os.Getenv("AILUO_MODEL"),
+		modelBaseURL:        os.Getenv("AILUO_MODEL_BASE_URL"),
+		modelAPIKey:         envOr("AILUO_MODEL_API_KEY", os.Getenv("OPENAI_API_KEY")),
+		modelAPIKeyFile:     os.Getenv("AILUO_MODEL_API_KEY_FILE"),
+		modelRequestTimeout: time.Duration(requestTimeout * float64(time.Second)),
+		modelReadyTimeout:   time.Duration(readinessTimeout * float64(time.Second)),
+		modelMaxRetries:     maxRetries,
+		modelRetryBase:      time.Duration(retryBase * float64(time.Second)),
+		modelRetryMax:       time.Duration(retryMax * float64(time.Second)),
+		modelRequestsMinute: requestsMinute,
+		modelMaxConcurrency: maxConcurrency,
 		manageAgent:         manageAgent,
 		loadDemoData:        loadDemoData,
 		environment:         envOr("AILUO_ENVIRONMENT", "development"),
@@ -697,6 +851,7 @@ func loadConfig() (config, error) {
 		runtimeInstallRoot:  os.Getenv("AILUO_RUNTIME_INSTALL_ROOT"),
 		runtimeHostAddress:  os.Getenv("AILUO_RUNTIME_HOST_ADDRESS"),
 		qqWSURL:             os.Getenv("AILUO_QQ_WS_URL"),
+		qqEnabled:           os.Getenv("AILUO_QQ_WS_URL") != "",
 		qqToken:             os.Getenv("AILUO_QQ_WS_TOKEN"),
 		qqBotID:             os.Getenv("AILUO_QQ_BOT_ID"),
 		qqAllowedGroupIDs:   envCSV("AILUO_QQ_ALLOWED_GROUP_IDS"),
@@ -709,8 +864,8 @@ func loadConfig() (config, error) {
 		return config{}, fmt.Errorf("configuration error: resolve python path: %w", err)
 	}
 	result.pythonPath = absolutePython
-	if result.model == "" {
-		return config{}, fmt.Errorf("configuration error: AILUO_MODEL is required")
+	if !loader.IsLocalRuntimeAddress(result.configUIAddress) {
+		return config{}, fmt.Errorf("configuration error: AILUO_CONFIG_UI_ADDRESS must be loopback")
 	}
 	if result.loadDemoData && (strings.EqualFold(result.environment, "production") || strings.EqualFold(result.environment, "prod")) {
 		return config{}, fmt.Errorf("configuration error: AILUO_LOAD_DEMO_DATA must be false in production")
@@ -723,14 +878,11 @@ func loadConfig() (config, error) {
 		return config{}, fmt.Errorf("configuration error: AILUO_QQ_WS_URL must be a ws:// or wss:// address")
 	}
 	if result.manageAgent {
-		secretFile := os.Getenv("AILUO_MODEL_API_KEY_FILE")
-		rawSecretConfigured := os.Getenv("AILUO_MODEL_API_KEY") != "" || os.Getenv("OPENAI_API_KEY") != ""
+		secretFile := result.modelAPIKeyFile
+		rawSecretConfigured := result.modelAPIKey != ""
 		production := strings.EqualFold(result.environment, "production") || strings.EqualFold(result.environment, "prod")
 		if production && rawSecretConfigured {
 			return config{}, fmt.Errorf("configuration error: production model credentials must use AILUO_MODEL_API_KEY_FILE")
-		}
-		if secretFile == "" && !rawSecretConfigured {
-			return config{}, fmt.Errorf("configuration error: AILUO_MODEL_API_KEY_FILE, AILUO_MODEL_API_KEY or OPENAI_API_KEY is required when Go manages the AI Agent")
 		}
 		if secretFile != "" {
 			if err := validateSecretFile(secretFile); err != nil {
@@ -739,6 +891,88 @@ func loadConfig() (config, error) {
 		}
 	}
 	return result, nil
+}
+
+func seedLocalConfigFromEnvironment(manager *controlconfig.Service, base config) error {
+	if _, ready := manager.CurrentResolved(); ready || base.model == "" {
+		return nil
+	}
+	modelKey := base.modelAPIKey
+	if modelKey == "" && base.modelAPIKeyFile != "" {
+		content, err := os.ReadFile(base.modelAPIKeyFile)
+		if err != nil {
+			return fmt.Errorf("read model secret for configuration migration: %w", err)
+		}
+		modelKey = strings.TrimSpace(string(content))
+	}
+	if modelKey == "" {
+		return nil
+	}
+	_, err := manager.Save(controlconfig.SaveInput{
+		Model:                        base.model,
+		ModelBaseURL:                 base.modelBaseURL,
+		ModelAPIKey:                  modelKey,
+		ModelRequestTimeoutSeconds:   base.modelRequestTimeout.Seconds(),
+		ModelReadinessTimeoutSeconds: base.modelReadyTimeout.Seconds(),
+		ModelMaxRetries:              base.modelMaxRetries,
+		ModelRetryBaseSeconds:        base.modelRetryBase.Seconds(),
+		ModelRetryMaxSeconds:         base.modelRetryMax.Seconds(),
+		ModelRequestsPerMinute:       base.modelRequestsMinute,
+		ModelMaxConcurrency:          base.modelMaxConcurrency,
+		QQEnabled:                    base.qqEnabled,
+		QQWSURL:                      base.qqWSURL,
+		QQWSToken:                    base.qqToken,
+		QQBotID:                      base.qqBotID,
+		QQAllowedGroupIDs:            base.qqAllowedGroupIDs,
+		QQAllowedPrivateUserIDs:      base.qqAllowedPrivateIDs,
+	})
+	if err != nil {
+		return fmt.Errorf("migrate environment configuration into control plane: %w", err)
+	}
+	return nil
+}
+
+func applyLocalConfig(base config, resolved controlconfig.Resolved) (config, error) {
+	settings := resolved.Settings
+	base.model = settings.Model
+	base.modelBaseURL = settings.ModelBaseURL
+	base.modelAPIKeyFile = resolved.ModelAPIKeyFile
+	base.modelRequestTimeout = time.Duration(settings.ModelRequestTimeoutSeconds * float64(time.Second))
+	base.modelReadyTimeout = time.Duration(settings.ModelReadinessTimeoutSeconds * float64(time.Second))
+	base.modelMaxRetries = settings.ModelMaxRetries
+	base.modelRetryBase = time.Duration(settings.ModelRetryBaseSeconds * float64(time.Second))
+	base.modelRetryMax = time.Duration(settings.ModelRetryMaxSeconds * float64(time.Second))
+	base.modelRequestsMinute = settings.ModelRequestsPerMinute
+	base.modelMaxConcurrency = settings.ModelMaxConcurrency
+	base.qqWSURL = settings.QQWSURL
+	base.qqEnabled = settings.QQEnabled
+	base.qqBotID = settings.QQBotID
+	base.qqAllowedGroupIDs = append([]string(nil), settings.QQAllowedGroupIDs...)
+	base.qqAllowedPrivateIDs = append([]string(nil), settings.QQAllowedPrivateUserIDs...)
+	base.qqToken = ""
+	if resolved.QQWSTokenFile != "" {
+		content, err := os.ReadFile(resolved.QQWSTokenFile)
+		if err != nil || len(content) > controlconfig.MaxQQTokenBytes {
+			return config{}, errors.New("QQ secret file is unavailable")
+		}
+		base.qqToken = strings.TrimSpace(string(content))
+	}
+	return base, nil
+}
+
+func agentEnvironment(config config) []string {
+	return []string{
+		"AILUO_ENVIRONMENT=" + config.environment,
+		"AILUO_MODEL_API_KEY_FILE=" + config.modelAPIKeyFile,
+		"AILUO_MODEL_BASE_URL=" + config.modelBaseURL,
+		"AILUO_MODEL_TIMEOUT_SECONDS=" + strconv.FormatFloat(config.modelRequestTimeout.Seconds(), 'f', -1, 64),
+		"AILUO_MODEL_READINESS_TIMEOUT_SECONDS=" + strconv.FormatFloat(config.modelReadyTimeout.Seconds(), 'f', -1, 64),
+		"AILUO_MODEL_MAX_RETRIES=" + strconv.Itoa(config.modelMaxRetries),
+		"AILUO_MODEL_RETRY_BASE_SECONDS=" + strconv.FormatFloat(config.modelRetryBase.Seconds(), 'f', -1, 64),
+		"AILUO_MODEL_RETRY_MAX_SECONDS=" + strconv.FormatFloat(config.modelRetryMax.Seconds(), 'f', -1, 64),
+		"AILUO_MODEL_REQUESTS_PER_MINUTE=" + strconv.Itoa(config.modelRequestsMinute),
+		"AILUO_MODEL_MAX_CONCURRENCY=" + strconv.Itoa(config.modelMaxConcurrency),
+	}
 }
 
 // configureInstalledRuntimes 发现安装目录中的 installed 包，返回加入统一 Loader
@@ -845,6 +1079,30 @@ func envInt(name string, fallback int) (int, error) {
 	parsed, err := strconv.Atoi(value)
 	if err != nil || parsed <= 0 {
 		return 0, fmt.Errorf("配置错误：%s 必须是正整数", name)
+	}
+	return parsed, nil
+}
+
+func envIntRange(name string, fallback, minimum, maximum int) (int, error) {
+	value := os.Getenv(name)
+	if value == "" {
+		return fallback, nil
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed < minimum || parsed > maximum {
+		return 0, fmt.Errorf("配置错误：%s 超出允许范围", name)
+	}
+	return parsed, nil
+}
+
+func envFloat(name string, fallback float64) (float64, error) {
+	value := os.Getenv(name)
+	if value == "" {
+		return fallback, nil
+	}
+	parsed, err := strconv.ParseFloat(value, 64)
+	if err != nil || parsed <= 0 {
+		return 0, fmt.Errorf("配置错误：%s 必须是正数", name)
 	}
 	return parsed, nil
 }
