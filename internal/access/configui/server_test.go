@@ -26,6 +26,8 @@ func TestConfigAPIStoresSecretsWithoutReturningThem(t *testing.T) {
 		ModelRetryMaxSeconds: 2, ModelRequestsPerMinute: 60, ModelMaxConcurrency: 4,
 		QQEnabled: true, QQWSURL: "ws://127.0.0.1:3001", QQWSToken: "qq-never-return-this",
 		QQBotID: "2647414417", QQAllowedGroupIDs: []string{"123456"},
+		QQQuickReplies: []controlconfig.QQQuickReply{{Trigger: "ping", Reply: "pong"}},
+		QQPokeReplies:  []string{"在呢"},
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -43,6 +45,21 @@ func TestConfigAPIStoresSecretsWithoutReturningThem(t *testing.T) {
 	}
 	if !strings.Contains(recorder.Body.String(), `"model_api_key_configured":true`) || !strings.Contains(recorder.Body.String(), `"qq_ws_token_configured":true`) {
 		t.Fatalf("body=%s", recorder.Body.String())
+	}
+	var snapshot controlconfig.Snapshot
+	if err := json.Unmarshal(recorder.Body.Bytes(), &snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Settings.QQQuickReplies) != 1 || snapshot.Settings.QQQuickReplies[0].Reply != "pong" ||
+		len(snapshot.Settings.QQPokeReplies) != 1 || snapshot.Settings.QQPokeReplies[0] != "在呢" {
+		t.Fatalf("snapshot=%+v", snapshot.Settings)
+	}
+	getRequest := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:9178/api/v1/config", nil)
+	getRequest.RemoteAddr = "127.0.0.1:43000"
+	getRecorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(getRecorder, getRequest)
+	if getRecorder.Code != http.StatusOK || !strings.Contains(getRecorder.Body.String(), `"qq_poke_replies":["在呢"]`) {
+		t.Fatalf("status=%d body=%s", getRecorder.Code, getRecorder.Body.String())
 	}
 }
 

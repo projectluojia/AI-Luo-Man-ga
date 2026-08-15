@@ -56,7 +56,10 @@ func TestQQAdapterRepliesToGroupPoke(t *testing.T) {
 				if params["group_id"] != float64(12345) {
 					t.Fatalf("group reply params=%#v", params)
 				}
-				assertGroupReply(t, params["message"], "67890", " ")
+				message, _ := params["message"].(string)
+				if message == "" {
+					t.Fatalf("empty or mentioned poke reply: %#v", params["message"])
+				}
 				textSeen = true
 			case "group_poke":
 				params, _ := action["params"].(map[string]any)
@@ -91,6 +94,48 @@ func TestQQAdapterRepliesToPrivatePoke(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("adapter did not reply to private poke")
+	}
+}
+
+func TestQQAdapterCanDisablePokeTextWithoutDisablingGroupPoke(t *testing.T) {
+	bot := newFakeOneBot(t)
+	store, err := sqlite.Open(filepath.Join(t.TempDir(), "qq-poke-disabled.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	hub := newQQTestHub(t, store, stubResolver{user: "user-1"})
+	adapter, err := New(Config{
+		AppID: "campus-services", WSURL: bot.wsURL(), BotQQID: "2647414417",
+		AllowedGroupIDs: []string{"12345"}, PokeReplies: []string{}, Provisioner: testProvisioner{},
+		DialTimeout: 2 * time.Second, ReconnectDelay: 50 * time.Millisecond, RunTimeout: 5 * time.Second,
+	}, hub, access.NewEventHub(), &qqFakeOrchestrator{store: store, created: make(chan struct{})}, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go func() { _ = adapter.Run(ctx) }()
+	select {
+	case <-bot.authHeader:
+	case <-time.After(5 * time.Second):
+		t.Fatal("adapter did not connect")
+	}
+
+	bot.sendEvent(t, `{"post_type":"notice","notice_type":"notify","sub_type":"poke","group_id":12345,"user_id":67890,"target_id":2647414417}`)
+
+	select {
+	case action := <-bot.received:
+		if action["action"] != "group_poke" {
+			t.Fatalf("unexpected action=%#v", action)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("adapter did not poke back")
+	}
+	select {
+	case action := <-bot.received:
+		t.Fatalf("unexpected text reply=%#v", action)
+	case <-time.After(200 * time.Millisecond):
 	}
 }
 

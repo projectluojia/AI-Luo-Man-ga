@@ -651,6 +651,7 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 		return qq.New(qq.Config{
 			AppID: settings.AppID, WSURL: settings.WSURL, Token: config.qqToken, BotQQID: settings.BotQQID,
 			AllowedGroupIDs: settings.AllowedGroupIDs, AllowedPrivateUserIDs: settings.AllowedPrivateUserIDs,
+			QuickReplies: config.qqQuickReplies, PokeReplies: config.qqPokeReplies,
 			Provisioner: qqProvisioner, OnConnectionChange: connectionChange,
 		}, platformHub, qqEvents, orchestrator, store)
 	})
@@ -769,6 +770,8 @@ type config struct {
 	qqBotID             string
 	qqAllowedGroupIDs   []string
 	qqAllowedPrivateIDs []string
+	qqQuickReplies      []qq.QuickReply
+	qqPokeReplies       []string
 }
 
 func loadConfig() (config, error) {
@@ -949,6 +952,11 @@ func applyLocalConfig(base config, resolved controlconfig.Resolved) (config, err
 	base.qqBotID = settings.QQBotID
 	base.qqAllowedGroupIDs = append([]string(nil), settings.QQAllowedGroupIDs...)
 	base.qqAllowedPrivateIDs = append([]string(nil), settings.QQAllowedPrivateUserIDs...)
+	base.qqQuickReplies = make([]qq.QuickReply, 0, len(settings.QQQuickReplies))
+	for _, rule := range settings.QQQuickReplies {
+		base.qqQuickReplies = append(base.qqQuickReplies, qq.QuickReply{Trigger: rule.Trigger, Reply: rule.Reply})
+	}
+	base.qqPokeReplies = append([]string(nil), settings.QQPokeReplies...)
 	base.qqToken = ""
 	if resolved.QQWSTokenFile != "" {
 		content, err := os.ReadFile(resolved.QQWSTokenFile)

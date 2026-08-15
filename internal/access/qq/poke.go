@@ -11,22 +11,6 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
 )
 
-// pokeReplies 戳一戳随机回复文案（迁移自 LuoYingRebuild constants.NOTIFYS）。
-var pokeReplies = []string{
-	"🌸",
-	"(轻轻戳回去)",
-	"(探头)",
-	"😊",
-	"(轻轻歪头)嗯？",
-	"(´▽｀)ノ♪",
-	"诶？",
-	"(轻轻挥手)",
-	"(戳回去)",
-	"(◕ᴗ◕✿)",
-	"(´▽｀)ノ",
-	"(✧ω✧)",
-}
-
 // handleNotice 处理一条 OneBot notice 事件；目前只支持戳一戳，其余忽略。
 func (a *Adapter) handleNotice(ctx context.Context, raw map[string]any) {
 	if str(raw, "notice_type") != "notify" || str(raw, "sub_type") != "poke" {
@@ -62,7 +46,9 @@ func (a *Adapter) handleNotice(ctx context.Context, raw map[string]any) {
 	if !a.allowed(inbound) {
 		return
 	}
-	a.reply(ctx, inbound, pokeReplies[rand.IntN(len(pokeReplies))])
+	if len(a.pokeReplies) > 0 {
+		a.replyPlain(ctx, inbound, a.pokeReplies[rand.IntN(len(a.pokeReplies))])
+	}
 	if channel == "group" {
 		// 群聊戳回去：向戳的人发送 group_poke。
 		if err := a.send(map[string]any{

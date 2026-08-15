@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/access/qq"
 	qqsettings "github.com/projectluojia/AI-Luo-Man-ga/internal/access/qq/settings"
 )
 
@@ -22,44 +23,54 @@ var (
 
 // Settings 是不含秘密的本机运行配置。
 type Settings struct {
-	Revision                     uint64    `json:"revision"`
-	Model                        string    `json:"model"`
-	ModelBaseURL                 string    `json:"model_base_url"`
-	ModelRequestTimeoutSeconds   float64   `json:"model_request_timeout_seconds"`
-	ModelReadinessTimeoutSeconds float64   `json:"model_readiness_timeout_seconds"`
-	ModelMaxRetries              int       `json:"model_max_retries"`
-	ModelRetryBaseSeconds        float64   `json:"model_retry_base_seconds"`
-	ModelRetryMaxSeconds         float64   `json:"model_retry_max_seconds"`
-	ModelRequestsPerMinute       int       `json:"model_requests_per_minute"`
-	ModelMaxConcurrency          int       `json:"model_max_concurrency"`
-	QQEnabled                    bool      `json:"qq_enabled"`
-	QQWSURL                      string    `json:"qq_ws_url"`
-	QQBotID                      string    `json:"qq_bot_id"`
-	QQAllowedGroupIDs            []string  `json:"qq_allowed_group_ids"`
-	QQAllowedPrivateUserIDs      []string  `json:"qq_allowed_private_user_ids"`
-	UpdatedAt                    time.Time `json:"updated_at"`
+	Revision                     uint64         `json:"revision"`
+	Model                        string         `json:"model"`
+	ModelBaseURL                 string         `json:"model_base_url"`
+	ModelRequestTimeoutSeconds   float64        `json:"model_request_timeout_seconds"`
+	ModelReadinessTimeoutSeconds float64        `json:"model_readiness_timeout_seconds"`
+	ModelMaxRetries              int            `json:"model_max_retries"`
+	ModelRetryBaseSeconds        float64        `json:"model_retry_base_seconds"`
+	ModelRetryMaxSeconds         float64        `json:"model_retry_max_seconds"`
+	ModelRequestsPerMinute       int            `json:"model_requests_per_minute"`
+	ModelMaxConcurrency          int            `json:"model_max_concurrency"`
+	QQEnabled                    bool           `json:"qq_enabled"`
+	QQWSURL                      string         `json:"qq_ws_url"`
+	QQBotID                      string         `json:"qq_bot_id"`
+	QQAllowedGroupIDs            []string       `json:"qq_allowed_group_ids"`
+	QQAllowedPrivateUserIDs      []string       `json:"qq_allowed_private_user_ids"`
+	QQQuickReplies               []QQQuickReply `json:"qq_quick_replies"`
+	QQPokeReplies                []string       `json:"qq_poke_replies"`
+	UpdatedAt                    time.Time      `json:"updated_at"`
 }
 
 // SaveInput 是 WebUI 写入契约。秘密为空表示保留已有值。
 type SaveInput struct {
-	Revision                     uint64   `json:"revision"`
-	Model                        string   `json:"model"`
-	ModelBaseURL                 string   `json:"model_base_url"`
-	ModelAPIKey                  string   `json:"model_api_key"`
-	ModelRequestTimeoutSeconds   float64  `json:"model_request_timeout_seconds"`
-	ModelReadinessTimeoutSeconds float64  `json:"model_readiness_timeout_seconds"`
-	ModelMaxRetries              int      `json:"model_max_retries"`
-	ModelRetryBaseSeconds        float64  `json:"model_retry_base_seconds"`
-	ModelRetryMaxSeconds         float64  `json:"model_retry_max_seconds"`
-	ModelRequestsPerMinute       int      `json:"model_requests_per_minute"`
-	ModelMaxConcurrency          int      `json:"model_max_concurrency"`
-	QQEnabled                    bool     `json:"qq_enabled"`
-	QQWSURL                      string   `json:"qq_ws_url"`
-	QQWSToken                    string   `json:"qq_ws_token"`
-	ClearQQWSToken               bool     `json:"clear_qq_ws_token"`
-	QQBotID                      string   `json:"qq_bot_id"`
-	QQAllowedGroupIDs            []string `json:"qq_allowed_group_ids"`
-	QQAllowedPrivateUserIDs      []string `json:"qq_allowed_private_user_ids"`
+	Revision                     uint64         `json:"revision"`
+	Model                        string         `json:"model"`
+	ModelBaseURL                 string         `json:"model_base_url"`
+	ModelAPIKey                  string         `json:"model_api_key"`
+	ModelRequestTimeoutSeconds   float64        `json:"model_request_timeout_seconds"`
+	ModelReadinessTimeoutSeconds float64        `json:"model_readiness_timeout_seconds"`
+	ModelMaxRetries              int            `json:"model_max_retries"`
+	ModelRetryBaseSeconds        float64        `json:"model_retry_base_seconds"`
+	ModelRetryMaxSeconds         float64        `json:"model_retry_max_seconds"`
+	ModelRequestsPerMinute       int            `json:"model_requests_per_minute"`
+	ModelMaxConcurrency          int            `json:"model_max_concurrency"`
+	QQEnabled                    bool           `json:"qq_enabled"`
+	QQWSURL                      string         `json:"qq_ws_url"`
+	QQWSToken                    string         `json:"qq_ws_token"`
+	ClearQQWSToken               bool           `json:"clear_qq_ws_token"`
+	QQBotID                      string         `json:"qq_bot_id"`
+	QQAllowedGroupIDs            []string       `json:"qq_allowed_group_ids"`
+	QQAllowedPrivateUserIDs      []string       `json:"qq_allowed_private_user_ids"`
+	QQQuickReplies               []QQQuickReply `json:"qq_quick_replies"`
+	QQPokeReplies                []string       `json:"qq_poke_replies"`
+}
+
+// QQQuickReply 是本机控制面使用的 QQ 精确快速回复配置。
+type QQQuickReply struct {
+	Trigger string `json:"trigger"`
+	Reply   string `json:"reply"`
 }
 
 // Snapshot 是管理 API 返回值，只有秘密是否已配置，不返回秘密正文。
@@ -90,6 +101,7 @@ func DefaultSettings() Settings {
 		ModelMaxRetries: 2, ModelRetryBaseSeconds: 0.25, ModelRetryMaxSeconds: 2,
 		ModelRequestsPerMinute: 60, ModelMaxConcurrency: 4,
 		QQAllowedGroupIDs: []string{}, QQAllowedPrivateUserIDs: []string{},
+		QQQuickReplies: []QQQuickReply{}, QQPokeReplies: qq.DefaultPokeReplies(),
 	}
 }
 
@@ -101,7 +113,8 @@ func normalize(input SaveInput) (Settings, error) {
 		ModelRetryMaxSeconds: input.ModelRetryMaxSeconds, ModelRequestsPerMinute: input.ModelRequestsPerMinute,
 		ModelMaxConcurrency: input.ModelMaxConcurrency, QQEnabled: input.QQEnabled, QQWSURL: strings.TrimSpace(input.QQWSURL),
 		QQBotID: strings.TrimSpace(input.QQBotID), QQAllowedGroupIDs: input.QQAllowedGroupIDs,
-		QQAllowedPrivateUserIDs: input.QQAllowedPrivateUserIDs,
+		QQAllowedPrivateUserIDs: input.QQAllowedPrivateUserIDs, QQQuickReplies: input.QQQuickReplies,
+		QQPokeReplies: input.QQPokeReplies,
 	}
 	if len(settings.Model) == 0 || len(settings.Model) > 256 || !validBaseURL(settings.ModelBaseURL) ||
 		settings.ModelRequestTimeoutSeconds < 0.1 || settings.ModelRequestTimeoutSeconds > 120 ||
@@ -123,6 +136,18 @@ func normalize(input SaveInput) (Settings, error) {
 	settings.QQBotID = qqValue.BotQQID
 	settings.QQAllowedGroupIDs = qqValue.AllowedGroupIDs
 	settings.QQAllowedPrivateUserIDs = qqValue.AllowedPrivateUserIDs
+	quick := make([]qq.QuickReply, 0, len(settings.QQQuickReplies))
+	for _, rule := range settings.QQQuickReplies {
+		quick = append(quick, qq.QuickReply{Trigger: rule.Trigger, Reply: rule.Reply})
+	}
+	quick, settings.QQPokeReplies, err = qq.NormalizeBehavior(quick, settings.QQPokeReplies)
+	if err != nil {
+		return Settings{}, ErrInvalid
+	}
+	settings.QQQuickReplies = make([]QQQuickReply, 0, len(quick))
+	for _, rule := range quick {
+		settings.QQQuickReplies = append(settings.QQQuickReplies, QQQuickReply{Trigger: rule.Trigger, Reply: rule.Reply})
+	}
 	return settings, nil
 }
 
@@ -134,7 +159,8 @@ func validateStored(settings Settings) (Settings, error) {
 		ModelRetryMaxSeconds: settings.ModelRetryMaxSeconds, ModelRequestsPerMinute: settings.ModelRequestsPerMinute,
 		ModelMaxConcurrency: settings.ModelMaxConcurrency, QQEnabled: settings.QQEnabled, QQWSURL: settings.QQWSURL,
 		QQBotID: settings.QQBotID, QQAllowedGroupIDs: settings.QQAllowedGroupIDs,
-		QQAllowedPrivateUserIDs: settings.QQAllowedPrivateUserIDs,
+		QQAllowedPrivateUserIDs: settings.QQAllowedPrivateUserIDs, QQQuickReplies: settings.QQQuickReplies,
+		QQPokeReplies: settings.QQPokeReplies,
 	})
 }
 

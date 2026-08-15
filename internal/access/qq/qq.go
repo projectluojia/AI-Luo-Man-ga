@@ -49,6 +49,8 @@ type Config struct {
 	BotQQID               string // 机器人 QQ 号：戳一戳识别 target_id、@提及匹配
 	AllowedGroupIDs       []string
 	AllowedPrivateUserIDs []string
+	QuickReplies          []QuickReply
+	PokeReplies           []string
 	Provisioner           IdentityProvisioner
 	OnConnectionChange    func(bool)
 	DialTimeout           time.Duration
@@ -76,6 +78,8 @@ type Adapter struct {
 	reader              EchoReader
 	allowedGroups       map[string]struct{}
 	allowedPrivateUsers map[string]struct{}
+	quickReplies        map[string]string
+	pokeReplies         []string
 
 	conn   *websocket.Conn
 	sendMu sync.Mutex
@@ -96,6 +100,10 @@ func New(cfg Config, hub *access.Hub, events *access.EventHub, orchestrator Echo
 	cfg.AppID, cfg.WSURL, cfg.BotQQID = normalized.AppID, normalized.WSURL, normalized.BotQQID
 	cfg.AllowedGroupIDs = normalized.AllowedGroupIDs
 	cfg.AllowedPrivateUserIDs = normalized.AllowedPrivateUserIDs
+	cfg.QuickReplies, cfg.PokeReplies, err = NormalizeBehavior(cfg.QuickReplies, cfg.PokeReplies)
+	if err != nil {
+		return nil, err
+	}
 
 	if cfg.DialTimeout == 0 {
 		cfg.DialTimeout = defaultDialTimeout
@@ -109,6 +117,7 @@ func New(cfg Config, hub *access.Hub, events *access.EventHub, orchestrator Echo
 	return &Adapter{
 		cfg: cfg, hub: hub, events: events, orchestrator: orchestrator, reader: reader,
 		allowedGroups: toSet(cfg.AllowedGroupIDs), allowedPrivateUsers: toSet(cfg.AllowedPrivateUserIDs),
+		quickReplies: toQuickReplyMap(cfg.QuickReplies), pokeReplies: append([]string(nil), cfg.PokeReplies...),
 	}, nil
 }
 
@@ -243,6 +252,10 @@ func (a *Adapter) handleEvent(ctx context.Context, raw map[string]any) {
 	if !a.allowed(inbound) {
 		return
 	}
+	if reply, matched := a.quickReplies[inbound.Text]; matched {
+		a.replyPlain(ctx, inbound, reply)
+		return
+	}
 	if err := a.cfg.Provisioner.EnsureQQIdentity(ctx, *inbound); err != nil {
 		_, _, message := access.IntakePublicError(err)
 		a.reply(ctx, inbound, message)
@@ -358,6 +371,15 @@ func terminalReply(event kernelecho.Event) *string {
 // reply 把回复文本发送到消息来源。群消息使用 OneBot 消息段明确 @ 原发送人，
 // 私聊直接回用户；按 PlatformChannel 选择动作，不依赖空间 ID 是否为空。
 func (a *Adapter) reply(ctx context.Context, inbound *access.InboundMessage, text string) {
+	a.sendReply(ctx, inbound, text, true)
+}
+
+// replyPlain 发送不带 @ 的平台固定回复，用于快速回复与戳一戳。
+func (a *Adapter) replyPlain(ctx context.Context, inbound *access.InboundMessage, text string) {
+	a.sendReply(ctx, inbound, text, false)
+}
+
+func (a *Adapter) sendReply(ctx context.Context, inbound *access.InboundMessage, text string, mentionSender bool) {
 	text = sanitizeReply(text)
 	if text == "" {
 		return
@@ -368,9 +390,11 @@ func (a *Adapter) reply(ctx context.Context, inbound *access.InboundMessage, tex
 		if inbound.PlatformChannel == "group" {
 			action = "send_group_msg"
 			params["group_id"] = onebotInt(inbound.PlatformSpaceID)
-			params["message"] = []any{
-				map[string]any{"type": "at", "data": map[string]any{"qq": inbound.PlatformUserID}},
-				map[string]any{"type": "text", "data": map[string]any{"text": " " + chunk}},
+			if mentionSender {
+				params["message"] = []any{
+					map[string]any{"type": "at", "data": map[string]any{"qq": inbound.PlatformUserID}},
+					map[string]any{"type": "text", "data": map[string]any{"text": " " + chunk}},
+				}
 			}
 		} else {
 			action = "send_private_msg"
@@ -415,6 +439,14 @@ func toSet(values []string) map[string]struct{} {
 	result := make(map[string]struct{}, len(values))
 	for _, value := range values {
 		result[value] = struct{}{}
+	}
+	return result
+}
+
+func toQuickReplyMap(values []QuickReply) map[string]string {
+	result := make(map[string]string, len(values))
+	for _, value := range values {
+		result[value.Trigger] = value.Reply
 	}
 	return result
 }

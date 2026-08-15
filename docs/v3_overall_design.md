@@ -1222,3 +1222,5 @@ SQLite 迁移 8 新增 `bus_current_snapshots`，以 `(app_id, revision)` 外键
 NapCat 保持独立运行、独立登录和独立 WebUI；AI珞只连接 NapCat 暴露的 OneBot v11 正向 WebSocket。AI珞的 9178 本机控制台统一管理模型、Provider 和自身的 QQ 接入参数；QQ Token 写入 Go 管理的受限秘密文件且不会回显。QQ 非秘密配置仍以迁移 22 的 App-scoped 当前记录和 generation CAS 持久化，配置重启时由 QQ Manager 应用；群号、私聊 QQ 号、机器人 QQ 号与 `@` 判断全部留在 `internal/access/qq`，不会进入 Kernel、Service 或 Tool。
 
 QQ 白名单是 `internal/access/qq` 的 Access admission，不是 Kernel、Service、Tool 或 Capability 权限：群聊先要求 @机器人，再检查群号；私聊检查 QQ 号；戳一戳使用同一准入规则。空白名单 fail-closed，未允许来源在进入 `Hub`、Message、Echo 之前被静默丢弃。允许来源由 QQ Access 幂等创建稳定内部用户、AppMembership 和空间绑定后再进入统一 `Hub.Intake`，不需要手工 `identity-bind`；身份事实仍由 Go 管理的 identity Store 持久化。
+
+精确快速回复和戳一戳属于 QQ 平台行为，直接读取 OneBot 事件并向同一平台回发，因此实现留在 `internal/access/qq`，不注册为 Service、Capability 或 Tool。群快速回复仍需事件明确 @机器人；命中后在身份开通、`Hub.Intake`、Message、Echo 和 Agent 之前短路，固定文本不 @发送人。戳一戳随机文本也使用不带 @ 的纯文本发送；群聊可继续执行 OneBot `group_poke` 戳回动作。两类文本由 9178 本机控制台配置，戳一戳文案为空时只关闭文字，不关闭群内戳回。

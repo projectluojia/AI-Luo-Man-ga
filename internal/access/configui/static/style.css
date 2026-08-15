@@ -44,6 +44,9 @@ h1 em { color: var(--signal); font-style: normal; }
 .boundary-note { align-self: end; min-height: 78px; border-left: 2px solid var(--warning); background: #f0b8610d; padding: 12px 15px; }
 .boundary-note strong { color: var(--warning); font-size: 12px; }
 .boundary-note p { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
+.behavior-heading { display: grid; grid-template-columns: 260px 1fr; gap: 28px; align-items: end; margin: 32px 0 20px; padding-top: 25px; border-top: 1px solid var(--line); }
+.behavior-heading h3 { margin: 5px 0 0; font-size: 22px; letter-spacing: -.025em; }
+.behavior-heading p { margin: 0; color: var(--muted); font-size: 13px; }
 .switch-row { display: flex; justify-content: space-between; align-items: center; gap: 20px; margin-bottom: 24px; padding: 15px 0; }
 .switch-row strong, .switch-row small { display: block; }
 .switch-row small { color: var(--muted); font-size: 12px; }
@@ -65,7 +68,7 @@ h1 em { color: var(--signal); font-style: normal; }
 .action-bar button:disabled { cursor: wait; opacity: .55; }
 @media (max-width: 760px) {
   .console { width: min(100% - 24px, 1160px); padding-top: 30px; }
-  .masthead, .section-heading, .field-grid, .metric-grid { grid-template-columns: 1fr; }
+  .masthead, .section-heading, .behavior-heading, .field-grid, .metric-grid { grid-template-columns: 1fr; }
   .masthead { gap: 28px; }
   .config-section { padding: 22px 18px 25px; }
   .section-heading { gap: 12px; }

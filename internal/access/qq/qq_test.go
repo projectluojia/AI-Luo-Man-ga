@@ -259,6 +259,48 @@ func TestQQAdapterIntakesAndReplies(t *testing.T) {
 	}
 }
 
+func TestQQAdapterQuickReplySkipsAgentAndDoesNotMentionSender(t *testing.T) {
+	store, err := sqlite.Open(filepath.Join(t.TempDir(), "qq-quick-reply.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	bot := newFakeOneBot(t)
+	hub := newQQTestHub(t, store, stubResolver{user: "user-1"})
+	orchestrator := &qqFakeOrchestrator{store: store, created: make(chan struct{})}
+	adapter, err := New(Config{
+		AppID: "campus-services", WSURL: bot.wsURL(), BotQQID: testBotQQID,
+		AllowedGroupIDs: []string{"12345"}, QuickReplies: []QuickReply{{Trigger: "ping", Reply: "pong"}},
+		Provisioner: testProvisioner{}, DialTimeout: 2 * time.Second, ReconnectDelay: 50 * time.Millisecond,
+	}, hub, access.NewEventHub(), orchestrator, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = adapter.Run(ctx) }()
+	select {
+	case <-bot.authHeader:
+	case <-time.After(5 * time.Second):
+		t.Fatal("adapter did not connect")
+	}
+	bot.sendEvent(t, `{"post_type":"message","message_type":"group","group_id":12345,"user_id":67890,"message_id":"qq-quick-1","message":[{"type":"at","data":{"qq":"2647414417"}},{"type":"text","data":{"text":"ping"}}]}`)
+	select {
+	case action := <-bot.received:
+		params, _ := action["params"].(map[string]any)
+		if action["action"] != "send_group_msg" || params["message"] != "pong" {
+			t.Fatalf("action=%#v", action)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("adapter did not send quick reply")
+	}
+	select {
+	case <-orchestrator.created:
+		t.Fatal("quick reply invoked the Agent orchestrator")
+	default:
+	}
+}
+
 func assertGroupReply(t *testing.T, raw any, expectedUserID, expectedText string) {
 	t.Helper()
 	segments, ok := raw.([]any)

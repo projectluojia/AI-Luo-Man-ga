@@ -64,6 +64,14 @@
           <label class="field"><span>允许的 QQ 群号</span><textarea id="qq-groups" rows="6" placeholder="每行一个群号"></textarea></label>
           <label class="field"><span>允许私聊的 QQ 号</span><textarea id="qq-private-users" rows="6" placeholder="每行一个 QQ 号"></textarea></label>
         </div>
+        <div class="behavior-heading">
+          <div><span class="section-mark">FAST PATH</span><h3>平台快速行为</h3></div>
+          <p>精确命中后直接由 QQ Access 回复，不调用模型、不写入会话，也不 @ 发送人。</p>
+        </div>
+        <div class="field-grid">
+          <label class="field"><span>快速回复规则</span><textarea id="qq-quick-replies" rows="8" placeholder="每行一条：触发文本 => 固定回复"></textarea><small>最多 64 条；去掉首尾空白后完全匹配。</small></label>
+          <label class="field"><span>戳一戳随机文案</span><textarea id="qq-poke-replies" rows="8" placeholder="每行一条；留空则不回复文本"></textarea><small>随机选一条，不 @ 用户；群内仍会戳回去。</small></label>
+        </div>
       </section>
 
       <footer class="action-bar">

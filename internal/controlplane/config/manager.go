@@ -211,6 +211,8 @@ func regularNonEmptyFile(path string, maximum int) bool {
 func cloneSettings(settings Settings) Settings {
 	settings.QQAllowedGroupIDs = append([]string(nil), settings.QQAllowedGroupIDs...)
 	settings.QQAllowedPrivateUserIDs = append([]string(nil), settings.QQAllowedPrivateUserIDs...)
+	settings.QQQuickReplies = append([]QQQuickReply(nil), settings.QQQuickReplies...)
+	settings.QQPokeReplies = append([]string(nil), settings.QQPokeReplies...)
 	return settings
 }
 
