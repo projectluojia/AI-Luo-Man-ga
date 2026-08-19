@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
-	"sort"
 	"sync"
 	"testing"
 
@@ -38,19 +37,6 @@ func mustMembership(t *testing.T, service *identity.Service, appID, userID strin
 	}); err != nil {
 		t.Fatalf("set membership %s/%s: %v", appID, userID, err)
 	}
-}
-
-func sortedEqual(actual, expected []string) bool {
-	sort.Strings(actual)
-	if len(actual) != len(expected) {
-		return false
-	}
-	for index := range actual {
-		if actual[index] != expected[index] {
-			return false
-		}
-	}
-	return true
 }
 
 // 验收标准 1：外部平台 ID 不能直接充当内部 user_id。
