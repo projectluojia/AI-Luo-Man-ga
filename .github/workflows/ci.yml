@@ -14,28 +14,34 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  platform-tests:
-    name: 核心测试 / ${{ matrix.os }}
+  # 三平台核心测试：Go 与 Python Agent 单元测试，覆盖 Windows/Linux/macOS 可构建可测试契约。
+  # job 名即 required status check 上下文（main 规则集），改名必须同步更新规则集。
+  test:
+    name: test-${{ matrix.os }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache: true
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           enable-cache: true
           cache-dependency-glob: agent/uv.lock
       - name: 同步 Python 环境
         run: uv sync --project agent --locked
-      - name: 校验 Go 模块
-        run: go mod verify
+      - name: 校验 Go 模块无漂移
+        run: |
+          go mod verify
+          go mod tidy -diff
       - name: 运行 Go 单元测试
         run: go test ./...
       - name: 编译 Python Agent
@@ -43,17 +49,20 @@ jobs:
       - name: 运行 Python Agent 单元测试
         run: uv run --project agent --locked python -m unittest discover -s agent -p "test_*.py" -v
 
-  linux-quality:
-    name: Linux 完整质量门禁
+  # Linux 完整质量门禁：格式、vet、staticcheck、race 与全部跨进程集成测试。
+  quality-linux:
+    name: quality-linux
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache: true
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           enable-cache: true
           cache-dependency-glob: agent/uv.lock
@@ -66,6 +75,10 @@ jobs:
           test -z "$files" || { echo "$files"; exit 1; }
       - name: 运行 Go vet
         run: go vet ./...
+      - name: 运行 staticcheck
+        # 默认检查集排除 SA1019（grpc.DialContext/WithBlock 弃用）：迁移到
+        # grpc.NewClient 涉及内核拨号语义与 15 处测试同步，作为独立重构任务跟进。
+        run: go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 '-checks=inherit,-SA1019' ./...
       - name: 运行 Go race 测试
         run: go test -race ./...
       - name: 运行 Runtime Host 集成测试
@@ -74,3 +87,45 @@ jobs:
         run: go test -tags=integration ./e2e -v -timeout=30s
       - name: 检查工作树未被验证步骤修改
         run: git diff --exit-code
+
+  # 生成物漂移检查：proto 是版本化契约，生成文件为提交构件，重新生成后必须零差异。
+  proto-drift:
+    name: proto-drift
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          enable-cache: true
+          cache-dependency-glob: agent/uv.lock
+      - name: 同步 Python 环境（含 grpc_tools protoc）
+        run: uv sync --project agent --locked
+      - name: 安装与提交产物一致的 Go protoc 插件
+        run: |
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.12
+          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.2
+      - name: 重新生成并检查无漂移
+        run: |
+          export PATH="$(go env GOPATH)/bin:$PATH"
+          uv run --project agent --locked python -m grpc_tools.protoc -I proto --go_out=. --go_opt=module=github.com/projectluojia/AI-Luo-Man-ga --go-grpc_out=. --go-grpc_opt=module=github.com/projectluojia/AI-Luo-Man-ga proto/executor.proto proto/runtime_host.proto
+          uv run --project agent --locked python -m grpc_tools.protoc -I proto --python_out=agent/generated --grpc_python_out=agent/generated proto/executor.proto
+          git diff --exit-code
+
+  # Docker Compose 编排语法校验（QQ OneBot 容器）。
+  compose-config:
+    name: compose-config
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: 校验 Docker Compose 配置
+        run: docker compose -f docker/qq-onebot.compose.yaml config --quiet
