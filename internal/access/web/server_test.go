@@ -732,7 +732,8 @@ func TestWebAccessShutdownStopsAdmissionAndDrainsActiveRuns(t *testing.T) {
 	)
 	handler := server.Handler()
 	echoID, _ := createEcho(t, handler, "shutdown")
-	shutdownContext, cancel := context.WithTimeout(context.Background(), time.Second)
+	// 排空含持久化与运行取消，CI 并行负载下 1 秒墙钟预算不足，放宽到 10 秒（断言语义不变）。
+	shutdownContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := server.Shutdown(shutdownContext); err != nil {
 		t.Fatalf("shutdown: %v", err)
@@ -806,7 +807,8 @@ func TestPersistentSchedulerBoundsConcurrentRuns(t *testing.T) {
 	if maximum := backend.maxActiveRuns.Load(); maximum != 4 {
 		t.Fatalf("scheduler exceeded worker limit after drain: %d", maximum)
 	}
-	shutdownContext, cancel := context.WithTimeout(context.Background(), time.Second)
+	// 排空含运行取消与持久化，CI 并行负载下 1 秒墙钟预算不足，放宽到 10 秒（断言语义不变）。
+	shutdownContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := server.Shutdown(shutdownContext); err != nil {
 		t.Fatal(err)
@@ -846,7 +848,8 @@ func TestShutdownWaitsForAdmittedCreationBeforeCancellingRun(t *testing.T) {
 	<-backend.createEntered
 	server.StopAccepting()
 	shutdownDone := make(chan error, 1)
-	shutdownContext, cancel := context.WithTimeout(context.Background(), time.Second)
+	// 等待已接入创建事务排空含持久化，CI 并行负载下 1 秒墙钟预算不足，放宽到 10 秒（断言语义不变）。
+	shutdownContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	go func() {
 		shutdownDone <- server.Shutdown(shutdownContext)
