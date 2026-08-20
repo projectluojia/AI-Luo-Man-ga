@@ -27,8 +27,6 @@ jobs:
     name: scan
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    permissions:
-      security-events: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -48,9 +46,26 @@ jobs:
             --output=results.sarif
             --recursive
             .
-      # 外部 fork 的 PR 无 security-events 写入权限，跳过上传（扫描本身仍执行）。
-      - name: 上传扫描结果
-        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+      - name: 上传扫描结果为构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: sarif-results
+          path: results.sarif
+
+  upload:
+    name: upload
+    needs: scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      security-events: write
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - name: 下载扫描结果
+        uses: actions/download-artifact@v4
+        with:
+          name: sarif-results
+      - name: 上传 SARIF 到 GitHub 安全分析
         uses: github/codeql-action/upload-sarif@faaa5d804fc648d0fdb28822a8e36cf7d0a6132c # v4.37.7
         with:
           sarif_file: results.sarif
