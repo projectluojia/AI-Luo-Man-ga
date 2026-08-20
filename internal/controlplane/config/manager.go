@@ -200,6 +200,9 @@ func writePrivateFile(path string, data []byte) error {
 	if err := os.Rename(temporaryPath, path); err != nil {
 		return fmt.Errorf("publish private file: %w", err)
 	}
+	if err := restrictPrivateFileACL(path); err != nil {
+		return err
+	}
 	return nil
 }
 
