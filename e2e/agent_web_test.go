@@ -50,6 +50,11 @@ func (integrationWebAuthenticator) Authenticate(*http.Request) (web.Authenticate
 func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 	var modelTurns atomic.Int32
 	modelHandler := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/v1/models" {
+			writer.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(writer, `{"data":[{"id":"test-model","object":"model","created":1,"owned_by":"test"}]}`)
+			return
+		}
 		if request.URL.Path == "/v1/models/test-model" {
 			writer.Header().Set("Content-Type", "application/json")
 			fmt.Fprint(writer, `{"id":"test-model","object":"model","created":1,"owned_by":"test"}`)

@@ -37,10 +37,9 @@ func (s *Store) beginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, erro
 	return tx, nil
 }
 
-// finishTx 结束事务并释放串行化互斥（语义等价 rollbackTransaction 后的解锁）。
+// finishTx 结束事务并释放串行化互斥（回滚逻辑复用 rollbackTx）。
 func (s *Store) finishTx(tx *sql.Tx, resultErr *error, operation string) {
-	*resultErr = rollbackTransaction(tx, *resultErr, operation)
-	s.txMu.Unlock()
+	*resultErr = s.rollbackTx(tx, *resultErr, operation)
 }
 
 // rollbackTx 回滚事务并释放串行化互斥（beginTx 后的内联错误路径专用）。
