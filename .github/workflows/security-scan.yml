@@ -39,7 +39,7 @@ jobs:
       - name: 运行 govulncheck
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
       # Python 依赖漏洞（agent/uv.lock）与仓库内其余锁定文件。
-      - uses: google/osv-scanner-action@6e4298ebc4db23e847df9b2e2de2939d6f066c67 # v2.5.1
+      - uses: google/osv-scanner-action/osv-scanner-action@6e4298ebc4db23e847df9b2e2de2939d6f066c67 # v2.5.1
         with:
           scan-args: |-
             --format=sarif
