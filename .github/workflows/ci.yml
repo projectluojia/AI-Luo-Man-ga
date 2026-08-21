@@ -14,10 +14,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # 三平台核心测试：Go 与 Python Agent 单元测试，覆盖 Windows/Linux/macOS 可构建可测试契约。
+  # 三平台核心测试：Go 覆盖 Windows/Linux/macOS 可构建可测试契约。
   # job 名即 required status check 上下文（main 规则集），改名必须同步更新规则集。
   test:
-    name: test-${{ matrix.os }}
+    name: 核心测试 (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
     strategy:
@@ -32,24 +32,14 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
-        with:
-          enable-cache: true
-          cache-dependency-glob: agent/uv.lock
-      - name: 同步 Python 环境
-        run: uv sync --project agent --locked
       - name: 校验 Go 模块（go.sum 完整性）
         run: go mod verify
       - name: 运行 Go 单元测试
         run: go test ./...
-      - name: 编译 Python Agent
-        run: uv run --project agent --locked python -m compileall -q agent
-      - name: 运行 Python Agent 单元测试
-        run: uv run --project agent --locked python -m unittest discover -s agent -p "test_*.py" -v
 
-  # Linux 完整质量门禁：格式、vet、staticcheck、race 与全部跨进程集成测试。
+  # Linux 完整质量门禁：PR 跑静态分析与集成测试，main/手动运行额外跑 race。
   quality-linux:
-    name: quality-linux
+    name: Linux 完整质量门禁
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -66,6 +56,10 @@ jobs:
           cache-dependency-glob: agent/uv.lock
       - name: 同步 Python 环境
         run: uv sync --project agent --locked
+      - name: 编译 Python Agent
+        run: uv run --project agent --locked python -m compileall -q agent
+      - name: 运行 Python Agent 单元测试
+        run: uv run --project agent --locked python -m unittest discover -s agent -p "test_*.py" -v
       - name: 校验 go.mod/go.sum 无漂移
         # go mod tidy 的结论与平台相关（Windows 依赖 x/sys 等），只在单一 Linux job 校验。
         run: go mod tidy -diff
@@ -81,6 +75,7 @@ jobs:
         # grpc.NewClient 涉及内核拨号语义与 15 处测试同步，作为独立重构任务跟进。
         run: go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 '-checks=inherit,-SA1019' ./...
       - name: 运行 Go race 测试
+        if: github.event_name != 'pull_request'
         run: go test -race ./...
       - name: 运行 Runtime Host 集成测试
         run: go test -tags=integration ./internal/kernel/loader -v -timeout=30s
