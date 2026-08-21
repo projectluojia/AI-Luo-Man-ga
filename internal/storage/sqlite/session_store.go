@@ -98,11 +98,11 @@ func (s *Store) CreateSession(ctx context.Context, sess session.Session) (result
 	if err := session.ValidateSession(sess); err != nil {
 		return err
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin session creation: %w", err)
 	}
-	defer finishTransaction(tx, &resultErr, "create session")
+	defer s.finishTx(tx, &resultErr, "create session")
 	if _, err := tx.ExecContext(ctx, `INSERT INTO sessions(app_id,session_id,type,created_at,updated_at) VALUES(?,?,?,?,?)`,
 		sess.AppID, sess.SessionID, sess.Type,
 		sess.CreatedAt.UTC().Format(time.RFC3339Nano), sess.UpdatedAt.UTC().Format(time.RFC3339Nano),
@@ -147,11 +147,11 @@ func (s *Store) EnsureSession(ctx context.Context, sess session.Session) (result
 	if err := session.ValidateSession(sess); err != nil {
 		return err
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin session ensure: %w", err)
 	}
-	defer finishTransaction(tx, &resultErr, "ensure session")
+	defer s.finishTx(tx, &resultErr, "ensure session")
 	result, err := tx.ExecContext(ctx, `INSERT INTO sessions(app_id,session_id,type,created_at,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(app_id,session_id) DO NOTHING`,
 		sess.AppID, sess.SessionID, sess.Type,
 		sess.CreatedAt.UTC().Format(time.RFC3339Nano), sess.UpdatedAt.UTC().Format(time.RFC3339Nano),
@@ -291,11 +291,11 @@ func (s *Store) CreateMessage(ctx context.Context, message session.Message, cont
 	if content == nil {
 		content = []byte{}
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginTx(ctx, nil)
 	if err != nil {
 		return session.Message{}, false, fmt.Errorf("begin message creation: %w", err)
 	}
-	defer finishTransaction(tx, &resultErr, "create message")
+	defer s.finishTx(tx, &resultErr, "create message")
 	if _, err := tx.ExecContext(ctx, `INSERT INTO messages(app_id,message_id,session_id,sender_user_id,type,content_mode,content_blob_id,content_size,content,reply_to,platform_message_id,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
 		message.AppID, message.MessageID, message.SessionID, message.SenderUserID, message.Type,
 		message.ContentRef.Mode, message.ContentRef.BlobID, message.ContentRef.Size, content,
@@ -507,11 +507,11 @@ func (s *Store) CreateAttachment(ctx context.Context, attachment session.Attachm
 	if err := session.ValidateAttachment(attachment); err != nil {
 		return err
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin attachment creation: %w", err)
 	}
-	defer finishTransaction(tx, &resultErr, "create attachment")
+	defer s.finishTx(tx, &resultErr, "create attachment")
 	if _, err := tx.ExecContext(ctx, `INSERT INTO attachments(app_id,attachment_id,session_id,message_id,uploader_user_id,filename,mime_type,size,blob_id,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)`,
 		attachment.AppID, attachment.AttachmentID, attachment.SessionID, attachment.MessageID, attachment.UploaderUserID,
 		attachment.Ref.Filename, attachment.Ref.MimeType, attachment.Ref.Size, attachment.Ref.BlobID,

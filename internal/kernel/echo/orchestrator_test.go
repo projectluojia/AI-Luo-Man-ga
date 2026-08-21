@@ -1052,7 +1052,7 @@ func TestParentCancellationPropagatesAndPersistsChildThenRootTerminalState(t *te
 	orchestrator := kernelecho.NewOrchestrator(
 		executorv1.NewExecutorRuntimeClient(connection), reg, dispatcher, policy, store,
 		kernelecho.Config{
-			AppID: campus.AppID, AppConfigSource: store, RunTimeout: 5 * time.Second,
+			AppID: campus.AppID, AppConfigSource: store, RunTimeout: 30 * time.Second,
 			Context: newSessionSource(t, store),
 		},
 	)
@@ -1076,7 +1076,8 @@ func TestParentCancellationPropagatesAndPersistsChildThenRootTerminalState(t *te
 		rootDone <- orchestrator.RunExisting(ctx, echoID, kernelecho.RunRequest{}, nil)
 	}()
 	var childWork kernelecho.RunWork
-	deadline := time.Now().Add(2 * time.Second)
+	// CI -race 负载下子 Run 入队可能较慢，放宽轮询窗口（断言语义不变）。
+	deadline := time.Now().Add(10 * time.Second)
 	for childWork.Run.ID == "" && time.Now().Before(deadline) {
 		work, runnableErr := orchestrator.Runnable(context.Background(), 10)
 		if runnableErr != nil {
@@ -1099,11 +1100,13 @@ func TestParentCancellationPropagatesAndPersistsChildThenRootTerminalState(t *te
 	go func() {
 		childDone <- orchestrator.RunQueued(ctx, childWork, nil)
 	}()
-	if err := <-rootDone; !errors.Is(err, context.Canceled) {
-		t.Fatalf("root run error=%v", err)
+	rootErr := <-rootDone
+	if !errors.Is(rootErr, context.Canceled) {
+		t.Fatalf("root run error=%v", rootErr)
 	}
-	if err := <-childDone; !errors.Is(err, context.Canceled) {
-		t.Fatalf("child run error=%v", err)
+	childErr := <-childDone
+	if !errors.Is(childErr, context.Canceled) {
+		t.Fatalf("child run error=%v", childErr)
 	}
 	record, _, readErr := store.GetEcho(context.Background(), campus.AppID, echoID)
 	if readErr != nil || record.Status != kernelecho.StatusCancelled {

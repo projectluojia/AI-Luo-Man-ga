@@ -10,10 +10,6 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
 )
 
-func finishTransaction(tx *sql.Tx, resultErr *error, operation string) {
-	*resultErr = rollbackTransaction(tx, *resultErr, operation)
-}
-
 func rollbackTransaction(tx *sql.Tx, primary error, operation string) error {
 	if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
 		return errors.Join(primary, fmt.Errorf("%s rollback: %w", operation, err))

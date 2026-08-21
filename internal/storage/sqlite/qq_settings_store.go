@@ -36,11 +36,11 @@ func (s *Store) EnsureQQSettings(ctx context.Context, seed qqsettings.Settings) 
 	if err != nil {
 		return qqsettings.Settings{}, false, err
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginTx(ctx, nil)
 	if err != nil {
 		return qqsettings.Settings{}, false, fmt.Errorf("begin qq settings ensure: %w", err)
 	}
-	defer finishTransaction(tx, &resultErr, "ensure qq settings")
+	defer s.finishTx(tx, &resultErr, "ensure qq settings")
 	existing, err := readQQSettings(ctx, tx, normalized.AppID)
 	if err == nil {
 		if err := tx.Commit(); err != nil {

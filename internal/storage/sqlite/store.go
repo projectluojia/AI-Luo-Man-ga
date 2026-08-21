@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -20,13 +21,41 @@ import (
 
 type Store struct {
 	db *sql.DB
+	// txMu 按事务生命周期串行化全部写事务：modernc/sqlite 单连接并发事务会破坏
+	// 事务边界（嵌套 BEGIN / 提交时语句进行中 / 并发语句报锁），事务必须显式互斥。
+	txMu sync.Mutex
+}
+
+// beginTx 领取事务并持有串行化互斥，直到 finishTx 提交/回滚后释放。
+func (s *Store) beginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error) {
+	s.txMu.Lock()
+	tx, err := s.db.BeginTx(ctx, opts)
+	if err != nil {
+		s.txMu.Unlock()
+		return nil, err
+	}
+	return tx, nil
+}
+
+// finishTx 结束事务并释放串行化互斥（回滚逻辑复用 rollbackTx）。
+func (s *Store) finishTx(tx *sql.Tx, resultErr *error, operation string) {
+	*resultErr = s.rollbackTx(tx, *resultErr, operation)
+}
+
+// rollbackTx 回滚事务并释放串行化互斥（beginTx 后的内联错误路径专用）。
+func (s *Store) rollbackTx(tx *sql.Tx, primary error, operation string) error {
+	err := rollbackTransaction(tx, primary, operation)
+	s.txMu.Unlock()
+	return err
 }
 
 var busStableIDPattern = id.StableMixedUncapped
 
 func Open(path string) (*Store, error) {
 	started := time.Now()
-	db, err := sql.Open("sqlite", path)
+	// 单连接 + busy_timeout：连接上限与事务互斥（txMu）共同保证串行化；
+	// busy_timeout 兜底跨进程写竞争。foreign_keys 经 DSN 对每个新连接生效。
+	db, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(1000)&_pragma=foreign_keys(1)")
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
@@ -729,25 +758,34 @@ func (s *Store) migrateThrough(ctx context.Context, maximumVersion int) error {
 		if applied > 0 {
 			continue
 		}
-		tx, err := s.db.BeginTx(ctx, nil)
-		if err != nil {
-			return fmt.Errorf("begin migration %d: %w", version, err)
-		}
-		if _, err := tx.ExecContext(ctx, migration); err != nil {
-			rollbackErr := tx.Rollback()
-			return errors.Join(fmt.Errorf("apply migration %d: %w", version, err), rollbackErr)
-		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO schema_migrations(version,applied_at) VALUES(?,?)`, version, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
-			rollbackErr := tx.Rollback()
-			return errors.Join(fmt.Errorf("record migration %d: %w", version, err), rollbackErr)
-		}
-		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("commit migration %d: %w", version, err)
+		if err := s.applyMigration(ctx, version, migration); err != nil {
+			return err
 		}
 		observe.Info(ctx, "数据库迁移已经应用",
 			observe.Component("storage"),
 			observe.IntAttr("migration_version", version),
 		)
+	}
+	return nil
+}
+
+// applyMigration 在独立事务中应用单个迁移；事务互斥由 finishTx 在返回时释放
+// （迁移可能逐条应用多个版本，互斥必须按事务而非按函数持有）。
+func (s *Store) applyMigration(ctx context.Context, version int, migration string) error {
+	tx, err := s.beginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin migration %d: %w", version, err)
+	}
+	var resultErr error
+	defer s.finishTx(tx, &resultErr, "apply migration")
+	if _, err := tx.ExecContext(ctx, migration); err != nil {
+		return errors.Join(fmt.Errorf("apply migration %d: %w", version, err), tx.Rollback())
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO schema_migrations(version,applied_at) VALUES(?,?)`, version, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		return errors.Join(fmt.Errorf("record migration %d: %w", version, err), tx.Rollback())
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit migration %d: %w", version, err)
 	}
 	return nil
 }
@@ -771,11 +809,11 @@ func (s *Store) ReplaceBusSnapshot(ctx context.Context, snapshot BusSnapshot) (r
 	if err := validateBusSnapshot(ctx, snapshot); err != nil {
 		return err
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin bus snapshot transaction: %w", err)
 	}
-	defer finishTransaction(tx, &resultErr, "replace bus snapshot")
+	defer s.finishTx(tx, &resultErr, "replace bus snapshot")
 	for _, table := range []string{"bus_journeys", "bus_routes", "bus_stops"} {
 		if _, err := tx.ExecContext(ctx, "DELETE FROM "+table+" WHERE app_id = ?", snapshot.AppID); err != nil {
 			return fmt.Errorf("clear %s: %w", table, err)
@@ -931,7 +969,7 @@ func (s *Store) SearchStops(ctx context.Context, appID string, request bus.StopS
 	if err != nil {
 		return bus.StopSnapshot{}, err
 	}
-	defer finishTransaction(tx, &resultErr, "search bus stops")
+	defer s.finishTx(tx, &resultErr, "search bus stops")
 	rows, err := tx.QueryContext(ctx, `SELECT id,name,aliases,latitude,longitude,source_revision FROM bus_stops WHERE app_id=? AND source_revision=? AND (lower(name) LIKE lower(?) OR lower(aliases) LIKE lower(?)) ORDER BY name LIMIT ?`, appID, metadata.Revision, "%"+request.Query+"%", "%"+request.Query+"%", request.Limit)
 	if err != nil {
 		return bus.StopSnapshot{}, fmt.Errorf("query stops: %w", err)
@@ -976,7 +1014,7 @@ func (s *Store) ListRoutes(ctx context.Context, appID string, request bus.RouteL
 	if err != nil {
 		return bus.RouteSnapshot{}, err
 	}
-	defer finishTransaction(tx, &resultErr, "list bus routes")
+	defer s.finishTx(tx, &resultErr, "list bus routes")
 	rows, err := tx.QueryContext(ctx, `SELECT id,name,direction,origin_stop_id,destination_stop_id,source_revision FROM bus_routes WHERE app_id=? AND source_revision=? ORDER BY name,direction LIMIT ?`, appID, metadata.Revision, request.Limit)
 	if err != nil {
 		return bus.RouteSnapshot{}, fmt.Errorf("query routes: %w", err)
@@ -1017,7 +1055,7 @@ func (s *Store) SearchJourneys(ctx context.Context, appID string, request bus.Se
 	if err != nil {
 		return bus.JourneySnapshot{}, err
 	}
-	defer finishTransaction(tx, &resultErr, "search bus journeys")
+	defer s.finishTx(tx, &resultErr, "search bus journeys")
 	rows, err := tx.QueryContext(ctx, `SELECT trip_id,route_id,route_name,direction,origin_stop_id,origin_stop_name,destination_stop_id,destination_stop_name,departure_at,arrival_at,source_revision FROM bus_journeys WHERE app_id=? AND source_revision=? AND origin_stop_id=? AND destination_stop_id=? AND julianday(departure_at)>=julianday(?) ORDER BY julianday(departure_at) LIMIT ?`, appID, metadata.Revision, request.OriginStopID, request.DestinationStopID, request.DepartAfter.UTC().Format(time.RFC3339Nano), request.Limit)
 	if err != nil {
 		return bus.JourneySnapshot{}, fmt.Errorf("query journeys: %w", err)
@@ -1065,7 +1103,7 @@ func (s *Store) beginBusSnapshotRead(ctx context.Context, appID string) (*sql.Tx
 	if !validBusStableID(appID) {
 		return nil, bus.SnapshotMetadata{}, contracts.ErrDataUnavailable
 	}
-	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	tx, err := s.beginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return nil, bus.SnapshotMetadata{}, fmt.Errorf("begin bus snapshot read: %w", err)
 	}
@@ -1088,21 +1126,21 @@ WHERE current.app_id=?`, appID).Scan(
 		&validUntil,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, bus.SnapshotMetadata{}, rollbackTransaction(tx, contracts.ErrDataUnavailable, "read bus snapshot")
+		return nil, bus.SnapshotMetadata{}, s.rollbackTx(tx, contracts.ErrDataUnavailable, "read bus snapshot")
 	}
 	if err != nil {
-		return nil, bus.SnapshotMetadata{}, rollbackTransaction(tx, fmt.Errorf("read current bus snapshot: %w", err), "read bus snapshot")
+		return nil, bus.SnapshotMetadata{}, s.rollbackTx(tx, fmt.Errorf("read current bus snapshot: %w", err), "read bus snapshot")
 	}
 	metadata.Authoritative = authoritative == 1
 	metadata.Complete = complete == 1
 	metadata.ImportedAt, err = time.Parse(time.RFC3339Nano, importedAt)
 	if err != nil {
-		return nil, bus.SnapshotMetadata{}, rollbackTransaction(tx, fmt.Errorf("parse bus snapshot import time: %w", err), "read bus snapshot")
+		return nil, bus.SnapshotMetadata{}, s.rollbackTx(tx, fmt.Errorf("parse bus snapshot import time: %w", err), "read bus snapshot")
 	}
 	if validUntil.Valid {
 		metadata.ValidUntil, err = time.Parse(time.RFC3339Nano, validUntil.String)
 		if err != nil {
-			return nil, bus.SnapshotMetadata{}, rollbackTransaction(tx, fmt.Errorf("parse bus snapshot validity: %w", err), "read bus snapshot")
+			return nil, bus.SnapshotMetadata{}, s.rollbackTx(tx, fmt.Errorf("parse bus snapshot validity: %w", err), "read bus snapshot")
 		}
 	}
 	return tx, metadata, nil

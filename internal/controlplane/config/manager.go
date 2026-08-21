@@ -200,12 +200,10 @@ func writePrivateFile(path string, data []byte) error {
 	if err := os.Rename(temporaryPath, path); err != nil {
 		return fmt.Errorf("publish private file: %w", err)
 	}
+	if err := restrictPrivateFileACL(path); err != nil {
+		return err
+	}
 	return nil
-}
-
-func regularNonEmptyFile(path string, maximum int) bool {
-	info, err := os.Lstat(path)
-	return err == nil && info.Mode().IsRegular() && info.Mode().Perm()&0o077 == 0 && info.Size() > 0 && info.Size() <= int64(maximum)
 }
 
 func cloneSettings(settings Settings) Settings {

@@ -14,7 +14,9 @@ func FuzzValidBlobID(f *testing.F) {
 	}
 	f.Fuzz(func(t *testing.T, value string) {
 		// 任意输入不得 panic；判定必须确定（同一输入两次结果一致）。
-		if ValidBlobID(value) != ValidBlobID(value) {
+		first := ValidBlobID(value)
+		second := ValidBlobID(value)
+		if first != second {
 			t.Fatalf("ValidBlobID(%q) 判定不确定", value)
 		}
 	})

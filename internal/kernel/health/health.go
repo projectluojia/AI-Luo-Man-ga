@@ -86,7 +86,7 @@ func (h ExecutorAppChecker) Ping(ctx context.Context) error {
 		return fmt.Errorf("读取 App 模型配置：%w", err)
 	}
 	if err := appconfig.VerifyCurrent(config, h.AppID); err != nil {
-		return fmt.Errorf("App 模型配置无效：%w", err)
+		return fmt.Errorf("当前 App 模型配置无效：%w", err)
 	}
 	if !config.Enabled {
 		return fmt.Errorf("当前 App 已停用")

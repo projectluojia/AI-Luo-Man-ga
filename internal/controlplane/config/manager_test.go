@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -37,7 +38,7 @@ func TestManagerStartsInSetupModeAndPersistsSecretsPrivately(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if info.Mode().Perm()&0o077 != 0 {
+		if runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0 {
 			t.Fatalf("secret file %s permissions=%o", name, info.Mode().Perm())
 		}
 	}
@@ -158,9 +159,14 @@ func TestManagerPersistsPromptCatalogAndDefaultsLegacySettings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resolved, ready := reloaded.CurrentResolved(); !ready || resolved.Settings.PromptCatalog.BasicStyles[0].Text != "自定义默认风格" || resolved.Settings.BaseSystemPrompt != "自定义基础系统提示" ||
+	resolved, ready := reloaded.CurrentResolved()
+	gotStyle := ""
+	if len(resolved.Settings.PromptCatalog.BasicStyles) > 0 {
+		gotStyle = resolved.Settings.PromptCatalog.BasicStyles[0].Text
+	}
+	if !ready || gotStyle != "自定义默认风格" || resolved.Settings.BaseSystemPrompt != "自定义基础系统提示" ||
 		resolved.Settings.ChannelPrompts["web"] != "自定义 web 渠道提示" {
-		t.Fatalf("reloaded prompt catalog=%#v base=%q channels=%#v ready=%v", resolved.Settings.PromptCatalog.BasicStyles[0], resolved.Settings.BaseSystemPrompt, resolved.Settings.ChannelPrompts, ready)
+		t.Fatalf("reloaded prompt catalog style=%q styles=%d base=%q channels=%#v ready=%v", gotStyle, len(resolved.Settings.PromptCatalog.BasicStyles), resolved.Settings.BaseSystemPrompt, resolved.Settings.ChannelPrompts, ready)
 	}
 	// 旧配置文件没有 prompt_catalog 字段：加载时自动补默认目录。
 	legacy := SaveInput{

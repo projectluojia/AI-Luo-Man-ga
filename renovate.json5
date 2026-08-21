@@ -4,6 +4,12 @@
   // 每周批量更新一次，避免每日 PR 噪音；所有升级 PR 必须人工评审
   // （main 规则集要求 1 人审批），不自动合并。
   schedule: ["every monday"],
+  // GitHub Actions 固定到提交 SHA（供应链加固），Renovate 随版本注释更新 SHA。
+  pinDigests: true,
+  // 安全漏洞 PR 交给 GitHub 原生 Dependabot 安全更新，Renovate 不重复发漏洞 PR。
+  vulnerabilityAlerts: {
+    enabled: false,
+  },
   packageRules: [
     {
       // gRPC/protobuf 代码生成工具链：升级会改变生成的 executor_pb2*.py 产物，
@@ -25,7 +31,7 @@
       groupName: "python minor/patch",
     },
     {
-      // GitHub Actions 的 minor/patch 合并为单个 PR。
+      // GitHub Actions 的 minor/patch 合并为单个 PR；major 单独 PR 人工评审。
       matchManagers: ["github-actions"],
       matchUpdateTypes: ["minor", "patch"],
       groupName: "actions minor/patch",
