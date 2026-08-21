@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	goruntime "runtime"
 	"strings"
@@ -86,15 +87,23 @@ func newAuthenticatedServer(
 	return web.NewServer(ctx, orchestrator, reader, health, reg, policy, appID, platformHub, web.WithWebAuthenticator(testWebAuthenticator{}))
 }
 
-// closeStore 关闭测试存储。Windows 上 modernc SQLite 的文件句柄由运行时
-// 最终化器延迟释放（sqlite3_close_v2 语义），关闭后立即回收一次，
-// 避免 TempDir 清理与最终化时序竞争导致 RemoveAll 失败。
-func closeStore(t *testing.T, store *sqlite.Store) {
+// closeStore 关闭测试存储，并等待 modernc SQLite 延迟释放 Windows 文件句柄。
+func closeStore(t *testing.T, store *sqlite.Store, tempDir string) {
 	t.Helper()
 	if err := store.Close(); err != nil {
 		t.Errorf("close store: %v", err)
 	}
-	goruntime.GC()
+	deadline := time.Now().Add(time.Second)
+	for {
+		if err := os.RemoveAll(tempDir); err == nil {
+			return
+		} else if time.Now().After(deadline) {
+			t.Errorf("remove sqlite temp dir: %v", err)
+			return
+		}
+		goruntime.GC()
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 type observedContext struct {
@@ -714,11 +723,12 @@ func TestMetricsEndpointUsesPrometheusFormatWithoutBusinessIdentifiers(t *testin
 }
 
 func TestWebAccessShutdownStopsAdmissionAndDrainsActiveRuns(t *testing.T) {
-	store, err := sqlite.Open(filepath.Join(t.TempDir(), "shutdown.db"))
+	tempDir := t.TempDir()
+	store, err := sqlite.Open(filepath.Join(tempDir, "shutdown.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer closeStore(t, store)
+	defer closeStore(t, store, tempDir)
 	backend := &fakeOrchestrator{store: store, block: true}
 	server := newAuthenticatedServer(
 		context.Background(),
@@ -816,7 +826,8 @@ func TestPersistentSchedulerBoundsConcurrentRuns(t *testing.T) {
 }
 
 func TestShutdownWaitsForAdmittedCreationBeforeCancellingRun(t *testing.T) {
-	store, err := sqlite.Open(filepath.Join(t.TempDir(), "admission.db"))
+	tempDir := t.TempDir()
+	store, err := sqlite.Open(filepath.Join(tempDir, "admission.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -875,7 +886,7 @@ func TestShutdownWaitsForAdmittedCreationBeforeCancellingRun(t *testing.T) {
 	if err != nil || record.Status != kernelecho.StatusCancelled {
 		t.Fatalf("record=%#v err=%v", record, err)
 	}
-	closeStore(t, store)
+	closeStore(t, store, tempDir)
 }
 
 func newTestServer(t *testing.T, block bool) (http.Handler, *sqlite.Store) {
