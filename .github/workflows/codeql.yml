@@ -4,6 +4,14 @@ on:
   push:
     branches: [main]
   pull_request:
+    paths:
+      - "**/*.go"
+      - "**/*.py"
+      - go.mod
+      - go.sum
+      - agent/pyproject.toml
+      - agent/uv.lock
+      - .github/workflows/codeql.yml
   schedule:
     - cron: "0 3 * * 1" # 每周一 03:00 UTC 全量扫描
   workflow_dispatch:
