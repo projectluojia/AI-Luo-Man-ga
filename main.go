@@ -234,7 +234,7 @@ func runPackageCommand(arguments []string, output io.Writer) (bool, error) {
 		if err != nil {
 			return true, err
 		}
-		if _, err := fmt.Fprintf(output, "已安装 %s@%s（%s）\n", record.Manifest.ID, record.Manifest.Version, record.Manifest.Mode); err != nil {
+		if _, err := fmt.Fprintf(output, "已安装 %s@%s（%s）\n", record.Manifest.ID, record.Manifest.Version, record.Manifest.Components[0].Mode); err != nil {
 			return true, err
 		}
 		return true, nil
@@ -246,7 +246,7 @@ func runPackageCommand(arguments []string, output io.Writer) (bool, error) {
 		if err != nil {
 			return true, err
 		}
-		_, err = fmt.Fprintf(output, "已升级 %s@%s（%s）\n", record.Manifest.ID, record.Manifest.Version, record.Manifest.Mode)
+		_, err = fmt.Fprintf(output, "已升级 %s@%s（%s）\n", record.Manifest.ID, record.Manifest.Version, record.Manifest.Components[0].Mode)
 		return true, err
 	case "uninstall":
 		if flags.NArg() != 1 {
@@ -313,7 +313,7 @@ func runPackageCommand(arguments []string, output io.Writer) (bool, error) {
 			if record.Manifest.Pin {
 				pin = " [pin]"
 			}
-			if _, err := fmt.Fprintf(output, "%s@%s\t%s%s\n", record.Manifest.ID, record.Manifest.Version, record.Manifest.Mode, pin); err != nil {
+			if _, err := fmt.Fprintf(output, "%s@%s\t%s%s\n", record.Manifest.ID, record.Manifest.Version, record.Manifest.Components[0].Mode, pin); err != nil {
 				return true, err
 			}
 		}

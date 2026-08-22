@@ -258,7 +258,11 @@ func writeMainInstalledFixture(t *testing.T) string {
 	}
 	installed := packmgr.Manifest{
 		SchemaVersion: packmgr.SchemaVersion, ID: "main.extension", Version: "1.0.0",
-		Mode: loader.ModeHosted, Pin: true, Extensions: extensions,
+		Pin: true, Extensions: extensions,
+		Components: []packmgr.Component{{
+			ID: "main.extension", Mode: loader.ModeHosted, Entrypoint: "runtime-artifact",
+			Exports: []string{"main.extension.query"},
+		}},
 	}
 	manifest, err := json.Marshal(installed)
 	if err != nil {
@@ -271,10 +275,11 @@ func writeMainInstalledFixture(t *testing.T) string {
 	artifactDigest := sha256.Sum256(artifactBody)
 	lockBytes, err := json.Marshal(packmgr.Lock{
 		SchemaVersion: packmgr.SchemaVersion,
-		PackageID:     "main.extension", PackageVersion: "1.0.0", Mode: loader.ModeHosted,
+		PackageID:     "main.extension", PackageVersion: "1.0.0",
 		ManifestSHA256: hex.EncodeToString(manifestDigest[:]),
-		ArtifactSHA256: hex.EncodeToString(artifactDigest[:]),
-		ArtifactPath:   artifact,
+		Artifacts: []packmgr.LockedArtifact{{
+			ComponentID: "main.extension", Path: artifact, SHA256: hex.EncodeToString(artifactDigest[:]),
+		}},
 	})
 	if err != nil {
 		t.Fatal(err)

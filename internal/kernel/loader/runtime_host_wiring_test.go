@@ -54,7 +54,11 @@ func TestRuntimeHostProductionWiring(t *testing.T) {
 	}
 	installed := packmgr.Manifest{
 		SchemaVersion: packmgr.SchemaVersion, ID: "strings.tool", Version: "1.0.0",
-		Mode: loader.ModeHosted, Pin: true, Extensions: extensions,
+		Pin: true, Extensions: extensions,
+		Components: []packmgr.Component{{
+			ID: "strings.tool", Mode: loader.ModeHosted, Entrypoint: "strings.tool.wasm",
+			Exports: []string{"strings.len.cap"},
+		}},
 	}
 	manifest, err := json.Marshal(installed)
 	if err != nil {
@@ -67,9 +71,11 @@ func TestRuntimeHostProductionWiring(t *testing.T) {
 	artifactDigest := sha256.Sum256(artifactBytes)
 	lock := packmgr.Lock{
 		SchemaVersion: packmgr.SchemaVersion, PackageID: "strings.tool",
-		PackageVersion: "1.0.0", Mode: loader.ModeHosted,
+		PackageVersion: "1.0.0",
 		ManifestSHA256: hex.EncodeToString(manifestDigest[:]),
-		ArtifactSHA256: hex.EncodeToString(artifactDigest[:]), ArtifactPath: artifactPath,
+		Artifacts: []packmgr.LockedArtifact{{
+			ComponentID: "strings.tool", Path: artifactPath, SHA256: hex.EncodeToString(artifactDigest[:]),
+		}},
 	}
 	lockBytes, err := json.Marshal(lock)
 	if err != nil {

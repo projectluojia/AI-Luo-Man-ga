@@ -54,5 +54,7 @@ func DefaultPythonPath(projectRoot string) string {
 // Agent Service（agent.run）依赖内核 Orchestrator，由 Register 在装配完成后
 // 单独注册，因此本记录只携带 Runtime 清单。
 func Record(host *Host) loader.InstalledRecord {
-	return loader.InstalledRecord{Runtime: host.Manifest()}
+	return loader.InstalledRecord{
+		Runtime: host.Manifest(), PackageID: RuntimeID, ComponentID: "executor",
+	}
 }

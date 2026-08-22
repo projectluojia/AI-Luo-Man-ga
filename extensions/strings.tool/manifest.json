@@ -2,6 +2,41 @@
   "schema_version": "ailuo.package.v1",
   "id": "strings.tool",
   "version": "1.0.0",
-  "mode": "hosted",
-  "entrypoint": "strings.tool.wasm"
+  "components": [
+    {
+      "id": "core",
+      "mode": "hosted",
+      "entrypoint": "strings.tool.wasm",
+      "exports": ["strings.len.cap", "strings.join.cap", "strings.upper.cap"]
+    }
+  ],
+  "extensions": {
+    "tools": [
+      { "id": "strings.len", "version": "1.0.0", "description": "字符串长度",
+        "input_schema_json": "{\"type\":\"object\",\"properties\":{\"value\":{\"type\":\"string\"}},\"required\":[\"value\"],\"additionalProperties\":false}",
+        "side_effect": "read" },
+      { "id": "strings.join", "version": "1.0.0", "description": "字符串拼接",
+        "input_schema_json": "{\"type\":\"object\",\"properties\":{\"values\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"separator\":{\"type\":\"string\"}},\"required\":[\"values\"],\"additionalProperties\":false}",
+        "side_effect": "read" },
+      { "id": "strings.upper", "version": "1.0.0", "description": "字符串转大写",
+        "input_schema_json": "{\"type\":\"object\",\"properties\":{\"value\":{\"type\":\"string\"}},\"required\":[\"value\"],\"additionalProperties\":false}",
+        "side_effect": "read" }
+    ],
+    "service": { "id": "strings.tool", "version": "1.0.0", "description": "字符串工具",
+      "tool_dependencies": ["strings.len", "strings.join", "strings.upper"] },
+    "capabilities": [
+      { "id": "strings.len.cap", "version": "1.0.0", "name": "字符串长度", "description": "计算字符串长度",
+        "service_id": "strings.tool", "tool_id": "strings.len",
+        "input_schema_json": "{\"type\":\"object\",\"properties\":{\"value\":{\"type\":\"string\"}},\"required\":[\"value\"],\"additionalProperties\":false}",
+        "side_effect": "read" },
+      { "id": "strings.join.cap", "version": "1.0.0", "name": "字符串拼接", "description": "拼接字符串数组",
+        "service_id": "strings.tool", "tool_id": "strings.join",
+        "input_schema_json": "{\"type\":\"object\",\"properties\":{\"values\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"separator\":{\"type\":\"string\"}},\"required\":[\"values\"],\"additionalProperties\":false}",
+        "side_effect": "read" },
+      { "id": "strings.upper.cap", "version": "1.0.0", "name": "字符串转大写", "description": "字符串转大写",
+        "service_id": "strings.tool", "tool_id": "strings.upper",
+        "input_schema_json": "{\"type\":\"object\",\"properties\":{\"value\":{\"type\":\"string\"}},\"required\":[\"value\"],\"additionalProperties\":false}",
+        "side_effect": "read" }
+    ]
+  }
 }

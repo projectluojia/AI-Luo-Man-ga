@@ -17,11 +17,15 @@ func Host(store bus.Store) (*loader.WasmHost, error) {
 }
 
 // Record 返回 campus 的安装清单（运行时 + Tool + Service + Capability +
-// storage 声明的单一来源），供统一 Loader 注册内置包使用。Storage 声明
-// 本包的持久化契约：无状态实例经该命名空间读写宿主统一存储。
+// storage 声明的单一来源），供统一 Loader 注册内置包使用。campus 是单组件
+// 包：组件 ID 为 "bus"，全部 Capability 由其导出。
 func Record() loader.InstalledRecord {
 	return loader.InstalledRecord{
+		Directory:    "",
+		ArtifactPath: "",
 		Runtime:      Manifest(),
+		PackageID:    ServiceID,
+		ComponentID:  "bus",
 		Tools:        bus.ToolSpecs(),
 		Service:      ServiceSpec(),
 		Capabilities: CapabilitySpecs(),
