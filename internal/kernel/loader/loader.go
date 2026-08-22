@@ -54,6 +54,9 @@ var (
 	versionPattern  = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$`)
 )
 
+// Manifest 是运行时的注册与装载清单。ID/Version/Mode 是身份字段；Role、
+// Pin、IdleTTL、LockedDigest 与 HostFunctions 是声明字段——装载与绑定校验
+// 以完整清单为准，工件读取只依赖身份字段。
 type Manifest struct {
 	ID           string
 	Version      string
@@ -62,6 +65,9 @@ type Manifest struct {
 	LockedDigest string
 	Pin          bool
 	IdleTTL      time.Duration
+	// HostFunctions 是包声明的宿主函数依赖（仅 hosted 有意义）：guest 只可
+	// 调用清单声明且宿主提供的宿主函数，未声明调用在加载期被拒绝。
+	HostFunctions []HostedFunctionDecl
 }
 
 type Description struct {
@@ -693,10 +699,16 @@ func (m *Manager) resolve(id string) (*entry, error) {
 }
 
 func validateManifest(manifest Manifest) error {
-	if !stableIDPattern.MatchString(manifest.ID) || !versionPattern.MatchString(manifest.Version) ||
+	if !stableIDPattern.MatchString(manifest.ID) ||
 		(manifest.Mode != ModeHosted && manifest.Mode != ModeIsolated) ||
 		(manifest.Role != RoleCapability && manifest.Role != RoleExecutor) ||
 		manifest.IdleTTL < 0 || len(manifest.LockedDigest) != 64 {
+		return ErrInvalidManifest
+	}
+	if _, err := ParseVersion(manifest.Version); err != nil {
+		return ErrInvalidManifest
+	}
+	if err := validateHostedFunctionDecls(manifest.HostFunctions); err != nil {
 		return ErrInvalidManifest
 	}
 	digest, err := hex.DecodeString(manifest.LockedDigest)

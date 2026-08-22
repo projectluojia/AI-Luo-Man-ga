@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"sync"
 	"time"
@@ -19,6 +20,8 @@ import (
 )
 
 const (
+	// wasiModuleName 是 WASI 快照模块名：沙箱自动提供，包不得声明为宿主函数。
+	wasiModuleName = "wasi_snapshot_preview1"
 	// hostedHostFunctionError 是宿主函数调用失败时返回给 guest 的长度标记（-1 的无符号表示）。
 	hostedHostFunctionError = 0xFFFFFFFF
 	// hostedStdoutLimit 限制 guest 单次调用 stdout 输出字节数，防止无界输出。
@@ -102,7 +105,8 @@ func NewWasmHost(config WasmHostConfig) (*WasmHost, error) {
 // Mode 返回宿主服务的运行模式：hosted 沙箱。
 func (h *WasmHost) Mode() string { return ModeHosted }
 
-// Verify 确认工件可读且未超过大小上限；digest 校验由 ReadArtifact 负责。
+// Verify 确认工件可读、未超过大小上限，且清单声明的宿主函数全部由本宿主
+// 提供（声明 ⊆ 可用，缺项在注册期 fail-closed）；digest 校验由 ReadArtifact 负责。
 func (h *WasmHost) Verify(ctx context.Context, manifest Manifest) error {
 	artifact, err := h.config.ReadArtifact(ctx, manifest)
 	if err != nil {
@@ -111,10 +115,22 @@ func (h *WasmHost) Verify(ctx context.Context, manifest Manifest) error {
 	if int64(len(artifact)) > h.config.MaxArtifactBytes {
 		return ErrInvalidManifest
 	}
+	available := make(map[string]struct{}, len(h.config.HostFunctions))
+	for _, fn := range h.config.HostFunctions {
+		available[hostedFunctionKey(fn.Module, fn.Name)] = struct{}{}
+	}
+	for _, decl := range manifest.HostFunctions {
+		if _, ok := available[hostedFunctionKey(decl.Module, decl.Name)]; !ok {
+			return fmt.Errorf("%w: host function %s.%s is not provided by this host",
+				ErrInvalidManifest, decl.Module, decl.Name)
+		}
+	}
 	return nil
 }
 
 // Load 编译工件并装配宿主函数，返回沙箱 Runtime；编译失败快速失败。
+// 加载期强制"只投影声明集合"：guest 只能 import 清单声明的宿主函数（WASI
+// 除外），未声明导入直接拒绝，宿主函数实现仍只来自宿主配置。
 func (h *WasmHost) Load(ctx context.Context, manifest Manifest) (Runtime, error) {
 	artifact, err := h.config.ReadArtifact(ctx, manifest)
 	if err != nil {
@@ -135,22 +151,62 @@ func (h *WasmHost) Load(ctx context.Context, manifest Manifest) (Runtime, error)
 		_ = wazeroRuntime.Close(ctx)
 		return nil, errors.Join(ErrLoadFailed, err)
 	}
+	if err := checkDeclaredHostFunctionImports(compiled, manifest.HostFunctions); err != nil {
+		_ = wazeroRuntime.Close(ctx)
+		return nil, errors.Join(ErrLoadFailed, err)
+	}
+	projected := h.projectedFunctions(manifest.HostFunctions)
 	hosted := &wasmRuntime{
 		wazeroRuntime: wazeroRuntime,
 		compiled:      compiled,
 		id:            manifest.ID,
 		version:       manifest.Version,
 		callTimeout:   h.config.CallTimeout,
-		hostFuncs:     make(map[string]func(context.Context, contracts.RequestContext, []byte) ([]byte, error), len(h.config.HostFunctions)),
+		hostFuncs:     make(map[string]func(context.Context, contracts.RequestContext, []byte) ([]byte, error), len(projected)),
 	}
-	for _, fn := range h.config.HostFunctions {
-		hosted.hostFuncs[fn.Module+"."+fn.Name] = fn.Call
+	for _, fn := range projected {
+		hosted.hostFuncs[hostedFunctionKey(fn.Module, fn.Name)] = fn.Call
 	}
-	if err := hosted.registerHostFunctions(ctx, h.config.HostFunctions); err != nil {
+	if err := hosted.registerHostFunctions(ctx, projected); err != nil {
 		_ = wazeroRuntime.Close(ctx)
 		return nil, errors.Join(ErrLoadFailed, err)
 	}
 	return hosted, nil
+}
+
+// projectedFunctions 返回清单声明且宿主配置提供的宿主函数（Verify 已保证
+// 声明 ⊆ 可用，此处防御性过滤）。
+func (h *WasmHost) projectedFunctions(decls []HostedFunctionDecl) []HostedFunction {
+	available := make(map[string]HostedFunction, len(h.config.HostFunctions))
+	for _, fn := range h.config.HostFunctions {
+		available[hostedFunctionKey(fn.Module, fn.Name)] = fn
+	}
+	projected := make([]HostedFunction, 0, len(decls))
+	for _, decl := range decls {
+		if fn, ok := available[hostedFunctionKey(decl.Module, decl.Name)]; ok {
+			projected = append(projected, fn)
+		}
+	}
+	return projected
+}
+
+// checkDeclaredHostFunctionImports 校验编译产物的函数导入：除 WASI 外，所有
+// 导入必须属于清单声明的宿主函数集合，未声明导入在加载期拒绝（fail-closed）。
+func checkDeclaredHostFunctionImports(compiled wazero.CompiledModule, decls []HostedFunctionDecl) error {
+	declared := make(map[string]struct{}, len(decls))
+	for _, decl := range decls {
+		declared[hostedFunctionKey(decl.Module, decl.Name)] = struct{}{}
+	}
+	for _, definition := range compiled.ImportedFunctions() {
+		moduleName, name, isImport := definition.Import()
+		if !isImport || moduleName == wasiModuleName {
+			continue
+		}
+		if _, ok := declared[hostedFunctionKey(moduleName, name)]; !ok {
+			return fmt.Errorf("guest imports undeclared host function %s.%s", moduleName, name)
+		}
+	}
+	return nil
 }
 
 // wasmRuntime 是 hosted 包的执行单元：共享 wazero 运行时与编译产物，每次调用独立实例化。

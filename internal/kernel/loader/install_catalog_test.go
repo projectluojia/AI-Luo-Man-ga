@@ -252,3 +252,229 @@ func rewriteManifestDigest(t *testing.T, directory string, manifest []byte) {
 var noopCatalogHandler registry.Handler = func(context.Context, contracts.RequestContext, json.RawMessage) (json.RawMessage, error) {
 	return json.RawMessage(`{}`), nil
 }
+
+// writeDeclaredFixture 写入携带宿主函数/storage 声明的 hosted fixture，
+// 返回记录与工件路径（供篡改与校验断言）。
+func writeDeclaredFixture(t *testing.T, root, runtimeID string, decls []loader.HostedFunctionDecl, storage *loader.InstalledStorage) loader.InstalledRecord {
+	t.Helper()
+	directory := filepath.Join(root, runtimeID)
+	if err := os.Mkdir(directory, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	artifact := filepath.Join(directory, "runtime-artifact")
+	if err := os.WriteFile(artifact, []byte("hosted artifact"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	installed := loader.InstalledManifest{
+		SchemaVersion: loader.InstallSchemaVersion,
+		Runtime: loader.InstalledRuntimeSpec{
+			ID: runtimeID, Version: "1.0.0", Mode: loader.ModeHosted, IdleTTLMS: 1000,
+		},
+		Tools: []registry.ToolSpec{{
+			ID: "extension.read", Version: "1.0.0", Description: "读取扩展数据",
+			InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
+			SideEffect:      registry.SideEffectRead,
+		}},
+		Service: registry.ServiceSpec{
+			ID: "extension", Version: "1.0.0", Description: "测试扩展",
+			ToolDependencies: []string{"extension.read"},
+		},
+		Capabilities: []registry.CapabilitySpec{{
+			ID: "extension.query", Version: "1.0.0", Name: "扩展查询",
+			Description: "查询扩展", ServiceID: "extension",
+			InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
+			SideEffect:      registry.SideEffectRead,
+		}},
+		HostFunctions: decls,
+		Storage:       storage,
+	}
+	manifest, err := json.Marshal(installed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, "manifest.json"), manifest, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	manifestDigest := sha256.Sum256(manifest)
+	artifactDigest := sha256.Sum256([]byte("hosted artifact"))
+	lock := loader.InstalledLock{
+		SchemaVersion: loader.InstallSchemaVersion, RuntimeID: runtimeID,
+		RuntimeVersion: "1.0.0", Mode: loader.ModeHosted,
+		ManifestSHA256: hex.EncodeToString(manifestDigest[:]),
+		ArtifactSHA256: hex.EncodeToString(artifactDigest[:]), ArtifactPath: artifact,
+	}
+	lockBytes, err := json.Marshal(lock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, "lock.json"), lockBytes, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := loader.NewCatalog(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	records, err := catalog.Discover(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 || records[0].Runtime.ID != runtimeID {
+		t.Fatalf("Discover records = %+v, want single %q record", records, runtimeID)
+	}
+	return records[0]
+}
+
+func TestInstalledCatalogAcceptsHostFunctionAndStorageDeclarations(t *testing.T) {
+	root := t.TempDir()
+	record := writeDeclaredFixture(t, root, "extension.decl", []loader.HostedFunctionDecl{
+		{Module: "ailuo.extension", Name: "query", Purpose: "查询扩展权威存储"},
+	}, &loader.InstalledStorage{
+		Namespace: "ext/data", SchemaVersion: 1,
+		Sensitivity: loader.SensitivityPublic, Retention: loader.RetentionPermanent,
+	})
+	if len(record.Runtime.HostFunctions) != 1 ||
+		record.Runtime.HostFunctions[0].Module != "ailuo.extension" || record.Runtime.HostFunctions[0].Name != "query" {
+		t.Fatalf("record host functions = %+v, want ailuo.extension.query", record.Runtime.HostFunctions)
+	}
+	if record.Storage == nil || record.Storage.Namespace != "ext/data" || record.Storage.SchemaVersion != 1 {
+		t.Fatalf("record storage = %+v, want ext/data v1", record.Storage)
+	}
+	catalog, err := loader.NewCatalog(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.VerifyRuntime(t.Context(), record.Runtime); err != nil {
+		t.Fatalf("VerifyRuntime: %v", err)
+	}
+}
+
+func TestInstalledCatalogRejectsInvalidDeclarations(t *testing.T) {
+	cases := []struct {
+		name     string
+		decls    []loader.HostedFunctionDecl
+		storage  *loader.InstalledStorage
+		hostedOK bool
+	}{
+		{name: "duplicate host function", decls: []loader.HostedFunctionDecl{
+			{Module: "ailuo.x", Name: "one"}, {Module: "ailuo.x", Name: "one"},
+		}, hostedOK: false},
+		{name: "wasi module reserved", decls: []loader.HostedFunctionDecl{
+			{Module: "wasi_snapshot_preview1", Name: "fd_write"},
+		}, hostedOK: true},
+		{name: "invalid module", decls: []loader.HostedFunctionDecl{
+			{Module: "Ailuo.X", Name: "query"},
+		}, hostedOK: true},
+		{name: "zero schema version", storage: &loader.InstalledStorage{
+			Namespace: "ext/data", SchemaVersion: 0,
+			Sensitivity: loader.SensitivityPublic, Retention: loader.RetentionPermanent,
+		}, hostedOK: false},
+		{name: "invalid sensitivity", storage: &loader.InstalledStorage{
+			Namespace: "ext/data", SchemaVersion: 1,
+			Sensitivity: "top_secret", Retention: loader.RetentionPermanent,
+		}, hostedOK: true},
+		{name: "invalid retention", storage: &loader.InstalledStorage{
+			Namespace: "ext/data", SchemaVersion: 1,
+			Sensitivity: loader.SensitivityPrivate, Retention: "forever",
+		}, hostedOK: true},
+		{name: "invalid namespace", storage: &loader.InstalledStorage{
+			Namespace: "Ext/data", SchemaVersion: 1,
+			Sensitivity: loader.SensitivityPublic, Retention: loader.RetentionPermanent,
+		}, hostedOK: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			if _, err := loader.NewCatalog(root); err != nil {
+				t.Fatal(err)
+			}
+			if tc.hostedOK {
+				// 通过安装目录发现路径校验。
+				directory := filepath.Join(root, "extension.bad")
+				if err := os.Mkdir(directory, 0o750); err != nil {
+					t.Fatal(err)
+				}
+				artifact := filepath.Join(directory, "runtime-artifact")
+				if err := os.WriteFile(artifact, []byte("hosted artifact"), 0o640); err != nil {
+					t.Fatal(err)
+				}
+				installed := loader.InstalledManifest{
+					SchemaVersion: loader.InstallSchemaVersion,
+					Runtime:       loader.InstalledRuntimeSpec{ID: "extension.bad", Version: "1.0.0", Mode: loader.ModeHosted},
+					Tools: []registry.ToolSpec{{
+						ID: "extension.read", Version: "1.0.0", Description: "读取扩展数据",
+						InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
+						SideEffect:      registry.SideEffectRead,
+					}},
+					Service: registry.ServiceSpec{ID: "extension", Version: "1.0.0", Description: "测试扩展"},
+					Capabilities: []registry.CapabilitySpec{{
+						ID: "extension.query", Version: "1.0.0", Name: "扩展查询",
+						Description: "查询扩展", ServiceID: "extension",
+						InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
+						SideEffect:      registry.SideEffectRead,
+					}},
+					HostFunctions: tc.decls,
+					Storage:       tc.storage,
+				}
+				manifest, err := json.Marshal(installed)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(directory, "manifest.json"), manifest, 0o640); err != nil {
+					t.Fatal(err)
+				}
+				manifestDigest := sha256.Sum256(manifest)
+				artifactDigest := sha256.Sum256([]byte("hosted artifact"))
+				lock := loader.InstalledLock{
+					SchemaVersion: loader.InstallSchemaVersion, RuntimeID: "extension.bad",
+					RuntimeVersion: "1.0.0", Mode: loader.ModeHosted,
+					ManifestSHA256: hex.EncodeToString(manifestDigest[:]),
+					ArtifactSHA256: hex.EncodeToString(artifactDigest[:]), ArtifactPath: artifact,
+				}
+				lockBytes, err := json.Marshal(lock)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(directory, "lock.json"), lockBytes, 0o640); err != nil {
+					t.Fatal(err)
+				}
+				catalog, err := loader.NewCatalog(root)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := catalog.Discover(t.Context()); !errors.Is(err, loader.ErrInstallCatalogInvalid) {
+					t.Fatalf("Discover with invalid declarations error = %v, want ErrInstallCatalogInvalid", err)
+				}
+				return
+			}
+			// 通过 RegisterInstalled 路径校验内置包（无目录记录）。
+			manager, err := loader.New(&fakeHost{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			reg := registry.New()
+			record := loader.InstalledRecord{
+				Runtime: loader.Manifest{
+					ID: "extension.builtin", Version: "1.0.0", Mode: loader.ModeHosted,
+					Role: loader.RoleCapability, LockedDigest: digest,
+					HostFunctions: tc.decls,
+				},
+				Tools: []registry.ToolSpec{{
+					ID: "extension.read", Version: "1.0.0", Description: "读取扩展数据",
+					InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
+					SideEffect:      registry.SideEffectRead,
+				}},
+				Service: registry.ServiceSpec{ID: "extension", Version: "1.0.0", Description: "测试扩展"},
+				Capabilities: []registry.CapabilitySpec{{
+					ID: "extension.query", Version: "1.0.0", Name: "扩展查询",
+					Description: "查询扩展", ServiceID: "extension",
+					InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
+					SideEffect:      registry.SideEffectRead,
+				}},
+				Storage: tc.storage,
+			}
+			if err := loader.RegisterInstalled(t.Context(), manager, reg, []loader.InstalledRecord{record}); !errors.Is(err, loader.ErrInstallCatalogInvalid) {
+				t.Fatalf("RegisterInstalled with invalid declarations error = %v, want ErrInstallCatalogInvalid", err)
+			}
+		})
+	}
+}

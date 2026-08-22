@@ -50,6 +50,10 @@ type InstalledManifest struct {
 	Tools         []registry.ToolSpec       `json:"tools"`
 	Service       registry.ServiceSpec      `json:"service"`
 	Capabilities  []registry.CapabilitySpec `json:"capabilities"`
+	// HostFunctions 是包声明的宿主函数依赖；Storage 是包声明的持久化契约。
+	// 两者都是声明不是凭据：宿主函数实现永远由宿主提供，存储凭据由宿主托管。
+	HostFunctions []HostedFunctionDecl `json:"host_functions,omitempty"`
+	Storage       *InstalledStorage    `json:"storage,omitempty"`
 }
 
 type InstalledProcessSpec struct {
@@ -80,6 +84,7 @@ type InstalledRecord struct {
 	Service      registry.ServiceSpec
 	Capabilities []registry.CapabilitySpec
 	Process      *ProcessSpec
+	Storage      *InstalledStorage
 }
 
 type Catalog struct {
@@ -250,7 +255,8 @@ func (c *Catalog) readRecord(ctx context.Context, directory string) (InstalledRe
 	runtimeManifest := Manifest{
 		ID: installed.Runtime.ID, Version: installed.Runtime.Version, Mode: installed.Runtime.Mode,
 		Role: RoleCapability, LockedDigest: lock.ArtifactSHA256, Pin: installed.Runtime.Pin,
-		IdleTTL: time.Duration(installed.Runtime.IdleTTLMS) * time.Millisecond,
+		IdleTTL:       time.Duration(installed.Runtime.IdleTTLMS) * time.Millisecond,
+		HostFunctions: cloneHostedFunctionDecls(installed.HostFunctions),
 	}
 	if err := validateManifest(runtimeManifest); err != nil {
 		return InstalledRecord{}, err
@@ -291,6 +297,7 @@ func (c *Catalog) readRecord(ctx context.Context, directory string) (InstalledRe
 		Directory: directory, ArtifactPath: artifactPath, Runtime: runtimeManifest,
 		Tools: cloneToolSpecs(installed.Tools), Service: cloneInstalledService(installed.Service),
 		Capabilities: cloneCapabilitySpecs(installed.Capabilities), Process: process,
+		Storage: cloneInstalledStorage(installed.Storage),
 	}
 	if err := validateInstalledRecord(record); err != nil {
 		return InstalledRecord{}, err
@@ -301,6 +308,14 @@ func (c *Catalog) readRecord(ctx context.Context, directory string) (InstalledRe
 func RegisterInstalled(ctx context.Context, manager *Manager, target *registry.Registry, records []InstalledRecord) error {
 	if manager == nil || target == nil || len(records) == 0 || len(records) > maxInstalledRuntimes {
 		return ErrInstallCatalogInvalid
+	}
+	// 内置包与 installed 包统一校验：同一规格契约（运行时清单、宿主函数声明、
+	// storage 声明与 Tool/Service/Capability 一致性），builtin 与安装目录记录
+	// 都不允许携带未校验的规格进入 Loader/Registry。
+	for _, record := range records {
+		if err := validateRecordSpecs(record); err != nil {
+			return errors.Join(ErrInstallCatalogInvalid, err)
+		}
 	}
 	manifests := make([]Manifest, 0, len(records))
 	tools := make([]registry.ToolRegistration, 0)
@@ -386,10 +401,39 @@ func validateInstalledRecords(records []InstalledRecord) error {
 }
 
 func validateInstalledRecord(record InstalledRecord) error {
-	if err := validateManifest(record.Runtime); err != nil ||
-		record.Directory == "" || record.Service.Version != record.Runtime.Version ||
+	if record.Directory == "" || record.Service.Version != record.Runtime.Version ||
 		len(record.Capabilities) == 0 {
+		return ErrInstallCatalogInvalid
+	}
+	if record.Runtime.Mode == ModeIsolated && record.Process == nil {
+		return ErrInstallCatalogInvalid
+	}
+	if record.Runtime.Mode == ModeHosted && record.Process != nil {
+		return ErrInstallCatalogInvalid
+	}
+	return validateRecordSpecs(record)
+}
+
+// validateRecordSpecs 校验内置包与 installed 包共用的规格契约：运行时清单、
+// 宿主函数声明、storage 声明，以及 Tool/Service/Capability 与运行时版本一致。
+// 运行时专用记录（如内置 agent）不携带 Service 规格，只校验运行时清单与声明。
+func validateRecordSpecs(record InstalledRecord) error {
+	if err := validateManifest(record.Runtime); err != nil {
 		return errors.Join(ErrInstallCatalogInvalid, err)
+	}
+	if record.Storage != nil {
+		if err := validateInstalledStorage(*record.Storage); err != nil {
+			return err
+		}
+	}
+	if record.Service.ID == "" {
+		if len(record.Tools) != 0 || len(record.Capabilities) != 0 {
+			return ErrInstallCatalogInvalid
+		}
+		return nil
+	}
+	if record.Service.Version != record.Runtime.Version || len(record.Capabilities) == 0 {
+		return ErrInstallCatalogInvalid
 	}
 	for _, tool := range record.Tools {
 		if tool.Version != record.Runtime.Version {
@@ -400,12 +444,6 @@ func validateInstalledRecord(record InstalledRecord) error {
 		if capability.Version != record.Runtime.Version || capability.ServiceID != record.Service.ID {
 			return ErrInstallCatalogInvalid
 		}
-	}
-	if record.Runtime.Mode == ModeIsolated && record.Process == nil {
-		return ErrInstallCatalogInvalid
-	}
-	if record.Runtime.Mode == ModeHosted && record.Process != nil {
-		return ErrInstallCatalogInvalid
 	}
 	return nil
 }
@@ -593,7 +631,8 @@ func hashInstalledArtifact(ctx context.Context, path string) (string, error) {
 func sameRuntimeManifest(left, right Manifest) bool {
 	return left.ID == right.ID && left.Version == right.Version && left.Mode == right.Mode &&
 		left.Role == right.Role && left.LockedDigest == right.LockedDigest &&
-		left.Pin == right.Pin && left.IdleTTL == right.IdleTTL
+		left.Pin == right.Pin && left.IdleTTL == right.IdleTTL &&
+		equalHostedFunctionDecls(left.HostFunctions, right.HostFunctions)
 }
 
 // sameRuntimeIdentity 只比较运行时身份字段（ID/Version/Mode），供 ReadArtifact
@@ -629,6 +668,14 @@ func cloneInstalledService(spec registry.ServiceSpec) registry.ServiceSpec {
 	spec.ToolDependencies = append([]string(nil), spec.ToolDependencies...)
 	spec.RequestedPermissions = append([]string(nil), spec.RequestedPermissions...)
 	return spec
+}
+
+func cloneInstalledStorage(storage *InstalledStorage) *InstalledStorage {
+	if storage == nil {
+		return nil
+	}
+	cloned := *storage
+	return &cloned
 }
 
 var noopInstalledHandler registry.Handler = func(context.Context, contracts.RequestContext, json.RawMessage) (json.RawMessage, error) {
