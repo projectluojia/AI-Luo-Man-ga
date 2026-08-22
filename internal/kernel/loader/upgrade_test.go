@@ -39,6 +39,21 @@ func upgradeManifest(id, version string) loader.Manifest {
 	}
 }
 
+// registerSingleComponent 注册单组件包并记录分组。
+func registerSingleComponent(t *testing.T, manager *loader.Manager, id, version string) {
+	t.Helper()
+	if err := manager.Register(context.Background(), upgradeManifest(id, version)); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.RegisterPackage(id, []string{id}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func upgradeSingleComponent(id, version string) loader.PackageSpec {
+	return loader.PackageSpec{ID: id, Components: []loader.ComponentSpec{{Runtime: upgradeManifest(id, version)}}}
+}
+
 func TestManagerUpgradeSwitchesAtomicallyAndDrainsOldVersion(t *testing.T) {
 	v1 := &fakeRuntime{description: loader.Description{ID: "extension.test", Version: "1.0.0", Mode: loader.ModeHosted}}
 	v2 := &fakeRuntime{description: loader.Description{ID: "extension.test", Version: "2.0.0", Mode: loader.ModeHosted}}
@@ -48,9 +63,7 @@ func TestManagerUpgradeSwitchesAtomicallyAndDrainsOldVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	if err := manager.Register(ctx, upgradeManifest("extension.test", "1.0.0")); err != nil {
-		t.Fatal(err)
-	}
+	registerSingleComponent(t, manager, "extension.test", "1.0.0")
 	if err := manager.EnsureLoaded(ctx, "extension.test"); err != nil {
 		t.Fatal(err)
 	}
@@ -62,8 +75,8 @@ func TestManagerUpgradeSwitchesAtomicallyAndDrainsOldVersion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := manager.Upgrade(ctx, upgradeManifest("extension.test", "2.0.0")); err != nil {
-		t.Fatalf("Upgrade: %v", err)
+	if err := manager.UpgradePackage(ctx, upgradeSingleComponent("extension.test", "2.0.0")); err != nil {
+		t.Fatalf("UpgradePackage: %v", err)
 	}
 	if v2.starts.Load() != 1 {
 		t.Fatalf("v2 starts = %d, want 1", v2.starts.Load())
@@ -124,8 +137,8 @@ func TestManagerUpgradeCandidateFailureKeepsOldVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 	// 候选版本宿主无法装载：升级失败，旧版本不受影响。
-	if err := manager.Upgrade(ctx, upgradeManifest("extension.test", "2.0.0")); err == nil {
-		t.Fatal("Upgrade with failing candidate = nil, want error")
+	if err := manager.UpgradePackage(ctx, upgradeSingleComponent("extension.test", "2.0.0")); err == nil {
+		t.Fatal("UpgradePackage with failing candidate = nil, want error")
 	}
 	lease, err := manager.Acquire(ctx, "extension.test")
 	if err != nil {
@@ -194,23 +207,29 @@ func TestManagerUpgradeRejectsInvalidTargets(t *testing.T) {
 	if err := manager.Register(ctx, upgradeManifest("extension.test", "1.0.0")); err != nil {
 		t.Fatal(err)
 	}
+	if err := manager.RegisterPackage("extension.test", []string{"extension.test"}); err != nil {
+		t.Fatal(err)
+	}
 	if err := manager.EnsureLoaded(ctx, "extension.test"); err != nil {
 		t.Fatal(err)
 	}
-	// 未注册标识。
-	if err := manager.Upgrade(ctx, upgradeManifest("missing.test", "1.0.0")); !errors.Is(err, loader.ErrNotFound) {
-		t.Fatalf("Upgrade unknown id error = %v, want ErrNotFound", err)
+	// 未注册包。
+	if err := manager.UpgradePackage(ctx, upgradeSingleComponent("missing.test", "1.0.0")); !errors.Is(err, loader.ErrNotFound) {
+		t.Fatalf("UpgradePackage unknown package error = %v, want ErrNotFound", err)
 	}
 	// 同版本升级无意义。
-	if err := manager.Upgrade(ctx, upgradeManifest("extension.test", "1.0.0")); !errors.Is(err, loader.ErrInvalidManifest) {
-		t.Fatalf("Upgrade same version error = %v, want ErrInvalidManifest", err)
+	if err := manager.UpgradePackage(ctx, upgradeSingleComponent("extension.test", "1.0.0")); !errors.Is(err, loader.ErrInvalidManifest) {
+		t.Fatalf("UpgradePackage same version error = %v, want ErrInvalidManifest", err)
 	}
 	// 未就绪条目不可升级。
 	if err := manager.Register(ctx, upgradeManifest("pending.test", "1.0.0")); err != nil {
 		t.Fatal(err)
 	}
-	if err := manager.Upgrade(ctx, upgradeManifest("pending.test", "2.0.0")); !errors.Is(err, loader.ErrUnavailable) {
-		t.Fatalf("Upgrade not-ready error = %v, want ErrUnavailable", err)
+	if err := manager.RegisterPackage("pending.test", []string{"pending.test"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.UpgradePackage(ctx, upgradeSingleComponent("pending.test", "2.0.0")); !errors.Is(err, loader.ErrUnavailable) {
+		t.Fatalf("UpgradePackage not-ready error = %v, want ErrUnavailable", err)
 	}
 }
 
