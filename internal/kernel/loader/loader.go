@@ -127,19 +127,28 @@ type entry struct {
 
 // retiredRuntime 是被升级替换的旧版本运行时：inFlight 是其剩余在途调用数，
 // 归零后经 stopOnce 恰好停止一次；stopped 通道供 Shutdown 有界等待。
+// group 不为 nil 时表示该成员属于退役组，停止由组统一触发。
 type retiredRuntime struct {
 	runtime  Runtime
 	inFlight int
 	stopOnce sync.Once
 	stopped  chan struct{}
+	group    *retiredGroup
 }
 
 type Manager struct {
 	mu        sync.RWMutex
 	entries   map[string]*entry
 	hosts     map[string][]Host
+	packages  map[string]*packageGroup
 	accepting bool
 	now       func() time.Time
+}
+
+// packageGroup 是一个包的组件组：order 按依赖拓扑排列（Provider 在前）。
+type packageGroup struct {
+	id    string
+	order []*entry
 }
 
 // New 构造统一 Loader：一个 Manager 持有全部运行模式的宿主，模式内部允许
@@ -162,6 +171,7 @@ func New(hosts ...Host) (*Manager, error) {
 	return &Manager{
 		entries:   make(map[string]*entry),
 		hosts:     grouped,
+		packages:  make(map[string]*packageGroup),
 		accepting: true,
 		now:       time.Now,
 	}, nil
@@ -251,68 +261,6 @@ func (m *Manager) RegisterBatch(ctx context.Context, manifests []Manifest) error
 			host:     bound[manifest.ID],
 			state:    StateRegistered,
 		}
-	}
-	return nil
-}
-
-// Upgrade 以候选清单原子升级已注册运行时：候选完成完整加载（Verify → Load →
-// Describe → Start → Health）后原子切换，新调用打到新版本，旧版本在在途调用
-// 排空后有界停止；候选加载失败不影响既有运行（fail without touching old）。
-// 同版本升级与未就绪升级被拒绝。
-func (m *Manager) Upgrade(ctx context.Context, candidate Manifest) error {
-	if err := validateManifest(candidate); err != nil {
-		return err
-	}
-	item, err := m.resolve(candidate.ID)
-	if err != nil {
-		return err
-	}
-	item.upgradeMu.Lock()
-	defer item.upgradeMu.Unlock()
-	item.mu.Lock()
-	if item.state != StateReady || item.runtime == nil {
-		item.mu.Unlock()
-		return ErrUnavailable
-	}
-	if item.manifest.Version == candidate.Version {
-		item.mu.Unlock()
-		return ErrInvalidManifest
-	}
-	item.mu.Unlock()
-	host, err := m.selectHost(ctx, candidate)
-	if err != nil {
-		return err
-	}
-	started := m.now()
-	loaded := loadRuntime(ctx, host, candidate)
-	observe.DefaultMetrics().ObserveRuntimeLoad(loaded.err == nil, m.now().Sub(started))
-	if loaded.err != nil {
-		return errors.Join(ErrLoadFailed, loaded.err)
-	}
-	item.mu.Lock()
-	// 候选加载期间条目状态可能变化（并发卸载/关闭）：重新校验后原子切换。
-	if item.state != StateReady || item.runtime == nil {
-		item.mu.Unlock()
-		stopContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-		defer cancel()
-		_ = loaded.runtime.Stop(stopContext)
-		return ErrUnavailable
-	}
-	retired := &retiredRuntime{runtime: item.runtime, inFlight: item.currentInFlight, stopped: make(chan struct{})}
-	stopRetired := retired.inFlight == 0
-	item.retired = append(item.retired, retired)
-	item.manifest = candidate
-	item.host = host
-	item.runtime = loaded.runtime
-	item.currentInFlight = 0
-	item.mu.Unlock()
-	observe.Info(ctx, "运行时已原子升级",
-		observe.StringAttr("runtime_id", candidate.ID),
-		observe.StringAttr("runtime_version", candidate.Version),
-		observe.StringAttr("runtime_mode", candidate.Mode),
-	)
-	if stopRetired {
-		stopRetiredRuntime(retired)
 	}
 	return nil
 }
@@ -574,8 +522,13 @@ func (l *Lease) Release() {
 		item.mu.Unlock()
 		observe.DefaultMetrics().RuntimeCallStopped()
 		if drained {
-			// 升级替换的旧版本在途调用已排空：停止旧版本（恰好一次）。
-			stopRetiredRuntime(retired)
+			// 升级替换的旧版本在途调用已排空：组员交给退役组协调（反序停止），
+			// 独立成员直接停止（恰好一次）。
+			if retired.group != nil {
+				retired.group.memberDrained()
+			} else {
+				stopRetiredRuntime(retired)
+			}
 		}
 	})
 }
