@@ -193,7 +193,7 @@ func runMaintenanceCommand(arguments []string, output io.Writer) (bool, error) {
 		}
 		_, err = fmt.Fprintf(output, "身份解绑完成：app=%s 平台=%s space=%s platform_user=%s\n", *appID, *platform, *space, *platformUser)
 		return true, err
-	case "install", "upgrade", "uninstall", "list":
+	case "install", "upgrade", "uninstall", "list", "pack":
 		return runPackageCommand(arguments, output)
 	default:
 		return true, fmt.Errorf("configuration error: unknown command")
@@ -210,7 +210,7 @@ func runPackageCommand(arguments []string, output io.Writer) (bool, error) {
 	if err := flags.Parse(arguments[1:]); err != nil {
 		return true, fmt.Errorf("configuration error: %s", err)
 	}
-	if *root == "" {
+	if *root == "" && command != "pack" {
 		return true, fmt.Errorf("configuration error: %s requires --root 或 AILUO_RUNTIME_INSTALL_ROOT", command)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -244,6 +244,25 @@ func runPackageCommand(arguments []string, output io.Writer) (bool, error) {
 			return true, err
 		}
 		if _, err := fmt.Fprintf(output, "已卸载 %s\n", flags.Arg(0)); err != nil {
+			return true, err
+		}
+		return true, nil
+	case "pack":
+		if flags.NArg() < 1 || flags.NArg() > 2 {
+			return true, fmt.Errorf("configuration error: pack requires source package directory [and optional output directory]")
+		}
+		outputDir := "."
+		if *root != "" {
+			outputDir = *root
+		}
+		if flags.NArg() == 2 {
+			outputDir = flags.Arg(1)
+		}
+		tarballPath, err := packmgr.Pack(ctx, flags.Arg(0), outputDir)
+		if err != nil {
+			return true, err
+		}
+		if _, err := fmt.Fprintf(output, "已打包 %s\n", tarballPath); err != nil {
 			return true, err
 		}
 		return true, nil
