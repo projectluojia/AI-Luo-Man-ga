@@ -62,6 +62,9 @@ func ReadInstalled(ctx context.Context, directory string) (InstalledRecord, erro
 		if lock.Process == nil || lock.Process.Path != lock.ArtifactPath {
 			return InstalledRecord{}, ErrInvalidFormat
 		}
+		if err := ValidateProcessSpec(*lock.Process); err != nil {
+			return InstalledRecord{}, err
+		}
 	}
 	if manifest.Mode == ModeHosted && lock.Process != nil {
 		return InstalledRecord{}, ErrInvalidFormat
