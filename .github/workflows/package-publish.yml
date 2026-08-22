@@ -84,8 +84,19 @@ jobs:
           echo "package-id=$id" >> "$GITHUB_OUTPUT"
           echo "package-version=$version" >> "$GITHUB_OUTPUT"
           echo "tarball=$tarball" >> "$GITHUB_OUTPUT"
-      - name: 发布到 GitHub Release
+      - name: 发布到 GitHub Release（tag 时，版本不可变）
         if: ${{ inputs.tag-required }}
         env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" "${{ steps.pack.outputs.tarball }}" --generate-notes
+          GITHUB_TOKEN: ${{ github.token }}
+        run: ./ailuo publish "${{ inputs.package-dir }}" --repo "${{ github.repository }}"
+      - name: 从注册表安装验证（发布物真实闭环）
+        if: ${{ inputs.tag-required }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          id="$(jq -r .id "${{ inputs.package-dir }}/manifest.json")"
+          version="$(jq -r .version "${{ inputs.package-dir }}/manifest.json")"
+          ./ailuo install --root "$RUNNER_TEMP/pkgroot-registry" "${{ github.repository }}@$version"
+          ./ailuo list --root "$RUNNER_TEMP/pkgroot-registry" | grep -q "^${id}@${version}"
