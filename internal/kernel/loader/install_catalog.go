@@ -397,7 +397,10 @@ func validateInstalledRecords(records []InstalledRecord) error {
 				Handler registry.Handler
 			}{Spec: spec, Handler: noopInstalledHandler}
 		}
-		services = append(services, registry.ServiceRegistration{Spec: record.Service, Capabilities: capabilities})
+		// 仅 Provider 基座（携带 Service）的组件注册 Service；其余组件只注册 Capabilities。
+		if record.Service.ID != "" {
+			services = append(services, registry.ServiceRegistration{Spec: record.Service, Capabilities: capabilities})
+		}
 	}
 	if err := validation.RegisterBatch(tools, services); err != nil {
 		return errors.Join(ErrInstallCatalogInvalid, err)
