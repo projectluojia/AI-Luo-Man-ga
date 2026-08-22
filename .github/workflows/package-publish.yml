@@ -1,0 +1,91 @@
+name: 包发布流水线（可复用）
+
+# npm 式包发布流水线：构建 → 版本一致性 → pack（tarball）→ 冒烟安装验证 →
+# （tag 发布时）附 GitHub Release。包作者仓库通过
+# `uses: projectluojia/AI-Luo-Man-ga/.github/workflows/package-publish.yml@ref`
+# 复用；CLI 现阶段由本仓库根模块构建（packmgr 尚在 internal/），待 CLI 独立
+# 发布后改为下载发布二进制。
+
+on:
+  workflow_call:
+    inputs:
+      package-dir:
+        type: string
+        default: "."
+        description: 源包目录（含 manifest.json 与 entrypoint 工件）
+      build-command:
+        type: string
+        default: ""
+        description: 在 package-dir 内构建工件的命令；空表示工件已提交
+      tag-required:
+        type: boolean
+        default: false
+        description: 要求 git tag（去 v 前缀）与 manifest.version 一致并发布 Release
+    outputs:
+      package-id:
+        description: 打包出的包 ID
+        value: ${{ jobs.package.outputs.package-id }}
+      package-version:
+        description: 打包出的包版本
+        value: ${{ jobs.package.outputs.package-version }}
+      tarball:
+        description: 生成的 tarball 相对路径
+        value: ${{ jobs.package.outputs.tarball }}
+
+permissions:
+  contents: ${{ inputs.tag-required && 'write' || 'read' }}
+
+jobs:
+  package:
+    name: package
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      package-id: ${{ steps.pack.outputs.package-id }}
+      package-version: ${{ steps.pack.outputs.package-version }}
+      tarball: ${{ steps.pack.outputs.tarball }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: 构建 ailuo CLI
+        run: go build -o ailuo .
+      - name: 构建包工件
+        if: ${{ inputs.build-command != '' }}
+        run: ${{ inputs.build-command }}
+        working-directory: ${{ inputs.package-dir }}
+      - name: 校验清单版本与 git tag 一致
+        if: ${{ inputs.tag-required }}
+        shell: bash
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+          tag="${tag#v}"
+          version="$(jq -r .version "${{ inputs.package-dir }}/manifest.json")"
+          test "$tag" = "$version" || {
+            echo "git tag $tag 与 manifest.version $version 不一致" >&2
+            exit 1
+          }
+      - name: 打包并冒烟安装验证
+        id: pack
+        shell: bash
+        run: |
+          set -euo pipefail
+          id="$(jq -r .id "${{ inputs.package-dir }}/manifest.json")"
+          version="$(jq -r .version "${{ inputs.package-dir }}/manifest.json")"
+          ./ailuo pack "${{ inputs.package-dir }}" --out dist
+          tarball="$(ls dist/*.tgz)"
+          # 发布物必须可安装并可列出（真实闭环，不信任"打包成功"本身）。
+          ./ailuo install "$tarball" --root "$RUNNER_TEMP/pkgroot"
+          ./ailuo list --root "$RUNNER_TEMP/pkgroot" | grep -q "^${id}@${version}"
+          echo "package-id=$id" >> "$GITHUB_OUTPUT"
+          echo "package-version=$version" >> "$GITHUB_OUTPUT"
+          echo "tarball=$tarball" >> "$GITHUB_OUTPUT"
+      - name: 发布到 GitHub Release
+        if: ${{ inputs.tag-required }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" "${{ steps.pack.outputs.tarball }}" --generate-notes

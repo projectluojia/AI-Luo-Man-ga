@@ -13,11 +13,18 @@ import (
 	"strings"
 )
 
-// Install 从源包目录安装到安装根目录：校验源清单（manifest.json + entrypoint
-// 工件）、解析依赖（已安装包满足约束）、原子发布 manifest+lock+artifact，并
-// 回读验证。目标已有同 ID 且版本不同时替换（升级语义）；版本相同视为重复
-// 安装并返回错误。
-func Install(ctx context.Context, root, sourceDir string) (InstalledRecord, error) {
+// Install 从源包目录或发布 tarball 安装到安装根目录：校验源（manifest.json +
+// entrypoint 工件）、解析依赖（已安装包满足约束）、原子发布
+// manifest+lock+artifact，并回读验证。目标已有同 ID 且版本不同时替换（升级
+// 语义）；版本相同视为重复安装并返回错误。
+func Install(ctx context.Context, root, sourcePath string) (InstalledRecord, error) {
+	sourceDir, cleanup, err := unpackSource(sourcePath)
+	if err != nil {
+		return InstalledRecord{}, err
+	}
+	if cleanup != nil {
+		defer cleanup()
+	}
 	source, err := readSourceManifest(sourceDir)
 	if err != nil {
 		return InstalledRecord{}, err
@@ -117,6 +124,29 @@ func Uninstall(_ context.Context, root, id string) error {
 		return fmt.Errorf("目录 %q 不是安装包（缺少 manifest.json）", target)
 	}
 	return os.RemoveAll(target)
+}
+
+// unpackSource 解析安装源：目录直接使用；.tgz 发布物严格解压到临时目录。
+func unpackSource(source string) (string, func(), error) {
+	info, err := os.Stat(source)
+	if err != nil {
+		return "", nil, err
+	}
+	if info.IsDir() {
+		return source, nil, nil
+	}
+	if !strings.HasSuffix(strings.ToLower(source), ".tgz") {
+		return "", nil, fmt.Errorf("安装源必须是包目录或 .tgz 发布物")
+	}
+	temp, err := os.MkdirTemp("", "ailuo-unpack-")
+	if err != nil {
+		return "", nil, err
+	}
+	if err := unpackTarball(source, temp); err != nil {
+		os.RemoveAll(temp)
+		return "", nil, err
+	}
+	return temp, func() { os.RemoveAll(temp) }, nil
 }
 
 // sourcePackage 是源包目录读取结果：清单字节原样保留以锁定 digest。
