@@ -22,9 +22,6 @@ const (
 	installManifestName  = "manifest.json"
 	installLockName      = "lock.json"
 	maxInstalledRuntimes = 256
-	maxInstallManifest   = 256 << 10
-	maxInstallLock       = 64 << 10
-	maxInstallArtifact   = int64(1 << 30)
 	maxInstalledSpecs    = 4096
 )
 
@@ -162,7 +159,7 @@ func (c *Catalog) ReadArtifact(ctx context.Context, manifest Manifest) ([]byte, 
 	if err != nil {
 		return nil, errors.Join(ErrInstallCatalogInvalid, err)
 	}
-	if int64(len(data)) > maxInstallArtifact {
+	if int64(len(data)) > packmgr.MaxArtifactBytes {
 		return nil, ErrInstallCatalogInvalid
 	}
 	return data, nil
@@ -186,11 +183,11 @@ func (c *Catalog) readRecord(ctx context.Context, directory string) (InstalledRe
 	if err := validateSecureDirectory(directory); err != nil {
 		return InstalledRecord{}, errors.Join(ErrInstallCatalogInvalid, err)
 	}
-	manifestBytes, err := readSecureJSONFile(filepath.Join(directory, installManifestName), maxInstallManifest)
+	manifestBytes, err := readSecureJSONFile(filepath.Join(directory, installManifestName), packmgr.MaxManifestBytes)
 	if err != nil {
 		return InstalledRecord{}, errors.Join(ErrInstallCatalogInvalid, err)
 	}
-	lockBytes, err := readSecureJSONFile(filepath.Join(directory, installLockName), maxInstallLock)
+	lockBytes, err := readSecureJSONFile(filepath.Join(directory, installLockName), packmgr.MaxLockBytes)
 	if err != nil {
 		return InstalledRecord{}, errors.Join(ErrInstallCatalogInvalid, err)
 	}
@@ -237,7 +234,7 @@ func (c *Catalog) readRecord(ctx context.Context, directory string) (InstalledRe
 	if err != nil {
 		return InstalledRecord{}, err
 	}
-	artifactDigest, err := packmgr.HashFile(ctx, artifactPath, maxInstallArtifact)
+	artifactDigest, err := packmgr.HashFile(ctx, artifactPath, packmgr.MaxArtifactBytes)
 	if err != nil || artifactDigest != lock.ArtifactSHA256 {
 		return InstalledRecord{}, errors.Join(ErrInstallCatalogInvalid, err)
 	}

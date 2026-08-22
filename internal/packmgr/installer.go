@@ -2,7 +2,6 @@ package packmgr
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -34,7 +33,8 @@ func Install(ctx context.Context, root, sourceDir string) (InstalledRecord, erro
 		existing.Manifest.Version == source.Manifest.Version {
 		return InstalledRecord{}, fmt.Errorf("包 %s@%s 已安装", source.Manifest.ID, source.Manifest.Version)
 	}
-	stageDir, err := createStageDir(root)
+	// 原子发布：先在安装根内创建临时阶段目录，再 rename 为目标。
+	stageDir, err := os.MkdirTemp(root, ".stage-")
 	if err != nil {
 		return InstalledRecord{}, err
 	}
@@ -192,19 +192,6 @@ func resolveDependencies(ctx context.Context, root string, deps []Dependency) er
 		return fmt.Errorf("缺少依赖: %s", strings.Join(missing, "; "))
 	}
 	return nil
-}
-
-// createStageDir 在安装根目录创建临时阶段目录。
-func createStageDir(root string) (string, error) {
-	random := make([]byte, 8)
-	if _, err := rand.Read(random); err != nil {
-		return "", err
-	}
-	path := filepath.Join(root, ".stage-"+hex.EncodeToString(random))
-	if err := os.Mkdir(path, 0o750); err != nil {
-		return "", err
-	}
-	return path, nil
 }
 
 // copyFile 复制文件并保留源权限位。
