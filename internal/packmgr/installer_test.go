@@ -11,7 +11,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/packmgr"
 )
 
-// writeSourcePackage 在临时目录构造源包（manifest.json + entrypoint 工件）。
+// writeSourcePackage 在临时目录构造单组件源包（manifest.json + entrypoint 工件）。
 func writeSourcePackage(t *testing.T, dir, id, version, mode, artifactName string, deps []packmgr.Dependency) {
 	t.Helper()
 	if err := os.MkdirAll(dir, 0o750); err != nil {
@@ -23,7 +23,10 @@ func writeSourcePackage(t *testing.T, dir, id, version, mode, artifactName strin
 	}
 	manifest, err := json.Marshal(packmgr.Manifest{
 		SchemaVersion: packmgr.SchemaVersion, ID: id, Version: version,
-		Mode: mode, Entrypoint: artifactName, Dependencies: deps,
+		Dependencies: deps,
+		Components: []packmgr.Component{{
+			ID: "core", Mode: mode, Entrypoint: artifactName,
+		}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -117,7 +120,8 @@ func TestInstallRejectsInvalidSource(t *testing.T) {
 			os.Remove(filepath.Join(dir, "app.wasm"))
 		}},
 		{name: "entrypoint escapes source dir", mutate: func(dir string) {
-			os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(`{"schema_version":"ailuo.package.v1","id":"demo.pkg","version":"1.0.0","mode":"hosted","entrypoint":"../outside"}`), 0o640)
+			manifest := []byte(`{"schema_version":"ailuo.package.v1","id":"demo.pkg","version":"1.0.0","components":[{"id":"core","mode":"hosted","entrypoint":"../outside"}]}`)
+			os.WriteFile(filepath.Join(dir, "manifest.json"), manifest, 0o640)
 		}},
 	}
 	for _, tc := range cases {

@@ -13,10 +13,10 @@ import (
 	"strings"
 )
 
-// Install 从源包目录或发布 tarball 安装到安装根目录：校验源（manifest.json +
-// entrypoint 工件）、解析依赖（已安装包满足约束）、原子发布
-// manifest+lock+artifact，并回读验证。目标已有同 ID 且版本不同时替换（升级
-// 语义）；版本相同视为重复安装并返回错误。
+// Install 从源包目录或发布 tarball 安装到安装根目录（以整个 Package 为单位）：
+// 校验源（manifest + 每组件 entrypoint 工件）、解析依赖、原子发布
+// manifest+lock+全部组件工件，并回读验证。目标已有同 ID 且版本不同时替换；
+// 版本相同视为重复安装并返回错误。
 func Install(ctx context.Context, root, sourcePath string) (InstalledRecord, error) {
 	sourceDir, cleanup, err := unpackSource(sourcePath)
 	if err != nil {
@@ -50,25 +50,35 @@ func Install(ctx context.Context, root, sourcePath string) (InstalledRecord, err
 	if err := os.WriteFile(filepath.Join(stageDir, "manifest.json"), source.manifestBytes, 0o640); err != nil {
 		return InstalledRecord{}, err
 	}
-	// 写入工件并计算哈希。
-	artifactName := filepath.Base(source.Manifest.Entrypoint)
-	stageArtifact := filepath.Join(stageDir, artifactName)
-	if err := copyFile(source.artifactPath, stageArtifact); err != nil {
-		return InstalledRecord{}, err
+	// 复制每组件工件、计算哈希、为 isolated 组件生成默认进程规格。
+	artifacts := make([]LockedArtifact, 0, len(source.artifacts))
+	for _, artifact := range source.artifacts {
+		artifactName := filepath.Base(artifact.path)
+		stageArtifact := filepath.Join(stageDir, artifactName)
+		if err := copyFile(artifact.path, stageArtifact); err != nil {
+			return InstalledRecord{}, err
+		}
+		artifactDigest, err := HashFile(ctx, stageArtifact, MaxArtifactBytes)
+		if err != nil {
+			return InstalledRecord{}, err
+		}
+		locked := LockedArtifact{
+			ComponentID: artifact.componentID,
+			Path:        filepath.Join(targetDir, artifactName),
+			SHA256:      artifactDigest,
+		}
+		if component, ok := findComponent(source.Manifest, artifact.componentID); ok && component.Mode == ModeIsolated {
+			locked.Process = defaultProcessSpec(component.ID, filepath.Join(targetDir, artifactName), targetDir)
+		}
+		artifacts = append(artifacts, locked)
 	}
-	artifactDigest, err := HashFile(ctx, stageArtifact, MaxArtifactBytes)
-	if err != nil {
-		return InstalledRecord{}, err
-	}
-	// 写入 lock：ArtifactPath 引用发布后的最终路径（stage 目录会被 rename 为目标）。
+	// 写入 lock。
 	manifestDigest := sha256.Sum256(source.manifestBytes)
-	targetArtifact := filepath.Join(targetDir, artifactName)
 	lockBytes, err := json.Marshal(Lock{
 		SchemaVersion: SchemaVersion, PackageID: source.Manifest.ID,
-		PackageVersion: source.Manifest.Version, Mode: source.Manifest.Mode,
+		PackageVersion: source.Manifest.Version,
 		ManifestSHA256: hex.EncodeToString(manifestDigest[:]),
-		ArtifactSHA256: artifactDigest,
-		ArtifactPath:   targetArtifact,
+		Artifacts:      artifacts,
 	})
 	if err != nil {
 		return InstalledRecord{}, err
@@ -88,6 +98,16 @@ func Install(ctx context.Context, root, sourcePath string) (InstalledRecord, err
 		return InstalledRecord{}, fmt.Errorf("安装后验证失败: %w", err)
 	}
 	return record, nil
+}
+
+// defaultProcessSpec 为 isolated 组件生成默认进程规格：可执行文件为工件、
+// 工作目录为包目录、Unix socket 位于包目录内（与工件同名去后缀）。
+func defaultProcessSpec(componentID, artifactPath, workDir string) *ProcessSpec {
+	base := strings.TrimSuffix(filepath.Base(artifactPath), filepath.Ext(artifactPath))
+	return &ProcessSpec{
+		Path: artifactPath, WorkDir: workDir,
+		Address: "unix:" + filepath.Join(workDir, base+"-"+componentID+".sock"),
+	}
 }
 
 // Upgrade 要求包已安装且源目录版本号不同，然后安装。
@@ -126,6 +146,48 @@ func Uninstall(_ context.Context, root, id string) error {
 	return os.RemoveAll(target)
 }
 
+// sourcePackage 是源包目录读取结果：清单字节原样保留以锁定 digest。
+type sourcePackage struct {
+	Manifest      Manifest
+	manifestBytes []byte
+	artifacts     []sourceArtifact
+}
+
+// sourceArtifact 是源包中单个组件的工件。
+type sourceArtifact struct {
+	componentID string
+	path        string
+}
+
+// readSourceManifest 读取源包目录的 manifest.json 与每组件 entrypoint 工件。
+func readSourceManifest(sourceDir string) (sourcePackage, error) {
+	manifestBytes, err := ReadFileLimited(filepath.Join(sourceDir, "manifest.json"), MaxManifestBytes)
+	if err != nil {
+		return sourcePackage{}, err
+	}
+	var manifest Manifest
+	if err := DecodeStrictJSON(manifestBytes, &manifest); err != nil {
+		return sourcePackage{}, err
+	}
+	if err := ValidateManifest(manifest); err != nil {
+		return sourcePackage{}, err
+	}
+	artifacts := make([]sourceArtifact, 0, len(manifest.Components))
+	for _, component := range manifest.Components {
+		artifactPath := filepath.Join(sourceDir, component.Entrypoint)
+		relative, err := filepath.Rel(sourceDir, artifactPath)
+		if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+			return sourcePackage{}, fmt.Errorf("组件 %s entrypoint 超出源目录", component.ID)
+		}
+		info, err := os.Lstat(artifactPath)
+		if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > MaxArtifactBytes {
+			return sourcePackage{}, fmt.Errorf("组件 %s entrypoint 工件无效: %w", component.ID, err)
+		}
+		artifacts = append(artifacts, sourceArtifact{componentID: component.ID, path: artifactPath})
+	}
+	return sourcePackage{Manifest: manifest, manifestBytes: manifestBytes, artifacts: artifacts}, nil
+}
+
 // unpackSource 解析安装源：目录直接使用；.tgz 发布物严格解压到临时目录。
 func unpackSource(source string) (string, func(), error) {
 	info, err := os.Stat(source)
@@ -147,43 +209,6 @@ func unpackSource(source string) (string, func(), error) {
 		return "", nil, err
 	}
 	return temp, func() { os.RemoveAll(temp) }, nil
-}
-
-// sourcePackage 是源包目录读取结果：清单字节原样保留以锁定 digest。
-type sourcePackage struct {
-	Manifest      Manifest
-	artifactPath  string
-	manifestBytes []byte
-}
-
-// readSourceManifest 读取源包目录的 manifest.json 与 entrypoint 工件。
-func readSourceManifest(sourceDir string) (sourcePackage, error) {
-	manifestBytes, err := ReadFileLimited(filepath.Join(sourceDir, "manifest.json"), MaxManifestBytes)
-	if err != nil {
-		return sourcePackage{}, err
-	}
-	var manifest Manifest
-	if err := DecodeStrictJSON(manifestBytes, &manifest); err != nil {
-		return sourcePackage{}, err
-	}
-	if err := ValidateManifest(manifest); err != nil {
-		return sourcePackage{}, err
-	}
-	if manifest.Entrypoint == "" {
-		return sourcePackage{}, fmt.Errorf("清单缺少 entrypoint")
-	}
-	artifactPath := filepath.Join(sourceDir, manifest.Entrypoint)
-	relative, err := filepath.Rel(sourceDir, artifactPath)
-	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-		return sourcePackage{}, fmt.Errorf("entrypoint 超出源目录")
-	}
-	info, err := os.Lstat(artifactPath)
-	if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > MaxArtifactBytes {
-		return sourcePackage{}, fmt.Errorf("entrypoint 工件无效: %w", err)
-	}
-	return sourcePackage{
-		Manifest: manifest, artifactPath: artifactPath, manifestBytes: manifestBytes,
-	}, nil
 }
 
 // resolveDependencies 检查每个依赖在安装根内存在已安装包且版本满足约束。
