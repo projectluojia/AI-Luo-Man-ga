@@ -41,17 +41,21 @@ func Pack(ctx context.Context, sourceDir, outputDir string) (string, error) {
 	if err := writeEntry("manifest.json", int64(len(source.manifestBytes)), bytes.NewReader(source.manifestBytes)); err != nil {
 		return "", err
 	}
-	artifact, err := os.Open(source.artifactPath)
-	if err != nil {
-		return "", err
-	}
-	defer artifact.Close()
-	info, err := artifact.Stat()
-	if err != nil {
-		return "", err
-	}
-	if err := writeEntry(filepath.Base(source.Manifest.Entrypoint), info.Size(), artifact); err != nil {
-		return "", err
+	for _, artifact := range source.artifacts {
+		file, err := os.Open(artifact.path)
+		if err != nil {
+			return "", err
+		}
+		info, err := file.Stat()
+		if err != nil {
+			file.Close()
+			return "", err
+		}
+		err = writeEntry(filepath.Base(artifact.path), info.Size(), file)
+		file.Close()
+		if err != nil {
+			return "", err
+		}
 	}
 	// tar 尾 + gzip 尾按序关闭；defer 的 file.Close 只负责文件描述符。
 	if err := tarWriter.Close(); err != nil {
