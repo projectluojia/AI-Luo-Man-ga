@@ -13,6 +13,7 @@ import (
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/packmgr"
 )
 
 // TestRuntimeHostProductionWiring 验证外部 Runtime Host 产品接线：真实安装目录
@@ -31,25 +32,32 @@ func TestRuntimeHostProductionWiring(t *testing.T) {
 	if err := os.WriteFile(artifactPath, artifactBytes, 0o640); err != nil {
 		t.Fatal(err)
 	}
-	installed := loader.InstalledManifest{
-		SchemaVersion: loader.InstallSchemaVersion,
-		Runtime: loader.InstalledRuntimeSpec{
-			ID: "strings.tool", Version: "1.0.0", Mode: loader.ModeHosted, Pin: true,
-		},
-		Tools: []registry.ToolSpec{{
+	extensions, err := json.Marshal(map[string]any{
+		"tools": []registry.ToolSpec{{
 			ID: "strings.len", Version: "1.0.0", Description: "字符串长度",
 			InputSchemaJSON: `{"type":"object","properties":{"value":{"type":"string"}},"required":["value"],"additionalProperties":false}`,
 			SideEffect:      registry.SideEffectRead,
 		}},
-		Service: registry.ServiceSpec{
+		"service": registry.ServiceSpec{
 			ID: "strings.tool", Version: "1.0.0", Description: "字符串工具",
 			ToolDependencies: []string{"strings.len"},
 		},
-		Capabilities: []registry.CapabilitySpec{{
+		"capabilities": []registry.CapabilitySpec{{
 			ID: "strings.len.cap", Version: "1.0.0", Name: "字符串长度",
 			Description: "字符串长度", ServiceID: "strings.tool",
 			InputSchemaJSON: `{"type":"object","properties":{"value":{"type":"string"}},"required":["value"],"additionalProperties":false}`,
 			SideEffect:      registry.SideEffectRead,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	installed := packmgr.Manifest{
+		SchemaVersion: packmgr.SchemaVersion, ID: "strings.tool", Version: "1.0.0",
+		Pin: true, Extensions: extensions,
+		Components: []packmgr.Component{{
+			ID: "strings.tool", Mode: loader.ModeHosted, Entrypoint: "strings.tool.wasm",
+			Exports: []string{"strings.len.cap"},
 		}},
 	}
 	manifest, err := json.Marshal(installed)
@@ -61,11 +69,13 @@ func TestRuntimeHostProductionWiring(t *testing.T) {
 	}
 	manifestDigest := sha256.Sum256(manifest)
 	artifactDigest := sha256.Sum256(artifactBytes)
-	lock := loader.InstalledLock{
-		SchemaVersion: loader.InstallSchemaVersion, RuntimeID: "strings.tool",
-		RuntimeVersion: "1.0.0", Mode: loader.ModeHosted,
+	lock := packmgr.Lock{
+		SchemaVersion: packmgr.SchemaVersion, PackageID: "strings.tool",
+		PackageVersion: "1.0.0",
 		ManifestSHA256: hex.EncodeToString(manifestDigest[:]),
-		ArtifactSHA256: hex.EncodeToString(artifactDigest[:]), ArtifactPath: artifactPath,
+		Artifacts: []packmgr.LockedArtifact{{
+			ComponentID: "strings.tool", Path: artifactPath, SHA256: hex.EncodeToString(artifactDigest[:]),
+		}},
 	}
 	lockBytes, err := json.Marshal(lock)
 	if err != nil {

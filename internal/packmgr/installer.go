@@ -1,0 +1,272 @@
+package packmgr
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+)
+
+// Install 从源包目录或发布 tarball 安装到安装根目录（以整个 Package 为单位）：
+// 校验源（manifest + 每组件 entrypoint 工件）、解析依赖、原子发布
+// manifest+lock+全部组件工件，并回读验证。目标已有同 ID 且版本不同时替换；
+// 版本相同视为重复安装并返回错误。
+func Install(ctx context.Context, root, sourcePath string) (InstalledRecord, error) {
+	sourceDir, cleanup, err := unpackSource(sourcePath)
+	if err != nil {
+		return InstalledRecord{}, err
+	}
+	if cleanup != nil {
+		defer cleanup()
+	}
+	source, err := readSourceManifest(sourceDir)
+	if err != nil {
+		return InstalledRecord{}, err
+	}
+	if err := os.MkdirAll(root, 0o750); err != nil {
+		return InstalledRecord{}, err
+	}
+	if err := resolveDependencies(ctx, root, source.Manifest.Dependencies); err != nil {
+		return InstalledRecord{}, err
+	}
+	targetDir := filepath.Join(root, source.Manifest.ID)
+	if existing, err := ReadInstalled(ctx, targetDir); err == nil &&
+		existing.Manifest.Version == source.Manifest.Version {
+		return InstalledRecord{}, fmt.Errorf("包 %s@%s 已安装", source.Manifest.ID, source.Manifest.Version)
+	}
+	// 原子发布：先在安装根内创建临时阶段目录，再 rename 为目标。
+	stageDir, err := os.MkdirTemp(root, ".stage-")
+	if err != nil {
+		return InstalledRecord{}, err
+	}
+	defer os.RemoveAll(stageDir)
+	// 写入 manifest（保留源字节，lock 中的 manifest digest 必须一致）。
+	if err := os.WriteFile(filepath.Join(stageDir, "manifest.json"), source.manifestBytes, 0o640); err != nil {
+		return InstalledRecord{}, err
+	}
+	// 复制每组件工件、计算哈希、为 isolated 组件生成默认进程规格。
+	artifacts := make([]LockedArtifact, 0, len(source.artifacts))
+	for _, artifact := range source.artifacts {
+		artifactName := filepath.Base(artifact.path)
+		stageArtifact := filepath.Join(stageDir, artifactName)
+		if err := copyFile(artifact.path, stageArtifact); err != nil {
+			return InstalledRecord{}, err
+		}
+		artifactDigest, err := HashFile(ctx, stageArtifact, MaxArtifactBytes)
+		if err != nil {
+			return InstalledRecord{}, err
+		}
+		locked := LockedArtifact{
+			ComponentID: artifact.componentID,
+			Path:        filepath.Join(targetDir, artifactName),
+			SHA256:      artifactDigest,
+		}
+		if component, ok := findComponent(source.Manifest, artifact.componentID); ok && component.Mode == ModeIsolated {
+			locked.Process = defaultProcessSpec(component.ID, filepath.Join(targetDir, artifactName), targetDir)
+		}
+		artifacts = append(artifacts, locked)
+	}
+	// 写入 lock。
+	manifestDigest := sha256.Sum256(source.manifestBytes)
+	lockBytes, err := json.Marshal(Lock{
+		SchemaVersion: SchemaVersion, PackageID: source.Manifest.ID,
+		PackageVersion: source.Manifest.Version,
+		ManifestSHA256: hex.EncodeToString(manifestDigest[:]),
+		Artifacts:      artifacts,
+	})
+	if err != nil {
+		return InstalledRecord{}, err
+	}
+	if err := os.WriteFile(filepath.Join(stageDir, "lock.json"), lockBytes, 0o640); err != nil {
+		return InstalledRecord{}, err
+	}
+	// 原子发布：目标先移除再 rename（Windows 不支持 rename 覆盖目录）。
+	if err := os.RemoveAll(targetDir); err != nil {
+		return InstalledRecord{}, err
+	}
+	if err := os.Rename(stageDir, targetDir); err != nil {
+		return InstalledRecord{}, err
+	}
+	record, err := ReadInstalled(ctx, targetDir)
+	if err != nil {
+		return InstalledRecord{}, fmt.Errorf("安装后验证失败: %w", err)
+	}
+	return record, nil
+}
+
+// defaultProcessSpec 为 isolated 组件生成默认进程规格：可执行文件为工件、
+// 工作目录为包目录、Unix socket 位于包目录内（与工件同名去后缀）。
+func defaultProcessSpec(componentID, artifactPath, workDir string) *ProcessSpec {
+	base := strings.TrimSuffix(filepath.Base(artifactPath), filepath.Ext(artifactPath))
+	return &ProcessSpec{
+		Path: artifactPath, WorkDir: workDir,
+		Address: "unix:" + filepath.Join(workDir, base+"-"+componentID+".sock"),
+	}
+}
+
+// Upgrade 要求包已安装且源目录版本号不同，然后安装。
+func Upgrade(ctx context.Context, root, id, sourceDir string) (InstalledRecord, error) {
+	existing, err := ReadInstalled(ctx, filepath.Join(root, id))
+	if err != nil {
+		return InstalledRecord{}, fmt.Errorf("包 %q 未安装", id)
+	}
+	source, err := readSourceManifest(sourceDir)
+	if err != nil {
+		return InstalledRecord{}, err
+	}
+	if source.Manifest.ID != id {
+		return InstalledRecord{}, fmt.Errorf("源目录包 ID %q 与升级目标 %q 不一致", source.Manifest.ID, id)
+	}
+	if source.Manifest.Version == existing.Manifest.Version {
+		return InstalledRecord{}, fmt.Errorf("包 %s 已安装版本 %s，升级目标版本相同", id, existing.Manifest.Version)
+	}
+	return Install(ctx, root, sourceDir)
+}
+
+// Uninstall 删除已安装包目录。仅当目录包含 manifest.json 时删除（安全防护）。
+func Uninstall(_ context.Context, root, id string) error {
+	target := filepath.Join(root, id)
+	info, err := os.Lstat(target)
+	if errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("包 %q 未安装", id)
+	}
+	if err != nil || !info.IsDir() {
+		return fmt.Errorf("删除失败: %w", err)
+	}
+	manifestInfo, err := os.Lstat(filepath.Join(target, "manifest.json"))
+	if err != nil || !manifestInfo.Mode().IsRegular() {
+		return fmt.Errorf("目录 %q 不是安装包（缺少 manifest.json）", target)
+	}
+	return os.RemoveAll(target)
+}
+
+// sourcePackage 是源包目录读取结果：清单字节原样保留以锁定 digest。
+type sourcePackage struct {
+	Manifest      Manifest
+	manifestBytes []byte
+	artifacts     []sourceArtifact
+}
+
+// sourceArtifact 是源包中单个组件的工件。
+type sourceArtifact struct {
+	componentID string
+	path        string
+}
+
+// readSourceManifest 读取源包目录的 manifest.json 与每组件 entrypoint 工件。
+func readSourceManifest(sourceDir string) (sourcePackage, error) {
+	manifestBytes, err := ReadFileLimited(filepath.Join(sourceDir, "manifest.json"), MaxManifestBytes)
+	if err != nil {
+		return sourcePackage{}, err
+	}
+	var manifest Manifest
+	if err := DecodeStrictJSON(manifestBytes, &manifest); err != nil {
+		return sourcePackage{}, err
+	}
+	if err := ValidateManifest(manifest); err != nil {
+		return sourcePackage{}, err
+	}
+	artifacts := make([]sourceArtifact, 0, len(manifest.Components))
+	for _, component := range manifest.Components {
+		artifactPath := filepath.Join(sourceDir, component.Entrypoint)
+		relative, err := filepath.Rel(sourceDir, artifactPath)
+		if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+			return sourcePackage{}, fmt.Errorf("组件 %s entrypoint 超出源目录", component.ID)
+		}
+		info, err := os.Lstat(artifactPath)
+		if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > MaxArtifactBytes {
+			return sourcePackage{}, fmt.Errorf("组件 %s entrypoint 工件无效: %w", component.ID, err)
+		}
+		artifacts = append(artifacts, sourceArtifact{componentID: component.ID, path: artifactPath})
+	}
+	return sourcePackage{Manifest: manifest, manifestBytes: manifestBytes, artifacts: artifacts}, nil
+}
+
+// unpackSource 解析安装源：目录直接使用；.tgz 发布物严格解压到临时目录。
+func unpackSource(source string) (string, func(), error) {
+	info, err := os.Stat(source)
+	if err != nil {
+		return "", nil, err
+	}
+	if info.IsDir() {
+		return source, nil, nil
+	}
+	if !strings.HasSuffix(strings.ToLower(source), ".tgz") {
+		return "", nil, fmt.Errorf("安装源必须是包目录或 .tgz 发布物")
+	}
+	temp, err := os.MkdirTemp("", "ailuo-unpack-")
+	if err != nil {
+		return "", nil, err
+	}
+	if err := unpackTarball(source, temp); err != nil {
+		os.RemoveAll(temp)
+		return "", nil, err
+	}
+	return temp, func() { os.RemoveAll(temp) }, nil
+}
+
+// resolveDependencies 检查每个依赖在安装根内存在已安装包且版本满足约束。
+func resolveDependencies(ctx context.Context, root string, deps []Dependency) error {
+	if len(deps) == 0 {
+		return nil
+	}
+	installed, err := ListInstalled(ctx, root)
+	if err != nil {
+		return err
+	}
+	versionByID := make(map[string]string, len(installed))
+	for _, record := range installed {
+		versionByID[record.Manifest.ID] = record.Manifest.Version
+	}
+	var missing []string
+	for _, dep := range deps {
+		versionText, ok := versionByID[dep.ID]
+		if !ok {
+			missing = append(missing, dep.ID+" (未安装)")
+			continue
+		}
+		candidate, err := ParseVersion(versionText)
+		if err != nil {
+			return fmt.Errorf("已安装包 %s 版本 %q 非法: %w", dep.ID, versionText, err)
+		}
+		constraint, err := ParseConstraint(dep.Constraint)
+		if err != nil {
+			return fmt.Errorf("依赖约束 %s@%s 非法: %w", dep.ID, dep.Constraint, err)
+		}
+		if !constraint.Matches(candidate) {
+			missing = append(missing, fmt.Sprintf("%s@%s (已安装 %s)", dep.ID, dep.Constraint, versionText))
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("缺少依赖: %s", strings.Join(missing, "; "))
+	}
+	return nil
+}
+
+// copyFile 复制文件并保留源权限位。
+func copyFile(src, dst string) error {
+	source, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer source.Close()
+	info, err := source.Stat()
+	if err != nil {
+		return err
+	}
+	dest, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, info.Mode().Perm())
+	if err != nil {
+		return err
+	}
+	defer dest.Close()
+	if _, err := io.Copy(dest, source); err != nil {
+		return err
+	}
+	return nil
+}

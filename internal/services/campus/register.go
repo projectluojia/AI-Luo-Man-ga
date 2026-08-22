@@ -2,6 +2,7 @@ package campus
 
 import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/packmgr"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/tools/bus"
 )
 
@@ -15,13 +16,24 @@ func Host(store bus.Store) (*loader.WasmHost, error) {
 	})
 }
 
-// Record 返回 campus 的安装清单（运行时 + Tool + Service + Capability 的单一来源），
-// 供统一 Loader 注册内置包使用。
+// Record 返回 campus 的安装清单（运行时 + Tool + Service + Capability +
+// storage 声明的单一来源），供统一 Loader 注册内置包使用。campus 是单组件
+// 包：组件 ID 为 "bus"，全部 Capability 由其导出。
 func Record() loader.InstalledRecord {
 	return loader.InstalledRecord{
+		Directory:    "",
+		ArtifactPath: "",
 		Runtime:      Manifest(),
+		PackageID:    ServiceID,
+		ComponentID:  "bus",
 		Tools:        bus.ToolSpecs(),
 		Service:      ServiceSpec(),
 		Capabilities: CapabilitySpecs(),
+		Storage: &packmgr.Storage{
+			Namespace:     "campus/bus",
+			SchemaVersion: 1,
+			Sensitivity:   packmgr.SensitivityPublic,
+			Retention:     packmgr.RetentionPermanent,
+		},
 	}
 }

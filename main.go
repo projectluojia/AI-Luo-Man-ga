@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -39,6 +40,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/session"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/task"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/packmgr"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/promptcatalog"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/agent"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus"
@@ -54,7 +56,12 @@ import (
 func main() {
 	loadDotEnv()
 	handled, err := runMaintenanceCommand(os.Args[1:], os.Stdout)
-	if err == nil && handled {
+	if handled {
+		if err != nil {
+			// CLI/维护命令直接输出可读错误到 stderr（公共 API 的泄密约束不适用于本机 CLI）。
+			_, _ = fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
 		return
 	}
 	if err == nil {
@@ -187,9 +194,150 @@ func runMaintenanceCommand(arguments []string, output io.Writer) (bool, error) {
 		}
 		_, err = fmt.Fprintf(output, "身份解绑完成：app=%s 平台=%s space=%s platform_user=%s\n", *appID, *platform, *space, *platformUser)
 		return true, err
+	case "install", "upgrade", "uninstall", "list", "pack", "publish":
+		return runPackageCommand(arguments, output)
 	default:
 		return true, fmt.Errorf("configuration error: unknown command")
 	}
+}
+
+// runPackageCommand 执行包管理 CLI：install 支持本地目录/tarball/GitHub
+// Release 源（owner/repo[@约束]），upgrade/uninstall/list/pack/publish 见各分支。
+func runPackageCommand(arguments []string, output io.Writer) (bool, error) {
+	command := arguments[0]
+	flags := flag.NewFlagSet(command, flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	root := flags.String("root", os.Getenv("AILUO_RUNTIME_INSTALL_ROOT"), "安装根目录（默认 AILUO_RUNTIME_INSTALL_ROOT）")
+	repo := flags.String("repo", "", "GitHub 仓库（owner/repo），publish 使用")
+	if err := flags.Parse(arguments[1:]); err != nil {
+		return true, fmt.Errorf("configuration error: %s", err)
+	}
+	if *root == "" && command != "pack" && command != "publish" {
+		return true, fmt.Errorf("configuration error: %s requires --root 或 AILUO_RUNTIME_INSTALL_ROOT", command)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	switch command {
+	case "install":
+		if flags.NArg() != 1 {
+			return true, fmt.Errorf("configuration error: install requires exactly one source package directory")
+		}
+		source := flags.Arg(0)
+		owner, name, constraint, isRegistry := splitRegistryRef(source)
+		var record packmgr.InstalledRecord
+		var err error
+		if !localPathExists(source) && isRegistry {
+			record, err = packmgr.InstallFromRelease(ctx, *root, packmgr.NewGitHubClient(), owner, name, constraint)
+		} else {
+			record, err = packmgr.Install(ctx, *root, source)
+		}
+		if err != nil {
+			return true, err
+		}
+		if _, err := fmt.Fprintf(output, "已安装 %s@%s（%s）\n", record.Manifest.ID, record.Manifest.Version, record.Manifest.Components[0].Mode); err != nil {
+			return true, err
+		}
+		return true, nil
+	case "upgrade":
+		if flags.NArg() != 2 {
+			return true, fmt.Errorf("configuration error: upgrade requires package id and source package directory")
+		}
+		record, err := packmgr.Upgrade(ctx, *root, flags.Arg(0), flags.Arg(1))
+		if err != nil {
+			return true, err
+		}
+		_, err = fmt.Fprintf(output, "已升级 %s@%s（%s）\n", record.Manifest.ID, record.Manifest.Version, record.Manifest.Components[0].Mode)
+		return true, err
+	case "uninstall":
+		if flags.NArg() != 1 {
+			return true, fmt.Errorf("configuration error: uninstall requires exactly one package id")
+		}
+		if err := packmgr.Uninstall(ctx, *root, flags.Arg(0)); err != nil {
+			return true, err
+		}
+		if _, err := fmt.Fprintf(output, "已卸载 %s\n", flags.Arg(0)); err != nil {
+			return true, err
+		}
+		return true, nil
+	case "pack":
+		if flags.NArg() < 1 || flags.NArg() > 2 {
+			return true, fmt.Errorf("configuration error: pack requires source package directory [and optional output directory]")
+		}
+		outputDir := "."
+		if *root != "" {
+			outputDir = *root
+		}
+		if flags.NArg() == 2 {
+			outputDir = flags.Arg(1)
+		}
+		tarballPath, err := packmgr.Pack(ctx, flags.Arg(0), outputDir)
+		if err != nil {
+			return true, err
+		}
+		if _, err := fmt.Fprintf(output, "已打包 %s\n", tarballPath); err != nil {
+			return true, err
+		}
+		return true, nil
+	case "publish":
+		if flags.NArg() != 1 {
+			return true, fmt.Errorf("configuration error: publish requires exactly one source package directory")
+		}
+		owner, name, _, ok := splitRegistryRef(*repo)
+		if !ok || owner == "" || name == "" {
+			return true, fmt.Errorf("configuration error: publish requires --repo owner/repo")
+		}
+		htmlURL, err := packmgr.NewGitHubClient().Publish(ctx, owner, name, flags.Arg(0))
+		if err != nil {
+			return true, err
+		}
+		if _, err := fmt.Fprintf(output, "已发布 %s\n", htmlURL); err != nil {
+			return true, err
+		}
+		return true, nil
+	default: // list
+		if flags.NArg() != 0 {
+			return true, fmt.Errorf("configuration error: list takes no positional arguments")
+		}
+		records, err := packmgr.ListInstalled(ctx, *root)
+		if err != nil {
+			return true, err
+		}
+		if len(records) == 0 {
+			if _, err := fmt.Fprintln(output, "安装根目录为空"); err != nil {
+				return true, err
+			}
+			return true, nil
+		}
+		for _, record := range records {
+			pin := ""
+			if record.Manifest.Pin {
+				pin = " [pin]"
+			}
+			if _, err := fmt.Fprintf(output, "%s@%s\t%s%s\n", record.Manifest.ID, record.Manifest.Version, record.Manifest.Components[0].Mode, pin); err != nil {
+				return true, err
+			}
+		}
+		return true, nil
+	}
+}
+
+// registryRefPattern 匹配 GitHub Release 源：owner/repo[@约束]。
+var registryRefPattern = regexp.MustCompile(`^([A-Za-z0-9._-]+)/([A-Za-z0-9._-]+)(?:@(.+))?$`)
+
+// splitRegistryRef 解析 owner/repo[@constraint] 注册表引用；本地存在的路径
+// 由调用方先排除（本地路径优先）。
+func splitRegistryRef(source string) (owner, repo, constraint string, ok bool) {
+	match := registryRefPattern.FindStringSubmatch(source)
+	if match == nil {
+		return "", "", "", false
+	}
+	return match[1], match[2], match[3], true
+}
+
+// localPathExists 判断源是否为已存在的本地文件或目录。
+func localPathExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 // identityProvision 是 identity-bind 命令的输入。
@@ -240,7 +388,7 @@ func runRuntimeHostCommand(arguments []string, output io.Writer) (bool, error) {
 	if !filepath.IsAbs(*installRoot) || filepath.Clean(*installRoot) != *installRoot {
 		return true, fmt.Errorf("configuration error: --install-root must be a clean absolute path")
 	}
-	if !loader.IsLocalRuntimeAddress(*address) {
+	if !packmgr.IsLocalRuntimeAddress(*address) {
 		return true, fmt.Errorf("configuration error: --address must be loopback or an absolute unix socket")
 	}
 	return true, serveRuntimeHost(*installRoot, *address, output)
@@ -556,7 +704,7 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 				WorkDir:    workDir,
 				Address:    config.agentAddress,
 				Env:        agentEnvironment(config),
-				Limits:     loader.ProcessLimits{},
+				Limits:     packmgr.ProcessLimits{},
 			}, nil
 		},
 		Spawn:          config.manageAgent,
@@ -931,7 +1079,7 @@ func loadConfig() (config, error) {
 		return config{}, fmt.Errorf("configuration error: resolve python path: %w", err)
 	}
 	result.pythonPath = absolutePython
-	if !loader.IsLocalRuntimeAddress(result.configUIAddress) {
+	if !packmgr.IsLocalRuntimeAddress(result.configUIAddress) {
 		return config{}, fmt.Errorf("configuration error: AILUO_CONFIG_UI_ADDRESS must be loopback")
 	}
 	if result.loadDemoData && (strings.EqualFold(result.environment, "production") || strings.EqualFold(result.environment, "prod")) {

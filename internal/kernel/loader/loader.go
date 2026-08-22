@@ -16,6 +16,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/id"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/packmgr"
 )
 
 const (
@@ -54,6 +55,9 @@ var (
 	versionPattern  = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$`)
 )
 
+// Manifest 是运行时的注册与装载清单。ID/Version/Mode 是身份字段；Role、
+// Pin、IdleTTL、LockedDigest 与 HostFunctions 是声明字段——装载与绑定校验
+// 以完整清单为准，工件读取只依赖身份字段。
 type Manifest struct {
 	ID           string
 	Version      string
@@ -62,6 +66,9 @@ type Manifest struct {
 	LockedDigest string
 	Pin          bool
 	IdleTTL      time.Duration
+	// HostFunctions 是包声明的宿主函数依赖（仅 hosted 有意义）：guest 只可
+	// 调用清单声明且宿主提供的宿主函数，未声明调用在加载期被拒绝。
+	HostFunctions []packmgr.HostedFunctionDecl
 }
 
 type Description struct {
@@ -104,6 +111,7 @@ type entry struct {
 	manifest Manifest
 	// host 是注册时按 Verify 精确绑定、能加载该清单的宿主；同一模式存在多个
 	// 宿主时，绑定结果在注册期一次性确定并固化，加载期不再重新选择。
+	// Upgrade 切换版本时随候选重新绑定。
 	host Host
 
 	mu         sync.Mutex
@@ -111,14 +119,34 @@ type entry struct {
 	runtime    Runtime
 	inFlight   int
 	transition chan struct{}
+	// retired 是升级后被替换、仍在 drain 的旧版本运行时；在途调用排空后停止。
+	retired []*retiredRuntime
+}
+
+// retiredRuntime 是被升级替换的旧版本运行时：inFlight 是其剩余在途调用数，
+// 归零后经 stopOnce 恰好停止一次；stopped 通道供 Shutdown 有界等待。
+// group 不为 nil 时表示该成员属于退役组，停止由组统一触发。
+type retiredRuntime struct {
+	runtime  Runtime
+	inFlight int
+	stopOnce sync.Once
+	stopped  chan struct{}
+	group    *retiredGroup
 }
 
 type Manager struct {
 	mu        sync.RWMutex
 	entries   map[string]*entry
 	hosts     map[string][]Host
+	packages  map[string]*packageGroup
 	accepting bool
 	now       func() time.Time
+}
+
+// packageGroup 是一个包的组件组：order 按依赖拓扑排列（Provider 在前）。
+type packageGroup struct {
+	id    string
+	order []*entry
 }
 
 // New 构造统一 Loader：一个 Manager 持有全部运行模式的宿主，模式内部允许
@@ -141,6 +169,7 @@ func New(hosts ...Host) (*Manager, error) {
 	return &Manager{
 		entries:   make(map[string]*entry),
 		hosts:     grouped,
+		packages:  make(map[string]*packageGroup),
 		accepting: true,
 		now:       time.Now,
 	}, nil
@@ -232,6 +261,19 @@ func (m *Manager) RegisterBatch(ctx context.Context, manifests []Manifest) error
 		}
 	}
 	return nil
+}
+
+// stopRetiredRuntime 恰好停止一次旧版本运行时，并在停止后关闭 stopped 通道。
+func stopRetiredRuntime(retired *retiredRuntime) {
+	retired.stopOnce.Do(func() {
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(context.Background()), 5*time.Second)
+		defer cancel()
+		stopErr := retired.runtime.Stop(ctx)
+		close(retired.stopped)
+		if stopErr != nil {
+			observe.Error(ctx, "升级后旧版本运行时停止失败", stopErr)
+		}
+	})
 }
 
 func (m *Manager) rollbackRegistered(manifests []Manifest) error {
@@ -456,10 +498,33 @@ func (l *Lease) Release() {
 		return
 	}
 	l.once.Do(func() {
-		l.entry.mu.Lock()
-		l.entry.inFlight--
-		l.entry.mu.Unlock()
+		item := l.entry
+		item.mu.Lock()
+		item.inFlight--
+		var retired *retiredRuntime
+		if l.runtime != item.runtime {
+			for _, candidate := range item.retired {
+				if candidate.runtime == l.runtime {
+					retired = candidate
+					break
+				}
+			}
+			if retired != nil {
+				retired.inFlight--
+			}
+		}
+		drained := retired != nil && retired.inFlight <= 0
+		item.mu.Unlock()
 		observe.DefaultMetrics().RuntimeCallStopped()
+		if drained {
+			// 升级替换的旧版本在途调用已排空：组员交给退役组协调（反序停止），
+			// 独立成员直接停止（恰好一次）。
+			if retired.group != nil {
+				retired.group.memberDrained()
+			} else {
+				stopRetiredRuntime(retired)
+			}
+		}
 	})
 }
 
@@ -663,10 +728,31 @@ func (m *Manager) Shutdown(ctx context.Context) error {
 	for _, item := range items {
 		item.mu.Lock()
 		ready := item.state == StateReady || (item.state == StateFailed && item.runtime != nil)
+		retired := append([]*retiredRuntime(nil), item.retired...)
 		item.mu.Unlock()
 		if ready {
 			if err := m.unload(ctx, item); err != nil {
 				result = append(result, err)
+			}
+		}
+		// 升级替换的旧版本在 inFlight 归零后已触发停止；此处兜底再次触发
+		// 并等待其完成，避免在途全部释放前 Shutdown 提前返回。
+		for _, old := range retired {
+			if old.inFlight <= 0 {
+				stopRetiredRuntime(old)
+			}
+		}
+	}
+	// 有界等待升级替换的旧版本停止完成。
+	for _, item := range items {
+		item.mu.Lock()
+		retired := append([]*retiredRuntime(nil), item.retired...)
+		item.mu.Unlock()
+		for _, old := range retired {
+			select {
+			case <-old.stopped:
+			case <-ctx.Done():
+				return errors.Join(append(result, ctx.Err())...)
 			}
 		}
 	}
@@ -693,10 +779,16 @@ func (m *Manager) resolve(id string) (*entry, error) {
 }
 
 func validateManifest(manifest Manifest) error {
-	if !stableIDPattern.MatchString(manifest.ID) || !versionPattern.MatchString(manifest.Version) ||
+	if !stableIDPattern.MatchString(manifest.ID) ||
 		(manifest.Mode != ModeHosted && manifest.Mode != ModeIsolated) ||
 		(manifest.Role != RoleCapability && manifest.Role != RoleExecutor) ||
 		manifest.IdleTTL < 0 || len(manifest.LockedDigest) != 64 {
+		return ErrInvalidManifest
+	}
+	if _, err := packmgr.ParseVersion(manifest.Version); err != nil {
+		return ErrInvalidManifest
+	}
+	if err := packmgr.ValidateHostedFunctions(manifest.HostFunctions); err != nil {
 		return ErrInvalidManifest
 	}
 	digest, err := hex.DecodeString(manifest.LockedDigest)

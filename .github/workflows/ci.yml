@@ -114,6 +114,15 @@ jobs:
           uv run --project agent --locked python -m grpc_tools.protoc -I proto --python_out=agent/generated --grpc_python_out=agent/generated proto/executor.proto
           git diff --exit-code
 
+  # 包发布流水线冒烟：strings.tool 构建工件 → pack → tarball 安装 → 列表校验。
+  # 复用 package-publish.yml，保证"构建到发布物可安装"的闭环在每次 PR 都跑通。
+  package-pipeline:
+    name: package-pipeline
+    uses: ./.github/workflows/package-publish.yml
+    with:
+      package-dir: extensions/strings.tool
+      build-command: ./build.sh
+
   # Docker Compose 编排语法校验（QQ OneBot 容器）。
   compose-config:
     name: compose-config

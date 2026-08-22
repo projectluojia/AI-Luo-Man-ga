@@ -10,6 +10,7 @@ import (
 	executorv1 "github.com/projectluojia/AI-Luo-Man-ga/gen/executorv1"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/executor"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/packmgr"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -21,7 +22,7 @@ type Spec struct {
 	WorkDir    string
 	Address    string
 	Env        []string
-	Limits     loader.ProcessLimits
+	Limits     packmgr.ProcessLimits
 }
 
 // Config 装配内置 AI 执行者宿主。
@@ -109,7 +110,7 @@ func (h *Host) Load(ctx context.Context, manifest loader.Manifest) (loader.Runti
 	}
 	var process *loader.Process
 	if h.config.Spawn {
-		process, err = loader.StartProcess(ctx, loader.ProcessSpec{
+		process, err = loader.StartProcess(ctx, packmgr.ProcessSpec{
 			Path:    spec.PythonPath,
 			Args:    []string{"-m", "agent.runtime", "--listen", spec.Address},
 			Env:     spec.Env,
@@ -138,7 +139,7 @@ func (h *Host) Load(ctx context.Context, manifest loader.Manifest) (loader.Runti
 // validateSpec 校验 agent 进程规格：监听地址必须是 loopback、限额在合理上限内；
 // Spawn 模式额外要求绝对 python 路径与可选绝对工作目录。
 func validateSpec(spec Spec, spawn bool) error {
-	if !loader.IsLocalRuntimeAddress(spec.Address) || !loader.ValidProcessLimits(spec.Limits) {
+	if !packmgr.IsLocalRuntimeAddress(spec.Address) || !packmgr.ValidProcessLimits(spec.Limits) {
 		return loader.ErrInvalidProcessSpec
 	}
 	if spawn {
