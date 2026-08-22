@@ -37,8 +37,9 @@ permissions:
 
 jobs:
   package:
+    # 发布 job 需要写 contents（gh release create）；PR 冒烟运行同为只读命令。
     permissions:
-      contents: ${{ inputs.tag-required && 'write' || 'read' }}
+      contents: write
     name: package
     runs-on: ubuntu-latest
     timeout-minutes: 15
