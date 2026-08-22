@@ -39,8 +39,11 @@ func TestPackAndInstallFromTarball(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadInstalled: %v", err)
 	}
-	if reloaded.ArtifactPath != filepath.Join(root, "demo.pkg", "app.wasm") {
-		t.Fatalf("artifact path = %s", reloaded.ArtifactPath)
+	if len(reloaded.Lock.Artifacts) != 1 || reloaded.Lock.Artifacts[0].ComponentID != "core" {
+		t.Fatalf("Lock.Artifacts = %+v", reloaded.Lock.Artifacts)
+	}
+	if reloaded.Lock.Artifacts[0].Path != filepath.Join(root, "demo.pkg", "app.wasm") {
+		t.Fatalf("artifact path = %s", reloaded.Lock.Artifacts[0].Path)
 	}
 }
 

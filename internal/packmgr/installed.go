@@ -20,8 +20,8 @@ const (
 )
 
 // ReadInstalled 从中性角度读取安装目录：严格解析 manifest + lock、校验内部
-// 一致性与工件哈希。部署级安全（目录属主/符号链接/权限位）由宿主在发现时
-// 叠加校验，本函数面向 CLI 工具、依赖解析与安装回读验证。
+// 一致性与每个组件的工件哈希。部署级安全（目录属主/符号链接/权限位）由宿主
+// 在发现时叠加校验，本函数面向 CLI 工具、依赖解析与安装回读验证。
 func ReadInstalled(ctx context.Context, directory string) (InstalledRecord, error) {
 	manifestBytes, err := ReadFileLimited(filepath.Join(directory, "manifest.json"), MaxManifestBytes)
 	if err != nil {
@@ -42,39 +42,23 @@ func ReadInstalled(ctx context.Context, directory string) (InstalledRecord, erro
 	if err := DecodeStrictJSON(lockBytes, &lock); err != nil {
 		return InstalledRecord{}, err
 	}
-	if err := ValidateLock(lock); err != nil {
+	if err := ValidateLock(lock, manifest); err != nil {
 		return InstalledRecord{}, err
 	}
 	manifestDigest := sha256.Sum256(manifestBytes)
-	if lock.PackageID != manifest.ID || lock.PackageVersion != manifest.Version ||
-		lock.Mode != manifest.Mode || lock.ManifestSHA256 != hex.EncodeToString(manifestDigest[:]) {
+	if lock.ManifestSHA256 != hex.EncodeToString(manifestDigest[:]) {
 		return InstalledRecord{}, ErrInvalidFormat
 	}
-	artifactDigest, err := HashFile(ctx, lock.ArtifactPath, MaxArtifactBytes)
-	if err != nil || artifactDigest != lock.ArtifactSHA256 {
-		return InstalledRecord{}, ErrInvalidFormat
-	}
-	record := InstalledRecord{
-		Directory: directory, ArtifactPath: lock.ArtifactPath,
-		Manifest: manifest, Process: lock.Process,
-	}
-	if manifest.Mode == ModeIsolated {
-		if lock.Process == nil || lock.Process.Path != lock.ArtifactPath {
+	for _, artifact := range lock.Artifacts {
+		artifactDigest, err := HashFile(ctx, artifact.Path, MaxArtifactBytes)
+		if err != nil || artifactDigest != artifact.SHA256 {
 			return InstalledRecord{}, ErrInvalidFormat
 		}
-		if err := ValidateProcessSpec(*lock.Process); err != nil {
-			return InstalledRecord{}, err
-		}
 	}
-	if manifest.Mode == ModeHosted && lock.Process != nil {
-		return InstalledRecord{}, ErrInvalidFormat
-	}
-	return record, nil
+	return InstalledRecord{Directory: directory, Manifest: manifest, Lock: lock}, nil
 }
 
 // ListInstalled 列出安装根目录内的全部已安装包（按 ID 排序）。
-// 目录名必须等于清单 ID，ID 去重；不属于包目录的目录（缺 manifest）按
-// 目录不存在处理还是报错？——安装根由本工具维护，异常目录报错（fail closed）。
 func ListInstalled(ctx context.Context, root string) ([]InstalledRecord, error) {
 	if root == "" {
 		return nil, ErrInvalidFormat
