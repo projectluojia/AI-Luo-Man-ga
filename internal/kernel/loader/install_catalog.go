@@ -1,13 +1,11 @@
 package loader
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -15,7 +13,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/jsonutil"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/packmgr"
@@ -200,14 +197,14 @@ func (c *Catalog) readRecord(ctx context.Context, directory string) (InstalledRe
 	// 中性包清单与锁定记录：格式层（packmgr）负责核心字段与声明校验，
 	// AI珞 宿主扩展段在本函数内严格解码为 registry 规格。
 	var installed packmgr.Manifest
-	if err := decodeStrictJSON(manifestBytes, &installed); err != nil {
+	if err := packmgr.DecodeStrictJSON(manifestBytes, &installed); err != nil {
 		return InstalledRecord{}, errors.Join(ErrInstallCatalogInvalid, err)
 	}
 	if err := packmgr.ValidateManifest(installed); err != nil {
 		return InstalledRecord{}, errors.Join(ErrInstallCatalogInvalid, err)
 	}
 	var lock packmgr.Lock
-	if err := decodeStrictJSON(lockBytes, &lock); err != nil {
+	if err := packmgr.DecodeStrictJSON(lockBytes, &lock); err != nil {
 		return InstalledRecord{}, errors.Join(ErrInstallCatalogInvalid, err)
 	}
 	if err := packmgr.ValidateLock(lock); err != nil {
@@ -220,7 +217,7 @@ func (c *Catalog) readRecord(ctx context.Context, directory string) (InstalledRe
 	}
 	var extensions aiLuoExtensions
 	if len(installed.Extensions) > 0 {
-		if err := decodeStrictJSON(installed.Extensions, &extensions); err != nil {
+		if err := packmgr.DecodeStrictJSON(installed.Extensions, &extensions); err != nil {
 			return InstalledRecord{}, errors.Join(ErrInstallCatalogInvalid, err)
 		}
 	}
@@ -240,7 +237,7 @@ func (c *Catalog) readRecord(ctx context.Context, directory string) (InstalledRe
 	if err != nil {
 		return InstalledRecord{}, err
 	}
-	artifactDigest, err := hashInstalledArtifact(ctx, artifactPath)
+	artifactDigest, err := packmgr.HashFile(ctx, artifactPath, maxInstallArtifact)
 	if err != nil || artifactDigest != lock.ArtifactSHA256 {
 		return InstalledRecord{}, errors.Join(ErrInstallCatalogInvalid, err)
 	}
@@ -424,101 +421,16 @@ func validateRecordSpecs(record InstalledRecord) error {
 }
 
 func readSecureJSONFile(path string, maximum int64) ([]byte, error) {
+	// 部署级安全（属主 + 组/其他不可写）叠加在格式层的受限读取之上。
 	info, err := os.Lstat(path)
-	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 ||
-		info.Mode().Perm()&0o022 != 0 || !ownerMatchesProcess(info) ||
-		info.Size() <= 0 || info.Size() > maximum {
+	if err != nil || !ownerMatchesProcess(info) || info.Mode().Perm()&0o022 != 0 {
 		return nil, ErrInstallCatalogInvalid
 	}
-	file, err := os.Open(path)
+	payload, err := packmgr.ReadFileLimited(path, maximum)
 	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-	opened, err := file.Stat()
-	if err != nil || !os.SameFile(info, opened) {
-		return nil, ErrInstallChanged
-	}
-	payload, err := io.ReadAll(io.LimitReader(file, maximum+1))
-	if err != nil || int64(len(payload)) > maximum {
 		return nil, errors.Join(ErrInstallCatalogInvalid, err)
 	}
 	return payload, nil
-}
-
-func decodeStrictJSON(payload []byte, target any) error {
-	if err := rejectDuplicateJSONKeys(payload); err != nil {
-		return err
-	}
-	decoder := json.NewDecoder(bytes.NewReader(payload))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(target); err != nil {
-		return err
-	}
-	if err := jsonutil.EnsureEOF(decoder); err != nil {
-		return errors.Join(ErrInstallCatalogInvalid, err)
-	}
-	return nil
-}
-
-func rejectDuplicateJSONKeys(payload []byte) error {
-	decoder := json.NewDecoder(bytes.NewReader(payload))
-	var walk func() error
-	walk = func() error {
-		token, err := decoder.Token()
-		if err != nil {
-			return err
-		}
-		delimiter, composite := token.(json.Delim)
-		if !composite {
-			return nil
-		}
-		switch delimiter {
-		case '{':
-			keys := make(map[string]struct{})
-			for decoder.More() {
-				keyToken, err := decoder.Token()
-				if err != nil {
-					return err
-				}
-				key, ok := keyToken.(string)
-				if !ok {
-					return ErrInstallCatalogInvalid
-				}
-				if _, duplicate := keys[key]; duplicate {
-					return ErrInstallCatalogInvalid
-				}
-				keys[key] = struct{}{}
-				if err := walk(); err != nil {
-					return err
-				}
-			}
-			end, err := decoder.Token()
-			if err != nil || end != json.Delim('}') {
-				return ErrInstallCatalogInvalid
-			}
-		case '[':
-			for decoder.More() {
-				if err := walk(); err != nil {
-					return err
-				}
-			}
-			end, err := decoder.Token()
-			if err != nil || end != json.Delim(']') {
-				return ErrInstallCatalogInvalid
-			}
-		default:
-			return ErrInstallCatalogInvalid
-		}
-		return nil
-	}
-	if err := walk(); err != nil {
-		return err
-	}
-	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
-		return ErrInstallCatalogInvalid
-	}
-	return nil
 }
 
 func validateSecureDirectory(path string) error {
@@ -560,47 +472,6 @@ func validateInstalledPath(root, path string, directory bool) (string, error) {
 		}
 	}
 	return path, nil
-}
-
-func hashInstalledArtifact(ctx context.Context, path string) (string, error) {
-	info, err := os.Lstat(path)
-	if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > maxInstallArtifact {
-		return "", ErrInstallCatalogInvalid
-	}
-	file, err := os.Open(path)
-	if err != nil {
-		return "", err
-	}
-	defer file.Close()
-	opened, err := file.Stat()
-	if err != nil || !os.SameFile(info, opened) {
-		return "", ErrInstallChanged
-	}
-	digest := sha256.New()
-	buffer := make([]byte, 128<<10)
-	var total int64
-	for {
-		if err := ctx.Err(); err != nil {
-			return "", err
-		}
-		count, readErr := file.Read(buffer)
-		if count > 0 {
-			total += int64(count)
-			if total > maxInstallArtifact {
-				return "", ErrInstallCatalogInvalid
-			}
-			if _, err := digest.Write(buffer[:count]); err != nil {
-				return "", err
-			}
-		}
-		if errors.Is(readErr, io.EOF) {
-			break
-		}
-		if readErr != nil {
-			return "", readErr
-		}
-	}
-	return hex.EncodeToString(digest.Sum(nil)), nil
 }
 
 func sameRuntimeManifest(left, right Manifest) bool {

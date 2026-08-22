@@ -55,7 +55,12 @@ import (
 func main() {
 	loadDotEnv()
 	handled, err := runMaintenanceCommand(os.Args[1:], os.Stdout)
-	if err == nil && handled {
+	if handled {
+		if err != nil {
+			// CLI/维护命令直接输出可读错误到 stderr（公共 API 的泄密约束不适用于本机 CLI）。
+			_, _ = fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
 		return
 	}
 	if err == nil {
@@ -188,8 +193,84 @@ func runMaintenanceCommand(arguments []string, output io.Writer) (bool, error) {
 		}
 		_, err = fmt.Fprintf(output, "身份解绑完成：app=%s 平台=%s space=%s platform_user=%s\n", *appID, *platform, *space, *platformUser)
 		return true, err
+	case "install", "upgrade", "uninstall", "list":
+		return runPackageCommand(arguments, output)
 	default:
 		return true, fmt.Errorf("configuration error: unknown command")
+	}
+}
+
+// runPackageCommand 执行包管理 CLI：install/upgrade 从本地源包目录安装，
+// uninstall 删除已装包，list 列出安装根内的包。
+func runPackageCommand(arguments []string, output io.Writer) (bool, error) {
+	command := arguments[0]
+	flags := flag.NewFlagSet(command, flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	root := flags.String("root", os.Getenv("AILUO_RUNTIME_INSTALL_ROOT"), "安装根目录（默认 AILUO_RUNTIME_INSTALL_ROOT）")
+	if err := flags.Parse(arguments[1:]); err != nil {
+		return true, fmt.Errorf("configuration error: %s", err)
+	}
+	if *root == "" {
+		return true, fmt.Errorf("configuration error: %s requires --root 或 AILUO_RUNTIME_INSTALL_ROOT", command)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	switch command {
+	case "install":
+		if flags.NArg() != 1 {
+			return true, fmt.Errorf("configuration error: install requires exactly one source package directory")
+		}
+		record, err := packmgr.Install(ctx, *root, flags.Arg(0))
+		if err != nil {
+			return true, err
+		}
+		_, err = fmt.Fprintf(output, "已安装 %s@%s（%s）\n", record.Manifest.ID, record.Manifest.Version, record.Manifest.Mode)
+		return true, err
+	case "upgrade":
+		if flags.NArg() != 2 {
+			return true, fmt.Errorf("configuration error: upgrade requires package id and source package directory")
+		}
+		record, err := packmgr.Upgrade(ctx, *root, flags.Arg(0), flags.Arg(1))
+		if err != nil {
+			return true, err
+		}
+		_, err = fmt.Fprintf(output, "已升级 %s@%s（%s）\n", record.Manifest.ID, record.Manifest.Version, record.Manifest.Mode)
+		return true, err
+	case "uninstall":
+		if flags.NArg() != 1 {
+			return true, fmt.Errorf("configuration error: uninstall requires exactly one package id")
+		}
+		if err := packmgr.Uninstall(ctx, *root, flags.Arg(0)); err != nil {
+			return true, err
+		}
+		if _, err := fmt.Fprintf(output, "已卸载 %s\n", flags.Arg(0)); err != nil {
+			return true, err
+		}
+		return true, nil
+	default: // list
+		if flags.NArg() != 0 {
+			return true, fmt.Errorf("configuration error: list takes no positional arguments")
+		}
+		records, err := packmgr.ListInstalled(ctx, *root)
+		if err != nil {
+			return true, err
+		}
+		if len(records) == 0 {
+			if _, err := fmt.Fprintln(output, "安装根目录为空"); err != nil {
+				return true, err
+			}
+			return true, nil
+		}
+		for _, record := range records {
+			pin := ""
+			if record.Manifest.Pin {
+				pin = " [pin]"
+			}
+			if _, err := fmt.Fprintf(output, "%s@%s\t%s%s\n", record.Manifest.ID, record.Manifest.Version, record.Manifest.Mode, pin); err != nil {
+				return true, err
+			}
+		}
+		return true, nil
 	}
 }
 
