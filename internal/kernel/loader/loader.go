@@ -16,6 +16,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/id"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/packmgr"
 )
 
 const (
@@ -67,7 +68,7 @@ type Manifest struct {
 	IdleTTL      time.Duration
 	// HostFunctions 是包声明的宿主函数依赖（仅 hosted 有意义）：guest 只可
 	// 调用清单声明且宿主提供的宿主函数，未声明调用在加载期被拒绝。
-	HostFunctions []HostedFunctionDecl
+	HostFunctions []packmgr.HostedFunctionDecl
 }
 
 type Description struct {
@@ -705,10 +706,10 @@ func validateManifest(manifest Manifest) error {
 		manifest.IdleTTL < 0 || len(manifest.LockedDigest) != 64 {
 		return ErrInvalidManifest
 	}
-	if _, err := ParseVersion(manifest.Version); err != nil {
+	if _, err := packmgr.ParseVersion(manifest.Version); err != nil {
 		return ErrInvalidManifest
 	}
-	if err := validateHostedFunctionDecls(manifest.HostFunctions); err != nil {
+	if err := packmgr.ValidateHostedFunctions(manifest.HostFunctions); err != nil {
 		return ErrInvalidManifest
 	}
 	digest, err := hex.DecodeString(manifest.LockedDigest)

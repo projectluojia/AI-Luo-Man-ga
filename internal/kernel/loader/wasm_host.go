@@ -17,6 +17,7 @@ import (
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/packmgr"
 )
 
 const (
@@ -117,10 +118,10 @@ func (h *WasmHost) Verify(ctx context.Context, manifest Manifest) error {
 	}
 	available := make(map[string]struct{}, len(h.config.HostFunctions))
 	for _, fn := range h.config.HostFunctions {
-		available[hostedFunctionKey(fn.Module, fn.Name)] = struct{}{}
+		available[packmgr.HostedFunctionKey(fn.Module, fn.Name)] = struct{}{}
 	}
 	for _, decl := range manifest.HostFunctions {
-		if _, ok := available[hostedFunctionKey(decl.Module, decl.Name)]; !ok {
+		if _, ok := available[packmgr.HostedFunctionKey(decl.Module, decl.Name)]; !ok {
 			return fmt.Errorf("%w: host function %s.%s is not provided by this host",
 				ErrInvalidManifest, decl.Module, decl.Name)
 		}
@@ -165,7 +166,7 @@ func (h *WasmHost) Load(ctx context.Context, manifest Manifest) (Runtime, error)
 		hostFuncs:     make(map[string]func(context.Context, contracts.RequestContext, []byte) ([]byte, error), len(projected)),
 	}
 	for _, fn := range projected {
-		hosted.hostFuncs[hostedFunctionKey(fn.Module, fn.Name)] = fn.Call
+		hosted.hostFuncs[packmgr.HostedFunctionKey(fn.Module, fn.Name)] = fn.Call
 	}
 	if err := hosted.registerHostFunctions(ctx, projected); err != nil {
 		_ = wazeroRuntime.Close(ctx)
@@ -176,14 +177,14 @@ func (h *WasmHost) Load(ctx context.Context, manifest Manifest) (Runtime, error)
 
 // projectedFunctions 返回清单声明且宿主配置提供的宿主函数（Verify 已保证
 // 声明 ⊆ 可用，此处防御性过滤）。
-func (h *WasmHost) projectedFunctions(decls []HostedFunctionDecl) []HostedFunction {
+func (h *WasmHost) projectedFunctions(decls []packmgr.HostedFunctionDecl) []HostedFunction {
 	available := make(map[string]HostedFunction, len(h.config.HostFunctions))
 	for _, fn := range h.config.HostFunctions {
-		available[hostedFunctionKey(fn.Module, fn.Name)] = fn
+		available[packmgr.HostedFunctionKey(fn.Module, fn.Name)] = fn
 	}
 	projected := make([]HostedFunction, 0, len(decls))
 	for _, decl := range decls {
-		if fn, ok := available[hostedFunctionKey(decl.Module, decl.Name)]; ok {
+		if fn, ok := available[packmgr.HostedFunctionKey(decl.Module, decl.Name)]; ok {
 			projected = append(projected, fn)
 		}
 	}
@@ -192,17 +193,17 @@ func (h *WasmHost) projectedFunctions(decls []HostedFunctionDecl) []HostedFuncti
 
 // checkDeclaredHostFunctionImports 校验编译产物的函数导入：除 WASI 外，所有
 // 导入必须属于清单声明的宿主函数集合，未声明导入在加载期拒绝（fail-closed）。
-func checkDeclaredHostFunctionImports(compiled wazero.CompiledModule, decls []HostedFunctionDecl) error {
+func checkDeclaredHostFunctionImports(compiled wazero.CompiledModule, decls []packmgr.HostedFunctionDecl) error {
 	declared := make(map[string]struct{}, len(decls))
 	for _, decl := range decls {
-		declared[hostedFunctionKey(decl.Module, decl.Name)] = struct{}{}
+		declared[packmgr.HostedFunctionKey(decl.Module, decl.Name)] = struct{}{}
 	}
 	for _, definition := range compiled.ImportedFunctions() {
 		moduleName, name, isImport := definition.Import()
 		if !isImport || moduleName == wasiModuleName {
 			continue
 		}
-		if _, ok := declared[hostedFunctionKey(moduleName, name)]; !ok {
+		if _, ok := declared[packmgr.HostedFunctionKey(moduleName, name)]; !ok {
 			return fmt.Errorf("guest imports undeclared host function %s.%s", moduleName, name)
 		}
 	}

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/packmgr"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus/builtin"
 )
 
@@ -25,7 +26,7 @@ func Manifest() loader.Manifest {
 	return loader.Manifest{
 		ID: ServiceID, Version: hostedVersion, Mode: loader.ModeHosted,
 		Role: loader.RoleCapability, LockedDigest: campusWASMDigest, Pin: true,
-		HostFunctions: []loader.HostedFunctionDecl{{
+		HostFunctions: []packmgr.HostedFunctionDecl{{
 			Module: "ailuo.bus", Name: "query",
 			Purpose: "查询 Go 托管权威校巴存储（App 隔离在宿主侧强制）",
 		}},
