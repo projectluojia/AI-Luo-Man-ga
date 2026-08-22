@@ -2,6 +2,7 @@ package campus
 
 import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/packmgr"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/tools/bus"
 )
 
@@ -24,11 +25,11 @@ func Record() loader.InstalledRecord {
 		Tools:        bus.ToolSpecs(),
 		Service:      ServiceSpec(),
 		Capabilities: CapabilitySpecs(),
-		Storage: &loader.InstalledStorage{
+		Storage: &packmgr.Storage{
 			Namespace:     "campus/bus",
 			SchemaVersion: 1,
-			Sensitivity:   loader.SensitivityPublic,
-			Retention:     loader.RetentionPermanent,
+			Sensitivity:   packmgr.SensitivityPublic,
+			Retention:     packmgr.RetentionPermanent,
 		},
 	}
 }

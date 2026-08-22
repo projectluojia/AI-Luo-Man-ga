@@ -1,9 +1,9 @@
-package loader_test
+package packmgr_test
 
 import (
 	"testing"
 
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/packmgr"
 )
 
 func TestParseVersionAcceptsValidSemver(t *testing.T) {
@@ -19,7 +19,7 @@ func TestParseVersionAcceptsValidSemver(t *testing.T) {
 		"1.0.0-0.3.7",
 	}
 	for _, text := range valid {
-		version, err := loader.ParseVersion(text)
+		version, err := packmgr.ParseVersion(text)
 		if err != nil {
 			t.Fatalf("ParseVersion(%q) error = %v, want nil", text, err)
 		}
@@ -49,7 +49,7 @@ func TestParseVersionRejectsInvalidSemver(t *testing.T) {
 		"1.2.3+",
 	}
 	for _, text := range invalid {
-		if _, err := loader.ParseVersion(text); err == nil {
+		if _, err := packmgr.ParseVersion(text); err == nil {
 			t.Fatalf("ParseVersion(%q) error = nil, want error", text)
 		}
 	}
@@ -75,27 +75,27 @@ func TestCompareVersionsFollowsSemverPrecedence(t *testing.T) {
 		{"1.0.0-1", "1.0.0-alpha"}, // 数字标识符 < 字母数字标识符
 	}
 	for _, pair := range ascending {
-		left := loader.MustParseVersion(pair[0])
-		right := loader.MustParseVersion(pair[1])
-		if compared := loader.CompareVersions(left, right); compared >= 0 {
+		left := packmgr.MustParseVersion(pair[0])
+		right := packmgr.MustParseVersion(pair[1])
+		if compared := packmgr.CompareVersions(left, right); compared >= 0 {
 			t.Fatalf("CompareVersions(%q, %q) = %d, want < 0", pair[0], pair[1], compared)
 		}
-		if compared := loader.CompareVersions(right, left); compared <= 0 {
+		if compared := packmgr.CompareVersions(right, left); compared <= 0 {
 			t.Fatalf("CompareVersions(%q, %q) = %d, want > 0", pair[1], pair[0], compared)
 		}
 	}
 }
 
 func TestCompareVersionsIgnoresBuildMetadata(t *testing.T) {
-	plain := loader.MustParseVersion("1.2.3")
-	withBuild := loader.MustParseVersion("1.2.3+build.7")
-	if compared := loader.CompareVersions(plain, withBuild); compared != 0 {
+	plain := packmgr.MustParseVersion("1.2.3")
+	withBuild := packmgr.MustParseVersion("1.2.3+build.7")
+	if compared := packmgr.CompareVersions(plain, withBuild); compared != 0 {
 		t.Fatalf("build metadata must not affect precedence: %d", compared)
 	}
 }
 
 func TestConstraintMatchesExact(t *testing.T) {
-	constraint := loader.MustParseConstraint("1.2.3")
+	constraint := packmgr.MustParseConstraint("1.2.3")
 	matches(t, constraint, "1.2.3", true)
 	matches(t, constraint, "1.2.4", false)
 	matches(t, constraint, "1.2.2", false)
@@ -105,49 +105,49 @@ func TestConstraintMatchesExact(t *testing.T) {
 }
 
 func TestConstraintMatchesCaret(t *testing.T) {
-	matches(t, loader.MustParseConstraint("^1.2.0"), "1.2.0", true)
-	matches(t, loader.MustParseConstraint("^1.2.0"), "1.9.9", true)
-	matches(t, loader.MustParseConstraint("^1.2.0"), "1.2.0-alpha", false)
-	matches(t, loader.MustParseConstraint("^1.2.0"), "1.1.9", false)
-	matches(t, loader.MustParseConstraint("^1.2.0"), "2.0.0", false)
+	matches(t, packmgr.MustParseConstraint("^1.2.0"), "1.2.0", true)
+	matches(t, packmgr.MustParseConstraint("^1.2.0"), "1.9.9", true)
+	matches(t, packmgr.MustParseConstraint("^1.2.0"), "1.2.0-alpha", false)
+	matches(t, packmgr.MustParseConstraint("^1.2.0"), "1.1.9", false)
+	matches(t, packmgr.MustParseConstraint("^1.2.0"), "2.0.0", false)
 
 	// caret 0.x 特例。
-	matches(t, loader.MustParseConstraint("^0.2.3"), "0.2.3", true)
-	matches(t, loader.MustParseConstraint("^0.2.3"), "0.2.9", true)
-	matches(t, loader.MustParseConstraint("^0.2.3"), "0.3.0", false)
-	matches(t, loader.MustParseConstraint("^0.2.3"), "0.2.2", false)
-	matches(t, loader.MustParseConstraint("^0.0.3"), "0.0.3", true)
-	matches(t, loader.MustParseConstraint("^0.0.3"), "0.0.4", false)
+	matches(t, packmgr.MustParseConstraint("^0.2.3"), "0.2.3", true)
+	matches(t, packmgr.MustParseConstraint("^0.2.3"), "0.2.9", true)
+	matches(t, packmgr.MustParseConstraint("^0.2.3"), "0.3.0", false)
+	matches(t, packmgr.MustParseConstraint("^0.2.3"), "0.2.2", false)
+	matches(t, packmgr.MustParseConstraint("^0.0.3"), "0.0.3", true)
+	matches(t, packmgr.MustParseConstraint("^0.0.3"), "0.0.4", false)
 }
 
 func TestConstraintMatchesRange(t *testing.T) {
-	constraint := loader.MustParseConstraint(">=1.0.0,<2.0.0")
+	constraint := packmgr.MustParseConstraint(">=1.0.0,<2.0.0")
 	matches(t, constraint, "1.0.0", true)
 	matches(t, constraint, "1.5.0", true)
 	matches(t, constraint, "2.0.0", false)
 	matches(t, constraint, "0.9.9", false)
 
-	lowerBound := loader.MustParseConstraint(">=1.2.3")
+	lowerBound := packmgr.MustParseConstraint(">=1.2.3")
 	matches(t, lowerBound, "1.2.3", true)
 	matches(t, lowerBound, "5.0.0", true)
 	matches(t, lowerBound, "1.2.2", false)
 
-	upperBound := loader.MustParseConstraint("<2.0.0")
+	upperBound := packmgr.MustParseConstraint("<2.0.0")
 	matches(t, upperBound, "1.9.9", true)
 	matches(t, upperBound, "2.0.0", false)
 }
 
 func TestConstraintPreReleaseGuard(t *testing.T) {
 	// 约束未显式携带预发布时，预发布候选不匹配（npm 规则）。
-	matches(t, loader.MustParseConstraint("^1.2.0"), "1.2.3-beta", false)
-	matches(t, loader.MustParseConstraint(">=1.0.0,<2.0.0"), "1.2.0-beta", false)
+	matches(t, packmgr.MustParseConstraint("^1.2.0"), "1.2.3-beta", false)
+	matches(t, packmgr.MustParseConstraint(">=1.0.0,<2.0.0"), "1.2.0-beta", false)
 	// 约束显式携带同 M.m.p 预发布时，预发布候选可匹配。
-	matches(t, loader.MustParseConstraint("^1.2.3-beta"), "1.2.3-beta", true)
-	matches(t, loader.MustParseConstraint("^1.2.3-beta"), "1.2.3-beta.1", true)
+	matches(t, packmgr.MustParseConstraint("^1.2.3-beta"), "1.2.3-beta", true)
+	matches(t, packmgr.MustParseConstraint("^1.2.3-beta"), "1.2.3-beta.1", true)
 	// 预发布守卫要求同 M.m.p：不同元组的预发布不因范围边界误匹配。
-	matches(t, loader.MustParseConstraint("^1.2.3-beta"), "1.5.0-beta", false)
+	matches(t, packmgr.MustParseConstraint("^1.2.3-beta"), "1.5.0-beta", false)
 	// 正式版不受守卫影响。
-	matches(t, loader.MustParseConstraint(">=1.0.0-beta,<2.0.0"), "1.2.0", true)
+	matches(t, packmgr.MustParseConstraint(">=1.0.0-beta,<2.0.0"), "1.2.0", true)
 }
 
 func TestParseConstraintRejectsInvalid(t *testing.T) {
@@ -164,23 +164,23 @@ func TestParseConstraintRejectsInvalid(t *testing.T) {
 		"||1.2.3",
 	}
 	for _, text := range invalid {
-		if _, err := loader.ParseConstraint(text); err == nil {
+		if _, err := packmgr.ParseConstraint(text); err == nil {
 			t.Fatalf("ParseConstraint(%q) error = nil, want error", text)
 		}
 	}
 }
 
 func TestConstraintStringReturnsRaw(t *testing.T) {
-	constraint := loader.MustParseConstraint(">=1.0.0,<2.0.0")
+	constraint := packmgr.MustParseConstraint(">=1.0.0,<2.0.0")
 	if constraint.String() != ">=1.0.0,<2.0.0" {
 		t.Fatalf("Constraint.String() = %q, want raw text", constraint.String())
 	}
 }
 
 // matches 断言约束对指定版本的匹配结果。
-func matches(t *testing.T, constraint loader.Constraint, versionText string, want bool) {
+func matches(t *testing.T, constraint packmgr.Constraint, versionText string, want bool) {
 	t.Helper()
-	version := loader.MustParseVersion(versionText)
+	version := packmgr.MustParseVersion(versionText)
 	if got := constraint.Matches(version); got != want {
 		t.Fatalf("Constraint(%q).Matches(%q) = %v, want %v", constraint.String(), versionText, got, want)
 	}

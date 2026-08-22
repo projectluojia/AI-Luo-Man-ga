@@ -39,6 +39,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/session"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/task"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/packmgr"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/promptcatalog"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/agent"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus"
@@ -240,7 +241,7 @@ func runRuntimeHostCommand(arguments []string, output io.Writer) (bool, error) {
 	if !filepath.IsAbs(*installRoot) || filepath.Clean(*installRoot) != *installRoot {
 		return true, fmt.Errorf("configuration error: --install-root must be a clean absolute path")
 	}
-	if !loader.IsLocalRuntimeAddress(*address) {
+	if !packmgr.IsLocalRuntimeAddress(*address) {
 		return true, fmt.Errorf("configuration error: --address must be loopback or an absolute unix socket")
 	}
 	return true, serveRuntimeHost(*installRoot, *address, output)
@@ -556,7 +557,7 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 				WorkDir:    workDir,
 				Address:    config.agentAddress,
 				Env:        agentEnvironment(config),
-				Limits:     loader.ProcessLimits{},
+				Limits:     packmgr.ProcessLimits{},
 			}, nil
 		},
 		Spawn:          config.manageAgent,
@@ -931,7 +932,7 @@ func loadConfig() (config, error) {
 		return config{}, fmt.Errorf("configuration error: resolve python path: %w", err)
 	}
 	result.pythonPath = absolutePython
-	if !loader.IsLocalRuntimeAddress(result.configUIAddress) {
+	if !packmgr.IsLocalRuntimeAddress(result.configUIAddress) {
 		return config{}, fmt.Errorf("configuration error: AILUO_CONFIG_UI_ADDRESS must be loopback")
 	}
 	if result.loadDemoData && (strings.EqualFold(result.environment, "production") || strings.EqualFold(result.environment, "prod")) {
