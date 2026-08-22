@@ -111,6 +111,7 @@ type entry struct {
 	manifest Manifest
 	// host 是注册时按 Verify 精确绑定、能加载该清单的宿主；同一模式存在多个
 	// 宿主时，绑定结果在注册期一次性确定并固化，加载期不再重新选择。
+	// Upgrade 切换版本时随候选重新绑定。
 	host Host
 
 	mu         sync.Mutex
@@ -118,6 +119,17 @@ type entry struct {
 	runtime    Runtime
 	inFlight   int
 	transition chan struct{}
+	// retired 是升级后被替换、仍在 drain 的旧版本运行时；在途调用排空后停止。
+	retired []*retiredRuntime
+}
+
+// retiredRuntime 是被升级替换的旧版本运行时：inFlight 是其剩余在途调用数，
+// 归零后经 stopOnce 恰好停止一次；stopped 通道供 Shutdown 有界等待。
+type retiredRuntime struct {
+	runtime  Runtime
+	inFlight int
+	stopOnce sync.Once
+	stopped  chan struct{}
 }
 
 type Manager struct {
@@ -239,6 +251,77 @@ func (m *Manager) RegisterBatch(ctx context.Context, manifests []Manifest) error
 		}
 	}
 	return nil
+}
+
+// Upgrade 以候选清单原子升级已注册运行时：候选完成完整加载（Verify → Load →
+// Describe → Start → Health）后原子切换，新调用打到新版本，旧版本在在途调用
+// 排空后有界停止；候选加载失败不影响既有运行（fail without touching old）。
+// 同版本升级与未就绪升级被拒绝。
+func (m *Manager) Upgrade(ctx context.Context, candidate Manifest) error {
+	if err := validateManifest(candidate); err != nil {
+		return err
+	}
+	item, err := m.resolve(candidate.ID)
+	if err != nil {
+		return err
+	}
+	item.mu.Lock()
+	if item.state != StateReady || item.runtime == nil {
+		item.mu.Unlock()
+		return ErrUnavailable
+	}
+	if item.manifest.Version == candidate.Version {
+		item.mu.Unlock()
+		return ErrInvalidManifest
+	}
+	item.mu.Unlock()
+	host, err := m.selectHost(ctx, candidate)
+	if err != nil {
+		return err
+	}
+	started := m.now()
+	loaded := loadRuntime(ctx, host, candidate)
+	observe.DefaultMetrics().ObserveRuntimeLoad(loaded.err == nil, m.now().Sub(started))
+	if loaded.err != nil {
+		return errors.Join(ErrLoadFailed, loaded.err)
+	}
+	item.mu.Lock()
+	// 候选加载期间条目状态可能变化（并发卸载/关闭）：重新校验后原子切换。
+	if item.state != StateReady || item.runtime == nil {
+		item.mu.Unlock()
+		stopContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		_ = loaded.runtime.Stop(stopContext)
+		return ErrUnavailable
+	}
+	retired := &retiredRuntime{runtime: item.runtime, inFlight: item.inFlight, stopped: make(chan struct{})}
+	item.retired = append(item.retired, retired)
+	item.manifest = candidate
+	item.host = host
+	item.runtime = loaded.runtime
+	item.mu.Unlock()
+	observe.Info(ctx, "运行时已原子升级",
+		observe.StringAttr("runtime_id", candidate.ID),
+		observe.StringAttr("runtime_version", candidate.Version),
+		observe.StringAttr("runtime_mode", candidate.Mode),
+	)
+	if retired.inFlight == 0 {
+		stopRetiredRuntime(retired)
+	}
+	return nil
+}
+
+// stopRetiredRuntime 恰好停止一次旧版本运行时，并在停止后关闭 stopped 通道。
+func stopRetiredRuntime(retired *retiredRuntime) {
+	retired.stopOnce.Do(func() {
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(context.Background()), 5*time.Second)
+		defer cancel()
+		stopErr := retired.runtime.Stop(ctx)
+		close(retired.stopped)
+		if stopErr != nil {
+			observe.Error(ctx, "升级后旧版本运行时停止失败", stopErr)
+		}
+	})
 }
 
 func (m *Manager) rollbackRegistered(manifests []Manifest) error {
@@ -463,10 +546,28 @@ func (l *Lease) Release() {
 		return
 	}
 	l.once.Do(func() {
-		l.entry.mu.Lock()
-		l.entry.inFlight--
-		l.entry.mu.Unlock()
+		item := l.entry
+		item.mu.Lock()
+		item.inFlight--
+		var retired *retiredRuntime
+		if l.runtime != item.runtime {
+			for _, candidate := range item.retired {
+				if candidate.runtime == l.runtime {
+					retired = candidate
+					break
+				}
+			}
+			if retired != nil {
+				retired.inFlight--
+			}
+		}
+		drained := retired != nil && retired.inFlight <= 0
+		item.mu.Unlock()
 		observe.DefaultMetrics().RuntimeCallStopped()
+		if drained {
+			// 升级替换的旧版本在途调用已排空：停止旧版本（恰好一次）。
+			stopRetiredRuntime(retired)
+		}
 	})
 }
 
@@ -670,10 +771,31 @@ func (m *Manager) Shutdown(ctx context.Context) error {
 	for _, item := range items {
 		item.mu.Lock()
 		ready := item.state == StateReady || (item.state == StateFailed && item.runtime != nil)
+		retired := append([]*retiredRuntime(nil), item.retired...)
 		item.mu.Unlock()
 		if ready {
 			if err := m.unload(ctx, item); err != nil {
 				result = append(result, err)
+			}
+		}
+		// 升级替换的旧版本在 inFlight 归零后已触发停止；此处兜底再次触发
+		// 并等待其完成，避免在途全部释放前 Shutdown 提前返回。
+		for _, old := range retired {
+			if old.inFlight <= 0 {
+				stopRetiredRuntime(old)
+			}
+		}
+	}
+	// 有界等待升级替换的旧版本停止完成。
+	for _, item := range items {
+		item.mu.Lock()
+		retired := append([]*retiredRuntime(nil), item.retired...)
+		item.mu.Unlock()
+		for _, old := range retired {
+			select {
+			case <-old.stopped:
+			case <-ctx.Done():
+				return errors.Join(append(result, ctx.Err())...)
 			}
 		}
 	}
