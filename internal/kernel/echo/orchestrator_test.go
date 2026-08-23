@@ -28,6 +28,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/blob"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/memory"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite/sqlitetest"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/tools/bus"
 
 	"google.golang.org/grpc"
@@ -1566,11 +1567,12 @@ func TestOrchestratorRenewsActiveRunLease(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer connection.Close()
-	baseStore, err := sqlite.Open(filepath.Join(t.TempDir(), "renew.db"))
+	renewDir := t.TempDir()
+	baseStore, err := sqlite.Open(filepath.Join(renewDir, "renew.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer baseStore.Close()
+	t.Cleanup(func() { sqlitetest.CloseAndWait(t, baseStore, renewDir) })
 	store := &renewalCountingStore{Store: baseStore}
 	reg := registry.New()
 	policy := runtimetest.NewStaticAppPolicy()

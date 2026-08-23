@@ -1,21 +1,15 @@
 package qq
 
 import (
-	"path/filepath"
 	"sync"
 	"testing"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/identity"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite"
 )
 
 func TestProvisionerConcurrentlyEnsuresStableIdentity(t *testing.T) {
-	store, err := sqlite.Open(filepath.Join(t.TempDir(), "qq-identity.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
+	store := newQQTestStore(t, "qq-identity.db")
 	service := identity.NewService(store)
 	provisioner, err := NewProvisioner(service)
 	if err != nil {
@@ -47,11 +41,7 @@ func TestProvisionerConcurrentlyEnsuresStableIdentity(t *testing.T) {
 }
 
 func TestProvisionerUsesOneUserAcrossQQSpaces(t *testing.T) {
-	store, err := sqlite.Open(filepath.Join(t.TempDir(), "qq-spaces.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
+	store := newQQTestStore(t, "qq-spaces.db")
 	service := identity.NewService(store)
 	provisioner, _ := NewProvisioner(service)
 	for _, spaceID := range []string{"private", "12345", "54321"} {
