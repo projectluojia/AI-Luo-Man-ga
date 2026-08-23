@@ -170,9 +170,15 @@ func TestCampusBusMultiComponentRoutesCapabilitiesAndUpgradesGroup(t *testing.T)
 	}
 
 	// 注册：hosted/isolated 各一个宿主，同时提供 v1/v2 运行时。
-	core1 := &fakeRuntime{description: loader.Description{ID: "bus.core", Version: "1.0.0", Mode: loader.ModeHosted}}
-	adapter1 := &fakeRuntime{description: loader.Description{ID: "bus.adapter", Version: "1.0.0", Mode: loader.ModeIsolated}}
 	recorder := &stopRecorder{}
+	core1 := &recordingRuntime{
+		fakeRuntime: &fakeRuntime{description: loader.Description{ID: "bus.core", Version: "1.0.0", Mode: loader.ModeHosted}},
+		recorder:    recorder, id: "bus.core",
+	}
+	adapter1 := &recordingRuntime{
+		fakeRuntime: &fakeRuntime{description: loader.Description{ID: "bus.adapter", Version: "1.0.0", Mode: loader.ModeIsolated}},
+		recorder:    recorder, id: "bus.adapter",
+	}
 	core2 := &recordingRuntime{
 		fakeRuntime: &fakeRuntime{description: loader.Description{ID: "bus.core", Version: "2.0.0", Mode: loader.ModeHosted}},
 		recorder:    recorder, id: "bus.core",
@@ -226,8 +232,10 @@ func TestCampusBusMultiComponentRoutesCapabilitiesAndUpgradesGroup(t *testing.T)
 	if err := manager.UpgradePackage(ctx, loader.PackageSpec{
 		ID: "campus.bus",
 		Components: []loader.ComponentSpec{
-			{Runtime: upgradeManifest("bus.adapter", "2.0.0")},
-			{Runtime: upgradeManifest("bus.core", "2.0.0")},
+			{Runtime: loader.Manifest{ID: "bus.adapter", Version: "2.0.0", Mode: loader.ModeIsolated,
+				Role: loader.RoleCapability, LockedDigest: digest}},
+			{Runtime: loader.Manifest{ID: "bus.core", Version: "2.0.0", Mode: loader.ModeHosted,
+				Role: loader.RoleCapability, LockedDigest: digest}},
 		},
 	}); err != nil {
 		t.Fatalf("UpgradePackage: %v", err)
