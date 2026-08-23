@@ -141,7 +141,7 @@ jobs:
           set -euo pipefail
           ./ailuo pack extensions/strings.tool dist
           tarball="$(ls dist/*.tgz)"
-          ./ailuo install "--root "$RUNNER_TEMP/pkgroot" "$tarball" "$RUNNER_TEMP/pkgroot"
+          ./ailuo install --root "$RUNNER_TEMP/pkgroot" "$tarball"
           ./ailuo list --root "$RUNNER_TEMP/pkgroot" | grep -q '^strings.tool@1.0.0'
 
   # Docker Compose 编排语法校验（QQ OneBot 容器）。
