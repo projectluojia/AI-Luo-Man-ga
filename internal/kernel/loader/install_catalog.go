@@ -451,19 +451,6 @@ func validateRecordSpecs(record InstalledRecord) error {
 	return nil
 }
 
-func readSecureJSONFile(path string, maximum int64) ([]byte, error) {
-	// 部署级安全（属主 + 组/其他不可写）叠加在格式层的受限读取之上。
-	info, err := os.Lstat(path)
-	if err != nil || !ownerMatchesProcess(info) || info.Mode().Perm()&0o022 != 0 {
-		return nil, ErrInstallCatalogInvalid
-	}
-	payload, err := packmgr.ReadFileLimited(path, maximum)
-	if err != nil {
-		return nil, errors.Join(ErrInstallCatalogInvalid, err)
-	}
-	return payload, nil
-}
-
 func validateSecureDirectory(path string) error {
 	info, err := os.Lstat(path)
 	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 ||
@@ -471,38 +458,6 @@ func validateSecureDirectory(path string) error {
 		return ErrInstallCatalogInvalid
 	}
 	return nil
-}
-
-func validateInstalledPath(root, path string, directory bool) (string, error) {
-	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
-		return "", ErrInstallCatalogInvalid
-	}
-	relative, err := filepath.Rel(root, path)
-	if err != nil || relative == "." && !directory || relative == ".." ||
-		strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-		return "", ErrInstallCatalogInvalid
-	}
-	current := root
-	parts := strings.Split(relative, string(filepath.Separator))
-	for index, part := range parts {
-		if part == "" || part == "." {
-			continue
-		}
-		current = filepath.Join(current, part)
-		info, err := os.Lstat(current)
-		if err != nil || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0o022 != 0 ||
-			!ownerMatchesProcess(info) {
-			return "", ErrInstallCatalogInvalid
-		}
-		last := index == len(parts)-1
-		if !last && !info.IsDir() {
-			return "", ErrInstallCatalogInvalid
-		}
-		if last && ((directory && !info.IsDir()) || (!directory && !info.Mode().IsRegular())) {
-			return "", ErrInstallCatalogInvalid
-		}
-	}
-	return path, nil
 }
 
 func sameRuntimeManifest(left, right Manifest) bool {
@@ -527,14 +482,6 @@ func cloneProcessSpec(spec packmgr.ProcessSpec) packmgr.ProcessSpec {
 
 func cloneToolSpecs(specs []registry.ToolSpec) []registry.ToolSpec {
 	cloned := append([]registry.ToolSpec(nil), specs...)
-	for index := range cloned {
-		cloned[index].RequiredPermissions = append([]string(nil), cloned[index].RequiredPermissions...)
-	}
-	return cloned
-}
-
-func cloneCapabilitySpecs(specs []registry.CapabilitySpec) []registry.CapabilitySpec {
-	cloned := append([]registry.CapabilitySpec(nil), specs...)
 	for index := range cloned {
 		cloned[index].RequiredPermissions = append([]string(nil), cloned[index].RequiredPermissions...)
 	}
