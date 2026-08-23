@@ -133,15 +133,15 @@ jobs:
       - name: 构建 ailuo CLI
         run: go build -o ailuo .
       - name: 构建 strings.tool 工件
-        run: ./build.sh
+        run: bash ./build.sh
         working-directory: extensions/strings.tool
       - name: 打包并冒烟安装验证
         shell: bash
         run: |
           set -euo pipefail
-          ./ailuo pack extensions/strings.tool --out dist
+          ./ailuo pack extensions/strings.tool dist
           tarball="$(ls dist/*.tgz)"
-          ./ailuo install "$tarball" --root "$RUNNER_TEMP/pkgroot"
+          ./ailuo install "--root "$RUNNER_TEMP/pkgroot" "$tarball" "$RUNNER_TEMP/pkgroot"
           ./ailuo list --root "$RUNNER_TEMP/pkgroot" | grep -q '^strings.tool@1.0.0'
 
   # Docker Compose 编排语法校验（QQ OneBot 容器）。
