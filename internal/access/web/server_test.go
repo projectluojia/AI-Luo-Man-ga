@@ -10,9 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"path/filepath"
-	goruntime "runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -33,6 +31,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/session"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite/sqlitetest"
 )
 
 type fakeOrchestrator struct {
@@ -85,25 +84,6 @@ func newAuthenticatedServer(
 	platformHub *access.Hub,
 ) *web.Server {
 	return web.NewServer(ctx, orchestrator, reader, health, reg, policy, appID, platformHub, web.WithWebAuthenticator(testWebAuthenticator{}))
-}
-
-// closeStore 关闭测试存储，并等待 modernc SQLite 延迟释放 Windows 文件句柄。
-func closeStore(t *testing.T, store *sqlite.Store, tempDir string) {
-	t.Helper()
-	if err := store.Close(); err != nil {
-		t.Errorf("close store: %v", err)
-	}
-	deadline := time.Now().Add(time.Second)
-	for {
-		if err := os.RemoveAll(tempDir); err == nil {
-			return
-		} else if time.Now().After(deadline) {
-			t.Errorf("remove sqlite temp dir: %v", err)
-			return
-		}
-		goruntime.GC()
-		time.Sleep(10 * time.Millisecond)
-	}
 }
 
 type observedContext struct {
@@ -728,7 +708,7 @@ func TestWebAccessShutdownStopsAdmissionAndDrainsActiveRuns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer closeStore(t, store, tempDir)
+	defer sqlitetest.CloseAndWait(t, store, tempDir)
 	backend := &fakeOrchestrator{store: store, block: true}
 	server := newAuthenticatedServer(
 		context.Background(),
@@ -831,7 +811,7 @@ func TestShutdownWaitsForAdmittedCreationBeforeCancellingRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer closeStore(t, store, tempDir)
+	defer sqlitetest.CloseAndWait(t, store, tempDir)
 	backend := &fakeOrchestrator{
 		store:         store,
 		block:         true,
@@ -887,7 +867,7 @@ func TestShutdownWaitsForAdmittedCreationBeforeCancellingRun(t *testing.T) {
 	if err != nil || record.Status != kernelecho.StatusCancelled {
 		t.Fatalf("record=%#v err=%v", record, err)
 	}
-	closeStore(t, store, tempDir)
+	sqlitetest.CloseAndWait(t, store, tempDir)
 }
 
 func newTestServer(t *testing.T, block bool) (http.Handler, *sqlite.Store) {
