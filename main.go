@@ -268,12 +268,12 @@ func runPackageCommand(parent context.Context, arguments []string, output io.Wri
 		if flags.NArg() == 2 {
 			outputDir = flags.Arg(1)
 		}
-		// 优先作者侧源清单 ailuo.toml（packagefmt 解析为中性清单），
+		// 优先作者侧源清单 ailuo.toml（resolveSource 解析并执行 [build] 构建），
 		// 否则兼容旧 manifest.json 直接打包（packmgr.Pack）。
 		var tarballPath string
 		var err error
-		if manifest, manifestBytes, ok, parseErr := parseSourceManifest(flags.Arg(0)); parseErr != nil {
-			return true, parseErr
+		if manifest, manifestBytes, ok, resolveErr := resolveSource(ctx, flags.Arg(0)); resolveErr != nil {
+			return true, resolveErr
 		} else if ok {
 			tarballPath, err = packmgr.PackFromSource(ctx, flags.Arg(0), outputDir, manifest, manifestBytes)
 		} else {
@@ -297,8 +297,8 @@ func runPackageCommand(parent context.Context, arguments []string, output io.Wri
 		client := packmgr.NewGitHubClient()
 		var htmlURL string
 		var err error
-		if manifest, manifestBytes, ok, parseErr := parseSourceManifest(flags.Arg(0)); parseErr != nil {
-			return true, parseErr
+		if manifest, manifestBytes, ok, resolveErr := resolveSource(ctx, flags.Arg(0)); resolveErr != nil {
+			return true, resolveErr
 		} else if ok {
 			htmlURL, err = client.PublishFromSource(ctx, owner, name, flags.Arg(0), manifest, manifestBytes)
 		} else {
@@ -357,16 +357,22 @@ func localPathExists(path string) bool {
 	return err == nil
 }
 
-// parseSourceManifest 解析源包目录的清单：优先 ailuo.toml；found=false 表示
-// 无 ailuo.toml（由旧 manifest.json 路径处理），err 报告解析失败。
-func parseSourceManifest(sourceDir string) (manifest packmgr.Manifest, manifestBytes []byte, found bool, err error) {
+// resolveSource 解析源包目录：优先 ailuo.toml；found=false 表示无 ailuo.toml
+// （由旧 manifest.json 路径处理）。若清单声明 [build]，先执行构建再返回
+// （pack/publish 共用，构建失败即报错，不打包残缺工件）。
+func resolveSource(ctx context.Context, sourceDir string) (manifest packmgr.Manifest, manifestBytes []byte, found bool, err error) {
 	path := packagefmt.SourcePath(sourceDir)
 	if _, statErr := os.Stat(path); statErr != nil {
 		return packmgr.Manifest{}, nil, false, nil
 	}
-	manifest, manifestBytes, err = packagefmt.Parse(path)
+	manifest, manifestBytes, build, err := packagefmt.Parse(path)
 	if err != nil {
 		return packmgr.Manifest{}, nil, true, err
+	}
+	if build != nil {
+		if err := packagefmt.Build(ctx, sourceDir, manifest, *build); err != nil {
+			return packmgr.Manifest{}, nil, true, err
+		}
 	}
 	return manifest, manifestBytes, true, nil
 }

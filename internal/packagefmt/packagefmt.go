@@ -36,6 +36,7 @@ type sourceManifest struct {
 	Tools        map[string]sourceTool `toml:"tool,omitempty"`
 	Service      *sourceService        `toml:"service,omitempty"`
 	Capabilities []sourceCapability    `toml:"capability,omitempty"`
+	Build        *BuildSpec            `toml:"build,omitempty"`
 }
 
 type sourcePackage struct {
@@ -99,32 +100,36 @@ type sourceCapability struct {
 
 // Parse 读取并解析 ailuo.toml：严格 TOML 解码（未知字段/重复键拒绝），转换为
 // 中性包清单并校验。返回的 manifestBytes 是序列化后的清单字节（供 pack 时
-// 原样写入与 digest 锁定，与 packmgr 安装路径一致）。
-func Parse(path string) (packmgr.Manifest, []byte, error) {
+// 原样写入与 digest 锁定，与 packmgr 安装路径一致）；build 为 `[build]` 声明
+// （nil 表示源清单未声明构建，工件由作者预置）。
+func Parse(path string) (manifest packmgr.Manifest, manifestBytes []byte, build *BuildSpec, err error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return packmgr.Manifest{}, nil, fmt.Errorf("%w: %v", ErrSourceInvalid, err)
+		return packmgr.Manifest{}, nil, nil, fmt.Errorf("%w: %v", ErrSourceInvalid, err)
 	}
 	if int64(len(data)) > packmgr.MaxManifestBytes {
-		return packmgr.Manifest{}, nil, fmt.Errorf("%w: 源清单超过大小上限", ErrSourceInvalid)
+		return packmgr.Manifest{}, nil, nil, fmt.Errorf("%w: 源清单超过大小上限", ErrSourceInvalid)
 	}
 	var source sourceManifest
 	meta, err := toml.NewDecoder(bytes.NewReader(data)).Decode(&source)
 	if err != nil {
-		return packmgr.Manifest{}, nil, fmt.Errorf("%w: %v", ErrSourceInvalid, err)
+		return packmgr.Manifest{}, nil, nil, fmt.Errorf("%w: %v", ErrSourceInvalid, err)
 	}
 	if undecoded := meta.Undecoded(); len(undecoded) > 0 {
-		return packmgr.Manifest{}, nil, fmt.Errorf("%w: 未知字段 %s", ErrSourceInvalid, undecoded[0])
+		return packmgr.Manifest{}, nil, nil, fmt.Errorf("%w: 未知字段 %s", ErrSourceInvalid, undecoded[0])
 	}
-	manifest, err := source.convert()
+	manifest, err = source.convert()
 	if err != nil {
-		return packmgr.Manifest{}, nil, err
+		return packmgr.Manifest{}, nil, nil, err
 	}
-	manifestBytes, err := json.Marshal(manifest)
+	manifestBytes, err = json.Marshal(manifest)
 	if err != nil {
-		return packmgr.Manifest{}, nil, fmt.Errorf("%w: 清单序列化失败: %v", ErrSourceInvalid, err)
+		return packmgr.Manifest{}, nil, nil, fmt.Errorf("%w: 清单序列化失败: %v", ErrSourceInvalid, err)
 	}
-	return manifest, manifestBytes, nil
+	if source.Build != nil {
+		build = &BuildSpec{Tool: source.Build.Tool, Source: source.Build.Source}
+	}
+	return manifest, manifestBytes, build, nil
 }
 
 // SourcePath 返回源包目录中的 ailuo.toml 路径（若存在）。

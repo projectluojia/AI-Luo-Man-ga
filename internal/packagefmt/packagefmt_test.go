@@ -36,7 +36,7 @@ id = "strings.len.cap"
 tool = "strings.len"
 `)
 
-	manifest, _, err := Parse(path)
+	manifest, _, _, err := Parse(path)
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -113,7 +113,7 @@ name = "演示能力"
 description = "覆盖描述"
 `)
 
-	manifest, _, err := Parse(path)
+	manifest, _, _, err := Parse(path)
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -147,7 +147,7 @@ id = "demo.cap"
 tool = "missing.tool"
 `)
 
-	if _, _, err := Parse(path); err == nil {
+	if _, _, _, err := Parse(path); err == nil {
 		t.Fatal("引用不存在的 tool 应报错")
 	}
 }
@@ -168,7 +168,7 @@ mode = "hosted"
 entrypoint = "demo.wasm"
 `)
 
-	if _, _, err := Parse(path); err == nil {
+	if _, _, _, err := Parse(path); err == nil {
 		t.Fatal("未知字段应被拒绝")
 	}
 }
@@ -183,7 +183,7 @@ id = "demo.pkg"
 version = "1.0.0"
 `)
 
-	if _, _, err := Parse(path); err == nil {
+	if _, _, _, err := Parse(path); err == nil {
 		t.Fatal("缺少 component 应被拒绝")
 	}
 }
@@ -274,7 +274,7 @@ tool = "strings.len"
 		t.Fatalf("写工件: %v", err)
 	}
 
-	manifest, manifestBytes, err := Parse(path)
+	manifest, manifestBytes, _, err := Parse(path)
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}

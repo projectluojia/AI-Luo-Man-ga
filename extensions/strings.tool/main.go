@@ -3,7 +3,7 @@
 // strings.tool 是 hosted 包参考实现：字符串工具集。
 // 它演示 hosted 沙箱调用契约（stdin 调用信封 -> stdout 结果信封），只依赖标准库，
 // 可交叉编译为 wasm32-wasi 工件，在任意平台由内核 WasmHost 沙箱执行。
-// 仅参与 wasm32-wasi 交叉编译（build.ps1 / build.sh）；宿主编译时该目录被忽略。
+// 仅参与 wasm32-wasi 交叉编译（ailuo pack 经 [build] 驱动）；宿主编译时该目录被忽略。
 package main
 
 import (

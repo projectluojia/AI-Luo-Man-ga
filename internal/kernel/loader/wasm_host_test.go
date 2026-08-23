@@ -22,7 +22,7 @@ func stringToolArtifact(t *testing.T) []byte {
 	path := filepath.Join("..", "..", "..", "extensions", "strings.tool", "strings.tool.wasm")
 	data, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("读取 strings.tool 工件（请先运行 extensions/strings.tool/build.ps1）: %v", err)
+		t.Fatalf("读取 strings.tool 工件（请先运行 ailuo pack extensions/strings.tool）: %v", err)
 	}
 	return data
 }
