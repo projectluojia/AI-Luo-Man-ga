@@ -2,22 +2,16 @@ package qq
 
 import (
 	"context"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite"
 )
 
 func newPokeAdapter(t *testing.T, bot *fakeOneBot) *Adapter {
 	t.Helper()
-	store, err := sqlite.Open(filepath.Join(t.TempDir(), "qq-poke.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
+	store := newQQTestStore(t, "qq-poke.db")
 	hub := newQQTestHub(t, store, stubResolver{user: "user-1"})
 	adapter, err := New(Config{
 		AppID: "campus-services", WSURL: bot.wsURL(), BotQQID: "2647414417",
@@ -99,11 +93,7 @@ func TestQQAdapterRepliesToPrivatePoke(t *testing.T) {
 
 func TestQQAdapterCanDisablePokeTextWithoutDisablingGroupPoke(t *testing.T) {
 	bot := newFakeOneBot(t)
-	store, err := sqlite.Open(filepath.Join(t.TempDir(), "qq-poke-disabled.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
+	store := newQQTestStore(t, "qq-poke-disabled.db")
 	hub := newQQTestHub(t, store, stubResolver{user: "user-1"})
 	adapter, err := New(Config{
 		AppID: "campus-services", WSURL: bot.wsURL(), BotQQID: "2647414417",
@@ -157,11 +147,7 @@ func TestQQAdapterIgnoresPokeOnOthers(t *testing.T) {
 // TestQQAdapterIgnoresGroupMessageWithoutMention 验证群聊未 @ 机器人时静默忽略。
 func TestQQAdapterIgnoresGroupMessageWithoutMention(t *testing.T) {
 	bot := newFakeOneBot(t)
-	store, err := sqlite.Open(filepath.Join(t.TempDir(), "qq-ignore.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
+	store := newQQTestStore(t, "qq-ignore.db")
 	hub := newQQTestHub(t, store, stubResolver{user: "user-1"})
 	orchestrator := &qqFakeOrchestrator{store: store, created: make(chan struct{})}
 	adapter, err := New(Config{
@@ -194,11 +180,7 @@ func TestQQAdapterIgnoresGroupMessageWithoutMention(t *testing.T) {
 // TestQQAdapterIgnoresMentionOfAnotherUser 验证群聊只 @ 其他用户时不会创建 Echo。
 func TestQQAdapterIgnoresMentionOfAnotherUser(t *testing.T) {
 	bot := newFakeOneBot(t)
-	store, err := sqlite.Open(filepath.Join(t.TempDir(), "qq-other-mention.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
+	store := newQQTestStore(t, "qq-other-mention.db")
 	hub := newQQTestHub(t, store, stubResolver{user: "user-1"})
 	orchestrator := &qqFakeOrchestrator{store: store, created: make(chan struct{})}
 	adapter, err := New(Config{
@@ -230,11 +212,7 @@ func TestQQAdapterIgnoresMentionOfAnotherUser(t *testing.T) {
 // TestQQAdapterHandlesGroupMessageWithMention 验证群聊 @ 机器人后正常入站。
 func TestQQAdapterHandlesGroupMessageWithMention(t *testing.T) {
 	bot := newFakeOneBot(t)
-	store, err := sqlite.Open(filepath.Join(t.TempDir(), "qq-mention.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
+	store := newQQTestStore(t, "qq-mention.db")
 	hub := newQQTestHub(t, store, stubResolver{user: "user-1"})
 	orchestrator := &qqFakeOrchestrator{store: store, created: make(chan struct{})}
 	adapter, err := New(Config{

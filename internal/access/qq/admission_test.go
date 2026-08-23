@@ -2,11 +2,9 @@ package qq
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite"
 )
 
 type countingProvisioner struct{ calls int }
@@ -17,11 +15,7 @@ func (p *countingProvisioner) EnsureQQIdentity(context.Context, access.InboundMe
 }
 
 func TestQQAdmissionRejectsUnknownGroupBeforeHub(t *testing.T) {
-	store, err := sqlite.Open(filepath.Join(t.TempDir(), "qq-admission.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
+	store := newQQTestStore(t, "qq-admission.db")
 	hub, err := access.NewHub("campus-services", store, stubResolver{user: "user-1"})
 	if err != nil {
 		t.Fatal(err)
