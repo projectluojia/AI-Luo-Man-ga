@@ -89,12 +89,12 @@ func TestSchemaTypeRejects(t *testing.T) {
 	}
 }
 
-func TestExportName(t *testing.T) {
-	if got := exportName("campus.bus.stops.search"); got != "CampusBusStopsSearch" {
-		t.Fatalf("exportName = %q", got)
+func TestGoMethodName(t *testing.T) {
+	if got := goMethodName("campus.bus.stops.search", "campus"); got != "BusStopsSearch" {
+		t.Fatalf("goMethodName = %q", got)
 	}
-	if got := exportName("stops"); got != "Stops" {
-		t.Fatalf("exportName 单段 = %q", got)
+	if got := goMethodName("stops", "campus"); got != "Stops" {
+		t.Fatalf("goMethodName 单段 = %q", got)
 	}
 }
 

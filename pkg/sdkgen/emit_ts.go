@@ -101,18 +101,3 @@ func tsFieldType(model *TypeModel) string {
 		return "unknown"
 	}
 }
-
-// tsMethodName 派生 TypeScript 方法名：点分段 camelCase（bus.stops.search → busStopsSearch）。
-func tsMethodName(capabilityID, packageID string) string {
-	rest := stripPackagePrefix(capabilityID, packageID)
-	parts := strings.Split(rest, ".")
-	names := make([]string, 0, len(parts))
-	for index, part := range parts {
-		if index == 0 {
-			names = append(names, part)
-		} else {
-			names = append(names, strings.Title(part))
-		}
-	}
-	return strings.Join(names, "")
-}

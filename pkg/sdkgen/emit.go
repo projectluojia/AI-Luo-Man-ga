@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/iancoleman/strcase"
 )
 
 // emitGo 渲染 Go SDK：一个 client.go，包含传输层与每个 capability 的类型化方法。
@@ -98,7 +100,7 @@ func goCapability(builder *strings.Builder, capability Capability, model *TypeMo
 			goStructType(builder, namedModel)
 		}
 	}
-	method := methodName(capability.ID, packageID)
+	method := goMethodName(capability.ID, packageID)
 	fmt.Fprintf(builder, "// %s 调用 %s。\n", method, capability.ID)
 	fmt.Fprintf(builder, "func (c *Client) %s(ctx context.Context, input %s) (json.RawMessage, error) {\n", method, model.Name)
 	fmt.Fprintf(builder, "\treturn c.invoke(ctx, %q, input)\n}\n\n", capability.ID)
@@ -142,7 +144,7 @@ func goEnumType(builder *strings.Builder, model *TypeModel) {
 	}
 	fmt.Fprintf(builder, "type %s %s\n\nconst (\n", model.Name, base)
 	for _, value := range model.Values {
-		constant := model.Name + exportName(value)
+		constant := model.Name + strcase.ToCamel(value)
 		if model.Base == KindInteger {
 			fmt.Fprintf(builder, "\t%s %s = %s\n", constant, model.Name, value)
 		} else {
@@ -168,20 +170,6 @@ func goStructType(builder *strings.Builder, model *TypeModel) {
 		fmt.Fprintf(builder, "\t%s %s `%s`\n", goFieldName(field.Name), goFieldType(field.Type, field.Required), tag)
 	}
 	builder.WriteString("}\n\n")
-}
-
-// goFieldName 将 snake_case JSON 键转为 Go 导出字段名（depart_after → DepartAfter，id → ID）。
-func goFieldName(name string) string {
-	parts := strings.Split(name, "_")
-	var builder strings.Builder
-	for _, part := range parts {
-		if part == "id" {
-			builder.WriteString("ID")
-		} else {
-			builder.WriteString(upperFirst(part))
-		}
-	}
-	return builder.String()
 }
 
 // goFieldType 映射字段类型：非必填标量与对象用指针（区分未提供与零值），
@@ -319,7 +307,7 @@ func pythonEnumType(builder *strings.Builder, model *TypeModel) {
 	}
 	fmt.Fprintf(builder, "class %s(%s, Enum):\n", model.Name, base)
 	for _, value := range model.Values {
-		member := exportName(value)
+		member := strcase.ToCamel(value)
 		if model.Base == KindInteger {
 			fmt.Fprintf(builder, "    %s = %s\n", member, value)
 		} else {
