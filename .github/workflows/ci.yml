@@ -132,7 +132,7 @@ jobs:
           cache: true
       - name: 构建 ailuo CLI
         run: go build -o ailuo .
-      - name: 打包（经 [build] 自动构建）并冒烟安装验证
+      - name: 打包 strings.tool（经 [build] 自动构建）并冒烟安装验证
         shell: bash
         run: |
           set -euo pipefail
@@ -140,6 +140,14 @@ jobs:
           tarball="$(ls dist/*.tgz)"
           ./ailuo install --root "$RUNNER_TEMP/pkgroot" "$tarball"
           ./ailuo list --root "$RUNNER_TEMP/pkgroot" | grep -q '^strings.tool@1.0.0'
+      - name: 打包 campus.bus（经 [build] 自动构建）并冒烟安装验证
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./ailuo pack extensions/campus.bus dist
+          tarball="$(ls dist/campus-*.tgz)"
+          ./ailuo install --root "$RUNNER_TEMP/pkgroot" "$tarball"
+          ./ailuo list --root "$RUNNER_TEMP/pkgroot" | grep -q '^campus@1.0.0'
 
   # Docker Compose 编排语法校验（QQ OneBot 容器）。
   compose-config:

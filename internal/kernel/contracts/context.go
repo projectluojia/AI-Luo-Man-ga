@@ -10,10 +10,6 @@ var (
 	ErrMissingEchoID    = errors.New("request context is missing echo_id")
 	ErrMissingRequestID = errors.New("request context is missing request_id")
 	ErrDeadlineExceeded = errors.New("request deadline has already expired")
-	ErrDataUnavailable  = errors.New("authoritative data is unavailable")
-	ErrDataIncomplete   = errors.New("data freshness metadata is incomplete")
-	ErrDataUntrusted    = errors.New("data source is not authoritative")
-	ErrDataExpired      = errors.New("authoritative data has expired")
 )
 
 // RequestContext 是所有内核治理调用必须传递的安全与可观测上下文。

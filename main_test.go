@@ -174,7 +174,7 @@ func TestConfigureInstalledRuntimesAllowsEmptySecureCatalog(t *testing.T) {
 	if err := os.Chmod(root, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	hosts, records, err := configureInstalledRuntimes(t.Context(), config{runtimeInstallRoot: root})
+	hosts, records, _, err := configureInstalledRuntimes(t.Context(), config{runtimeInstallRoot: root}, nil)
 	if err != nil {
 		t.Fatalf("configure empty catalog: %v", err)
 	}
@@ -188,16 +188,16 @@ func TestConfigureInstalledRuntimesRegistersHostedCatalogAndRequiresAddress(t *t
 		t.Skip("非 Unix 平台显式关闭安装目录属主校验")
 	}
 	root := writeMainInstalledFixture(t)
-	if _, _, err := configureInstalledRuntimes(t.Context(), config{
+	if _, _, _, err := configureInstalledRuntimes(t.Context(), config{
 		runtimeInstallRoot: root,
-	}); err == nil || !strings.Contains(err.Error(), "AILUO_RUNTIME_HOST_ADDRESS") {
+	}, nil); err == nil || !strings.Contains(err.Error(), "AILUO_RUNTIME_HOST_ADDRESS") {
 		t.Fatalf("missing hosted address error=%v", err)
 	}
 
-	hosts, records, err := configureInstalledRuntimes(t.Context(), config{
+	hosts, records, _, err := configureInstalledRuntimes(t.Context(), config{
 		runtimeInstallRoot: root,
 		runtimeHostAddress: "unix:" + filepath.Join(root, "host.sock"),
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("configure hosted catalog: %v", err)
 	}

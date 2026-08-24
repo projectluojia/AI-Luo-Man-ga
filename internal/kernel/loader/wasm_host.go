@@ -18,6 +18,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/packmgr"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/bus"
 )
 
 const (
@@ -67,6 +68,9 @@ type WasmHostConfig struct {
 	CallTimeout time.Duration
 	// HostFunctions 是投影给 guest 的宿主函数（可空）。
 	HostFunctions []HostedFunction
+	// RequireHostFunctions 为 true 时只接受声明了宿主函数的清单（安装目录 hosted
+	// 包专用宿主）：无宿主函数声明的包交给外部 GRPCHost 执行，避免双宿主歧义。
+	RequireHostFunctions bool
 }
 
 // WasmHost 以 wazero 沙箱执行 hosted 包：进程内线性内存隔离 + WASI 能力裁剪。
@@ -108,7 +112,12 @@ func (h *WasmHost) Mode() string { return ModeHosted }
 
 // Verify 确认工件可读、未超过大小上限，且清单声明的宿主函数全部由本宿主
 // 提供（声明 ⊆ 可用，缺项在注册期 fail-closed）；digest 校验由 ReadArtifact 负责。
+// RequireHostFunctions 时无宿主函数声明的清单直接拒绝（本宿主只服务需内核
+// 投影的安装目录 hosted 包，无声明者归 GRPCHost，防路由歧义）。
 func (h *WasmHost) Verify(ctx context.Context, manifest Manifest) error {
+	if h.config.RequireHostFunctions && len(manifest.HostFunctions) == 0 {
+		return fmt.Errorf("%w: host requires host_functions declarations", ErrUnsupportedMode)
+	}
 	artifact, err := h.config.ReadArtifact(ctx, manifest)
 	if err != nil {
 		return err
@@ -391,13 +400,13 @@ func parseHostedEnvelope(runtimeID string, output []byte) (json.RawMessage, erro
 	)
 	switch envelope.Code {
 	case "data_unavailable":
-		return nil, errors.Join(ErrHostedCallRejected, contracts.ErrDataUnavailable)
+		return nil, errors.Join(ErrHostedCallRejected, bus.ErrDataUnavailable)
 	case "data_incomplete":
-		return nil, errors.Join(ErrHostedCallRejected, contracts.ErrDataIncomplete)
+		return nil, errors.Join(ErrHostedCallRejected, bus.ErrDataIncomplete)
 	case "data_untrusted":
-		return nil, errors.Join(ErrHostedCallRejected, contracts.ErrDataUntrusted)
+		return nil, errors.Join(ErrHostedCallRejected, bus.ErrDataUntrusted)
 	case "data_expired":
-		return nil, errors.Join(ErrHostedCallRejected, contracts.ErrDataExpired)
+		return nil, errors.Join(ErrHostedCallRejected, bus.ErrDataExpired)
 	case "invalid_argument":
 		return nil, errors.Join(ErrHostedCallRejected, ErrHostedInvalidArgument)
 	case "internal":
