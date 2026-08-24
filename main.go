@@ -41,7 +41,6 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/task"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/packagefmt"
-	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/promptcatalog"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/agent"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus"
@@ -49,6 +48,8 @@ import (
 	promptservice "github.com/projectluojia/AI-Luo-Man-ga/internal/services/prompt"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/blob"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/sdkgen"
 
 	"github.com/joho/godotenv"
 	"google.golang.org/grpc"
@@ -195,7 +196,7 @@ func runMaintenanceCommand(arguments []string, output io.Writer) (bool, error) {
 		}
 		_, err = fmt.Fprintf(output, "身份解绑完成：app=%s 平台=%s space=%s platform_user=%s\n", *appID, *platform, *space, *platformUser)
 		return true, err
-	case "install", "upgrade", "uninstall", "list", "pack", "publish":
+	case "install", "upgrade", "uninstall", "list", "pack", "publish", "sdk-go", "sdk-py":
 		return runPackageCommand(ctx, arguments, output)
 	default:
 		return true, fmt.Errorf("configuration error: unknown command")
@@ -315,6 +316,39 @@ func runPackageCommand(parent context.Context, arguments []string, output io.Wri
 			return true, err
 		}
 		if _, err := fmt.Fprintf(output, "已发布 %s\n", htmlURL); err != nil {
+			return true, err
+		}
+		return true, nil
+	case "sdk-go", "sdk-py":
+		if flags.NArg() < 1 || flags.NArg() > 2 {
+			return true, fmt.Errorf("configuration error: %s requires source package directory [and optional output directory]", command)
+		}
+		language := sdkgen.LanguageGo
+		if command == "sdk-py" {
+			language = sdkgen.LanguagePython
+		}
+		manifest, _, _, err := packagefmt.Parse(packagefmt.SourcePath(flags.Arg(0)))
+		if err != nil {
+			return true, err
+		}
+		files, err := sdkgen.Generate(manifest.Extensions, sdkgen.Options{Language: language, PackageID: manifest.ID})
+		if err != nil {
+			return true, err
+		}
+		outputDir := "."
+		if flags.NArg() == 2 {
+			outputDir = flags.Arg(1)
+		}
+		for _, f := range files {
+			path := filepath.Join(outputDir, f.Path)
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				return true, err
+			}
+			if err := os.WriteFile(path, f.Code, 0o644); err != nil {
+				return true, err
+			}
+		}
+		if _, err := fmt.Fprintf(output, "已生成 SDK：%d 个文件到 %s\n", len(files), outputDir); err != nil {
 			return true, err
 		}
 		return true, nil
