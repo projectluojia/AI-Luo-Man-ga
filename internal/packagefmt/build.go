@@ -11,7 +11,7 @@ import (
 	"path/filepath"
 	"runtime"
 
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/packmgr"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
 )
 
 // BuildToolGoWasm 是内置的 Go→wasm32-wasi 构建器：跨平台一致（os/exec 设

@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/packmgr"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
 )
 
 // applyProcessLimits 在既无 prlimit 也无 Job Object 的平台（macOS/BSD、Plan 9、

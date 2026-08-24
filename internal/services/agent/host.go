@@ -10,7 +10,7 @@ import (
 	executorv1 "github.com/projectluojia/AI-Luo-Man-ga/gen/executorv1"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/executor"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/packmgr"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"

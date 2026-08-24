@@ -13,7 +13,7 @@ import (
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/packmgr"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
 )
 
 // stringToolArtifact 读取参考包编译产物；测试工作目录为 internal/kernel/loader。

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/packmgr"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
 )
 
 // writeSourcePackage 在临时目录构造单组件源包（manifest.json + entrypoint 工件）。

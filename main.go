@@ -41,7 +41,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/task"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/packagefmt"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/packmgr"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/promptcatalog"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/agent"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus"

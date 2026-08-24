@@ -19,7 +19,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/packmgr"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
 )
 
 // 源清单文件名的唯一约定（作者侧包定义）。
