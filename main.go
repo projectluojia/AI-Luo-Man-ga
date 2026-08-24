@@ -202,16 +202,33 @@ func runMaintenanceCommand(arguments []string, output io.Writer) (bool, error) {
 	}
 }
 
+// defaultRuntimeRoot 返回用户级默认安装根目录（用户配置目录下 ailuo/runtime）。
+// 与 npm 的 node_modules、cargo 的 registry 同理：ailuo install 与内核启动共享
+// 同一默认位置，无需显式 --root；UserConfigDir 不可用（无 HOME 等）时返回空。
+func defaultRuntimeRoot() string {
+	base, err := os.UserConfigDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(base, "ailuo", "runtime")
+}
+
 // runPackageCommand 执行包管理 CLI：install 支持本地目录/tarball/GitHub
 // Release 源（owner/repo[@约束]），upgrade/uninstall/list/pack/publish 见各分支。
 func runPackageCommand(parent context.Context, arguments []string, output io.Writer) (bool, error) {
 	command := arguments[0]
 	flags := flag.NewFlagSet(command, flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
-	root := flags.String("root", os.Getenv("AILUO_RUNTIME_INSTALL_ROOT"), "安装根目录（默认 AILUO_RUNTIME_INSTALL_ROOT）")
+	root := flags.String("root", "", "安装根目录（默认 AILUO_RUNTIME_INSTALL_ROOT，再默认用户配置目录 ailuo/runtime）")
 	repo := flags.String("repo", "", "GitHub 仓库（owner/repo），publish 使用")
 	if err := flags.Parse(arguments[1:]); err != nil {
 		return true, fmt.Errorf("configuration error: %s", err)
+	}
+	if *root == "" {
+		*root = os.Getenv("AILUO_RUNTIME_INSTALL_ROOT")
+	}
+	if *root == "" {
+		*root = defaultRuntimeRoot()
 	}
 	if *root == "" && command != "pack" && command != "publish" {
 		return true, fmt.Errorf("configuration error: %s requires --root 或 AILUO_RUNTIME_INSTALL_ROOT", command)
@@ -790,7 +807,7 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 		}
 	}
 	if !campusInstalled {
-		return fmt.Errorf("campus.bus 未安装：请先运行 extensions/campus.bus 的 ailuo pack 并 ailuo install 到安装目录（AILUO_RUNTIME_INSTALL_ROOT）")
+		return fmt.Errorf("campus.bus 未安装：请先 ailuo install campus.bus（无 --root 时自动装到默认用户目录）")
 	}
 	// 预热全部声明 pin 的运行时（内置 agent 与 installed pin）：编译/启动
 	// 失败则内核拒绝就绪（fail-closed）。预热清单由各清单声明推导，不再硬编码。
@@ -1085,6 +1102,18 @@ func loadConfig() (config, error) {
 	if err != nil {
 		return config{}, err
 	}
+	// 安装根目录：显式 AILUO_RUNTIME_INSTALL_ROOT 优先；未设置时回退用户级
+	// 默认目录（ailuo install 与内核共享同一默认位置）。默认目录尚未创建
+	// （未安装任何包）时视为未配置：内核跳过安装目录装载，由 campus 核心
+	// 包缺失的 fail-closed 检查给出可行动安装指引。
+	runtimeInstallRoot := os.Getenv("AILUO_RUNTIME_INSTALL_ROOT")
+	if runtimeInstallRoot == "" {
+		if def := defaultRuntimeRoot(); def != "" {
+			if _, err := os.Stat(def); err == nil {
+				runtimeInstallRoot = def
+			}
+		}
+	}
 	result := config{
 		httpAddress:         envOr("AILUO_HTTP_ADDRESS", "127.0.0.1:8080"),
 		configUIAddress:     envOr("AILUO_CONFIG_UI_ADDRESS", configui.DefaultAddress),
@@ -1110,7 +1139,7 @@ func loadConfig() (config, error) {
 		logFormat:           envOr("AILUO_LOG_FORMAT", "console"),
 		logSource:           logSource,
 		logMaxValueLength:   logMaxValueLength,
-		runtimeInstallRoot:  os.Getenv("AILUO_RUNTIME_INSTALL_ROOT"),
+		runtimeInstallRoot:  runtimeInstallRoot,
 		runtimeHostAddress:  os.Getenv("AILUO_RUNTIME_HOST_ADDRESS"),
 		qqWSURL:             os.Getenv("AILUO_QQ_WS_URL"),
 		qqEnabled:           os.Getenv("AILUO_QQ_WS_URL") != "",

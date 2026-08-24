@@ -166,6 +166,16 @@ func TestLoadConfigRejectsRelativeRuntimeInstallRoot(t *testing.T) {
 	}
 }
 
+func TestDefaultRuntimeRootIsAbsoluteOrEmpty(t *testing.T) {
+	root := defaultRuntimeRoot()
+	if root == "" {
+		return // 无 HOME / 不支持 UserConfigDir 的平台
+	}
+	if !filepath.IsAbs(root) || !strings.HasSuffix(root, "ailuo"+string(filepath.Separator)+"runtime") {
+		t.Fatalf("defaultRuntimeRoot()=%q 应为绝对路径并结尾为 ailuo/runtime", root)
+	}
+}
+
 func TestConfigureInstalledRuntimesAllowsEmptySecureCatalog(t *testing.T) {
 	if !unixSecurityAvailable {
 		t.Skip("非 Unix 平台显式关闭安装目录属主校验")
