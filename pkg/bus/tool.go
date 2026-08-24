@@ -10,7 +10,7 @@ import (
 const (
 	StopSearchToolID    = "campus.bus.stops.search"
 	RouteListToolID     = "campus.bus.routes.list"
-	JourneySearchToolID = "campus.bus.schedule.search"
+	JourneySearchToolID = "campus.bus.journeys.search"
 
 	StopSearchInputSchemaJSON    = `{"type":"object","properties":{"query":{"type":"string","minLength":1},"limit":{"type":"integer","minimum":1,"maximum":50}},"required":["query"],"additionalProperties":false}`
 	RouteListInputSchemaJSON     = `{"type":"object","properties":{"limit":{"type":"integer","minimum":1,"maximum":50}},"additionalProperties":false}`
