@@ -40,6 +40,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/session"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/task"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/packagefmt"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/packmgr"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/promptcatalog"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/agent"
@@ -267,7 +268,17 @@ func runPackageCommand(parent context.Context, arguments []string, output io.Wri
 		if flags.NArg() == 2 {
 			outputDir = flags.Arg(1)
 		}
-		tarballPath, err := packmgr.Pack(ctx, flags.Arg(0), outputDir)
+		// 优先作者侧源清单 ailuo.toml（packagefmt 解析为中性清单），
+		// 否则兼容旧 manifest.json 直接打包（packmgr.Pack）。
+		var tarballPath string
+		var err error
+		if manifest, manifestBytes, ok, parseErr := parseSourceManifest(flags.Arg(0)); parseErr != nil {
+			return true, parseErr
+		} else if ok {
+			tarballPath, err = packmgr.PackFromSource(ctx, flags.Arg(0), outputDir, manifest, manifestBytes)
+		} else {
+			tarballPath, err = packmgr.Pack(ctx, flags.Arg(0), outputDir)
+		}
 		if err != nil {
 			return true, err
 		}
@@ -283,7 +294,16 @@ func runPackageCommand(parent context.Context, arguments []string, output io.Wri
 		if !ok || owner == "" || name == "" {
 			return true, fmt.Errorf("configuration error: publish requires --repo owner/repo")
 		}
-		htmlURL, err := packmgr.NewGitHubClient().Publish(ctx, owner, name, flags.Arg(0))
+		client := packmgr.NewGitHubClient()
+		var htmlURL string
+		var err error
+		if manifest, manifestBytes, ok, parseErr := parseSourceManifest(flags.Arg(0)); parseErr != nil {
+			return true, parseErr
+		} else if ok {
+			htmlURL, err = client.PublishFromSource(ctx, owner, name, flags.Arg(0), manifest, manifestBytes)
+		} else {
+			htmlURL, err = client.Publish(ctx, owner, name, flags.Arg(0))
+		}
 		if err != nil {
 			return true, err
 		}
@@ -335,6 +355,20 @@ func splitRegistryRef(source string) (owner, repo, constraint string, ok bool) {
 func localPathExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
+}
+
+// parseSourceManifest 解析源包目录的清单：优先 ailuo.toml；found=false 表示
+// 无 ailuo.toml（由旧 manifest.json 路径处理），err 报告解析失败。
+func parseSourceManifest(sourceDir string) (manifest packmgr.Manifest, manifestBytes []byte, found bool, err error) {
+	path := packagefmt.SourcePath(sourceDir)
+	if _, statErr := os.Stat(path); statErr != nil {
+		return packmgr.Manifest{}, nil, false, nil
+	}
+	manifest, manifestBytes, err = packagefmt.Parse(path)
+	if err != nil {
+		return packmgr.Manifest{}, nil, true, err
+	}
+	return manifest, manifestBytes, true, nil
 }
 
 // identityProvision 是 identity-bind 命令的输入。

@@ -11,7 +11,7 @@ on:
       package-dir:
         type: string
         default: "."
-        description: 源包目录（含 manifest.json 与 entrypoint 工件）
+        description: 源包目录（含 ailuo.toml 或 manifest.json 与 entrypoint 工件）
       build-command:
         type: string
         default: ""
@@ -69,19 +69,6 @@ jobs:
           BUILD_COMMAND: ${{ inputs.build-command }}
         run: bash -euo pipefail -c "$BUILD_COMMAND"
         working-directory: ${{ inputs.package-dir }}
-      - name: 校验清单版本与 git tag 一致
-        if: ${{ inputs.tag-required }}
-        shell: bash
-        env:
-          PACKAGE_DIR: ${{ inputs.package-dir }}
-        run: |
-          tag="${GITHUB_REF#refs/tags/}"
-          tag="${tag#v}"
-          version="$(jq -r .version "$PACKAGE_DIR/manifest.json")"
-          test "$tag" = "$version" || {
-            echo "git tag $tag 与 manifest.version $version 不一致" >&2
-            exit 1
-          }
       - name: 打包并冒烟安装验证
         id: pack
         shell: bash
@@ -89,16 +76,28 @@ jobs:
           PACKAGE_DIR: ${{ inputs.package-dir }}
         run: |
           set -euo pipefail
-          id="$(jq -r .id "$PACKAGE_DIR/manifest.json")"
-          version="$(jq -r .version "$PACKAGE_DIR/manifest.json")"
           ./.ailuo-cli/ailuo pack "$PACKAGE_DIR" dist
           tarball="$(ls dist/*.tgz)"
+          manifest="$(tar -xzOf "$tarball" manifest.json)"
+          id="$(jq -er .id <<<"$manifest")"
+          version="$(jq -er .version <<<"$manifest")"
           # 发布物必须可安装并可列出（真实闭环，不信任"打包成功"本身）。
           ./.ailuo-cli/ailuo install --root "$RUNNER_TEMP/pkgroot" "$tarball"
           ./.ailuo-cli/ailuo list --root "$RUNNER_TEMP/pkgroot" | grep -q "^${id}@${version}"
           echo "package-id=$id" >> "$GITHUB_OUTPUT"
           echo "package-version=$version" >> "$GITHUB_OUTPUT"
           echo "tarball=$tarball" >> "$GITHUB_OUTPUT"
+      - name: 校验包版本与 git tag 一致
+        if: ${{ inputs.tag-required }}
+        shell: bash
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+          tag="${tag#v}"
+          version="${{ steps.pack.outputs.package-version }}"
+          test "$tag" = "$version" || {
+            echo "git tag $tag 与包版本 $version 不一致" >&2
+            exit 1
+          }
       - name: 发布到 GitHub Release（tag 时，版本不可变）
         if: ${{ inputs.tag-required }}
         env:
@@ -115,7 +114,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          id="$(jq -r .id "$PACKAGE_DIR/manifest.json")"
-          version="$(jq -r .version "$PACKAGE_DIR/manifest.json")"
+          id="${{ steps.pack.outputs.package-id }}"
+          version="${{ steps.pack.outputs.package-version }}"
           ./.ailuo-cli/ailuo install --root "$RUNNER_TEMP/pkgroot-registry" "$REPOSITORY@$version"
           ./.ailuo-cli/ailuo list --root "$RUNNER_TEMP/pkgroot-registry" | grep -q "^${id}@${version}"

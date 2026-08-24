@@ -49,6 +49,10 @@ func Install(ctx context.Context, root, sourcePath string) (InstalledRecord, err
 	if err != nil {
 		return InstalledRecord{}, err
 	}
+	artifacts, err := readSourceArtifacts(sourceDir, source.Manifest)
+	if err != nil {
+		return InstalledRecord{}, err
+	}
 	if err := os.MkdirAll(root, 0o750); err != nil {
 		return InstalledRecord{}, err
 	}
@@ -78,8 +82,8 @@ func Install(ctx context.Context, root, sourcePath string) (InstalledRecord, err
 		return InstalledRecord{}, err
 	}
 	// 复制每组件工件、计算哈希、为 isolated 组件生成默认进程规格。
-	artifacts := make([]LockedArtifact, 0, len(source.artifacts))
-	for _, artifact := range source.artifacts {
+	lockedArtifacts := make([]LockedArtifact, 0, len(artifacts))
+	for _, artifact := range artifacts {
 		artifactName := filepath.Base(artifact.path)
 		stageArtifact := filepath.Join(stageDir, artifactName)
 		if err := copyFile(artifact.path, stageArtifact); err != nil {
@@ -97,7 +101,7 @@ func Install(ctx context.Context, root, sourcePath string) (InstalledRecord, err
 		if component, ok := findComponent(source.Manifest, artifact.componentID); ok && component.Mode == ModeIsolated {
 			locked.Process = defaultProcessSpec(component.ID, filepath.Join(targetDir, artifactName), targetDir)
 		}
-		artifacts = append(artifacts, locked)
+		lockedArtifacts = append(lockedArtifacts, locked)
 	}
 	// 写入 lock。
 	manifestDigest := sha256.Sum256(source.manifestBytes)
@@ -105,7 +109,7 @@ func Install(ctx context.Context, root, sourcePath string) (InstalledRecord, err
 		SchemaVersion: SchemaVersion, PackageID: source.Manifest.ID,
 		PackageVersion: source.Manifest.Version,
 		ManifestSHA256: hex.EncodeToString(manifestDigest[:]),
-		Artifacts:      artifacts,
+		Artifacts:      lockedArtifacts,
 	})
 	if err != nil {
 		return InstalledRecord{}, err
@@ -258,7 +262,6 @@ func Uninstall(ctx context.Context, root, id string) error {
 type sourcePackage struct {
 	Manifest      Manifest
 	manifestBytes []byte
-	artifacts     []sourceArtifact
 }
 
 // sourceArtifact 是源包中单个组件的工件。
@@ -267,7 +270,7 @@ type sourceArtifact struct {
 	path        string
 }
 
-// readSourceManifest 读取源包目录的 manifest.json 与每组件 entrypoint 工件。
+// readSourceManifest 读取源包目录的 manifest.json 并校验。
 func readSourceManifest(sourceDir string) (sourcePackage, error) {
 	manifestBytes, err := ReadFileLimited(filepath.Join(sourceDir, "manifest.json"), MaxManifestBytes)
 	if err != nil {
@@ -280,17 +283,22 @@ func readSourceManifest(sourceDir string) (sourcePackage, error) {
 	if err := ValidateManifest(manifest); err != nil {
 		return sourcePackage{}, err
 	}
+	return sourcePackage{Manifest: manifest, manifestBytes: manifestBytes}, nil
+}
+
+// readSourceArtifacts 校验并收集清单声明的每组件 entrypoint 工件。
+func readSourceArtifacts(sourceDir string, manifest Manifest) ([]sourceArtifact, error) {
 	artifacts := make([]sourceArtifact, 0, len(manifest.Components))
 	seenNames := make(map[string]struct{}, len(manifest.Components))
 	for _, component := range manifest.Components {
 		artifactPath := filepath.Join(sourceDir, component.Entrypoint)
 		relative, err := filepath.Rel(sourceDir, artifactPath)
 		if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-			return sourcePackage{}, fmt.Errorf("组件 %s entrypoint 超出源目录", component.ID)
+			return nil, fmt.Errorf("组件 %s entrypoint 超出源目录", component.ID)
 		}
 		info, err := os.Lstat(artifactPath)
 		if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > MaxArtifactBytes {
-			return sourcePackage{}, fmt.Errorf("组件 %s entrypoint 工件无效: %w", component.ID, err)
+			return nil, fmt.Errorf("组件 %s entrypoint 工件无效: %w", component.ID, err)
 		}
 		name := filepath.Base(artifactPath)
 		if _, exists := seenNames[name]; exists {
@@ -299,7 +307,7 @@ func readSourceManifest(sourceDir string) (sourcePackage, error) {
 		seenNames[name] = struct{}{}
 		artifacts = append(artifacts, sourceArtifact{componentID: component.ID, path: artifactPath})
 	}
-	return sourcePackage{Manifest: manifest, manifestBytes: manifestBytes, artifacts: artifacts}, nil
+	return artifacts, nil
 }
 
 // unpackSource 解析安装源：目录直接使用；.tgz 发布物严格解压到临时目录。
