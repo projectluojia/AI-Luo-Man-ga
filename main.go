@@ -196,7 +196,7 @@ func runMaintenanceCommand(arguments []string, output io.Writer) (bool, error) {
 		}
 		_, err = fmt.Fprintf(output, "身份解绑完成：app=%s 平台=%s space=%s platform_user=%s\n", *appID, *platform, *space, *platformUser)
 		return true, err
-	case "install", "upgrade", "uninstall", "list", "pack", "publish", "sdk-go", "sdk-py":
+	case "install", "upgrade", "uninstall", "list", "pack", "publish", "sdk-go", "sdk-py", "sdk-ts":
 		return runPackageCommand(ctx, arguments, output)
 	default:
 		return true, fmt.Errorf("configuration error: unknown command")
@@ -319,13 +319,16 @@ func runPackageCommand(parent context.Context, arguments []string, output io.Wri
 			return true, err
 		}
 		return true, nil
-	case "sdk-go", "sdk-py":
+	case "sdk-go", "sdk-py", "sdk-ts":
 		if flags.NArg() < 1 || flags.NArg() > 2 {
 			return true, fmt.Errorf("configuration error: %s requires source package directory [and optional output directory]", command)
 		}
 		language := sdkgen.LanguageGo
 		if command == "sdk-py" {
 			language = sdkgen.LanguagePython
+		}
+		if command == "sdk-ts" {
+			language = sdkgen.LanguageTypeScript
 		}
 		manifest, _, _, err := packagefmt.Parse(packagefmt.SourcePath(flags.Arg(0)))
 		if err != nil {

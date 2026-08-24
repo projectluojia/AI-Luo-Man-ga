@@ -11,8 +11,9 @@ import (
 type Language string
 
 const (
-	LanguageGo     Language = "go"
-	LanguagePython Language = "python"
+	LanguageGo        Language = "go"
+	LanguagePython    Language = "python"
+	LanguageTypeScript Language = "typescript"
 )
 
 // Options 控制 SDK 生成。
@@ -53,6 +54,8 @@ func Generate(source json.RawMessage, options Options) ([]Generated, error) {
 		return emitGo(options.PackageID, capabilities, models), nil
 	case LanguagePython:
 		return emitPython(options.PackageID, capabilities, models), nil
+	case LanguageTypeScript:
+		return emitTypeScript(options.PackageID, capabilities, models), nil
 	default:
 		return nil, fmt.Errorf("sdkgen: 不支持的语言 %q", options.Language)
 	}
