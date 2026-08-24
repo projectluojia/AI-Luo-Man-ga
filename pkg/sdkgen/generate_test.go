@@ -9,8 +9,9 @@ import (
 	"testing"
 )
 
-// campusExtensions 是 extensions/campus.bus/ailuo.toml 三个 capability 的
-// 真实契约（packagefmt 输出的 extensions 段形状），用于驱动生成测试。
+// campusExtensions 是独立包仓库 ailuo-packages/campus-bus 三个 capability 的
+// 契约快照（packagefmt 输出的 extensions 段形状），用于驱动生成测试。
+// sdkgen 是中立包（不依赖内核 internal），故以静态快照而非实时契约驱动。
 const campusExtensions = `{
 	"tools": [],
 	"service": {"id": "campus"},
