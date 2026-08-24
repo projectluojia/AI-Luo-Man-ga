@@ -3,16 +3,16 @@ package sdkgen
 import (
 	"encoding/json"
 	"fmt"
+	"go/format"
 	"strings"
-	"unicode"
 )
 
 // Language 是目标 SDK 语言。
 type Language string
 
 const (
-	LanguageGo        Language = "go"
-	LanguagePython    Language = "python"
+	LanguageGo         Language = "go"
+	LanguagePython     Language = "python"
 	LanguageTypeScript Language = "typescript"
 )
 
@@ -42,7 +42,7 @@ func Generate(source json.RawMessage, options Options) ([]Generated, error) {
 	models := make(map[string]*TypeModel, len(capabilities))
 	for index := range capabilities {
 		capability := &capabilities[index]
-		inputName := inputTypeName(capability.ID, options.PackageID)
+		inputName := typeName(capability.ID, options.PackageID)
 		model, err := schemaType(json.RawMessage(capability.InputSchema), inputName)
 		if err != nil {
 			return nil, fmt.Errorf("sdkgen: capability %q: %w", capability.ID, err)
@@ -51,7 +51,15 @@ func Generate(source json.RawMessage, options Options) ([]Generated, error) {
 	}
 	switch options.Language {
 	case LanguageGo:
-		return emitGo(options.PackageID, capabilities, models), nil
+		generated := emitGo(options.PackageID, capabilities, models)
+		// go/format（gofmt 核心）：生成的 Go 源码统一为标准格式；格式化失败
+		// 说明 emitter 生成语法错误，fail-closed 报错而非产出畸形代码。
+		formatted, formatErr := format.Source(generated[0].Code)
+		if formatErr != nil {
+			return nil, fmt.Errorf("sdkgen: Go 生成代码格式化失败: %w", formatErr)
+		}
+		generated[0].Code = formatted
+		return generated, nil
 	case LanguagePython:
 		return emitPython(options.PackageID, capabilities, models), nil
 	case LanguageTypeScript:
@@ -64,50 +72,4 @@ func Generate(source json.RawMessage, options Options) ([]Generated, error) {
 // packageName 派生 Go 包名/Python 模块名：取包 ID 第一段（campus.bus → campus）。
 func packageName(packageID string) string {
 	return strings.Split(packageID, ".")[0]
-}
-
-// inputTypeName 派生 capability 输入类型的具名：去掉包前缀后各段 Title 拼接，
-// 再追加 Input。campus.bus.stops.search（包 campus）→ BusStopsSearchInput。
-func inputTypeName(capabilityID, packageID string) string {
-	return exportName(stripPackagePrefix(capabilityID, packageID)) + "Input"
-}
-
-// methodName 派生 capability 的调用函数名：inputTypeName 去掉 Input 后缀。
-func methodName(capabilityID, packageID string) string {
-	return exportName(stripPackagePrefix(capabilityID, packageID))
-}
-
-// stripPackagePrefix 去掉 capability ID 的包前缀（"campus."），无前缀时原样保留。
-func stripPackagePrefix(capabilityID, packageID string) string {
-	prefix := packageID + "."
-	if strings.HasPrefix(capabilityID, prefix) {
-		return strings.TrimPrefix(capabilityID, prefix)
-	}
-	return capabilityID
-}
-
-// exportName 将点分隔的标识符转为导出风格：每段首字母大写后拼接。
-func exportName(identifier string) string {
-	parts := strings.Split(identifier, ".")
-	var builder strings.Builder
-	for _, part := range parts {
-		builder.WriteString(upperFirst(part))
-	}
-	return builder.String()
-}
-
-// upperFirst 将首字母大写，其余原样保留。
-func upperFirst(value string) string {
-	if value == "" {
-		return value
-	}
-	runes := []rune(value)
-	runes[0] = unicode.ToUpper(runes[0])
-	return string(runes)
-}
-
-// pythonMethodName 派生 Python 调用函数名：capability ID 分段以点分段
-// （内核强制 StableLower：全小写字母数字，点/下划线/连字符分段）。
-func pythonMethodName(capabilityID, packageID string) string {
-	return strings.ReplaceAll(stripPackagePrefix(capabilityID, packageID), ".", "_")
 }
