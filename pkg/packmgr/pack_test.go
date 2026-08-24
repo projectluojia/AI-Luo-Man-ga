@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/packmgr"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
 )
 
 func TestPackAndInstallFromTarball(t *testing.T) {

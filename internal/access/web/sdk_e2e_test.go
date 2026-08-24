@@ -15,7 +15,6 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime/runtimetest"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/packagefmt"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus/campustest"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/memory"
@@ -64,12 +63,12 @@ func TestGeneratedGoSDKInvokesRealCapability(t *testing.T) {
 	testServer := httptest.NewServer(server.Handler())
 	defer testServer.Close()
 
-	// 4. 从真实 ailuo.toml 契约生成 Go SDK。
-	manifest, _, _, err := packagefmt.Parse("../../../extensions/campus.bus/ailuo.toml")
+	// 4. 从 campus 包权威契约（campustest 装配与 SDK 生成共用）生成 Go SDK。
+	extensions, err := campus.Extensions()
 	if err != nil {
-		t.Fatalf("Parse ailuo.toml: %v", err)
+		t.Fatalf("构造 extensions: %v", err)
 	}
-	files, err := sdkgen.Generate(manifest.Extensions, sdkgen.Options{Language: sdkgen.LanguageGo, PackageID: manifest.ID})
+	files, err := sdkgen.Generate(extensions, sdkgen.Options{Language: sdkgen.LanguageGo, PackageID: campus.ServiceID})
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}

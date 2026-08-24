@@ -22,7 +22,7 @@ import (
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/packmgr"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus/builtin"
 	"github.com/projectluojia/AI-Luo-Man-ga/pkg/bus"
@@ -68,11 +68,7 @@ func writeCampusBusPackage(t testing.TB, root string) {
 	if err := os.MkdirAll(directory, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	extensions, err := json.Marshal(struct {
-		Tools        []registry.ToolSpec       `json:"tools"`
-		Service      registry.ServiceSpec      `json:"service"`
-		Capabilities []registry.CapabilitySpec `json:"capabilities"`
-	}{Tools: campus.ToolSpecs(), Service: campus.ServiceSpec(), Capabilities: campus.CapabilitySpecs()})
+	extensions, err := campus.Extensions()
 	if err != nil {
 		t.Fatal(err)
 	}
