@@ -127,7 +127,7 @@ func scalarOrEnum(base TypeKind, spec schemaSpec, name string) (*TypeModel, erro
 
 // objectType 编译 object：要求显式 additionalProperties:false 与 properties。
 func objectType(spec schemaSpec, name string) (*TypeModel, error) {
-	if spec.AdditionalProperties == nil || *spec.AdditionalProperties != false {
+	if spec.AdditionalProperties == nil || *spec.AdditionalProperties {
 		return nil, fmt.Errorf("sdkgen: object 类型必须显式声明 additionalProperties=false")
 	}
 	if len(spec.Properties) == 0 {
