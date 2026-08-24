@@ -1,10 +1,61 @@
 package sdkgen
 
 import (
+	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/iancoleman/strcase"
 )
+
+// capabilityIDPattern 与内核 id.StableLower 一致：capability ID 的闭式格式。
+// sdkgen 是中立包（不 import 内核 internal），此处自持校验。
+var capabilityIDPattern = regexp.MustCompile(`^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$`)
+
+// 语言保留字：字段名直接作为标识符（Python dataclass 属性 / TS interface
+// 属性），撞保留字会生成非法代码 → 显式拒绝（fail-closed），不自动改名
+// （改名会破坏 JSON key 与契约的一致性）。
+var (
+	pythonKeywords = stringSet("False None True and as assert async await break class continue def del elif else except finally for from global if import in is lambda nonlocal not or pass raise return try while with yield")
+	tsKeywords     = stringSet("break case catch class const continue debugger default delete do else enum export extends false finally for function if import in instanceof new null return super switch this throw true try typeof var void while with as implements interface let package private protected public static yield await")
+)
+
+// ValidateCapabilityID 校验 capability ID 符合内核 StableLower 格式。
+func ValidateCapabilityID(id string) error {
+	if !capabilityIDPattern.MatchString(id) {
+		return fmt.Errorf("sdkgen: capability id %q 不合法（需小写字母/数字，点/下划线/连字符分段）", id)
+	}
+	return nil
+}
+
+// ValidateFieldNames 校验 object 字段名不是 Go/Python/TS 保留字。
+// Go 字段名经 goFieldName 导出（首字母大写），不会撞小写保留字，无需检查；
+// Python/TS 用原始 JSON key 作标识符，撞保留字拒绝。
+func ValidateFieldNames(model *TypeModel) error {
+	for _, namedModel := range collectNamed(model) {
+		if namedModel.Kind != KindObject {
+			continue
+		}
+		for _, field := range namedModel.Fields {
+			if _, pythonReserved := pythonKeywords[field.Name]; pythonReserved {
+				return fmt.Errorf("sdkgen: 字段名 %q 是 Python 保留字，请调整契约字段名", field.Name)
+			}
+			if _, tsReserved := tsKeywords[field.Name]; tsReserved {
+				return fmt.Errorf("sdkgen: 字段名 %q 是 TypeScript 保留字，请调整契约字段名", field.Name)
+			}
+		}
+	}
+	return nil
+}
+
+// stringSet 构造 O(1) 查找的字符串集合。
+func stringSet(values string) map[string]struct{} {
+	set := make(map[string]struct{})
+	for _, value := range strings.Fields(values) {
+		set[value] = struct{}{}
+	}
+	return set
+}
 
 // 命名层：所有跨语言命名统一经 strcase（成熟命名库）转换，消除各 emitter
 // 手写重复。唯一例外是 Go 字段名（goFieldName）：strcase 会把 "id" 段转成

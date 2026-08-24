@@ -47,17 +47,26 @@ type schemaSpec struct {
 	Properties           map[string]json.RawMessage `json:"properties"`
 	Required             []string                   `json:"required"`
 	AdditionalProperties *bool                      `json:"additionalProperties"`
+	// 组合/引用结构（改变类型语义，生成器无法正确表达 → 显式拒绝）：
+	OneOf []json.RawMessage `json:"oneOf"`
+	AllOf []json.RawMessage `json:"allOf"`
+	AnyOf []json.RawMessage `json:"anyOf"`
+	Not   json.RawMessage   `json:"not"`
+	Ref   string            `json:"$ref"`
 }
 
 // schemaType 将 JSON Schema 编译为具名 TypeModel。name 是生成语言中的类型名。
 // object 必须显式声明 additionalProperties:false 且给出 properties，与内核
-// 严格解码契约一致；未知 type、缺 items 的 array、无 properties 的 object
-// 一律拒绝，不引入宽松回退。Schema 内其它关键字（minimum 等约束）不改变
-// 类型派生，按 JSON Schema 规范允许出现。
+// 严格解码契约一致；未知 type、缺 items 的 array、无 properties 的 object、
+// 组合/引用结构（oneOf/allOf/anyOf/not/$ref）一律拒绝，不引入宽松回退。
+// Schema 内约束关键字（minimum 等）不改变类型派生，按 JSON Schema 规范允许出现。
 func schemaType(schema json.RawMessage, name string) (*TypeModel, error) {
 	var spec schemaSpec
 	if err := decodeSchema(schema, &spec); err != nil {
 		return nil, err
+	}
+	if spec.OneOf != nil || spec.AllOf != nil || spec.AnyOf != nil || spec.Not != nil || spec.Ref != "" {
+		return nil, fmt.Errorf("sdkgen: 不支持的组合/引用结构（oneOf/allOf/anyOf/not/$ref）")
 	}
 	switch spec.Type {
 	case "string":
