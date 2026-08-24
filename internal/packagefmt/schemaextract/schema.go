@@ -1,0 +1,148 @@
+package schemaextract
+
+import (
+	"encoding/json"
+	"fmt"
+	"go/ast"
+	"strconv"
+	"strings"
+)
+
+// structSchema 把 struct AST 编译为 JSON Schema（object + additionalProperties:false）。
+func structSchema(structType *ast.StructType) (json.RawMessage, error) {
+	if structType.Fields == nil || len(structType.Fields.List) == 0 {
+		return nil, fmt.Errorf("schemaextract: 参数 struct 不能为空")
+	}
+	schema := map[string]any{
+		"type":                 "object",
+		"properties":           map[string]any{},
+		"required":             []string{},
+		"additionalProperties": false,
+	}
+	properties := schema["properties"].(map[string]any)
+	required := schema["required"].([]string)
+	for _, field := range structType.Fields.List {
+		name, optional, err := fieldJSONName(field)
+		if err != nil {
+			return nil, err
+		}
+		fieldSchema, err := fieldSchema(field.Type)
+		if err != nil {
+			return nil, fmt.Errorf("schemaextract: 字段 %q: %w", name, err)
+		}
+		properties[name] = fieldSchema
+		if !optional {
+			required = append(required, name)
+		}
+	}
+	schema["required"] = required
+	return json.Marshal(schema)
+}
+
+// fieldJSONName 解析字段 json tag：`json:"name"` 或 `json:"name,omitempty"`。
+// 无 tag 拒绝（契约必须显式声明 JSON 名）。
+func fieldJSONName(field *ast.Field) (name string, optional bool, err error) {
+	if field.Tag == nil || len(field.Names) == 0 {
+		return "", false, fmt.Errorf("schemaextract: 字段缺少 json tag")
+	}
+	tag := strings.Trim(field.Tag.Value, "`")
+	value, ok := reflectTagLookup(tag, "json")
+	if !ok {
+		return "", false, fmt.Errorf("schemaextract: 字段 %q 缺少 json tag", field.Names[0].Name)
+	}
+	parts := strings.Split(value, ",")
+	if parts[0] == "" || parts[0] == "-" {
+		return "", false, fmt.Errorf("schemaextract: 字段 %q 的 json tag 无效", field.Names[0].Name)
+	}
+	optional = len(parts) > 1 && parts[1] == "omitempty"
+	return parts[0], optional, nil
+}
+
+// fieldSchema 把字段类型 AST 编译为 JSON Schema 片段。
+func fieldSchema(expr ast.Expr) (any, error) {
+	switch t := expr.(type) {
+	case *ast.Ident:
+		return scalarSchema(t.Name)
+	case *ast.SelectorExpr:
+		if pkg, ok := t.X.(*ast.Ident); ok && pkg.Name == "time" && t.Sel.Name == "Time" {
+			return map[string]any{"type": "string", "format": "date-time"}, nil
+		}
+		return nil, fmt.Errorf("不支持的标识类型 %s.%s", pkgName(t.X), t.Sel.Name)
+	case *ast.ArrayType:
+		items, err := fieldSchema(t.Elt)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"type": "array", "items": items}, nil
+	case *ast.StructType:
+		schema, err := structSchema(t)
+		if err != nil {
+			return nil, err
+		}
+		var decoded any
+		if err := json.Unmarshal(schema, &decoded); err != nil {
+			return nil, err
+		}
+		return decoded, nil
+	default:
+		return nil, fmt.Errorf("不支持的字段类型 %T", expr)
+	}
+}
+
+// scalarSchema 映射内置标量类型；未知类型拒绝（fail-closed）。
+func scalarSchema(name string) (any, error) {
+	switch name {
+	case "string":
+		return map[string]any{"type": "string"}, nil
+	case "int", "int8", "int16", "int32", "int64", "uint", "uint8", "uint16", "uint32", "uint64":
+		return map[string]any{"type": "integer"}, nil
+	case "float32", "float64":
+		return map[string]any{"type": "number"}, nil
+	case "bool":
+		return map[string]any{"type": "boolean"}, nil
+	default:
+		return nil, fmt.Errorf("未知类型 %q", name)
+	}
+}
+
+// pkgName 取 SelectorExpr 的包名。
+func pkgName(expr ast.Expr) string {
+	if ident, ok := expr.(*ast.Ident); ok {
+		return ident.Name
+	}
+	return "?"
+}
+
+// reflectTagLookup 复刻 reflect.StructTag.Lookup 的语义（避免引入 reflect 依赖
+// 解析 AST tag 字面量）。
+func reflectTagLookup(tag, key string) (string, bool) {
+	for tag != "" {
+		i := strings.Index(tag, ":")
+		if i < 0 {
+			return "", false
+		}
+		fieldName := tag[:i]
+		if fieldName == key {
+			value := tag[i+1:]
+			if len(value) < 2 || value[0] != '"' {
+				return "", false
+			}
+			unquoted, err := strconv.Unquote(value)
+			if err != nil {
+				return "", false
+			}
+			return unquoted, true
+		}
+		i = strings.Index(tag, `"`)
+		if i < 0 {
+			return "", false
+		}
+		next, err := strconv.QuotedPrefix(tag[i:])
+		if err != nil {
+			return "", false
+		}
+		tag = tag[i+len(next):]
+		tag = strings.TrimPrefix(tag, " ")
+	}
+	return "", false
+}
