@@ -1,0 +1,40 @@
+# strings.tool 作者侧源清单（ailuo.toml）。
+# 构建：bash build.sh（或 build.ps1）编译 wasm，再 `ailuo pack . dist` 打包。
+
+[package]
+id = "strings.tool"
+version = "1.0.0"
+description = "字符串工具"
+
+[[component]]
+id = "core"
+mode = "hosted"
+entrypoint = "strings.tool.wasm"
+exports = ["strings.len.cap", "strings.join.cap", "strings.upper.cap"]
+
+[tool."strings.len"]
+description = "字符串长度"
+schema = """{"type":"object","properties":{"value":{"type":"string"}},"required":["value"],"additionalProperties":false}"""
+side_effect = "read"
+
+[tool."strings.join"]
+description = "字符串拼接"
+schema = """{"type":"object","properties":{"values":{"type":"array","items":{"type":"string"}},"separator":{"type":"string"}},"required":["values"],"additionalProperties":false}"""
+side_effect = "read"
+
+[tool."strings.upper"]
+description = "字符串转大写"
+schema = """{"type":"object","properties":{"value":{"type":"string"}},"required":["value"],"additionalProperties":false}"""
+side_effect = "read"
+
+[[capability]]
+id = "strings.len.cap"
+tool = "strings.len"
+
+[[capability]]
+id = "strings.join.cap"
+tool = "strings.join"
+
+[[capability]]
+id = "strings.upper.cap"
+tool = "strings.upper"
