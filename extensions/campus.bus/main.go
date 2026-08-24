@@ -1,8 +1,8 @@
 //go:build wasip1
 
-// campus 是校园服务的 hosted 包形态：复用 internal/tools/bus 的业务逻辑与治理，
+// campus 是校园服务的 hosted 包形态：复用 pkg/bus 的中立业务逻辑与治理，
 // 数据访问经宿主函数 ailuo.bus.query 投影到 Go 托管的权威存储（App 隔离在宿主侧强制）。
-// 仅参与 wasm32-wasi 交叉编译（build.ps1 / build.sh）；宿主编译时该目录被忽略。
+// 仅参与 wasm32-wasi 交叉编译（ailuo pack 经 [build] 驱动）；宿主编译时该目录被忽略。
 package main
 
 import (
@@ -14,9 +14,7 @@ import (
 	"os"
 	"unsafe"
 
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/tools/bus"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/bus"
 )
 
 //go:wasmimport ailuo.bus query
@@ -44,13 +42,7 @@ type hostedEnvelope struct {
 }
 
 func main() {
-	// 日志写入 stderr（宿主丢弃），避免污染 stdout 结果信封通道。
-	if _, err := observe.Configure(observe.Config{
-		Service: "ailuo-campus-hosted", Environment: "production", Format: "json", Writer: os.Stderr,
-	}); err != nil {
-		writeEnvelope(os.Stdout, hostedEnvelope{OK: false, Code: "internal", Message: "observe configure failed"})
-		return
-	}
+	// 无日志初始化：wasm guest 的 stdout 只承载结果信封，日志由宿主侧丢弃。
 	run(os.Stdin, os.Stdout)
 }
 
@@ -72,7 +64,9 @@ func run(input io.Reader, output io.Writer) {
 		writeEnvelope(output, hostedEnvelope{OK: false, Code: "invalid_argument", Message: "unknown tool: " + request.ToolID})
 		return
 	}
-	result, err := handler(context.Background(), contracts.RequestContext{}, request.Payload)
+	// App 隔离由宿主侧治理上下文强制：guest 调用经宿主函数投影时宿主注入
+	// app_id，本侧不感知具体 App（hostStore 忽略 appID）。
+	result, err := handler(context.Background(), "", request.Payload)
 	if err != nil {
 		writeEnvelope(output, hostedEnvelope{OK: false, Code: codeFor(err), Message: err.Error()})
 		return
@@ -132,13 +126,13 @@ func callBusQuery(op string, args any, result any) error {
 	if !envelope.OK {
 		switch envelope.Code {
 		case "data_unavailable":
-			return errors.Join(contracts.ErrDataUnavailable, errors.New("bus host function: data unavailable"))
+			return errors.Join(bus.ErrDataUnavailable, errors.New("bus host function: data unavailable"))
 		case "data_incomplete":
-			return errors.Join(contracts.ErrDataIncomplete, errors.New("bus host function: data incomplete"))
+			return errors.Join(bus.ErrDataIncomplete, errors.New("bus host function: data incomplete"))
 		case "data_untrusted":
-			return errors.Join(contracts.ErrDataUntrusted, errors.New("bus host function: data untrusted"))
+			return errors.Join(bus.ErrDataUntrusted, errors.New("bus host function: data untrusted"))
 		case "data_expired":
-			return errors.Join(contracts.ErrDataExpired, errors.New("bus host function: data expired"))
+			return errors.Join(bus.ErrDataExpired, errors.New("bus host function: data expired"))
 		default:
 			return fmt.Errorf("bus host function failed: %s", envelope.Code)
 		}
@@ -149,13 +143,13 @@ func callBusQuery(op string, args any, result any) error {
 // codeFor 把 bus 业务错误映射为信封闭式错误码（与宿主侧稳定错误映射对应）。
 func codeFor(err error) string {
 	switch {
-	case errors.Is(err, contracts.ErrDataUnavailable):
+	case errors.Is(err, bus.ErrDataUnavailable):
 		return "data_unavailable"
-	case errors.Is(err, contracts.ErrDataIncomplete):
+	case errors.Is(err, bus.ErrDataIncomplete):
 		return "data_incomplete"
-	case errors.Is(err, contracts.ErrDataUntrusted):
+	case errors.Is(err, bus.ErrDataUntrusted):
 		return "data_untrusted"
-	case errors.Is(err, contracts.ErrDataExpired):
+	case errors.Is(err, bus.ErrDataExpired):
 		return "data_expired"
 	case isInvalidArgument(err):
 		return "invalid_argument"

@@ -20,3 +20,6 @@ dist/
 .uv-cache/
 
 server.log
+
+# 包管理器构建产物（由 ailuo pack [build] 生成，不提交）
+extensions/campus.bus/campus.wasm

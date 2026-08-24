@@ -7,8 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/tools/bus"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/bus"
 )
 
 // BusStore 是用于测试和本地开发的并发安全参考适配器。
@@ -73,7 +72,7 @@ func (s *BusStore) SearchStops(ctx context.Context, appID string, request bus.St
 	defer s.mu.RUnlock()
 	metadata, exists := s.metadata[appID]
 	if !exists {
-		return bus.StopSnapshot{}, contracts.ErrDataUnavailable
+		return bus.StopSnapshot{}, bus.ErrDataUnavailable
 	}
 	result := make([]bus.Stop, 0, min(request.Limit, len(s.stops[appID])))
 	for _, stop := range s.stops[appID] {
@@ -99,7 +98,7 @@ func (s *BusStore) ListRoutes(ctx context.Context, appID string, request bus.Rou
 	defer s.mu.RUnlock()
 	metadata, exists := s.metadata[appID]
 	if !exists {
-		return bus.RouteSnapshot{}, contracts.ErrDataUnavailable
+		return bus.RouteSnapshot{}, bus.ErrDataUnavailable
 	}
 	limit := min(request.Limit, len(s.routes[appID]))
 	return bus.RouteSnapshot{
@@ -116,7 +115,7 @@ func (s *BusStore) SearchJourneys(ctx context.Context, appID string, request bus
 	metadata, exists := s.metadata[appID]
 	if !exists {
 		s.mu.RUnlock()
-		return bus.JourneySnapshot{}, contracts.ErrDataUnavailable
+		return bus.JourneySnapshot{}, bus.ErrDataUnavailable
 	}
 	items := s.journeys[appID]
 	result := make([]bus.Journey, 0, min(request.Limit, len(items)))

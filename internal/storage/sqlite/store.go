@@ -13,10 +13,9 @@ import (
 
 	_ "modernc.org/sqlite"
 
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/id"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/tools/bus"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/bus"
 )
 
 type Store struct {
@@ -1101,7 +1100,7 @@ func (s *Store) SearchJourneys(ctx context.Context, appID string, request bus.Se
 
 func (s *Store) beginBusSnapshotRead(ctx context.Context, appID string) (*sql.Tx, bus.SnapshotMetadata, error) {
 	if !validBusStableID(appID) {
-		return nil, bus.SnapshotMetadata{}, contracts.ErrDataUnavailable
+		return nil, bus.SnapshotMetadata{}, bus.ErrDataUnavailable
 	}
 	tx, err := s.beginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
@@ -1126,7 +1125,7 @@ WHERE current.app_id=?`, appID).Scan(
 		&validUntil,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, bus.SnapshotMetadata{}, s.rollbackTx(tx, contracts.ErrDataUnavailable, "read bus snapshot")
+		return nil, bus.SnapshotMetadata{}, s.rollbackTx(tx, bus.ErrDataUnavailable, "read bus snapshot")
 	}
 	if err != nil {
 		return nil, bus.SnapshotMetadata{}, s.rollbackTx(tx, fmt.Errorf("read current bus snapshot: %w", err), "read bus snapshot")

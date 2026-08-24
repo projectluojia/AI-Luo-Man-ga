@@ -8,30 +8,22 @@ import (
 	"time"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime/runtimetest"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus/campustest"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/memory"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/tools/bus"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/bus"
 )
 
-func TestHostedCampusBuiltinManifestLocksArtifact(t *testing.T) {
-	manifest := campus.Manifest()
-	if manifest.ID != campus.ServiceID || manifest.Mode != loader.ModeHosted || len(manifest.LockedDigest) != 64 {
-		t.Fatalf("manifest = %+v, want campus hosted with 64-hex digest", manifest)
-	}
-	artifact, err := campus.ReadArtifact(context.Background(), manifest)
-	if err != nil || len(artifact) == 0 {
-		t.Fatalf("ReadArtifact: %v", err)
-	}
-	// 清单与工件不一致必须被拒绝（防构建产物漂移）。
-	bad := manifest
-	bad.LockedDigest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-	if _, err := campus.ReadArtifact(context.Background(), bad); !errors.Is(err, loader.ErrDescribeMismatch) {
-		t.Fatalf("ReadArtifact mismatched = %v, want ErrDescribeMismatch", err)
+func TestHostedCampusInstalledArtifactLocksDigest(t *testing.T) {
+	// campus.bus 经 campustest 装配为安装目录包：注册成功即证明 manifest 与
+	// 工件 digest 锁定通过（catalog.Discover 重新校验工件哈希）。
+	reg := registry.New()
+	campustest.RegisterHosted(t, reg, memory.NewBusStore())
+	if len(reg.Capabilities()) != 3 {
+		t.Fatalf("registry capabilities = %d, want 3", len(reg.Capabilities()))
 	}
 }
 
@@ -103,7 +95,7 @@ func TestHostedCampusCapabilityBehaviors(t *testing.T) {
 		payload := mustJSON(t, bus.SearchRequest{
 			OriginStopID: "stop-a", DestinationStopID: "stop-b", DepartAfter: time.Now(),
 		})
-		if _, err := invoke("another-app", payload); !errors.Is(err, contracts.ErrDataUnavailable) {
+		if _, err := invoke("another-app", payload); !errors.Is(err, bus.ErrDataUnavailable) {
 			t.Fatalf("cross-App error = %v, want ErrDataUnavailable", err)
 		}
 	})
@@ -121,7 +113,7 @@ func TestHostedCampusCapabilityBehaviors(t *testing.T) {
 					Revision: "demo", Source: "demo-copy", ImportedAt: now.Add(-time.Hour),
 					ValidUntil: now.Add(time.Hour), Complete: true,
 				},
-				target: contracts.ErrDataUntrusted,
+				target: bus.ErrDataUntrusted,
 			},
 			{
 				name: "expired",
@@ -129,7 +121,7 @@ func TestHostedCampusCapabilityBehaviors(t *testing.T) {
 					Revision: "expired", Source: "zhihui-luojia", Authoritative: true,
 					ImportedAt: now.Add(-2 * time.Hour), ValidUntil: now.Add(-time.Hour), Complete: true,
 				},
-				target: contracts.ErrDataExpired,
+				target: bus.ErrDataExpired,
 			},
 			{
 				name: "incomplete",
@@ -137,7 +129,7 @@ func TestHostedCampusCapabilityBehaviors(t *testing.T) {
 					Revision: "incomplete", Source: "zhihui-luojia", Authoritative: true,
 					ImportedAt: now.Add(-time.Hour), ValidUntil: now.Add(time.Hour),
 				},
-				target: contracts.ErrDataIncomplete,
+				target: bus.ErrDataIncomplete,
 			},
 		}
 		for _, tc := range cases {

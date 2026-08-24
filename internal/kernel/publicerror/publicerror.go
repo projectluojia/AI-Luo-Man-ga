@@ -10,6 +10,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/bus"
 )
 
 type Error struct {
@@ -31,13 +32,13 @@ func Capability(err error) Error {
 		errors.Is(err, contracts.ErrMissingEchoID),
 		errors.Is(err, contracts.ErrMissingRequestID):
 		return capabilityCodeTable["invalid_request_context"]
-	case errors.Is(err, contracts.ErrDataUnavailable):
+	case errors.Is(err, bus.ErrDataUnavailable):
 		return capabilityCodeTable["data_unavailable"]
-	case errors.Is(err, contracts.ErrDataIncomplete):
+	case errors.Is(err, bus.ErrDataIncomplete):
 		return capabilityCodeTable["data_incomplete"]
-	case errors.Is(err, contracts.ErrDataUntrusted):
+	case errors.Is(err, bus.ErrDataUntrusted):
 		return capabilityCodeTable["data_non_authoritative"]
-	case errors.Is(err, contracts.ErrDataExpired):
+	case errors.Is(err, bus.ErrDataExpired):
 		return capabilityCodeTable["data_expired"]
 	case errors.Is(err, runtime.ErrCapabilityDisabled):
 		return capabilityCodeTable["capability_disabled"]

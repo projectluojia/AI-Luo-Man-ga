@@ -1,0 +1,61 @@
+# campus.bus 作者侧源清单（ailuo.toml）。
+# 构建：`ailuo pack . dist` 经 [build] 自动交叉编译（源码在包目录内）。
+
+[package]
+id = "campus"
+version = "1.0.0"
+description = "Campus-wide public services."
+pin = true
+
+[[component]]
+id = "bus"
+mode = "hosted"
+entrypoint = "campus.wasm"
+exports = ["campus.bus.stops.search", "campus.bus.routes.list", "campus.bus.journeys.search"]
+
+[[component.host_function]]
+module = "ailuo.bus"
+name = "query"
+purpose = "查询 Go 托管权威校巴存储（App 隔离在宿主侧强制）"
+
+[build]
+tool = "go-wasm"
+
+[storage]
+namespace = "campus/bus"
+schema_version = 1
+sensitivity = "public"
+retention = "permanent"
+
+[tool."campus.bus.stops.search"]
+description = "Search authoritative campus bus stops by name or alias."
+schema = """{"type":"object","properties":{"query":{"type":"string","minLength":1},"limit":{"type":"integer","minimum":1,"maximum":50}},"required":["query"],"additionalProperties":false}"""
+side_effect = "read"
+
+[tool."campus.bus.routes.list"]
+description = "List authoritative campus bus routes."
+schema = """{"type":"object","properties":{"limit":{"type":"integer","minimum":1,"maximum":50}},"additionalProperties":false}"""
+side_effect = "read"
+
+[tool."campus.bus.journeys.search"]
+description = "Search authoritative campus bus journeys by stops and departure time."
+schema = """{"type":"object","properties":{"origin_stop_id":{"type":"string","minLength":1},"destination_stop_id":{"type":"string","minLength":1},"depart_after":{"type":"string","format":"date-time"},"limit":{"type":"integer","minimum":1,"maximum":50}},"required":["origin_stop_id","destination_stop_id"],"additionalProperties":false}"""
+side_effect = "read"
+
+[service]
+tool_dependencies = ["campus.bus.stops.search", "campus.bus.routes.list", "campus.bus.journeys.search"]
+
+[[capability]]
+id = "campus.bus.stops.search"
+tool = "campus.bus.stops.search"
+name = "查询校巴站点"
+
+[[capability]]
+id = "campus.bus.routes.list"
+tool = "campus.bus.routes.list"
+name = "列出校巴线路"
+
+[[capability]]
+id = "campus.bus.journeys.search"
+tool = "campus.bus.journeys.search"
+name = "查询校巴行程"

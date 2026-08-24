@@ -724,12 +724,8 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 		ConfirmationVerifier: confirmations,
 	})
 	// 统一 Loader：所有运行模式共享一个 Manager，清单在注册时按 Verify 精确绑定
-	// 到唯一宿主。内置 campus（hosted 沙箱）、内置 agent（isolated 进程）与
-	// installed 包（hosted/isolated）同池管理，不再按包分叉多个 Loader。
-	campusHost, err := campus.Host(store)
-	if err != nil {
-		return fmt.Errorf("create campus hosted boundary: %w", err)
-	}
+	// 到唯一宿主。内置 agent（isolated 进程）与 installed 包（hosted/isolated）
+	// 同池管理；campus.bus 是安装目录包（声明宿主函数 → 进程内 WasmHost 装载）。
 	workDir, err := filepath.Abs(".")
 	if err != nil {
 		return fmt.Errorf("resolve agent working directory: %w", err)
@@ -755,12 +751,14 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 	if err != nil {
 		return fmt.Errorf("create built-in agent runtime: %w", err)
 	}
-	installedHosts, installedRecords, err := configureInstalledRuntimes(ctx, config)
+	// 宿主函数集：当前只有 campus 的存储投影（内核特权，供安装目录 hosted 包声明）。
+	hostFunctions := campus.HostedFunctions(store)
+	installedHosts, installedRecords, _, err := configureInstalledRuntimes(ctx, config, hostFunctions)
 	if err != nil {
 		return err
 	}
-	hosts := make([]loader.Host, 0, 2+len(installedHosts))
-	hosts = append(hosts, campusHost, agentHost)
+	hosts := make([]loader.Host, 0, 1+len(installedHosts))
+	hosts = append(hosts, agentHost)
 	hosts = append(hosts, installedHosts...)
 	runtimeLoader, err := loader.New(hosts...)
 	if err != nil {
@@ -771,10 +769,10 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 		defer cancel()
 		resultErr = errors.Join(resultErr, runtimeLoader.Shutdown(shutdownContext))
 	}()
-	// 内置包与 installed 包统一注册：campus 与内置 agent 各以安装清单形式经同一
-	// RegisterInstalled 路径注册（agent 记录只携带运行时清单，其 Service agent.run
-	// 依赖 Orchestrator，在内核装配完成后单独注册），随后注册 installed 目录。
-	if err := loader.RegisterInstalled(ctx, runtimeLoader, reg, []loader.InstalledRecord{campus.Record(), agent.Record(agentHost)}); err != nil {
+	// 内置 agent 以安装清单形式经统一 RegisterInstalled 路径注册（agent 记录只
+	// 携带运行时清单，其 Service agent.run 依赖 Orchestrator，在内核装配完成后
+	// 单独注册）；campus.bus 与其余 installed 包随后注册。
+	if err := loader.RegisterInstalled(ctx, runtimeLoader, reg, []loader.InstalledRecord{agent.Record(agentHost)}); err != nil {
 		return fmt.Errorf("register built-in packages: %w", err)
 	}
 	if len(installedRecords) > 0 {
@@ -782,7 +780,19 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 			return fmt.Errorf("register installed runtimes: %w", err)
 		}
 	}
-	// 预热全部声明 pin 的运行时（内置 campus/agent 与 installed pin）：编译/启动
+	// campus.bus 是核心业务包（App 配置启用的 Capability 均由其导出）：安装目录
+	// 缺失 campus 组件即拒绝就绪（fail-closed），给出可行动错误。
+	campusInstalled := false
+	for _, record := range installedRecords {
+		if record.PackageID == campus.ServiceID {
+			campusInstalled = true
+			break
+		}
+	}
+	if !campusInstalled {
+		return fmt.Errorf("campus.bus 未安装：请先运行 extensions/campus.bus 的 ailuo pack 并 ailuo install 到安装目录（AILUO_RUNTIME_INSTALL_ROOT）")
+	}
+	// 预热全部声明 pin 的运行时（内置 agent 与 installed pin）：编译/启动
 	// 失败则内核拒绝就绪（fail-closed）。预热清单由各清单声明推导，不再硬编码。
 	pinnedRuntimes := runtimeLoader.Pinned()
 	if err := runtimeLoader.Warmup(ctx, pinnedRuntimes, min(len(pinnedRuntimes), 4)); err != nil {
@@ -1243,80 +1253,100 @@ func agentEnvironment(config config) []string {
 }
 
 // configureInstalledRuntimes 发现安装目录中的 installed 包，返回加入统一 Loader
-// 的宿主与待注册记录。安装目录未配置时返回空切片（统一 Loader 只装配内置包）；
-// 配置了安装目录但没有 hosted 宿主地址时 fail-closed。pin 运行时由各清单声明，
-// 预热清单由 runtimeLoader.Pinned() 统一推导，本函数不再返回。
-func configureInstalledRuntimes(ctx context.Context, cfg config) ([]loader.Host, []loader.InstalledRecord, error) {
+// 的宿主、待注册记录与安装目录 catalog。安装目录未配置时返回空切片（统一
+// Loader 只装配内置 agent）；配置了安装目录但没有 hosted 宿主地址时 fail-closed。
+// hosted 包按是否声明 host_functions 分流：有声明 → 进程内 WasmHost（宿主函数
+// 是内核特权，跨进程无法投影），无声明 → 外部 GRPCHost。pin 运行时由各清单
+// 声明，预热清单由 runtimeLoader.Pinned() 统一推导。
+func configureInstalledRuntimes(ctx context.Context, cfg config, hostFunctions []loader.HostedFunction) (hosts []loader.Host, records []loader.InstalledRecord, catalog *loader.Catalog, err error) {
 	if cfg.runtimeInstallRoot == "" {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
-	catalog, err := loader.NewCatalog(cfg.runtimeInstallRoot)
+	catalog, err = loader.NewCatalog(cfg.runtimeInstallRoot)
 	if err != nil {
-		return nil, nil, fmt.Errorf("create installed runtime catalog: %w", err)
+		return nil, nil, nil, fmt.Errorf("create installed runtime catalog: %w", err)
 	}
-	records, err := catalog.Discover(ctx)
+	records, err = catalog.Discover(ctx)
 	if err != nil {
-		return nil, nil, fmt.Errorf("discover installed runtimes: %w", err)
+		return nil, nil, nil, fmt.Errorf("discover installed runtimes: %w", err)
 	}
 	if len(records) == 0 {
 		observe.Info(ctx, "运行时安装目录校验完成",
 			observe.IntAttr("runtime_count", 0),
 		)
-		return nil, nil, nil
+		return nil, nil, catalog, nil
 	}
-	hosts := make([]loader.Host, 0, 2)
-	hostedCount := 0
+	hostedWithFunctions := 0
+	hostedWithoutFunctions := 0
 	isolatedCount := 0
 	pinnedCount := 0
 	for _, record := range records {
 		switch record.Runtime.Mode {
 		case loader.ModeHosted:
-			hostedCount++
+			if len(record.Runtime.HostFunctions) > 0 {
+				hostedWithFunctions++
+			} else {
+				hostedWithoutFunctions++
+			}
 		case loader.ModeIsolated:
 			isolatedCount++
 		default:
-			return nil, nil, loader.ErrUnsupportedMode
+			return nil, nil, nil, loader.ErrUnsupportedMode
 		}
 		if record.Runtime.Pin {
 			pinnedCount++
 		}
 	}
-	if hostedCount > 0 {
-		if cfg.runtimeHostAddress == "" {
-			return nil, nil, fmt.Errorf("configuration error: AILUO_RUNTIME_HOST_ADDRESS is required for installed hosted runtimes")
+	hosts = make([]loader.Host, 0, 3)
+	if hostedWithFunctions > 0 {
+		// 声明宿主函数的 hosted 包只能在内核进程内执行（宿主函数是内核特权）。
+		host, hostErr := loader.NewWasmHost(loader.WasmHostConfig{
+			ReadArtifact:         catalog.ReadArtifact,
+			HostFunctions:        hostFunctions,
+			RequireHostFunctions: true,
+		})
+		if hostErr != nil {
+			return nil, nil, nil, fmt.Errorf("configure in-kernel hosted runtime boundary: %w", hostErr)
 		}
-		host, err := loader.NewGRPCHost(loader.GRPCHostConfig{
+		hosts = append(hosts, host)
+	}
+	if hostedWithoutFunctions > 0 {
+		if cfg.runtimeHostAddress == "" {
+			return nil, nil, nil, fmt.Errorf("configuration error: AILUO_RUNTIME_HOST_ADDRESS is required for installed hosted runtimes without host functions")
+		}
+		host, hostErr := loader.NewGRPCHost(loader.GRPCHostConfig{
 			Mode: loader.ModeHosted, Address: cfg.runtimeHostAddress,
 			VerifyInstalled: catalog.VerifyRuntime,
 			DialTimeout:     10 * time.Second,
-			MaxRuntimes:     hostedCount,
+			MaxRuntimes:     hostedWithoutFunctions,
 			MaxConcurrent:   64,
 		})
-		if err != nil {
-			return nil, nil, fmt.Errorf("configure hosted runtime boundary: %w", err)
+		if hostErr != nil {
+			return nil, nil, nil, fmt.Errorf("configure hosted runtime boundary: %w", hostErr)
 		}
 		hosts = append(hosts, host)
 	}
 	if isolatedCount > 0 {
-		host, err := loader.NewIsolatedProcessHost(loader.IsolatedProcessHostConfig{
+		host, hostErr := loader.NewIsolatedProcessHost(loader.IsolatedProcessHostConfig{
 			ResolveInstalled: catalog.ResolveProcess,
 			VerifyInstalled:  catalog.VerifyProcess,
 			DialTimeout:      10 * time.Second,
 			StopGrace:        5 * time.Second,
 			TerminateGrace:   2 * time.Second,
 		})
-		if err != nil {
-			return nil, nil, fmt.Errorf("configure isolated runtime boundary: %w", err)
+		if hostErr != nil {
+			return nil, nil, nil, fmt.Errorf("configure isolated runtime boundary: %w", hostErr)
 		}
 		hosts = append(hosts, host)
 	}
 	observe.Info(ctx, "已安装运行时发现完成",
 		observe.IntAttr("runtime_count", len(records)),
-		observe.IntAttr("hosted_count", hostedCount),
+		observe.IntAttr("hosted_with_host_functions", hostedWithFunctions),
+		observe.IntAttr("hosted_without_host_functions", hostedWithoutFunctions),
 		observe.IntAttr("isolated_count", isolatedCount),
 		observe.IntAttr("pinned_count", pinnedCount),
 	)
-	return hosts, records, nil
+	return hosts, records, catalog, nil
 }
 
 func envOr(name, fallback string) string {
