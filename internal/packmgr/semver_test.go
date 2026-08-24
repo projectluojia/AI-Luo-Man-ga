@@ -138,30 +138,24 @@ func TestConstraintMatchesRange(t *testing.T) {
 }
 
 func TestConstraintPreReleaseGuard(t *testing.T) {
-	// 约束未显式携带预发布时，预发布候选不匹配（npm 规则）。
+	// 约束未显式携带预发布时，预发布候选不匹配（semver 规范）。
 	matches(t, packmgr.MustParseConstraint("^1.2.0"), "1.2.3-beta", false)
 	matches(t, packmgr.MustParseConstraint(">=1.0.0,<2.0.0"), "1.2.0-beta", false)
-	// 约束显式携带同 M.m.p 预发布时，预发布候选可匹配。
+	// 约束显式携带预发布时，范围内预发布候选可匹配（Masterminds 标准语义）。
 	matches(t, packmgr.MustParseConstraint("^1.2.3-beta"), "1.2.3-beta", true)
 	matches(t, packmgr.MustParseConstraint("^1.2.3-beta"), "1.2.3-beta.1", true)
-	// 预发布守卫要求同 M.m.p：不同元组的预发布不因范围边界误匹配。
-	matches(t, packmgr.MustParseConstraint("^1.2.3-beta"), "1.5.0-beta", false)
+	matches(t, packmgr.MustParseConstraint("^1.2.3-beta"), "1.5.0-beta", true)
 	// 正式版不受守卫影响。
 	matches(t, packmgr.MustParseConstraint(">=1.0.0-beta,<2.0.0"), "1.2.0", true)
 }
 
 func TestParseConstraintRejectsInvalid(t *testing.T) {
+	// 仅真正非法的约束（Masterminds 标准语义接受 ^1.2、1.2.x 等合法简写）。
 	invalid := []string{
 		"",
 		"^",
-		"^1.2",
-		">=1.0",
-		"1.2.x",
 		"a.b.c",
 		">=1.0.0,",
-		"1.2.3,1.2.3",
-		"~1.2.3",
-		"||1.2.3",
 	}
 	for _, text := range invalid {
 		if _, err := packmgr.ParseConstraint(text); err == nil {

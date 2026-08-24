@@ -57,7 +57,7 @@ func TestValidateManifestRejectsInvalidCore(t *testing.T) {
 			m.Dependencies = []packmgr.Dependency{{ID: "Bus.query", Constraint: "^1.0.0"}}
 		}},
 		{name: "invalid dependency constraint", mutate: func(m *packmgr.Manifest) {
-			m.Dependencies = []packmgr.Dependency{{ID: "bus.query", Constraint: "^1.0"}}
+			m.Dependencies = []packmgr.Dependency{{ID: "bus.query", Constraint: "^"}}
 		}},
 		{name: "invalid extensions json", mutate: func(m *packmgr.Manifest) { m.Extensions = json.RawMessage(`{`) }},
 	}
