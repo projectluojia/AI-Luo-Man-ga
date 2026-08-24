@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"sort"
 )
 
@@ -170,8 +171,12 @@ func decodeSchema(source json.RawMessage, target any) error {
 	if err := decoder.Decode(target); err != nil {
 		return fmt.Errorf("sdkgen: 解码 JSON Schema 失败: %w", err)
 	}
-	if err := ensureEOF(decoder); err != nil {
-		return err
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("sdkgen: JSON Schema 包含多余内容")
+		}
+		return fmt.Errorf("sdkgen: 解析 JSON Schema 失败: %w", err)
 	}
 	return nil
 }

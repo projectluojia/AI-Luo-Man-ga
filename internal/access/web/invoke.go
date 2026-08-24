@@ -6,7 +6,6 @@ import (
 	"net/http"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/jsonutil"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime"
@@ -29,21 +28,13 @@ func (s *Server) invokeCapability(writer http.ResponseWriter, request *http.Requ
 	if !authenticated {
 		return
 	}
-	request.Body = http.MaxBytesReader(writer, request.Body, 64<<10)
-	decoder := json.NewDecoder(request.Body)
-	decoder.DisallowUnknownFields()
 	var envelope struct {
 		Input json.RawMessage `json:"input"`
 	}
-	if err := decoder.Decode(&envelope); err != nil {
+	if !decodeJSONBody(writer, request, &envelope) {
 		observe.Warn(request.Context(), "Capability 调用请求体解析失败",
 			observe.StringAttr("capability_id", capabilityID),
 		)
-		access.WriteJSON(writer, http.StatusBadRequest, map[string]string{"code": "invalid_request", "message": "请求体必须是包含 input 的 JSON 对象"})
-		return
-	}
-	if err := jsonutil.EnsureEOF(decoder); err != nil {
-		access.WriteJSON(writer, http.StatusBadRequest, map[string]string{"code": "invalid_request", "message": "请求体只能包含一个 JSON 对象"})
 		return
 	}
 	if len(envelope.Input) == 0 {
