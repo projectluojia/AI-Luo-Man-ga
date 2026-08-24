@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"go/ast"
-	"strconv"
+	"reflect"
 	"strings"
 )
 
@@ -46,7 +46,7 @@ func fieldJSONName(field *ast.Field) (name string, optional bool, err error) {
 		return "", false, fmt.Errorf("schemaextract: 字段缺少 json tag")
 	}
 	tag := strings.Trim(field.Tag.Value, "`")
-	value, ok := reflectTagLookup(tag, "json")
+	value, ok := reflect.StructTag(tag).Lookup("json")
 	if !ok {
 		return "", false, fmt.Errorf("schemaextract: 字段 %q 缺少 json tag", field.Names[0].Name)
 	}
@@ -111,38 +111,4 @@ func pkgName(expr ast.Expr) string {
 		return ident.Name
 	}
 	return "?"
-}
-
-// reflectTagLookup 复刻 reflect.StructTag.Lookup 的语义（避免引入 reflect 依赖
-// 解析 AST tag 字面量）。
-func reflectTagLookup(tag, key string) (string, bool) {
-	for tag != "" {
-		i := strings.Index(tag, ":")
-		if i < 0 {
-			return "", false
-		}
-		fieldName := tag[:i]
-		if fieldName == key {
-			value := tag[i+1:]
-			if len(value) < 2 || value[0] != '"' {
-				return "", false
-			}
-			unquoted, err := strconv.Unquote(value)
-			if err != nil {
-				return "", false
-			}
-			return unquoted, true
-		}
-		i = strings.Index(tag, `"`)
-		if i < 0 {
-			return "", false
-		}
-		next, err := strconv.QuotedPrefix(tag[i:])
-		if err != nil {
-			return "", false
-		}
-		tag = tag[i+len(next):]
-		tag = strings.TrimPrefix(tag, " ")
-	}
-	return "", false
 }
