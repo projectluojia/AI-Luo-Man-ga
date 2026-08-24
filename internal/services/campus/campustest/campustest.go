@@ -12,7 +12,6 @@ import (
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus"
 )
 
 // registerHosted 注册并预热已发现记录（Unix 与非 Unix 共用）。
@@ -34,7 +33,8 @@ func registerHosted(t testing.TB, target *registry.Registry, host loader.Host, r
 	}
 	warmupContext, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	if err := manager.Warmup(warmupContext, []string{campus.ServiceID}, 1); err != nil {
+	// 预热按实际注册的 runtime ID（组件 ID），非包 ID（campus.ServiceID）。
+	if err := manager.Warmup(warmupContext, []string{records[0].Runtime.ID}, 1); err != nil {
 		t.Fatalf("warm campus hosted package: %v", err)
 	}
 }
