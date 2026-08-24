@@ -51,7 +51,6 @@ func ManifestFromCapabilities(packageID string, capabilities []schemaextract.Cap
 		Tools:   make(map[string]sourceTool, len(capabilities)),
 	}
 	exportIDs := make([]string, 0, len(capabilities))
-	capabilitySpecs := make([]schemaextract.Capability, 0, len(capabilities))
 	for _, capability := range capabilities {
 		source.Tools[capability.ID] = sourceTool{
 			Description: capability.Description,
@@ -63,7 +62,6 @@ func ManifestFromCapabilities(packageID string, capabilities []schemaextract.Cap
 			Description: capability.Description,
 		})
 		exportIDs = append(exportIDs, capability.ID)
-		capabilitySpecs = append(capabilitySpecs, capability)
 	}
 	sort.Strings(exportIDs)
 	extensions, err := source.buildExtensions()
