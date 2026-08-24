@@ -17,19 +17,9 @@ import (
 
 // Pack 把源包目录打成可分发 tarball（npm pack 等价物）：校验清单与工件后
 // 生成 `<id>-<version>.tgz`，条目为扁平布局（manifest.json + lock.json + 工件），
-// 供注册表发布与 `ailuo install <pkg>.tgz` 安装。
-func Pack(ctx context.Context, sourceDir, outputDir string) (string, error) {
-	source, err := readSourceManifest(sourceDir)
-	if err != nil {
-		return "", err
-	}
-	return PackFromSource(ctx, sourceDir, outputDir, source.Manifest, source.manifestBytes)
-}
-
-// PackFromSource 用调用方提供的清单（如从 ailuo.toml 源清单解析）打包：
-// 校验清单与源目录工件，生成 tarball 并附带按工件 SHA-256 锁定的 lock.json。
-// 与 Pack 的唯一区别是清单来源：本函数不读取 manifest.json，供作者侧源清单
-// （packagefmt）与旧 manifest.json 路径共用同一打包实现。
+// PackFromSource 用调用方提供的清单（如从 ailuo.toml 源清单或 schemaextract
+// 自动提取）打包：校验清单与源目录工件，生成 tarball 并附带按工件 SHA-256
+// 锁定的 lock.json。清单来源由调用方决定，本函数不读取 manifest.json。
 func PackFromSource(ctx context.Context, sourceDir, outputDir string, manifest Manifest, manifestBytes []byte) (string, error) {
 	if err := ValidateManifest(manifest); err != nil {
 		return "", err

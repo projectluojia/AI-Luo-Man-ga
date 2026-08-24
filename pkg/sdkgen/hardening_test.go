@@ -2,6 +2,7 @@ package sdkgen
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -27,7 +28,7 @@ func TestGenerateRejectsCompositionSchema(t *testing.T) {
 		`{"$ref":"#/definitions/X"}`,
 	}
 	for _, schema := range tests {
-		source := `{"capabilities":[{"id":"x.y","input_schema_json":` + string(jsonMarshal(schema)) + `}]}`
+		source := `{"capabilities":[{"id":"x.y","input_schema_json":` + strconv.Quote(schema) + `}]}`
 		if _, err := Generate(json.RawMessage(source), Options{Language: LanguageGo, PackageID: "x"}); err == nil {
 			t.Errorf("schema %s 期望拒绝", schema)
 		}
@@ -61,12 +62,6 @@ func TestValidateFieldNames(t *testing.T) {
 	if _, err := Generate(json.RawMessage(source), Options{Language: LanguagePython, PackageID: "x"}); err != nil {
 		t.Fatalf("合法字段名被拒绝: %v", err)
 	}
-}
-
-// jsonMarshal 辅助（测试内联 schema 字符串转 JSON 字符串字面量）。
-func jsonMarshal(value string) string {
-	encoded, _ := json.Marshal(value)
-	return string(encoded)
 }
 
 // TestGenerateRejectsReservedError 验证错误信息可读（含保留字提示）。

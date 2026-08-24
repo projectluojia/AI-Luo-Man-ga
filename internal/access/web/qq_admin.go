@@ -1,14 +1,12 @@
 package web
 
 import (
-	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access"
 	qqsettings "github.com/projectluojia/AI-Luo-Man-ga/internal/access/qq/settings"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/jsonutil"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
 )
 
@@ -38,12 +36,8 @@ func (s *Server) updateQQAccess(writer http.ResponseWriter, request *http.Reques
 	if !s.authorizeQQAdmin(writer, request) {
 		return
 	}
-	request.Body = http.MaxBytesReader(writer, request.Body, 64<<10)
-	decoder := json.NewDecoder(request.Body)
-	decoder.DisallowUnknownFields()
 	var input qqSettingsInput
-	if err := decoder.Decode(&input); err != nil || jsonutil.EnsureEOF(decoder) != nil {
-		writeQQAdminError(writer, http.StatusBadRequest, "invalid_request", "请求体不是有效的 QQ 接入配置")
+	if !decodeJSONBody(writer, request, &input) {
 		return
 	}
 	if input.Generation == 0 {

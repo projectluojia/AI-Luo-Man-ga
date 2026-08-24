@@ -6,10 +6,10 @@
 package sdkgen
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
+
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
 )
 
 // Capability 是生成 SDK 所需的 capability 契约视图，JSON 形状与内核
@@ -40,8 +40,8 @@ type extensions struct {
 // decodeCapabilities 严格解码 extensions 段并校验生成所需的最小契约。
 func decodeCapabilities(source json.RawMessage) ([]Capability, error) {
 	var ext extensions
-	if err := decodeStrict(source, &ext); err != nil {
-		return nil, err
+	if err := packmgr.DecodeStrictJSON(source, &ext); err != nil {
+		return nil, fmt.Errorf("sdkgen: 解码契约失败: %w", err)
 	}
 	if len(ext.Capabilities) == 0 {
 		return nil, fmt.Errorf("sdkgen: extensions 未声明任何 capability")
@@ -56,29 +56,4 @@ func decodeCapabilities(source json.RawMessage) ([]Capability, error) {
 		}
 	}
 	return ext.Capabilities, nil
-}
-
-// decodeStrict 以拒绝未知字段的方式解码单个 JSON 值并确保无尾随内容。
-func decodeStrict(source json.RawMessage, target any) error {
-	decoder := json.NewDecoder(bytes.NewReader(source))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(target); err != nil {
-		return fmt.Errorf("sdkgen: 解码契约失败: %w", err)
-	}
-	if err := ensureEOF(decoder); err != nil {
-		return err
-	}
-	return nil
-}
-
-// ensureEOF 拒绝解码后仍剩余非空白内容的输入。
-func ensureEOF(decoder *json.Decoder) error {
-	var trailing any
-	if err := decoder.Decode(&trailing); err != io.EOF {
-		if err == nil {
-			return fmt.Errorf("sdkgen: 契约包含多余内容")
-		}
-		return fmt.Errorf("sdkgen: 解析契约失败: %w", err)
-	}
-	return nil
 }

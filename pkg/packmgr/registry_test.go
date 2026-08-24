@@ -70,7 +70,15 @@ func TestInstallFromReleaseEndToEnd(t *testing.T) {
 	// 先打一个真实 tarball，让 mock 服务器直接喂给客户端。
 	source := filepath.Join(t.TempDir(), "pkg")
 	writeSourcePackage(t, source, "demo.pkg", "1.0.0", packmgr.ModeHosted, "app.wasm", nil)
-	tarballPath, err := packmgr.Pack(context.Background(), source, t.TempDir())
+	manifest := packmgr.Manifest{
+		SchemaVersion: packmgr.SchemaVersion, ID: "demo.pkg", Version: "1.0.0",
+		Components: []packmgr.Component{{ID: "core", Mode: packmgr.ModeHosted, Entrypoint: "app.wasm"}},
+	}
+	manifestBytes, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tarballPath, err := packmgr.PackFromSource(context.Background(), source, t.TempDir(), manifest, manifestBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
