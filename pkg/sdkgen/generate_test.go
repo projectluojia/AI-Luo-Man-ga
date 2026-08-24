@@ -46,9 +46,10 @@ func generateForTest(t *testing.T, language Language) string {
 	if err != nil {
 		t.Fatalf("Generate(%s): %v", language, err)
 	}
-	if len(files) != 1 {
-		t.Fatalf("Generate(%s) 文件数 = %d, want 1", language, len(files))
+	if len(files) == 0 {
+		t.Fatalf("Generate(%s) 未产出文件", language)
 	}
+	// 首个文件是语言主实现（client.go / client.py / client.ts）。
 	return string(files[0].Code)
 }
 

@@ -28,46 +28,11 @@ import (
 // wasm 与权威 store）→ SDK 调用 invoke 端点 → 断言返回正确行程。
 // 全程不 mock 被调函数：capability 由 campustest 按安装目录路径注册。
 func TestGeneratedGoSDKInvokesRealCapability(t *testing.T) {
-	// 1. 权威数据 store（必须先设 metadata 再 Replace：Replace 内部以
-	// metadata.Revision 覆写行程 SourceRevision，顺序颠倒会不匹配）。
-	store := memory.NewBusStore()
-	now := time.Now().UTC()
-	store.SetSnapshotMetadata(campus.AppID, bus.SnapshotMetadata{
-		Revision: "e2e-revision", Source: "zhihui-luojia", Authoritative: true, Complete: true,
-		ImportedAt: now.Add(-time.Hour), ValidUntil: now.Add(time.Hour),
-	})
-	baseTime := time.Date(2026, time.July, 24, 8, 0, 0, 0, time.FixedZone("Asia/Shanghai", 8*60*60))
-	store.Replace(campus.AppID, []bus.Journey{
-		journeyFixture("trip-early", "stop-a", "stop-b", baseTime.Add(30*time.Minute)),
-		journeyFixture("trip-late", "stop-a", "stop-b", baseTime.Add(90*time.Minute)),
-	})
-
-	// 2. 注册真实 hosted campus（安装目录路径）。
-	reg := registry.New()
-	campustest.RegisterHosted(t, reg, store)
-	policy := runtimetest.NewStaticAppPolicy()
-	for _, capabilityID := range []string{
-		campus.BusStopSearchCapabilityID, campus.BusRouteListCapabilityID, campus.BusJourneySearchCapabilityID,
-	} {
-		policy.Enable(campus.AppID, capabilityID)
-	}
-	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{})
-
-	// 3. httptest 启动真实 HTTP 端点。
-	server := web.NewServer(
-		context.Background(), &fakeOrchestrator{}, nil, nil,
-		reg, policy, campus.AppID, nil,
-		web.WithWebAuthenticator(testWebAuthenticator{}),
-		web.WithDispatcher(dispatcher),
-	)
-	testServer := httptest.NewServer(server.Handler())
+	// 1. 装配真实端点 + 权威契约（多语言端到端共用）。
+	testServer, extensions := newCampusE2E(t)
 	defer testServer.Close()
 
-	// 4. 从 campus 包权威契约（campustest 装配与 SDK 生成共用）生成 Go SDK。
-	extensions, err := campus.Extensions()
-	if err != nil {
-		t.Fatalf("构造 extensions: %v", err)
-	}
+	// 2. 生成 Go SDK。
 	files, err := sdkgen.Generate(extensions, sdkgen.Options{Language: sdkgen.LanguageGo, PackageID: campus.ServiceID})
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
@@ -168,4 +133,46 @@ func journeyFixture(id, origin, destination string, departure time.Time) bus.Jou
 		ArrivalAt:         departure.Add(20 * time.Minute),
 		SourceRevision:    "e2e-revision",
 	}
+}
+
+// newCampusE2E 装配多语言端到端共享环境：权威数据 store + 真实 hosted campus
+// 注册 + httptest 端点 + campus 权威契约。返回 HTTP 端点与生成 SDK 的契约输入。
+// 全程不 mock 被调函数（campustest 按安装目录路径注册真实 wasm）。
+func newCampusE2E(t *testing.T) (*httptest.Server, json.RawMessage) {
+	t.Helper()
+	// 权威数据 store（必须先设 metadata 再 Replace：Replace 内部以
+	// metadata.Revision 覆写行程 SourceRevision，顺序颠倒会不匹配）。
+	store := memory.NewBusStore()
+	now := time.Now().UTC()
+	store.SetSnapshotMetadata(campus.AppID, bus.SnapshotMetadata{
+		Revision: "e2e-revision", Source: "zhihui-luojia", Authoritative: true, Complete: true,
+		ImportedAt: now.Add(-time.Hour), ValidUntil: now.Add(time.Hour),
+	})
+	baseTime := time.Date(2026, time.July, 24, 8, 0, 0, 0, time.FixedZone("Asia/Shanghai", 8*60*60))
+	store.Replace(campus.AppID, []bus.Journey{
+		journeyFixture("trip-early", "stop-a", "stop-b", baseTime.Add(30*time.Minute)),
+		journeyFixture("trip-late", "stop-a", "stop-b", baseTime.Add(90*time.Minute)),
+	})
+	reg := registry.New()
+	campustest.RegisterHosted(t, reg, store)
+	policy := runtimetest.NewStaticAppPolicy()
+	for _, capabilityID := range []string{
+		campus.BusStopSearchCapabilityID, campus.BusRouteListCapabilityID, campus.BusJourneySearchCapabilityID,
+	} {
+		policy.Enable(campus.AppID, capabilityID)
+	}
+	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{})
+	server := web.NewServer(
+		context.Background(), &fakeOrchestrator{}, nil, nil,
+		reg, policy, campus.AppID, nil,
+		web.WithWebAuthenticator(testWebAuthenticator{}),
+		web.WithDispatcher(dispatcher),
+	)
+	testServer := httptest.NewServer(server.Handler())
+	extensions, err := campus.Extensions()
+	if err != nil {
+		testServer.Close()
+		t.Fatalf("构造 extensions: %v", err)
+	}
+	return testServer, extensions
 }
