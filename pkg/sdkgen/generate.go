@@ -50,9 +50,9 @@ func Generate(source json.RawMessage, options Options) ([]Generated, error) {
 	}
 	switch options.Language {
 	case LanguageGo:
-		return emitGo(options.PackageID, capabilities, models)
+		return emitGo(options.PackageID, capabilities, models), nil
 	case LanguagePython:
-		return emitPython(options.PackageID, capabilities, models)
+		return emitPython(options.PackageID, capabilities, models), nil
 	default:
 		return nil, fmt.Errorf("sdkgen: 不支持的语言 %q", options.Language)
 	}
