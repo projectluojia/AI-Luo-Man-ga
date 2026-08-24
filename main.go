@@ -423,10 +423,31 @@ func localPathExists(path string) bool {
 	return err == nil
 }
 
-// resolveSource 解析作者侧 ailuo.toml；若清单声明 [build]，先执行构建再返回。
+// resolveSource 解析源包目录：优先 ailuo.toml（显式声明，含宿主函数/存储），
+// 无则从源码自动提取清单并构建（作者零声明，纯计算包）。清单声明 [build] 时
+// 先执行构建再返回（pack/publish 共用，构建失败即报错，不打包残缺工件）。
 func resolveSource(ctx context.Context, sourceDir string) (manifest packmgr.Manifest, manifestBytes []byte, err error) {
 	path := packagefmt.SourcePath(sourceDir)
-	if _, statErr := os.Stat(path); statErr != nil {
+	if _, statErr := os.Stat(path); errors.Is(statErr, fs.ErrNotExist) {
+		// 无 ailuo.toml：从源码自动提取并构建（作者零声明）。
+		capabilities, buildTool, extractErr := packagefmt.AutoExtract(ctx, sourceDir)
+		if extractErr != nil {
+			return packmgr.Manifest{}, nil, extractErr
+		}
+		absolute, absErr := filepath.Abs(sourceDir)
+		if absErr != nil {
+			return packmgr.Manifest{}, nil, absErr
+		}
+		manifest, manifestBytes, err = packagefmt.ManifestFromCapabilities(filepath.Base(absolute), capabilities)
+		if err != nil {
+			return packmgr.Manifest{}, nil, err
+		}
+		if err := packagefmt.Build(ctx, sourceDir, manifest, packagefmt.BuildSpec{Tool: buildTool}); err != nil {
+			return packmgr.Manifest{}, nil, err
+		}
+		return manifest, manifestBytes, nil
+	}
+	if statErr != nil {
 		return packmgr.Manifest{}, nil, fmt.Errorf("读取源清单失败: %w", statErr)
 	}
 	manifest, manifestBytes, build, err := packagefmt.Parse(path)
