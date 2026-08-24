@@ -59,6 +59,7 @@ type Server struct {
 	reader             EchoReader
 	health             HealthChecker
 	registry           *registry.Registry
+	dispatcher         *runtime.Dispatcher
 	policy             runtime.AppPolicy
 	appID              string
 	platformHub        *access.Hub
@@ -158,6 +159,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /readyz", s.readyz)
 	mux.Handle("GET /metrics", observe.DefaultMetrics())
 	mux.HandleFunc("GET /api/v1/capabilities", s.capabilities)
+	mux.HandleFunc("POST /api/v1/capabilities/{capability_id}/invoke", s.invokeCapability)
 	mux.HandleFunc("GET /api/v1/admin/qq-access", s.getQQAccess)
 	mux.HandleFunc("PUT /api/v1/admin/qq-access", s.updateQQAccess)
 	mux.HandleFunc("POST /api/v2/echoes", s.createEcho)

@@ -11,6 +11,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access/qq"
 	qqsettings "github.com/projectluojia/AI-Luo-Man-ga/internal/access/qq/settings"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/identity"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
 )
 
@@ -55,6 +56,13 @@ func WithEventHub(hub *access.EventHub) ServerOption {
 		if hub != nil {
 			server.hub = hub
 		}
+	}
+}
+
+// WithDispatcher 注入 Capability 调用分发器（invokeCapability 端点必需）。
+func WithDispatcher(dispatcher *runtime.Dispatcher) ServerOption {
+	return func(server *Server) {
+		server.dispatcher = dispatcher
 	}
 }
 
