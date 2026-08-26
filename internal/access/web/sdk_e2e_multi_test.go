@@ -1,11 +1,13 @@
 package web_test
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus"
 	"github.com/projectluojia/AI-Luo-Man-ga/pkg/sdkgen"
@@ -65,7 +67,10 @@ print(json.dumps(result))
 	if err := os.WriteFile(filepath.Join(dir, "main.py"), []byte(main), 0644); err != nil {
 		t.Fatal(err)
 	}
-	command := exec.Command("python", "main.py", dir, testServer.URL)
+	// 外部解释器可能挂住：绑定超时上下文，超时后子进程被杀而不是拖死整个测试。
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	command := exec.CommandContext(ctx, "python", "main.py", dir, testServer.URL)
 	command.Dir = dir
 	output, err := command.CombinedOutput()
 	if err != nil {
@@ -110,7 +115,10 @@ void main();
 	if err := os.WriteFile(filepath.Join(dir, "main.ts"), []byte(main), 0644); err != nil {
 		t.Fatal(err)
 	}
-	command := exec.Command("npx", "--yes", "tsx", "main.ts", testServer.URL)
+	// npx 首次运行需下载 tsx，超时给足；超时后子进程被杀，测试转为 Skip。
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	command := exec.CommandContext(ctx, "npx", "--yes", "tsx", "main.ts", testServer.URL)
 	command.Dir = dir
 	output, err := command.CombinedOutput()
 	if err != nil {

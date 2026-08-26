@@ -1,12 +1,14 @@
 package sdkgen
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // campusExtensions 是独立包仓库 ailuo-packages/campus-bus 三个 capability 的
@@ -135,18 +137,39 @@ func TestGeneratePythonCompiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, f := range files {
-		path := filepath.Join(dir, f.Path)
-		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path, f.Code, 0644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	cmd := exec.Command("python", "-m", "compileall", "-q", dir)
+	writeGenerated(t, dir, files)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "python", "-m", "compileall", "-q", dir)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("python compileall 失败: %v\n%s", err, output)
+	}
+}
+
+// TestGeneratePythonDropsNestedNone 真实执行生成的序列化路径：asdict 会把嵌套
+// dataclass 一并展开成 dict，只在顶层过滤 None 会把嵌套的未提供字段当显式 null
+// 发给内核（严格 schema 会拒收）。
+func TestGeneratePythonDropsNestedNone(t *testing.T) {
+	dir := t.TempDir()
+	schema := `{"type":"object","properties":{"inner":{"type":"object","properties":{"a":{"type":"string"},"b":{"type":"string"}},"required":["a"],"additionalProperties":false}},"additionalProperties":false}`
+	source := `{"capabilities":[{"id":"x.y","input_schema_json":` + strconv.Quote(schema) + `}]}`
+	files, err := Generate(json.RawMessage(source), Options{Language: LanguagePython, PackageID: "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeGenerated(t, dir, files)
+	script := `import json, sys
+sys.path.insert(0, sys.argv[1])
+from x.client import _json_default, YInput, YInputInner
+print(json.dumps({"input": YInput(inner=YInputInner(a="v", b=None))}, default=_json_default))`
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	output, err := exec.CommandContext(ctx, "python", "-c", script, dir).CombinedOutput()
+	if err != nil {
+		t.Fatalf("python 执行失败: %v\n%s", err, output)
+	}
+	if got := strings.TrimSpace(string(output)); got != `{"input": {"inner": {"a": "v"}}}` {
+		t.Fatalf("嵌套 None 未被剔除: %s", got)
 	}
 }
