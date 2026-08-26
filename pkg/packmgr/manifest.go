@@ -232,6 +232,11 @@ func ValidateLock(lock Lock, manifest Manifest) error {
 		if !filepath.IsAbs(artifact.Path) || filepath.Clean(artifact.Path) != artifact.Path {
 			return ErrInvalidFormat
 		}
+		// 工件按 basename 平铺安装，lock 的文件名必须与清单声明的 entrypoint 一致：
+		// 否则 lock 可以把摘要绑到包目录外任意一个绝对路径文件上。
+		if filepath.Base(artifact.Path) != filepath.Base(component.Entrypoint) {
+			return ErrInvalidFormat
+		}
 		switch component.Mode {
 		case ModeHosted:
 			if artifact.Process != nil {

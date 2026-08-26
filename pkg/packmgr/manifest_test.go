@@ -56,6 +56,12 @@ func TestValidateManifestRejectsInvalidCore(t *testing.T) {
 			m.Components[0].Mode = "embedded"
 		}},
 		{name: "missing entrypoint", mutate: func(m *packmgr.Manifest) { m.Components[0].Entrypoint = "" }},
+		{name: "absolute entrypoint", mutate: func(m *packmgr.Manifest) {
+			m.Components[0].Entrypoint = filepath.Join(string(filepath.Separator), "opt", "evil.wasm")
+		}},
+		{name: "escaping entrypoint", mutate: func(m *packmgr.Manifest) {
+			m.Components[0].Entrypoint = filepath.Join("..", "..", "evil.wasm")
+		}},
 		{name: "duplicate component id", mutate: func(m *packmgr.Manifest) {
 			m.Components = append(m.Components, packmgr.Component{ID: "bus.core", Mode: packmgr.ModeHosted, Entrypoint: "x"})
 		}},
@@ -143,7 +149,9 @@ func TestComponentOrderRejectsCycle(t *testing.T) {
 }
 
 func TestValidateLockMatchesComponents(t *testing.T) {
-	artifactPath := filepath.Join(t.TempDir(), "bus-core.wasm")
+	installDir := t.TempDir()
+	corePath := filepath.Join(installDir, "bus-core.wasm")
+	adapterPath := filepath.Join(installDir, "bus-adapter")
 	manifest := packmgr.Manifest{
 		SchemaVersion: packmgr.SchemaVersion, ID: "campus.bus", Version: "1.0.0",
 		Components: []packmgr.Component{
@@ -156,12 +164,12 @@ func TestValidateLockMatchesComponents(t *testing.T) {
 		PackageVersion: "1.0.0",
 		ManifestSHA256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		Artifacts: []packmgr.LockedArtifact{
-			{ComponentID: "bus.core", Path: artifactPath,
+			{ComponentID: "bus.core", Path: corePath,
 				SHA256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
-			{ComponentID: "bus.adapter", Path: artifactPath,
+			{ComponentID: "bus.adapter", Path: adapterPath,
 				SHA256: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
 				Process: &packmgr.ProcessSpec{
-					Path: artifactPath, WorkDir: t.TempDir(), Address: "127.0.0.1:9000",
+					Path: adapterPath, WorkDir: t.TempDir(), Address: "127.0.0.1:9000",
 				}},
 		},
 	}
@@ -176,9 +184,16 @@ func TestValidateLockMatchesComponents(t *testing.T) {
 		return copied
 	}
 	bad := cloneLock()
-	bad.Artifacts[0].Process = &packmgr.ProcessSpec{Path: artifactPath, WorkDir: t.TempDir(), Address: "127.0.0.1:9001"}
+	bad.Artifacts[0].Process = &packmgr.ProcessSpec{Path: corePath, WorkDir: t.TempDir(), Address: "127.0.0.1:9001"}
 	if err := packmgr.ValidateLock(bad, manifest); err == nil {
 		t.Fatal("ValidateLock accepted hosted component with process spec")
+	}
+	// lock 的工件文件名必须与清单 entrypoint 一致：否则摘要可以绑到包目录外
+	// 任意一个绝对路径文件上，装载的就不是清单声明的工件。
+	bad = cloneLock()
+	bad.Artifacts[0].Path = filepath.Join(installDir, "other.wasm")
+	if err := packmgr.ValidateLock(bad, manifest); err == nil {
+		t.Fatal("ValidateLock accepted artifact path not matching entrypoint")
 	}
 	// 摘要必须是合法十六进制：只校验长度会让 64 个 "g" 混过完整性校验前置检查。
 	bad = cloneLock()
