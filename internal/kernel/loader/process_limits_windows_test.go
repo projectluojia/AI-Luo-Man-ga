@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"testing"
 	"time"
+
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
 )
 
 // TestWindowsCPUBurnHelper 是 CPU 燃烧子进程入口：AILUO_CPU_BURN=1 时无限旋转。
@@ -33,7 +35,7 @@ func TestApplyProcessLimitsTerminatesCPUOverrun(t *testing.T) {
 	if err := command.Start(); err != nil {
 		t.Fatal(err)
 	}
-	release, err := applyProcessLimits(command.Process, ProcessLimits{MaxCPUSeconds: 1})
+	release, err := applyProcessLimits(command.Process, packmgr.ProcessLimits{MaxCPUSeconds: 1})
 	if err != nil {
 		_ = command.Process.Kill()
 		_ = command.Wait()
@@ -72,7 +74,7 @@ func TestApplyProcessLimitsRejectsUnmappableLimits(t *testing.T) {
 		}
 		return command
 	}
-	for _, limits := range []ProcessLimits{
+	for _, limits := range []packmgr.ProcessLimits{
 		{MaxOpenFiles: 100},
 		{MaxFileBytes: 1024},
 	} {
