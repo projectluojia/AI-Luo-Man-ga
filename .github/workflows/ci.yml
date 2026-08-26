@@ -144,28 +144,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/hello.pkg"
-          cat > "$RUNNER_TEMP/hello.pkg/go.mod" <<'EOF'
-module hello.pkg
-
-go 1.23
-EOF
-          cat > "$RUNNER_TEMP/hello.pkg/main.go" <<'EOF'
-//go:build wasip1
-
-// hello 说你好。
-package main
-
-// hello 是 hello.pkg 的唯一 capability。
-func hello(args HelloArgs) {}
-
-// HelloArgs 是 hello 的输入。
-type HelloArgs struct {
-    Name string `json:"name"`
-}
-
-func main() {}
-EOF
+          # 夹具是 testdata/hello.pkg 下的真实源码（go 工具链忽略 testdata），
+          # 拷到临时目录再打包：pack 会在包目录内生成产物，不污染工作树。
+          cp -r testdata/hello.pkg "$RUNNER_TEMP/hello.pkg"
           ./ailuo pack "$RUNNER_TEMP/hello.pkg" dist
           tarball="$(ls dist/hello.pkg-*.tgz)"
           ./ailuo install --root "$RUNNER_TEMP/pkgroot" "$tarball"
