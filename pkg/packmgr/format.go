@@ -103,9 +103,11 @@ func ValidateDependency(dep Dependency) error {
 	return nil
 }
 
-// HostedFunctionKey 返回宿主函数声明/实现的唯一键。
+// HostedFunctionKey 返回宿主函数声明/实现的唯一键。分隔符用 NUL：module 与
+// name 都允许含 `.`，用 `.` 拼接会让 {"a.b","c"} 与 {"a","b.c"} 撞成同一个键。
+// 该键只作进程内查找，不序列化、不出现在任何契约里。
 func HostedFunctionKey(module, name string) string {
-	return module + "." + name
+	return module + "\x00" + name
 }
 
 // EqualHostedFunctions 比较声明集合（忽略用途文本：用途只作说明，不参与身份）。
