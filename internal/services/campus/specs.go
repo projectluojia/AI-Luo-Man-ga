@@ -10,6 +10,9 @@ import (
 const (
 	AppID     = "campus-services"
 	ServiceID = "campus"
+	// BusComponentID 是 campus 包内导出全部校巴 Capability 的组件 ID。就绪校验
+	// 与测试装配共用该常量：包内可以有其他组件，只有 bus 组件在位才算就绪。
+	BusComponentID = "bus"
 
 	BusStopSearchCapabilityID    = "campus.bus.stops.search"
 	BusRouteListCapabilityID     = "campus.bus.routes.list"

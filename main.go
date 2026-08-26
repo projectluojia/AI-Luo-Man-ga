@@ -823,10 +823,11 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 		}
 	}
 	// campus.bus 是核心业务包（App 配置启用的 Capability 均由其导出）：安装目录
-	// 缺失 campus 组件即拒绝就绪（fail-closed），给出可行动错误。
+	// 缺失 bus 组件即拒绝就绪（fail-closed），给出可行动错误。只比包 ID 不够——
+	// 包内可能只装上了别的组件，那时 Capability 一个也没注册，却会判定为就绪。
 	campusInstalled := false
 	for _, record := range installedRecords {
-		if record.PackageID == campus.ServiceID {
+		if record.PackageID == campus.ServiceID && record.ComponentID == campus.BusComponentID {
 			campusInstalled = true
 			break
 		}

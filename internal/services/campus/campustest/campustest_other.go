@@ -51,7 +51,7 @@ func RegisterHosted(t testing.TB, target *registry.Registry, store bus.Store) {
 				Purpose: "查询 Go 托管权威校巴存储（App 隔离在宿主侧强制）",
 			}},
 		},
-		PackageID: campus.ServiceID, ComponentID: "bus",
+		PackageID: campus.ServiceID, ComponentID: campus.BusComponentID,
 		Tools:        campus.ToolSpecs(),
 		Service:      campus.ServiceSpec(),
 		Capabilities: campus.CapabilitySpecs(),
