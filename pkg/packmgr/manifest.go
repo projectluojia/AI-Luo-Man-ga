@@ -258,10 +258,11 @@ func isPackageEntrypoint(value string) bool {
 		!strings.ContainsAny(value, `/\\:`) && !strings.ContainsRune(value, '\x00')
 }
 
-// isSHA256Hex 判断摘要是否恰好是 32 字节的小写或大写十六进制值。
-func isSHA256Hex(value string) bool {
-	decoded, err := hex.DecodeString(value)
-	return err == nil && len(decoded) == sha256.Size
+// isSHA256Hex 判断字符串是否为合法十六进制 SHA-256 摘要。只校验长度会让 64 个
+// "g" 这类非十六进制垃圾通过 lock 校验，摘要比对之前就该拒掉。
+func isSHA256Hex(digest string) bool {
+	raw, err := hex.DecodeString(digest)
+	return err == nil && len(raw) == sha256.Size
 }
 
 func findComponent(manifest Manifest, id string) (Component, bool) {

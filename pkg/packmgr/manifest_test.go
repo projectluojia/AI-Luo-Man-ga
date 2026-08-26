@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
@@ -31,14 +32,17 @@ func TestValidateManifestAcceptsNeutralCore(t *testing.T) {
 }
 
 func TestValidateManifestRejectsInvalidCore(t *testing.T) {
-	validComponents := []packmgr.Component{{
-		ID: "bus.core", Mode: packmgr.ModeHosted, Entrypoint: "bus-core.wasm",
-	}}
-	valid := packmgr.Manifest{
-		SchemaVersion: packmgr.SchemaVersion, ID: "campus.bus", Version: "1.0.0",
-		Components: validComponents,
+	// 每个用例独立构造：Manifest 结构体复制不复制 Components 底层数组，
+	// 共用一份会让 `m.Components[0].Mode = ...` 之类的改动污染后续子测试。
+	validManifest := func() packmgr.Manifest {
+		return packmgr.Manifest{
+			SchemaVersion: packmgr.SchemaVersion, ID: "campus.bus", Version: "1.0.0",
+			Extensions: json.RawMessage(`{"tools":[]}`),
+			Components: []packmgr.Component{{
+				ID: "bus.core", Mode: packmgr.ModeHosted, Entrypoint: "bus-core.wasm",
+			}},
+		}
 	}
-	validJSON := json.RawMessage(`{"tools":[]}`)
 	cases := []struct {
 		name   string
 		mutate func(*packmgr.Manifest)
@@ -93,8 +97,7 @@ func TestValidateManifestRejectsInvalidCore(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			manifest := valid
-			manifest.Extensions = validJSON
+			manifest := validManifest()
 			tc.mutate(&manifest)
 			if err := packmgr.ValidateManifest(manifest); err == nil {
 				t.Fatalf("ValidateManifest accepted invalid manifest: %+v", manifest)
@@ -165,11 +168,28 @@ func TestValidateLockMatchesComponents(t *testing.T) {
 	if err := packmgr.ValidateLock(lock, manifest); err != nil {
 		t.Fatalf("ValidateLock: %v", err)
 	}
-	// hosted 组件不得携带进程规格。
-	bad := lock
+	// hosted 组件不得携带进程规格。Artifacts 必须深拷贝：Lock 结构体复制共用
+	// 底层数组，直接改 bad.Artifacts[0] 会同时改掉上面已校验过的 lock。
+	cloneLock := func() packmgr.Lock {
+		copied := lock
+		copied.Artifacts = append([]packmgr.LockedArtifact(nil), lock.Artifacts...)
+		return copied
+	}
+	bad := cloneLock()
 	bad.Artifacts[0].Process = &packmgr.ProcessSpec{Path: artifactPath, WorkDir: t.TempDir(), Address: "127.0.0.1:9001"}
 	if err := packmgr.ValidateLock(bad, manifest); err == nil {
 		t.Fatal("ValidateLock accepted hosted component with process spec")
+	}
+	// 摘要必须是合法十六进制：只校验长度会让 64 个 "g" 混过完整性校验前置检查。
+	bad = cloneLock()
+	bad.Artifacts[0].SHA256 = strings.Repeat("g", 64)
+	if err := packmgr.ValidateLock(bad, manifest); err == nil {
+		t.Fatal("ValidateLock accepted non-hex artifact digest")
+	}
+	bad = cloneLock()
+	bad.ManifestSHA256 = strings.Repeat("g", 64)
+	if err := packmgr.ValidateLock(bad, manifest); err == nil {
+		t.Fatal("ValidateLock accepted non-hex manifest digest")
 	}
 }
 
@@ -189,5 +209,20 @@ func TestSchemaVersionConstantIsNeutral(t *testing.T) {
 func TestValidateDependencyRejectsMalformedConstraint(t *testing.T) {
 	if err := packmgr.ValidateDependency(packmgr.Dependency{ID: "bus.query", Constraint: "not-a-constraint"}); !errors.Is(err, packmgr.ErrInvalidFormat) {
 		t.Fatalf("ValidateDependency error = %v, want ErrInvalidFormat", err)
+	}
+}
+
+// module 与 name 都允许含 `.`，因此 {"ailuo.bus","query"} 与 {"ailuo","bus.query"}
+// 是两个不同声明；用 `.` 拼键会让它们撞成同一个键并被误判为重复声明。
+func TestHostedFunctionKeyDistinguishesDottedSegments(t *testing.T) {
+	decls := []packmgr.HostedFunctionDecl{
+		{Module: "ailuo.bus", Name: "query"},
+		{Module: "ailuo", Name: "bus.query"},
+	}
+	if err := packmgr.ValidateHostedFunctions(decls); err != nil {
+		t.Fatalf("ValidateHostedFunctions: %v", err)
+	}
+	if packmgr.HostedFunctionKey("ailuo.bus", "query") == packmgr.HostedFunctionKey("ailuo", "bus.query") {
+		t.Fatal("HostedFunctionKey 对歧义的 module/name 切分产生了相同键")
 	}
 }
