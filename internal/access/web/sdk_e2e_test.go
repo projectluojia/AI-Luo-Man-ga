@@ -80,8 +80,10 @@ func main() {
 		t.Fatal(err)
 	}
 
-	// 6. 编译运行生成的 SDK 调用真实端点。
-	cmd := exec.Command("go", "run", ".", testServer.URL)
+	// 6. 编译运行生成的 SDK 调用真实端点（绑定超时上下文，编译挂住时子进程被杀）。
+	runCtx, cancelRun := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancelRun()
+	cmd := exec.CommandContext(runCtx, "go", "run", ".", testServer.URL)
 	cmd.Dir = dir
 	output, err := cmd.CombinedOutput()
 	if err != nil {
