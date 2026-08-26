@@ -284,7 +284,8 @@ func (r *wasmRuntime) hostFunction(fn HostedFunction) func(context.Context, api.
 			return hostedHostFunctionError
 		}
 		state := value.(*hostedInvokeState)
-		call, ok := state.funcs[fn.Module+"."+fn.Name]
+		// 必须走 HostedFunctionKey：手写拼接与注册端不一致时查表恒失败。
+		call, ok := state.funcs[packmgr.HostedFunctionKey(fn.Module, fn.Name)]
 		if !ok {
 			return hostedHostFunctionError
 		}
