@@ -76,6 +76,9 @@ func ListInstalled(ctx context.Context, root string) ([]InstalledRecord, error) 
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
+		// Install 的阶段/备份目录建在安装根内（同文件系统才能原子 rename）。
+		// 崩溃后可能残留，跳过而不是报错——否则一次失败的安装会让列表与依赖
+		// 解析永久失败。其他非包条目仍然 fail closed。
 		if strings.HasPrefix(entry.Name(), stagePrefix) || strings.HasPrefix(entry.Name(), backupPrefix) {
 			continue
 		}

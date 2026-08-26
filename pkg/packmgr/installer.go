@@ -14,6 +14,9 @@ import (
 	"sync"
 )
 
+// 安装根内的内部工作目录前缀：Install 的阶段目录与旧版本备份目录都建在安装根
+// 内（保证与目标同文件系统，rename 才是原子的）。ListInstalled 按这些前缀跳过
+// 它们，否则一次崩掉的安装会让 `ailuo list` 与依赖解析永久失败。
 var installLocks sync.Map
 
 const (
@@ -117,11 +120,14 @@ func Install(ctx context.Context, root, sourcePath string) (InstalledRecord, err
 	if err := os.WriteFile(filepath.Join(stageDir, "lock.json"), lockBytes, 0o640); err != nil {
 		return InstalledRecord{}, err
 	}
+	// 原子发布 + 回滚：旧版本先移到备份目录而非直接删除，rename 或发布后回读
+	// 失败都恢复原安装，绝不留下"包消失"或"目录无效"的中间态。
 	return publishStage(ctx, root, targetDir, stageDir)
 }
 
-// publishStage 把阶段目录发布为安装目录并回读验证。旧安装先移到同一安装根内
-// 的备份目录，任何失败都恢复旧版本，成功后才清理备份。
+// publishStage 把阶段目录发布为安装目录并回读验证。旧安装先 rename 为安装根内
+// 的备份目录：任一步失败都把备份恢复回原位，成功后才删除备份。
+// （Windows 不支持 rename 覆盖已存在目录，因此走"移走旧的→移入新的"两步。）
 func publishStage(ctx context.Context, root, targetDir, stageDir string) (InstalledRecord, error) {
 	backupDir, err := reserveBackupDir(root, targetDir)
 	if err != nil {
@@ -164,7 +170,8 @@ func publishStage(ctx context.Context, root, targetDir, stageDir string) (Instal
 	return record, nil
 }
 
-// reserveBackupDir 把已有安装目录移到同一安装根内的唯一备份目录。
+// reserveBackupDir 把已存在的安装目录移到安装根内的备份目录并返回其路径；
+// 目标原本不存在时返回空字符串（无需备份，失败时直接删除新目录即可）。
 func reserveBackupDir(root, targetDir string) (string, error) {
 	if _, err := os.Lstat(targetDir); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -172,6 +179,7 @@ func reserveBackupDir(root, targetDir string) (string, error) {
 		}
 		return "", err
 	}
+	// MkdirTemp 只用于取唯一名字；rename 要求目标不存在，因此先删掉空目录。
 	backupDir, err := os.MkdirTemp(root, backupPrefix)
 	if err != nil {
 		return "", err
@@ -245,8 +253,11 @@ func Uninstall(ctx context.Context, root, id string) error {
 	if errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("包 %q 未安装", id)
 	}
-	if err != nil || !info.IsDir() {
-		return fmt.Errorf("目标 %q 不是目录", target)
+	if err != nil {
+		return fmt.Errorf("读取 %q 失败: %w", target, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("%q 不是目录，不是安装包", target)
 	}
 	manifestInfo, err := os.Lstat(filepath.Join(target, "manifest.json"))
 	if err != nil || !manifestInfo.Mode().IsRegular() {
@@ -286,24 +297,30 @@ func readSourceManifest(sourceDir string) (sourcePackage, error) {
 	return sourcePackage{Manifest: manifest, manifestBytes: manifestBytes}, nil
 }
 
-// readSourceArtifacts 校验并收集清单声明的每组件 entrypoint 工件。
+// readSourceArtifacts 校验并收集清单声明的每组件 entrypoint 工件。安装与打包
+// 都按 basename 平铺工件，因此这里拒绝 basename 冲突：否则两个组件的
+// `a/mod.wasm` 与 `b/mod.wasm` 会互相覆盖，且 lock 里两条记录指向同一个文件。
 func readSourceArtifacts(sourceDir string, manifest Manifest) ([]sourceArtifact, error) {
 	artifacts := make([]sourceArtifact, 0, len(manifest.Components))
-	seenNames := make(map[string]struct{}, len(manifest.Components))
+	ownerByName := make(map[string]string, len(manifest.Components))
 	for _, component := range manifest.Components {
 		artifactPath := filepath.Join(sourceDir, component.Entrypoint)
 		info, err := os.Lstat(artifactPath)
 		if err != nil {
 			return nil, fmt.Errorf("组件 %s entrypoint 工件不可读: %w", component.ID, err)
 		}
-		if !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > MaxArtifactBytes {
-			return nil, fmt.Errorf("组件 %s entrypoint 工件无效", component.ID)
+		if !info.Mode().IsRegular() {
+			return nil, fmt.Errorf("组件 %s entrypoint 工件不是普通文件", component.ID)
+		}
+		if info.Size() <= 0 || info.Size() > MaxArtifactBytes {
+			return nil, fmt.Errorf("组件 %s entrypoint 工件大小 %d 超出 (0, %d]", component.ID, info.Size(), MaxArtifactBytes)
 		}
 		name := filepath.Base(artifactPath)
-		if _, exists := seenNames[name]; exists {
-			return nil, fmt.Errorf("%w: 组件 entrypoint basename 重复 %q", ErrInvalidFormat, name)
+		if owner, exists := ownerByName[name]; exists {
+			return nil, fmt.Errorf("%w: 组件 %s 与 %s 的 entrypoint 同名 %q（工件按 basename 平铺，不可冲突）",
+				ErrInvalidFormat, owner, component.ID, name)
 		}
-		seenNames[name] = struct{}{}
+		ownerByName[name] = component.ID
 		artifacts = append(artifacts, sourceArtifact{componentID: component.ID, path: artifactPath})
 	}
 	return artifacts, nil
@@ -403,13 +420,15 @@ func validateDependents(ctx context.Context, root, id, replacement string) error
 	return nil
 }
 
-// copyFile 复制文件并保留源权限位。
+// copyFile 复制文件并保留源权限位。写入路径必须 Sync + 检查 Close：ENOSPC 这类
+// 错误只在 flush/close 时才浮出来，丢掉它会让一个被截断的工件照样通过后续哈希
+// 并被写进 lock（自洽但内容错误）。
 func copyFile(src, dst string) error {
 	source, err := os.Open(src)
 	if err != nil {
 		return err
 	}
-	defer source.Close()
+	defer func() { _ = source.Close() }()
 	info, err := source.Stat()
 	if err != nil {
 		return err
