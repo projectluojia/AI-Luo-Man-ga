@@ -1,7 +1,8 @@
 package sdkgen
 
-// collectNamed 深度优先收集具名类型（object/enum），按出现顺序去重。
-// 三 emitter（Go/Python/TS）共用。
+// collectNamed 深度优先收集具名类型（object/enum），去重后按后序排列：
+// 嵌套类型排在引用它的父类型之前。Python 的 dataclass 注解在类体执行时求值，
+// 父类型先输出会直接 NameError（Go/TS 与顺序无关）。三 emitter 共用。
 func collectNamed(model *TypeModel) []*TypeModel {
 	var ordered []*TypeModel
 	seen := make(map[string]struct{})
@@ -15,12 +16,12 @@ func collectNamed(model *TypeModel) []*TypeModel {
 				return
 			}
 			seen[current.Name] = struct{}{}
-			ordered = append(ordered, current)
 			if current.Kind == KindObject {
 				for _, field := range current.Fields {
 					visit(field.Type)
 				}
 			}
+			ordered = append(ordered, current)
 			return
 		}
 		if current.Kind == KindArray {
@@ -29,25 +30,4 @@ func collectNamed(model *TypeModel) []*TypeModel {
 	}
 	visit(model)
 	return ordered
-}
-
-// hasKind 判断类型树中是否存在指定 kind（Python 导入判断用，TS 未来可能用）。
-func hasKind(model *TypeModel, kind TypeKind) bool {
-	if model == nil {
-		return false
-	}
-	if model.Kind == kind {
-		return true
-	}
-	if model.Kind == KindArray {
-		return hasKind(model.Elem, kind)
-	}
-	if model.Kind == KindObject {
-		for _, field := range model.Fields {
-			if hasKind(field.Type, kind) {
-				return true
-			}
-		}
-	}
-	return false
 }

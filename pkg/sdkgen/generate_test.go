@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -122,9 +123,10 @@ func TestGenerateGoCompiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := writeGoModule(t, dir, files); err != nil {
-		t.Fatalf("写临时模块: %v", err)
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module gen\n\ngo 1.23\n"), 0644); err != nil {
+		t.Fatal(err)
 	}
+	writeGenerated(t, dir, files)
 	if output, err := runGo(t, dir, "build", "./..."); err != nil {
 		t.Fatalf("生成 SDK 编译失败: %v\n%s", err, output)
 	}
