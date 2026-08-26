@@ -1,6 +1,7 @@
 // Package packagefmt 是 AI珞 包管理器的作者侧源格式层：把 ailuo.toml（Cargo.toml
-// 风格源清单）转换为中性包清单 packmgr.Manifest。与 packmgr（stdlib-only 中立
-// 格式层）分离：TOML 解析依赖只存在于本包，packmgr 保持可整体迁移。
+// 风格源清单）转换为中性包清单 packmgr.Manifest。与 packmgr（仅标准库 +
+// Masterminds/semver 的中立格式层）分离：TOML 解析依赖只存在于本包，packmgr
+// 保持可整体迁移。
 //
 // ailuo.toml 采用继承式精简：tool 以 `[tool.<id>]` 表声明（id 即键，不重复）；
 // capability 只声明 id 与引用的 tool，其余字段（schema、side_effect、name、
