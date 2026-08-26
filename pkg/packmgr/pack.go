@@ -36,7 +36,14 @@ func PackFromSource(ctx context.Context, sourceDir, outputDir string, manifest M
 	if err != nil {
 		return "", err
 	}
-	defer file.Close()
+	// 失败路径关掉描述符即可（tarball 不完整，调用方不会使用）；成功路径在末尾
+	// 显式 Sync + Close，ENOSPC 这类错误只在 flush/close 时才浮出来。
+	closed := false
+	defer func() {
+		if !closed {
+			file.Close()
+		}
+	}()
 	gzipWriter := gzip.NewWriter(file)
 	tarWriter := tar.NewWriter(gzipWriter)
 	writeEntry := func(name string, size int64, body io.Reader) error {
@@ -94,11 +101,18 @@ func PackFromSource(ctx context.Context, sourceDir, outputDir string, manifest M
 	if err := writeEntry("lock.json", int64(len(lockBytes)), bytes.NewReader(lockBytes)); err != nil {
 		return "", err
 	}
-	// tar 尾 + gzip 尾按序关闭；defer 的 file.Close 只负责文件描述符。
+	// tar 尾 + gzip 尾 + 文件按序关闭；截断只在 flush/close 时才报错，必须检查。
 	if err := tarWriter.Close(); err != nil {
 		return "", err
 	}
 	if err := gzipWriter.Close(); err != nil {
+		return "", err
+	}
+	if err := file.Sync(); err != nil {
+		return "", err
+	}
+	closed = true
+	if err := file.Close(); err != nil {
 		return "", err
 	}
 	return tarballPath, nil
