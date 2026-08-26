@@ -67,6 +67,54 @@ func TestResolveReleasePicksHighestMatchingConstraint(t *testing.T) {
 	}
 }
 
+// TestResolveReleaseIgnoresPublishOrder 覆盖"旧版本线的补丁晚于新主版本发布"：
+// GitHub 按创建时间倒序返回，v1.0.1 排在 v1.2.0 之前，取首个匹配项会解析出 1.0.1。
+func TestResolveReleaseIgnoresPublishOrder(t *testing.T) {
+	client, _, _ := newGitHubTestClient(t, func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Query().Get("page") != "1" {
+			_ = json.NewEncoder(writer).Encode([]map[string]any{})
+			return
+		}
+		_ = json.NewEncoder(writer).Encode([]map[string]any{
+			{"tag_name": "v1.0.1", "assets": []map[string]any{
+				{"name": "demo.pkg-1.0.1.tgz", "browser_download_url": "https://example.com/demo.pkg-1.0.1.tgz"},
+			}},
+			{"tag_name": "v1.2.0", "assets": []map[string]any{
+				{"name": "demo.pkg-1.2.0.tgz", "browser_download_url": "https://example.com/demo.pkg-1.2.0.tgz"},
+			}},
+		})
+	}, http.NotFound)
+	version, assetURL, err := client.ResolveRelease(context.Background(), "owner", "repo", "^1.0.0")
+	if err != nil {
+		t.Fatalf("ResolveRelease: %v", err)
+	}
+	if version != "1.2.0" || assetURL != "https://example.com/demo.pkg-1.2.0.tgz" {
+		t.Fatalf("ResolveRelease = %s %s, want 1.2.0 + demo.pkg-1.2.0.tgz", version, assetURL)
+	}
+}
+
+// TestResolveReleaseSkipsReleasesWithoutTarball 确认没有 .tgz 资产的更高版本不会
+// 顶掉已选中的较低版本：附件缺失的 Release 不可安装，必须保留有 tarball 的版本。
+func TestResolveReleaseSkipsReleasesWithoutTarball(t *testing.T) {
+	client, _, _ := newGitHubTestClient(t, func(writer http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(writer).Encode([]map[string]any{
+			{"tag_name": "v1.2.0", "assets": []map[string]any{
+				{"name": "demo.pkg-1.2.0.tgz", "browser_download_url": "https://example.com/demo.pkg-1.2.0.tgz"},
+			}},
+			{"tag_name": "v1.3.0", "assets": []map[string]any{
+				{"name": "notes.txt", "browser_download_url": "https://example.com/notes.txt"},
+			}},
+		})
+	}, http.NotFound)
+	version, assetURL, err := client.ResolveRelease(context.Background(), "owner", "repo", "")
+	if err != nil {
+		t.Fatalf("ResolveRelease: %v", err)
+	}
+	if version != "1.2.0" || assetURL != "https://example.com/demo.pkg-1.2.0.tgz" {
+		t.Fatalf("ResolveRelease = %s %s, want 1.2.0 + demo.pkg-1.2.0.tgz", version, assetURL)
+	}
+}
+
 func TestInstallFromReleaseEndToEnd(t *testing.T) {
 	// 先打一个真实 tarball，让 mock 服务器直接喂给客户端。
 	source := filepath.Join(t.TempDir(), "pkg")

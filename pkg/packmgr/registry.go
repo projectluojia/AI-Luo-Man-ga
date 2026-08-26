@@ -179,9 +179,13 @@ func (c *GitHubClient) ResolveRelease(ctx context.Context, owner, repo, constrai
 			return "", "", err
 		}
 	}
-	var bestVersion Version
-	bestURL := ""
-	found := false
+	// GitHub /releases 按创建时间排序，不按版本：必须扫完所有页取最高版本，
+	// 返回首个匹配项会在"旧版本线的补丁晚于新主版本发布"时解析出旧版本。
+	var (
+		bestVersion Version
+		bestURL     string
+		found       bool
+	)
 	for page := 1; ; page++ {
 		request, err := http.NewRequestWithContext(ctx, http.MethodGet,
 			fmt.Sprintf("%s/repos/%s/%s/releases?per_page=100&page=%d", c.APIBase, owner, repo, page), nil)
@@ -216,7 +220,7 @@ func (c *GitHubClient) ResolveRelease(ctx context.Context, owner, repo, constrai
 		}
 		response.Body.Close()
 		if len(releases) == 0 {
-			break
+			break // 空页之后不会再有 Release
 		}
 		for _, release := range releases {
 			version, err := ParseVersion(strings.TrimPrefix(release.TagName, "v"))
@@ -226,11 +230,12 @@ func (c *GitHubClient) ResolveRelease(ctx context.Context, owner, repo, constrai
 			if constraint != "" && !parsedConstraint.Matches(version) {
 				continue
 			}
+			if found && CompareVersions(version, bestVersion) <= 0 {
+				continue
+			}
 			for _, asset := range release.Assets {
 				if strings.HasSuffix(asset.Name, ".tgz") {
-					if !found || CompareVersions(version, bestVersion) > 0 {
-						bestVersion, bestURL, found = version, asset.BrowserDownloadURL, true
-					}
+					bestVersion, bestURL, found = version, asset.BrowserDownloadURL, true
 					break
 				}
 			}
