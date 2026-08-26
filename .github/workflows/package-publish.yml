@@ -1,9 +1,12 @@
 name: 包发布流水线（可复用）
 
-# npm 式包发布流水线：构建 → 版本一致性 → pack（tarball）→ 冒烟安装验证 →
+# npm 式包发布流水线：构建 → pack（tarball）→ 冒烟安装验证 → 版本一致性 →
 # （tag 发布时）附 GitHub Release。包作者仓库通过
 # `uses: projectluojia/AI-Luo-Man-ga/.github/workflows/package-publish.yml@ref`
 # 复用；CLI 从本仓库固定提交构建，不能把调用方源码当作 CLI 仓库。
+#
+# 打包与发布分两个 job：package 只读（PR 冒烟走这条路，且它执行调用方传入的
+# build-command），contents: write 只在 tag 触发的 publish job 里存在。
 
 on:
   workflow_call:
@@ -11,7 +14,7 @@ on:
       package-dir:
         type: string
         default: "."
-        description: 源包目录（含 ailuo.toml 与 entrypoint 工件）
+        description: 源包目录（含 ailuo.toml 或源码与 entrypoint 工件）
       build-command:
         type: string
         default: ""
@@ -36,12 +39,11 @@ permissions:
 
 jobs:
   package:
-    # 发布 job 需要写 contents（gh release create）；PR 冒烟运行同为只读命令。
-    permissions:
-      contents: write
     name: package
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: read
     outputs:
       package-id: ${{ steps.pack.outputs.package-id }}
       package-version: ${{ steps.pack.outputs.package-version }}
@@ -72,12 +74,17 @@ jobs:
       - name: 打包并冒烟安装验证
         id: pack
         shell: bash
+        # 调用方输入经 env 传入：直接插值进 run: 会把输入当脚本片段拼接。
         env:
           PACKAGE_DIR: ${{ inputs.package-dir }}
         run: |
           set -euo pipefail
           ./.ailuo-cli/ailuo pack "$PACKAGE_DIR" dist
           tarball="$(ls dist/*.tgz)"
+          # pack 的输出目录是第二个位置参数；flag 必须在位置参数之前
+          # （Go flag 包遇到首个位置参数即停止解析）。
+          # id/version 的权威来源是 tarball 根的 manifest.json：文件名形如
+          # <id>-<version>.tgz，用 ${base%-*} 切分会在预发布版本（1.0.0-rc.1）上切错。
           manifest="$(tar -xzOf "$tarball" manifest.json)"
           id="$(jq -er .id <<<"$manifest")"
           version="$(jq -er .version <<<"$manifest")"
@@ -90,31 +97,62 @@ jobs:
       - name: 校验包版本与 git tag 一致
         if: ${{ inputs.tag-required }}
         shell: bash
+        env:
+          PACKAGE_VERSION: ${{ steps.pack.outputs.package-version }}
         run: |
           tag="${GITHUB_REF#refs/tags/}"
           tag="${tag#v}"
-          version="${{ steps.pack.outputs.package-version }}"
-          test "$tag" = "$version" || {
-            echo "git tag $tag 与包版本 $version 不一致" >&2
+          test "$tag" = "$PACKAGE_VERSION" || {
+            echo "git tag $tag 与包版本 $PACKAGE_VERSION 不一致" >&2
             exit 1
           }
+
+  # Release 发布单独成 job：只有它需要 contents: write，且只在 tag 发布时运行。
+  publish:
+    name: publish
+    needs: package
+    if: ${{ inputs.tag-required }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: projectluojia/AI-Luo-Man-ga
+          ref: 6a2bc35
+          path: .ailuo-cli
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: .ailuo-cli/go.mod
+          cache: true
+      - name: 构建 ailuo CLI
+        run: go build -o ailuo .
+        working-directory: .ailuo-cli
+      - name: 构建包工件
+        if: ${{ inputs.build-command != '' }}
+        env:
+          BUILD_COMMAND: ${{ inputs.build-command }}
+        run: bash -euo pipefail -c "$BUILD_COMMAND"
+        working-directory: ${{ inputs.package-dir }}
       - name: 发布到 GitHub Release（tag 时，版本不可变）
-        if: ${{ inputs.tag-required }}
         env:
           GITHUB_TOKEN: ${{ github.token }}
           PACKAGE_DIR: ${{ inputs.package-dir }}
           REPOSITORY: ${{ github.repository }}
         run: ./.ailuo-cli/ailuo publish --repo "$REPOSITORY" "$PACKAGE_DIR"
       - name: 从注册表安装验证（发布物真实闭环）
-        if: ${{ inputs.tag-required }}
+        shell: bash
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          PACKAGE_DIR: ${{ inputs.package-dir }}
           REPOSITORY: ${{ github.repository }}
-        shell: bash
+          PACKAGE_ID: ${{ needs.package.outputs.package-id }}
+          PACKAGE_VERSION: ${{ needs.package.outputs.package-version }}
         run: |
           set -euo pipefail
-          id="${{ steps.pack.outputs.package-id }}"
-          version="${{ steps.pack.outputs.package-version }}"
-          ./.ailuo-cli/ailuo install --root "$RUNNER_TEMP/pkgroot-registry" "$REPOSITORY@$version"
-          ./.ailuo-cli/ailuo list --root "$RUNNER_TEMP/pkgroot-registry" | grep -q "^${id}@${version}"
+          ./.ailuo-cli/ailuo install --root "$RUNNER_TEMP/pkgroot-registry" "$REPOSITORY@$PACKAGE_VERSION"
+          ./.ailuo-cli/ailuo list --root "$RUNNER_TEMP/pkgroot-registry" | grep -q "^${PACKAGE_ID}@${PACKAGE_VERSION}"
