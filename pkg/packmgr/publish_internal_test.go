@@ -29,3 +29,54 @@ func TestPublishStageRestoresOldDirectoryWhenPublishRenameFails(t *testing.T) {
 		t.Fatalf("old installation content = %q", content)
 	}
 }
+
+// publishStage 的失败必须可回滚：旧安装先移到备份目录，rename 或发布后回读失败都
+// 恢复原安装。白盒测试直接喂一个无效阶段目录，这是"发布后回读失败"的唯一可控触发
+// 点——正常路径下 Install 已在源阶段拦掉所有非法输入。
+func TestPublishStageRestoresPreviousInstallOnVerifyFailure(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	source := filepath.Join(t.TempDir(), "pkg")
+	if err := os.MkdirAll(source, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "app.wasm"), []byte("artifact"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	manifest := `{"schema_version":"` + SchemaVersion + `","id":"demo.pkg","version":"1.0.0",` +
+		`"components":[{"id":"core","mode":"hosted","entrypoint":"app.wasm"}]}`
+	if err := os.WriteFile(filepath.Join(source, "manifest.json"), []byte(manifest), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Install(ctx, root, source); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	targetDir := filepath.Join(root, "demo.pkg")
+
+	// 阶段目录只有一个垃圾文件：rename 会成功，回读必然失败。
+	stageDir, err := os.MkdirTemp(root, stagePrefix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stageDir, "junk"), []byte("x"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := publishStage(ctx, root, targetDir, stageDir); err == nil {
+		t.Fatal("publishStage with invalid stage = nil, want error")
+	}
+	// 原安装必须完好，且不留备份/阶段目录残骸（阶段目录已被 rename 走并删除）。
+	record, err := ReadInstalled(ctx, targetDir)
+	if err != nil {
+		t.Fatalf("回滚后原安装不可读: %v", err)
+	}
+	if record.Manifest.Version != "1.0.0" {
+		t.Fatalf("回滚后版本 = %s, want 1.0.0", record.Manifest.Version)
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "demo.pkg" {
+		t.Fatalf("安装根条目 = %+v, want 仅 demo.pkg", entries)
+	}
+}
