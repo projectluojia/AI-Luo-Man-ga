@@ -9,33 +9,15 @@ import (
 	"time"
 )
 
-// writeGoModule 写 Go 临时模块（go.mod + 生成文件），校验 go.mod 版本。
-func writeGoModule(t *testing.T, dir string, files []Generated) error {
+// writeGenerated 把生成产物写到 dir（按相对路径建目录），写失败直接终止用例。
+func writeGenerated(t *testing.T, dir string, files []Generated) {
 	t.Helper()
-	modPath := filepath.Join(dir, "go.mod")
-	if err := os.WriteFile(modPath, []byte("module gen\n\ngo 1.23\n"), 0644); err != nil {
-		return err
-	}
 	for _, f := range files {
 		path := filepath.Join(dir, f.Path)
 		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-			return err
-		}
-		if err := os.WriteFile(path, f.Code, 0644); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func writeGenerated(t *testing.T, dir string, files []Generated) {
-	t.Helper()
-	for _, file := range files {
-		path := filepath.Join(dir, file.Path)
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(path, file.Code, 0o644); err != nil {
+		if err := os.WriteFile(path, f.Code, 0644); err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -12,9 +12,9 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
 )
 
-// Capability 是生成 SDK 所需的 capability 契约视图，JSON 形状与内核
+// capabilitySpec 是生成 SDK 所需的 capability 契约视图，JSON 形状与内核
 // CapabilitySpec 一致（严格解码拒绝未知字段）。
-type Capability struct {
+type capabilitySpec struct {
 	ID                   string   `json:"id"`
 	Version              string   `json:"version"`
 	Name                 string   `json:"name"`
@@ -32,13 +32,13 @@ type Capability struct {
 // extensions 是 Manifest.Extensions 的严格形状：tools 与 service 由内核
 // 解释（SDK 消费方只调用 capability），capabilities 驱动 SDK 生成。
 type extensions struct {
-	Tools        json.RawMessage `json:"tools"`
-	Service      json.RawMessage `json:"service"`
-	Capabilities []Capability    `json:"capabilities"`
+	Tools        json.RawMessage  `json:"tools"`
+	Service      json.RawMessage  `json:"service"`
+	Capabilities []capabilitySpec `json:"capabilities"`
 }
 
 // decodeCapabilities 严格解码 extensions 段并校验生成所需的最小契约。
-func decodeCapabilities(source json.RawMessage) ([]Capability, error) {
+func decodeCapabilities(source json.RawMessage) ([]capabilitySpec, error) {
 	var ext extensions
 	if err := packmgr.DecodeStrictJSON(source, &ext); err != nil {
 		return nil, fmt.Errorf("sdkgen: 解码契约失败: %w", err)
@@ -46,6 +46,7 @@ func decodeCapabilities(source json.RawMessage) ([]Capability, error) {
 	if len(ext.Capabilities) == 0 {
 		return nil, fmt.Errorf("sdkgen: extensions 未声明任何 capability")
 	}
+	seen := make(map[string]struct{}, len(ext.Capabilities))
 	for index := range ext.Capabilities {
 		capability := &ext.Capabilities[index]
 		if capability.ID == "" {
@@ -54,6 +55,11 @@ func decodeCapabilities(source json.RawMessage) ([]Capability, error) {
 		if len(capability.InputSchema) == 0 {
 			return nil, fmt.Errorf("sdkgen: capability %q 缺少 input_schema_json", capability.ID)
 		}
+		// ID 唯一：重复 ID 会生成重复的方法名与输入类型名，产物编译不过。
+		if _, exists := seen[capability.ID]; exists {
+			return nil, fmt.Errorf("sdkgen: capability %q 重复声明", capability.ID)
+		}
+		seen[capability.ID] = struct{}{}
 	}
 	return ext.Capabilities, nil
 }

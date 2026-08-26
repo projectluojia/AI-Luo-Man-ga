@@ -12,36 +12,40 @@ import (
 // sdkgen 是中立包（不 import 内核 internal），此处自持校验。
 var capabilityIDPattern = regexp.MustCompile(`^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$`)
 
-// 语言保留字：字段名直接作为标识符（Python dataclass 属性 / TS interface
-// 属性），撞保留字会生成非法代码 → 显式拒绝（fail-closed），不自动改名
-// （改名会破坏 JSON key 与契约的一致性）。
-var (
-	pythonKeywords = stringSet("False None True and as assert async await break class continue def del elif else except finally for from global if import in is lambda nonlocal not or pass raise return try while with yield")
-	tsKeywords     = stringSet("break case catch class const continue debugger default delete do else enum export extends false finally for function if import in instanceof new null return super switch this throw true try typeof var void while with as implements interface let package private protected public static yield await")
-)
+// reservedKeywords 是 Python 与 TypeScript 保留字的并集：字段名直接作为标识符
+// （Python dataclass 属性 / TS interface 属性），撞保留字会生成非法代码 → 显式
+// 拒绝（fail-closed），不自动改名（改名会破坏 JSON key 与契约的一致性）。
+// 取并集而非按目标语言分辨：契约字段名对三语言同时可用才算合法。
+var reservedKeywords = stringSet(
+	"False None True and as assert async await break class continue def del elif else except finally for from global if import in is lambda nonlocal not or pass raise return try while with yield " +
+		"case catch const debugger default delete do enum export extends false function instanceof new null super switch this throw true typeof var void implements interface let package private protected public static")
 
-// ValidateCapabilityID 校验 capability ID 符合内核 StableLower 格式。
-func ValidateCapabilityID(id string) error {
+// validateCapabilityID 校验 capability ID 符合内核 StableLower 格式。
+func validateCapabilityID(id string) error {
 	if !capabilityIDPattern.MatchString(id) {
 		return fmt.Errorf("sdkgen: capability id %q 不合法（需小写字母/数字，点/下划线/连字符分段）", id)
 	}
 	return nil
 }
 
-// ValidateFieldNames 校验 object 字段名不是 Go/Python/TS 保留字。
-// Go 字段名经 goFieldName 导出（首字母大写），不会撞小写保留字，无需检查；
-// Python/TS 用原始 JSON key 作标识符，撞保留字拒绝。
-func ValidateFieldNames(model *TypeModel) error {
+// identifierPattern 是 Python/TS 可直接作标识符的字段名形状。JSON key 允许
+// "user-name"、"2fa"、"a b"，但它们作 dataclass 属性/interface 属性都是语法
+// 错误，生成阶段就必须拒绝。
+var identifierPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// validateFieldNames 校验 object 字段名可直接作 Python/TS 标识符，且不是保留字。
+// Go 字段名经 goFieldName 转导出名（首字母大写、按分隔符分段），不受影响。
+func validateFieldNames(model *TypeModel) error {
 	for _, namedModel := range collectNamed(model) {
 		if namedModel.Kind != KindObject {
 			continue
 		}
 		for _, field := range namedModel.Fields {
-			if _, pythonReserved := pythonKeywords[field.Name]; pythonReserved {
-				return fmt.Errorf("sdkgen: 字段名 %q 是 Python 保留字，请调整契约字段名", field.Name)
+			if !identifierPattern.MatchString(field.Name) {
+				return fmt.Errorf("sdkgen: 字段名 %q 不是合法标识符（需字母/下划线开头，仅含字母数字下划线）", field.Name)
 			}
-			if _, tsReserved := tsKeywords[field.Name]; tsReserved {
-				return fmt.Errorf("sdkgen: 字段名 %q 是 TypeScript 保留字，请调整契约字段名", field.Name)
+			if _, reserved := reservedKeywords[field.Name]; reserved {
+				return fmt.Errorf("sdkgen: 字段名 %q 是 Python/TypeScript 保留字，请调整契约字段名", field.Name)
 			}
 		}
 	}

@@ -17,7 +17,7 @@ const (
 	KindNumber
 	KindBoolean
 	KindDateTime // string + format=date-time
-	KindEnum     // string/integer + enum
+	KindEnum     // string + enum
 	KindArray
 	KindObject
 )
@@ -32,7 +32,6 @@ type Field struct {
 // TypeModel 是 JSON Schema 编译后的派生类型模型。
 type TypeModel struct {
 	Kind   TypeKind
-	Base   TypeKind   // KindEnum 的基类型（KindString/KindInteger）
 	Name   string     // object/enum 的具名类型名；其余为空
 	Elem   *TypeModel // KindArray 的元素类型
 	Fields []Field    // KindObject 的属性
@@ -62,27 +61,33 @@ type schemaSpec struct {
 // 组合/引用结构（oneOf/allOf/anyOf/not/$ref）一律拒绝，不引入宽松回退。
 // Schema 内约束关键字（minimum 等）不改变类型派生，按 JSON Schema 规范允许出现。
 func schemaType(schema json.RawMessage, name string) (*TypeModel, error) {
+	// 容忍合法但不参与类型派生的约束关键字（minimum 等），拒绝尾随内容：
+	// decoder.More() 不覆盖尾随 `}`/`]`，故用二次 Decode 断言 io.EOF。
+	decoder := json.NewDecoder(bytes.NewReader(schema))
 	var spec schemaSpec
-	if err := decodeSchema(schema, &spec); err != nil {
-		return nil, err
+	if err := decoder.Decode(&spec); err != nil {
+		return nil, fmt.Errorf("sdkgen: 解码 JSON Schema 失败: %w", err)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return nil, fmt.Errorf("sdkgen: JSON Schema 包含多余内容")
 	}
 	if spec.OneOf != nil || spec.AllOf != nil || spec.AnyOf != nil || spec.Not != nil || spec.Ref != "" {
 		return nil, fmt.Errorf("sdkgen: 不支持的组合/引用结构（oneOf/allOf/anyOf/not/$ref）")
 	}
+	// enum 只支持 string 基类型（见 stringOrEnum）：其余类型的 enum 无真实用例，
+	// 半支持比拒绝更糟（Python 成员名 `1 = 1` 根本不是合法标识符），静默忽略更糟。
+	if len(spec.Enum) > 0 && spec.Type != "string" {
+		return nil, fmt.Errorf("sdkgen: 类型 %q 不支持 enum（enum 仅支持 string）", spec.Type)
+	}
 	switch spec.Type {
 	case "string":
-		return scalarOrEnum(KindString, spec, name)
+		return stringOrEnum(spec, name)
 	case "integer":
-		return scalarOrEnum(KindInteger, spec, name)
+		return &TypeModel{Kind: KindInteger}, nil
 	case "number":
-		if len(spec.Enum) > 0 {
-			return nil, fmt.Errorf("sdkgen: 类型 %q 不支持 enum", spec.Type)
-		}
 		return &TypeModel{Kind: KindNumber}, nil
 	case "boolean":
-		if len(spec.Enum) > 0 {
-			return nil, fmt.Errorf("sdkgen: 类型 %q 不支持 enum", spec.Type)
-		}
 		return &TypeModel{Kind: KindBoolean}, nil
 	case "array":
 		if len(spec.Items) == 0 {
@@ -100,8 +105,8 @@ func schemaType(schema json.RawMessage, name string) (*TypeModel, error) {
 	}
 }
 
-// scalarOrEnum 处理 string/integer：带 enum 派生枚举类型，date-time 派生时间类型。
-func scalarOrEnum(base TypeKind, spec schemaSpec, name string) (*TypeModel, error) {
+// stringOrEnum 处理 string：带 enum 派生枚举类型，date-time 派生时间类型。
+func stringOrEnum(spec schemaSpec, name string) (*TypeModel, error) {
 	if len(spec.Enum) > 0 {
 		if spec.Format != "" {
 			return nil, fmt.Errorf("sdkgen: enum 与 format 不能同时声明")
@@ -110,19 +115,16 @@ func scalarOrEnum(base TypeKind, spec schemaSpec, name string) (*TypeModel, erro
 		for _, raw := range spec.Enum {
 			var value string
 			if err := json.Unmarshal(raw, &value); err != nil {
-				return nil, fmt.Errorf("sdkgen: enum 值必须是 %s: %w", baseName(base), err)
+				return nil, fmt.Errorf("sdkgen: enum 值必须是 string: %w", err)
 			}
 			values = append(values, value)
 		}
-		return &TypeModel{Kind: KindEnum, Base: base, Name: name, Values: values}, nil
+		return &TypeModel{Kind: KindEnum, Name: name, Values: values}, nil
 	}
 	if spec.Format == "date-time" {
-		if base != KindString {
-			return nil, fmt.Errorf("sdkgen: format=date-time 仅适用于 string")
-		}
 		return &TypeModel{Kind: KindDateTime}, nil
 	}
-	return &TypeModel{Kind: base}, nil
+	return &TypeModel{Kind: KindString}, nil
 }
 
 // objectType 编译 object：要求显式 additionalProperties:false 与 properties。
@@ -152,31 +154,4 @@ func objectType(spec schemaSpec, name string) (*TypeModel, error) {
 		fields = append(fields, Field{Name: key, Type: fieldType, Required: isRequired})
 	}
 	return &TypeModel{Kind: KindObject, Name: name, Fields: fields}, nil
-}
-
-// baseName 返回 enum 基类型的描述（用于错误消息）。
-func baseName(kind TypeKind) string {
-	switch kind {
-	case KindInteger:
-		return "integer"
-	default:
-		return "string"
-	}
-}
-
-// decodeSchema 解码 JSON Schema：容忍合法关键字（约束不参与类型派生），
-// 但拒绝尾随内容，避免畸形输入被静默接受。
-func decodeSchema(source json.RawMessage, target any) error {
-	decoder := json.NewDecoder(bytes.NewReader(source))
-	if err := decoder.Decode(target); err != nil {
-		return fmt.Errorf("sdkgen: 解码 JSON Schema 失败: %w", err)
-	}
-	var trailing any
-	if err := decoder.Decode(&trailing); err != io.EOF {
-		if err == nil {
-			return fmt.Errorf("sdkgen: JSON Schema 包含多余内容")
-		}
-		return fmt.Errorf("sdkgen: 解析 JSON Schema 失败: %w", err)
-	}
-	return nil
 }

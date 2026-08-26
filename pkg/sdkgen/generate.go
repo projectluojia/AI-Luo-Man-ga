@@ -42,7 +42,7 @@ func Generate(source json.RawMessage, options Options) ([]Generated, error) {
 	models := make(map[string]*TypeModel, len(capabilities))
 	for index := range capabilities {
 		capability := &capabilities[index]
-		if err := ValidateCapabilityID(capability.ID); err != nil {
+		if err := validateCapabilityID(capability.ID); err != nil {
 			return nil, err
 		}
 		inputName := typeName(capability.ID, options.PackageID)
@@ -50,7 +50,7 @@ func Generate(source json.RawMessage, options Options) ([]Generated, error) {
 		if err != nil {
 			return nil, fmt.Errorf("sdkgen: capability %q: %w", capability.ID, err)
 		}
-		if err := ValidateFieldNames(model); err != nil {
+		if err := validateFieldNames(model); err != nil {
 			return nil, fmt.Errorf("sdkgen: capability %q: %w", capability.ID, err)
 		}
 		models[capability.ID] = model

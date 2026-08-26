@@ -45,15 +45,7 @@ func TestGenerateTypeScriptCompiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, f := range files {
-		path := filepath.Join(dir, f.Path)
-		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path, f.Code, 0644); err != nil {
-			t.Fatal(err)
-		}
-	}
+	writeGenerated(t, dir, files)
 	// 最小 tsconfig：strict + DOM（fetch/Response 类型）。
 	tsconfig := `{"compilerOptions":{"strict":true,"target":"ES2020","module":"ESNext","lib":["ES2020","DOM"],"noEmit":true},"include":["campus/**/*.ts"]}`
 	if err := os.WriteFile(filepath.Join(dir, "tsconfig.json"), []byte(tsconfig), 0644); err != nil {

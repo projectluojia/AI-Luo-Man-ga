@@ -33,7 +33,7 @@ func TestSchemaTypeEnum(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if model.Kind != KindEnum || model.Base != KindString || model.Name != "StatusEnum" {
+	if model.Kind != KindEnum || model.Name != "StatusEnum" {
 		t.Fatalf("enum model = %+v", model)
 	}
 	if len(model.Values) != 2 || model.Values[0] != "active" || model.Values[1] != "inactive" {
@@ -76,11 +76,14 @@ func TestSchemaTypeRejects(t *testing.T) {
 	tests := []string{
 		`{"type":"custom"}`, // 未知类型
 		`{"type":"array"}`,  // 缺 items
-		`{"type":"object","properties":{"a":{"type":"string"}}}`, // 缺 additionalProperties
-		`{"type":"object","additionalProperties":false}`,         // 缺 properties
-		`{"type":"string","enum":[1]}`,                           // enum 值非字符串
-		`{"type":"number","enum":["x"]}`,                         // number 不支持 enum
-		`{"type":"string","format":"date-time","enum":["x"]}`,    // enum 与 format 冲突
+		`{"type":"object","properties":{"a":{"type":"string"}}}`,  // 缺 additionalProperties
+		`{"type":"object","additionalProperties":false}`,          // 缺 properties
+		`{"type":"string","enum":[1]}`,                            // enum 值非字符串
+		`{"type":"number","enum":["x"]}`,                          // number 不支持 enum
+		`{"type":"integer","enum":[1,2]}`,                         // integer 不支持 enum
+		`{"type":"boolean","enum":[true]}`,                        // boolean 不支持 enum
+		`{"type":"array","items":{"type":"string"},"enum":["x"]}`, // array 不支持 enum（不静默忽略）
+		`{"type":"string","format":"date-time","enum":["x"]}`,     // enum 与 format 冲突
 	}
 	for _, schema := range tests {
 		if _, err := schemaType(json.RawMessage(schema), "Input"); err == nil {
@@ -124,7 +127,9 @@ func TestGenerateRejectsBadSource(t *testing.T) {
 	for _, source := range tests {
 		_, err := Generate(json.RawMessage(source), Options{Language: LanguageGo, PackageID: "campus"})
 		if err == nil {
+			// continue 必需：err 为 nil 时下面 err.Error() 会 panic。
 			t.Errorf("Generate(%q) 期望拒绝，实际通过", source)
+			continue
 		}
 		if !strings.Contains(err.Error(), "sdkgen:") {
 			t.Errorf("Generate(%q) 错误未带 sdkgen 前缀: %v", source, err)
