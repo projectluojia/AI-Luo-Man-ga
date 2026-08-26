@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
@@ -253,7 +254,7 @@ func runPackageCommand(parent context.Context, arguments []string, output io.Wri
 		if err != nil {
 			return true, err
 		}
-		if _, err := fmt.Fprintf(output, "已安装 %s@%s（%s）\n", record.Manifest.ID, record.Manifest.Version, record.Manifest.Components[0].Mode); err != nil {
+		if _, err := fmt.Fprintf(output, "已安装 %s@%s（%s）\n", record.Manifest.ID, record.Manifest.Version, componentModes(record.Manifest)); err != nil {
 			return true, err
 		}
 		return true, nil
@@ -265,7 +266,7 @@ func runPackageCommand(parent context.Context, arguments []string, output io.Wri
 		if err != nil {
 			return true, err
 		}
-		_, err = fmt.Fprintf(output, "已升级 %s@%s（%s）\n", record.Manifest.ID, record.Manifest.Version, record.Manifest.Components[0].Mode)
+		_, err = fmt.Fprintf(output, "已升级 %s@%s（%s）\n", record.Manifest.ID, record.Manifest.Version, componentModes(record.Manifest))
 		return true, err
 	case "uninstall":
 		if flags.NArg() != 1 {
@@ -282,6 +283,8 @@ func runPackageCommand(parent context.Context, arguments []string, output io.Wri
 		if flags.NArg() < 1 || flags.NArg() > 2 {
 			return true, fmt.Errorf("configuration error: pack requires source package directory [and optional output directory]")
 		}
+		// 输出目录只由位置参数决定：--root 是安装根，拿它当打包输出目录会把
+		// tarball 丢进已安装包的目录树里。
 		outputDir := "."
 		if flags.NArg() == 2 {
 			outputDir = flags.Arg(1)
@@ -374,12 +377,32 @@ func runPackageCommand(parent context.Context, arguments []string, output io.Wri
 			if record.Manifest.Pin {
 				pin = " [pin]"
 			}
-			if _, err := fmt.Fprintf(output, "%s@%s\t%s%s\n", record.Manifest.ID, record.Manifest.Version, record.Manifest.Components[0].Mode, pin); err != nil {
+			if _, err := fmt.Fprintf(output, "%s@%s\t%s%s\n", record.Manifest.ID, record.Manifest.Version, componentModes(record.Manifest), pin); err != nil {
 				return true, err
 			}
 		}
 		return true, nil
 	}
+}
+
+// componentModes 汇总包内组件的运行形态：单组件直接给出 mode，多组件按形态计数。
+// 包不是"一种模式"（每个组件各有 mode），打印 Components[0].Mode 会把混合包说成
+// 单一形态。
+func componentModes(manifest packmgr.Manifest) string {
+	if len(manifest.Components) == 1 {
+		return manifest.Components[0].Mode
+	}
+	counts := make(map[string]int, 2)
+	for _, component := range manifest.Components {
+		counts[component.Mode]++
+	}
+	parts := make([]string, 0, len(counts))
+	for _, mode := range []string{packmgr.ModeHosted, packmgr.ModeIsolated} {
+		if counts[mode] > 0 {
+			parts = append(parts, fmt.Sprintf("%s×%d", mode, counts[mode]))
+		}
+	}
+	return strings.Join(parts, "+")
 }
 
 // registryRefPattern 匹配 GitHub Release 源：owner/repo[@约束]。
