@@ -266,6 +266,18 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+        "409":
+          description: The Capability requires a governed confirmation before it can run.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: The Capability invocation failed; no internal detail is disclosed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         "503":
           description: App policy, idempotency store, or the invoke endpoint itself is unavailable.
           content:
