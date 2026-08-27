@@ -78,15 +78,11 @@ func (s *Store) PutWeather(ctx context.Context, appID string, entry weather.Cach
 		entry.FetchedAt.IsZero() || entry.ValidUntil.IsZero() || !entry.ValidUntil.After(entry.FetchedAt) {
 		return fmt.Errorf("%w: weather cache entry is invalid", weather.ErrInvalidRequest)
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin weather cache write: %w", err)
 	}
-	defer func() {
-		if resultErr != nil {
-			_ = tx.Rollback()
-		}
-	}()
+	defer s.finishTx(tx, &resultErr, "put weather cache")
 	if _, err := tx.ExecContext(ctx, `DELETE FROM weather_cache WHERE app_id=? AND valid_until<=?`,
 		appID, nowUTC(entry.FetchedAt)); err != nil {
 		return fmt.Errorf("expire weather cache: %w", err)
