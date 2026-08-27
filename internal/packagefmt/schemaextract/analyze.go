@@ -47,7 +47,7 @@ func AnalyzeGo(source []byte, packageID string) ([]Capability, error) {
 		if !found {
 			continue
 		}
-		schema, err := structSchema(structType)
+		schema, err := structSchemaWithTypes(structType, types, make(map[string]bool))
 		if err != nil {
 			return nil, err
 		}

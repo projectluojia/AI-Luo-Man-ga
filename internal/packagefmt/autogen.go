@@ -17,22 +17,23 @@ import (
 // packageIDPattern 与内核 id.StableLower 一致：自动生成清单的包 id 闭式格式。
 var packageIDPattern = regexp.MustCompile(`^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$`)
 
-// AutoExtract 从包目录源码自动提取 capabilities：约定入口文件
-// main.go（Go，go/ast）或 main.ts（TypeScript，ts-json-schema-generator）。
-// 包 id 取目录名。
-func AutoExtract(ctx context.Context, sourceDir string) ([]schemaextract.Capability, error) {
+// AutoExtract 从包目录源码自动提取 capabilities，并返回对应的构建器：
+// main.go 使用 Go wasm，main.ts 使用 AssemblyScript。包 id 取目录名。
+func AutoExtract(ctx context.Context, sourceDir string) ([]schemaextract.Capability, string, error) {
 	absolute, err := filepath.Abs(sourceDir)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	id := filepath.Base(absolute)
 	if source, err := os.ReadFile(filepath.Join(sourceDir, "main.go")); err == nil {
-		return schemaextract.AnalyzeGo(source, id)
+		capabilities, analyzeErr := schemaextract.AnalyzeGo(source, id)
+		return capabilities, BuildToolGoWasm, analyzeErr
 	}
 	if source, err := os.ReadFile(filepath.Join(sourceDir, "main.ts")); err == nil {
-		return schemaextract.AnalyzeTS(ctx, source, id, sourceDir)
+		capabilities, analyzeErr := schemaextract.AnalyzeTS(ctx, source, id, sourceDir)
+		return capabilities, BuildToolAssemblyScript, analyzeErr
 	}
-	return nil, fmt.Errorf("packagefmt: %q 未找到 main.go 或 main.ts", sourceDir)
+	return nil, "", fmt.Errorf("packagefmt: %q 未找到 main.go 或 main.ts", sourceDir)
 }
 
 // ManifestFromCapabilities 从源码提取的 capabilities 自动生成纯计算包清单

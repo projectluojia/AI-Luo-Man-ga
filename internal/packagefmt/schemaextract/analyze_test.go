@@ -2,6 +2,7 @@ package schemaextract
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -130,5 +131,44 @@ type Hello struct { Name string ` + "`json:\"name\"`" + ` }
 	}
 	if len(capabilities) != 1 {
 		t.Fatalf("capabilities = %d", len(capabilities))
+	}
+}
+
+func TestAnalyzeGoResolvesNestedStructs(t *testing.T) {
+	source := []byte(`package main
+func hello(args HelloArgs) {}
+type HelloArgs struct {
+	Address Address ` + "`json:\"address\"`" + `
+}
+type Address struct {
+	City string ` + "`json:\"city\"`" + `
+}
+`)
+	capabilities, err := AnalyzeGo(source, "x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema map[string]any
+	if err := json.Unmarshal(capabilities[0].InputSchema, &schema); err != nil {
+		t.Fatal(err)
+	}
+	address := schema["properties"].(map[string]any)["address"].(map[string]any)
+	if address["type"] != "object" {
+		t.Fatalf("address schema = %+v", address)
+	}
+	if address["properties"].(map[string]any)["city"].(map[string]any)["type"] != "string" {
+		t.Fatalf("city schema = %+v", address)
+	}
+}
+
+func TestAnalyzeGoRejectsRecursiveStructs(t *testing.T) {
+	source := []byte(`package main
+func hello(args Node) {}
+type Node struct {
+	Next *Node ` + "`json:\"next,omitempty\"`" + `
+}
+`)
+	if _, err := AnalyzeGo(source, "x"); err == nil || !strings.Contains(err.Error(), "递归") {
+		t.Fatalf("recursive struct error = %v, want explicit rejection", err)
 	}
 }

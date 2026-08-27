@@ -302,18 +302,24 @@ func runPackageCommand(parent context.Context, arguments []string, output io.Wri
 		return true, nil
 	case "publish":
 		if flags.NArg() != 1 {
-			return true, fmt.Errorf("configuration error: publish requires exactly one source package directory")
+			return true, fmt.Errorf("configuration error: publish requires exactly one source package directory or .tgz")
 		}
 		owner, name, _, ok := splitRegistryRef(*repo)
 		if !ok || owner == "" || name == "" {
 			return true, fmt.Errorf("configuration error: publish requires --repo owner/repo")
 		}
 		client := packmgr.NewGitHubClient()
-		manifest, manifestBytes, err := resolveSource(ctx, flags.Arg(0))
-		if err != nil {
-			return true, err
+		var htmlURL string
+		var err error
+		if strings.HasSuffix(strings.ToLower(flags.Arg(0)), ".tgz") {
+			htmlURL, err = client.PublishTarball(ctx, owner, name, flags.Arg(0))
+		} else {
+			manifest, manifestBytes, resolveErr := resolveSource(ctx, flags.Arg(0))
+			if resolveErr != nil {
+				return true, resolveErr
+			}
+			htmlURL, err = client.PublishFromSource(ctx, owner, name, flags.Arg(0), manifest, manifestBytes)
 		}
-		htmlURL, err := client.PublishFromSource(ctx, owner, name, flags.Arg(0), manifest, manifestBytes)
 		if err != nil {
 			return true, err
 		}
