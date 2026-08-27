@@ -80,3 +80,29 @@ func TestPublishStageRestoresPreviousInstallOnVerifyFailure(t *testing.T) {
 		t.Fatalf("安装根条目 = %+v, want 仅 demo.pkg", entries)
 	}
 }
+
+func TestPublishStageRestoresPreviousInstallOnRenameFailure(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(t.TempDir(), "pkg")
+	if err := os.MkdirAll(source, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "app.wasm"), []byte("artifact"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	manifest := `{"schema_version":"` + SchemaVersion + `","id":"demo.pkg","version":"1.0.0",` +
+		`"components":[{"id":"core","mode":"hosted","entrypoint":"app.wasm"}]}`
+	if err := os.WriteFile(filepath.Join(source, "manifest.json"), []byte(manifest), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Install(context.Background(), root, source); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	targetDir := filepath.Join(root, "demo.pkg")
+	if _, err := publishStage(context.Background(), root, targetDir, filepath.Join(root, stagePrefix+"missing")); err == nil {
+		t.Fatal("publishStage with missing stage = nil, want error")
+	}
+	if record, err := ReadInstalled(context.Background(), targetDir); err != nil || record.Manifest.Version != "1.0.0" {
+		t.Fatalf("rollback record=%#v err=%v, want original install", record, err)
+	}
+}
