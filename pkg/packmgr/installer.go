@@ -65,6 +65,9 @@ func Install(ctx context.Context, root, sourcePath string) (InstalledRecord, err
 	if err := resolveDependencies(ctx, root, source.Manifest.Dependencies); err != nil {
 		return InstalledRecord{}, err
 	}
+	lock := packageInstallLock(root, source.Manifest.ID)
+	lock.Lock()
+	defer lock.Unlock()
 	targetDir := filepath.Join(root, source.Manifest.ID)
 	if existing, err := ReadInstalled(ctx, targetDir); err == nil {
 		if existing.Manifest.Version == source.Manifest.Version {

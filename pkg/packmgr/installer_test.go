@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
@@ -281,6 +282,42 @@ func TestInstallLocksProcessSpecForIsolatedComponent(t *testing.T) {
 	}
 	if !packmgr.IsLocalRuntimeAddress(artifact.Process.Address) {
 		t.Fatalf("process address = %q, want 本机地址", artifact.Process.Address)
+	}
+}
+
+func TestInstallSerializesSamePackagePublication(t *testing.T) {
+	root := t.TempDir()
+	sources := make([]string, 2)
+	for i, version := range []string{"1.0.0", "2.0.0"} {
+		sources[i] = filepath.Join(t.TempDir(), "pkg")
+		writeSourcePackage(t, sources[i], "demo.concurrent", version, packmgr.ModeHosted, "app.wasm", nil)
+	}
+	start := make(chan struct{})
+	errorsSeen := make(chan error, len(sources))
+	var group sync.WaitGroup
+	for _, source := range sources {
+		group.Add(1)
+		go func(source string) {
+			defer group.Done()
+			<-start
+			_, err := packmgr.Install(context.Background(), root, source)
+			errorsSeen <- err
+		}(source)
+	}
+	close(start)
+	group.Wait()
+	close(errorsSeen)
+	for err := range errorsSeen {
+		if err != nil {
+			t.Fatalf("concurrent Install: %v", err)
+		}
+	}
+	record, err := packmgr.ReadInstalled(context.Background(), filepath.Join(root, "demo.concurrent"))
+	if err != nil {
+		t.Fatalf("ReadInstalled after concurrent Install: %v", err)
+	}
+	if record.Manifest.Version != "1.0.0" && record.Manifest.Version != "2.0.0" {
+		t.Fatalf("version=%s, want one complete installation", record.Manifest.Version)
 	}
 }
 

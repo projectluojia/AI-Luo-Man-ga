@@ -11,7 +11,7 @@ import (
 )
 
 // TestBuildAssemblyScript 验证 ts-as 构建器：AssemblyScript guest 编译为 wasm
-// 工件。npx/node 不可用或首次下载失败时跳过（外部工具链非门禁前提）。
+// 工件。仅在 npx 不可用时跳过；工具链存在但构建失败必须让测试失败。
 func TestBuildAssemblyScript(t *testing.T) {
 	if _, err := exec.LookPath("npx"); err != nil {
 		t.Skip("npx 不可用，跳过 ts-as 构建测试")
@@ -29,7 +29,7 @@ func TestBuildAssemblyScript(t *testing.T) {
 		Components: []packmgr.Component{{ID: "main", Mode: packmgr.ModeHosted, Entrypoint: "main.wasm"}},
 	}
 	if err := Build(context.Background(), dir, manifest, BuildSpec{Tool: BuildToolAssemblyScript}); err != nil {
-		t.Skipf("AssemblyScript 编译失败（外部工具链）：%v", err)
+		t.Fatalf("AssemblyScript 编译失败: %v", err)
 	}
 	artifact, err := os.Stat(filepath.Join(dir, "main.wasm"))
 	if err != nil {

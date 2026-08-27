@@ -13,10 +13,25 @@ func TestExtractTSFunctions(t *testing.T) {
 export async function ping(args: PingArgs): Promise<any> {}
 function hidden() {} // 非 export 忽略
 export function noArgs() {}
+export function untyped(args): any {}
+export function wrongType(args: OtherArgs): any {}
+export function tooMany(args: HelloArgs, other: string): any {}
 `)
 	names := extractTSFunctions(source)
 	if len(names) != 2 || names[0] != "hello" || names[1] != "ping" {
 		t.Fatalf("names = %v", names)
+	}
+}
+
+func TestExtractTSFunctionsRequiresContractParameter(t *testing.T) {
+	source := []byte(`export function hello(args: HelloArgs): any {}
+export function hello2(args: Hello2Args): any {}
+export function noArgs(): any {}
+export function wrong(args: Wrong): any {}
+`)
+	names := extractTSFunctions(source)
+	if len(names) != 2 || names[0] != "hello" || names[1] != "hello2" {
+		t.Fatalf("names = %v, want only functions with matching Args parameter", names)
 	}
 }
 

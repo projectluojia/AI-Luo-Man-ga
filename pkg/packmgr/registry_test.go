@@ -96,7 +96,11 @@ func TestResolveReleaseIgnoresPublishOrder(t *testing.T) {
 // TestResolveReleaseSkipsReleasesWithoutTarball 确认没有 .tgz 资产的更高版本不会
 // 顶掉已选中的较低版本：附件缺失的 Release 不可安装，必须保留有 tarball 的版本。
 func TestResolveReleaseSkipsReleasesWithoutTarball(t *testing.T) {
-	client, _, _ := newGitHubTestClient(t, func(writer http.ResponseWriter, _ *http.Request) {
+	client, _, _ := newGitHubTestClient(t, func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Query().Get("page") != "1" {
+			_ = json.NewEncoder(writer).Encode([]map[string]any{})
+			return
+		}
 		_ = json.NewEncoder(writer).Encode([]map[string]any{
 			{"tag_name": "v1.2.0", "assets": []map[string]any{
 				{"name": "demo.pkg-1.2.0.tgz", "browser_download_url": "https://example.com/demo.pkg-1.2.0.tgz"},
@@ -112,6 +116,31 @@ func TestResolveReleaseSkipsReleasesWithoutTarball(t *testing.T) {
 	}
 	if version != "1.2.0" || assetURL != "https://example.com/demo.pkg-1.2.0.tgz" {
 		t.Fatalf("ResolveRelease = %s %s, want 1.2.0 + demo.pkg-1.2.0.tgz", version, assetURL)
+	}
+}
+
+func TestResolveReleaseScansAllPages(t *testing.T) {
+	client, _, _ := newGitHubTestClient(t, func(writer http.ResponseWriter, request *http.Request) {
+		page := request.URL.Query().Get("page")
+		var releases []map[string]any
+		switch page {
+		case "1", "2":
+			releases = []map[string]any{{"tag_name": "v1." + page + ".0", "assets": []map[string]any{{
+				"name": "demo.pkg-1." + page + ".0.tgz", "browser_download_url": "https://example.com/1." + page,
+			}}}}
+		case "3":
+			releases = []map[string]any{{"tag_name": "v2.0.0", "assets": []map[string]any{{
+				"name": "demo.pkg-2.0.0.tgz", "browser_download_url": "https://example.com/2.0.0",
+			}}}}
+		}
+		_ = json.NewEncoder(writer).Encode(releases)
+	}, http.NotFound)
+	version, assetURL, err := client.ResolveRelease(context.Background(), "owner", "repo", "")
+	if err != nil {
+		t.Fatalf("ResolveRelease: %v", err)
+	}
+	if version != "2.0.0" || assetURL != "https://example.com/2.0.0" {
+		t.Fatalf("ResolveRelease = %s %s, want page-3 release", version, assetURL)
 	}
 }
 
@@ -235,23 +264,62 @@ func TestPublishCreatesReleaseAndUploadsAsset(t *testing.T) {
 	}
 }
 
+func TestPublishTarballCreatesReleaseAndUploadsAsset(t *testing.T) {
+	source := filepath.Join(t.TempDir(), "pkg")
+	writeSourcePackage(t, source, "demo.pkg", "1.0.0", packmgr.ModeHosted, "app.wasm", nil)
+	manifestBytes, err := os.ReadFile(filepath.Join(source, "manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest packmgr.Manifest
+	if err := json.Unmarshal(manifestBytes, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	tarball, err := packmgr.PackFromSource(context.Background(), source, t.TempDir(), manifest, manifestBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var uploadPath string
+	client, _, _ := newGitHubTestClient(t, func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodPost || !strings.Contains(request.URL.Path, "/releases") {
+			http.NotFound(writer, request)
+			return
+		}
+		writer.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(writer).Encode(map[string]any{"id": 9, "html_url": "https://github.com/owner/repo/releases/tag/v1.0.0"})
+	}, func(writer http.ResponseWriter, request *http.Request) {
+		uploadPath = request.URL.RequestURI()
+		writer.WriteHeader(http.StatusCreated)
+	})
+	if _, err := client.PublishTarball(context.Background(), "owner", "repo", tarball); err != nil {
+		t.Fatalf("PublishTarball: %v", err)
+	}
+	if !strings.Contains(uploadPath, "demo.pkg-1.0.0.tgz") {
+		t.Fatalf("upload path = %s, want asset name demo.pkg-1.0.0.tgz", uploadPath)
+	}
+}
+
 func TestPublishRemovesReleaseAfterUploadFailure(t *testing.T) {
 	source := filepath.Join(t.TempDir(), "pkg")
 	writeSourcePackage(t, source, "demo.pkg", "1.0.0", packmgr.ModeHosted, "app.wasm", nil)
 	var deleted atomic.Bool
 	client, _, _ := newGitHubTestClient(t, func(writer http.ResponseWriter, request *http.Request) {
-		if request.Method == http.MethodDelete {
+		switch request.Method {
+		case http.MethodPost:
+			writer.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(writer).Encode(map[string]any{"id": 10, "html_url": "https://example.com/release"})
+			return
+		case http.MethodDelete:
 			deleted.Store(true)
 			writer.WriteHeader(http.StatusNoContent)
-			return
+		default:
+			http.NotFound(writer, request)
 		}
-		writer.WriteHeader(http.StatusCreated)
-		_ = json.NewEncoder(writer).Encode(map[string]any{"id": 7, "html_url": "https://example.com/release"})
 	}, func(writer http.ResponseWriter, _ *http.Request) {
-		writer.WriteHeader(http.StatusBadGateway)
+		writer.WriteHeader(http.StatusInternalServerError)
 	})
 	if _, err := client.Publish(context.Background(), "owner", "repo", source); err == nil {
-		t.Fatal("Publish upload failure = nil")
+		t.Fatal("Publish upload failure = nil, want error")
 	}
 	if !deleted.Load() {
 		t.Fatal("Publish did not remove the incomplete release")

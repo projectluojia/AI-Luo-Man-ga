@@ -10,6 +10,10 @@ import (
 
 // structSchema 把 struct AST 编译为 JSON Schema（object + additionalProperties:false）。
 func structSchema(structType *ast.StructType) (json.RawMessage, error) {
+	return structSchemaWithTypes(structType, nil, make(map[string]bool))
+}
+
+func structSchemaWithTypes(structType *ast.StructType, types map[string]*ast.StructType, resolving map[string]bool) (json.RawMessage, error) {
 	if structType.Fields == nil || len(structType.Fields.List) == 0 {
 		return nil, fmt.Errorf("schemaextract: 参数 struct 不能为空")
 	}
@@ -26,7 +30,7 @@ func structSchema(structType *ast.StructType) (json.RawMessage, error) {
 		if err != nil {
 			return nil, err
 		}
-		fieldSchema, err := fieldSchema(field.Type)
+		fieldSchema, err := fieldSchemaWithTypes(field.Type, types, resolving)
 		if err != nil {
 			return nil, fmt.Errorf("schemaextract: 字段 %q: %w", name, err)
 		}
@@ -60,22 +64,48 @@ func fieldJSONName(field *ast.Field) (name string, optional bool, err error) {
 
 // fieldSchema 把字段类型 AST 编译为 JSON Schema 片段。
 func fieldSchema(expr ast.Expr) (any, error) {
+	return fieldSchemaWithTypes(expr, nil, make(map[string]bool))
+}
+
+func fieldSchemaWithTypes(expr ast.Expr, types map[string]*ast.StructType, resolving map[string]bool) (any, error) {
 	switch t := expr.(type) {
 	case *ast.Ident:
-		return scalarSchema(t.Name)
+		if schema, err := scalarSchema(t.Name); err == nil {
+			return schema, nil
+		}
+		nested, ok := types[t.Name]
+		if !ok {
+			return nil, fmt.Errorf("未知类型 %q", t.Name)
+		}
+		if resolving[t.Name] {
+			return nil, fmt.Errorf("类型 %q 存在递归引用", t.Name)
+		}
+		resolving[t.Name] = true
+		schema, err := structSchemaWithTypes(nested, types, resolving)
+		delete(resolving, t.Name)
+		if err != nil {
+			return nil, err
+		}
+		var decoded any
+		if err := json.Unmarshal(schema, &decoded); err != nil {
+			return nil, err
+		}
+		return decoded, nil
+	case *ast.StarExpr:
+		return fieldSchemaWithTypes(t.X, types, resolving)
 	case *ast.SelectorExpr:
 		if pkg, ok := t.X.(*ast.Ident); ok && pkg.Name == "time" && t.Sel.Name == "Time" {
 			return map[string]any{"type": "string", "format": "date-time"}, nil
 		}
 		return nil, fmt.Errorf("不支持的标识类型 %s.%s", pkgName(t.X), t.Sel.Name)
 	case *ast.ArrayType:
-		items, err := fieldSchema(t.Elt)
+		items, err := fieldSchemaWithTypes(t.Elt, types, resolving)
 		if err != nil {
 			return nil, err
 		}
 		return map[string]any{"type": "array", "items": items}, nil
 	case *ast.StructType:
-		schema, err := structSchema(t)
+		schema, err := structSchemaWithTypes(t, types, resolving)
 		if err != nil {
 			return nil, err
 		}

@@ -73,6 +73,37 @@ func (c *GitHubClient) PublishFromSource(ctx context.Context, owner, repo, sourc
 	if err != nil {
 		return "", err
 	}
+	return c.publishTarball(ctx, owner, repo, tarballPath, manifest)
+}
+
+// PublishTarball 校验并发布已打包的 tarball。构建与发布分离时，发布端只需
+// 处理已验证的发布物，不执行调用方提供的构建命令。
+func (c *GitHubClient) PublishTarball(ctx context.Context, owner, repo, tarballPath string) (string, error) {
+	if owner == "" || repo == "" {
+		return "", fmt.Errorf("发布需要 --repo owner/repo")
+	}
+	if c.Token == "" {
+		return "", fmt.Errorf("发布需要 GITHUB_TOKEN（或 GH_TOKEN）")
+	}
+	root, err := os.MkdirTemp("", "ailuo-publish-validate-")
+	if err != nil {
+		return "", err
+	}
+	defer os.RemoveAll(root)
+	if _, err := Install(ctx, root, tarballPath); err != nil {
+		return "", fmt.Errorf("发布物校验失败: %w", err)
+	}
+	entries, err := ListInstalled(ctx, root)
+	if err != nil || len(entries) != 1 {
+		if err == nil {
+			err = fmt.Errorf("安装结果数量为 %d", len(entries))
+		}
+		return "", fmt.Errorf("发布物校验失败: %w", err)
+	}
+	return c.publishTarball(ctx, owner, repo, tarballPath, entries[0].Manifest)
+}
+
+func (c *GitHubClient) publishTarball(ctx context.Context, owner, repo, tarballPath string, manifest Manifest) (string, error) {
 	tag := "v" + manifest.Version
 	release, err := c.createRelease(ctx, owner, repo, tag)
 	if err != nil {
@@ -166,6 +197,24 @@ func (c *GitHubClient) createRelease(ctx context.Context, owner, repo, tag strin
 		return gitHubRelease{}, err
 	}
 	return release, nil
+}
+
+func (c *GitHubClient) deleteRelease(ctx context.Context, owner, repo string, id int64) error {
+	request, err := http.NewRequestWithContext(ctx, http.MethodDelete,
+		fmt.Sprintf("%s/repos/%s/%s/releases/%d", c.APIBase, owner, repo, id), nil)
+	if err != nil {
+		return err
+	}
+	request.Header.Set("Authorization", "Bearer "+c.Token)
+	response, err := c.HTTP.Do(request)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusNoContent {
+		return fmt.Errorf("删除 Release 失败（HTTP %d）", response.StatusCode)
+	}
+	return nil
 }
 
 // ResolveRelease 解析 owner/repo 的发行版：按 semver 约束选择最高版本，

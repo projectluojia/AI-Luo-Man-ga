@@ -12,8 +12,8 @@ import (
 	"unicode"
 )
 
-// tsFunctionPattern 匹配 TS 导出处理函数：export function hello(args: X)。
-var tsFunctionPattern = regexp.MustCompile(`(?m)^export\s+async\s+function\s+(\w+)\(|^export\s+function\s+(\w+)\(`)
+// tsFunctionPattern 匹配仅有一个带约定类型参数的 TS 导出处理函数。
+var tsFunctionPattern = regexp.MustCompile(`(?m)^export\s+(?:async\s+)?function\s+([a-z][a-z0-9]*)\s*\(\s*[A-Za-z_$][A-Za-z0-9_$]*\s*:\s*([A-Za-z_$][A-Za-z0-9_$]*)\s*\)`)
 
 // commandRunner 抽象外部命令执行（测试注入用）。
 type commandRunner func(ctx context.Context, dir string, name string, args ...string) ([]byte, error)
@@ -68,11 +68,8 @@ func extractTSFunctions(source []byte) []string {
 	var names []string
 	seen := make(map[string]struct{})
 	for _, match := range tsFunctionPattern.FindAllSubmatch(source, -1) {
-		name := string(match[1])
-		if name == "" {
-			name = string(match[2])
-		}
-		if name == "" || !goArgsPattern.MatchString(name) {
+		name, typeName := string(match[1]), string(match[2])
+		if typeName != upperFirst(name)+"Args" {
 			continue
 		}
 		if _, exists := seen[name]; exists {
