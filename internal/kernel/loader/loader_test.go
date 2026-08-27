@@ -36,26 +36,6 @@ func (h *fakeHost) Mode() string {
 	return h.mode
 }
 
-type versionHost struct {
-	runtimes map[string]*fakeRuntime
-	loads    atomic.Int32
-}
-
-func (h *versionHost) Mode() string { return loader.ModeHosted }
-
-func (h *versionHost) Verify(context.Context, loader.Manifest) error {
-	return nil
-}
-
-func (h *versionHost) Load(_ context.Context, manifest loader.Manifest) (loader.Runtime, error) {
-	h.loads.Add(1)
-	runtime := h.runtimes[manifest.Version]
-	if runtime == nil {
-		return nil, errors.New("version unavailable")
-	}
-	return runtime, nil
-}
-
 func (h *fakeHost) Verify(ctx context.Context, manifest loader.Manifest) error {
 	h.verifies.Add(1)
 	if h.mode != "" && manifest.Mode != h.mode {

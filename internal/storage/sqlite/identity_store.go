@@ -156,11 +156,11 @@ func (s *Store) SetUserStatus(ctx context.Context, userID, status string, at tim
 	if (status != identity.UserStatusActive && status != identity.UserStatusDisabled) || at.IsZero() {
 		return identity.User{}, identity.ErrInvalid
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginTx(ctx, nil)
 	if err != nil {
 		return identity.User{}, fmt.Errorf("begin user status update: %w", err)
 	}
-	defer finishTransaction(tx, &resultErr, "set user status")
+	defer s.finishTx(tx, &resultErr, "set user status")
 	var currentStatus string
 	var createdAt string
 	var disabledAt sql.NullString
@@ -248,11 +248,11 @@ func (s *Store) BindExternalIdentity(ctx context.Context, binding identity.Exter
 	if err != nil {
 		return err
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin external identity bind: %w", err)
 	}
-	defer finishTransaction(tx, &resultErr, "bind external identity")
+	defer s.finishTx(tx, &resultErr, "bind external identity")
 	// 目标内部用户必须已经存在且处于启用状态：平台接入绝不自动创建匿名权威用户。
 	var userStatus string
 	err = tx.QueryRowContext(ctx, `SELECT status FROM users WHERE user_id=?`, normalized.UserID).Scan(&userStatus)
@@ -324,11 +324,11 @@ func (s *Store) UnbindExternalIdentity(ctx context.Context, appID, platform, pla
 	if err := identity.ValidateBindingKey(appID, platform, platformSpaceID, platformUserID); err != nil {
 		return identity.ErrInvalid
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin external identity unbind: %w", err)
 	}
-	defer finishTransaction(tx, &resultErr, "unbind external identity")
+	defer s.finishTx(tx, &resultErr, "unbind external identity")
 	result, err := tx.ExecContext(ctx, `
 DELETE FROM external_identities
 WHERE app_id=? AND platform=? AND platform_space_id=? AND platform_user_id=?`,
@@ -387,11 +387,11 @@ func (s *Store) SetMembership(ctx context.Context, membership identity.AppMember
 	if err != nil {
 		return err
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin membership ensure: %w", err)
 	}
-	defer finishTransaction(tx, &resultErr, "set membership")
+	defer s.finishTx(tx, &resultErr, "set membership")
 	// 成员关系必须引用已存在的 Deployment 级用户，绝不自动创建匿名权威用户。
 	var userCount int
 	if err := tx.QueryRowContext(ctx, `

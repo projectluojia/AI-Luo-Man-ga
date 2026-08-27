@@ -50,6 +50,11 @@ func (integrationWebAuthenticator) Authenticate(*http.Request) (web.Authenticate
 func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 	var modelTurns atomic.Int32
 	modelHandler := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/v1/models" {
+			writer.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(writer, `{"data":[{"id":"test-model","object":"model","created":1,"owned_by":"test"}]}`)
+			return
+		}
 		if request.URL.Path == "/v1/models/test-model" {
 			writer.Header().Set("Content-Type", "application/json")
 			fmt.Fprint(writer, `{"id":"test-model","object":"model","created":1,"owned_by":"test"}`)
@@ -62,39 +67,42 @@ func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 		body, _ := io.ReadAll(request.Body)
 		bodyText := string(body)
 		writer.Header().Set("Content-Type", "text/event-stream")
-		switch modelTurns.Add(1) {
-		case 1:
+		// writeTurn 输出一轮 chat.completion 的 delta/结束/用量三段 SSE。
+		writeTurn := func(id, delta, finish, usage string) {
+			fmt.Fprint(writer, `data: {"id":"`+id+`","object":"chat.completion.chunk","created":1,"model":"test-model","choices":[{"index":0,"delta":`+delta+`,"finish_reason":null}]}`+"\n\n")
+			fmt.Fprint(writer, `data: {"id":"`+id+`","object":"chat.completion.chunk","created":1,"model":"test-model","choices":[{"index":0,"delta":{},"finish_reason":"`+finish+`"}]}`+"\n\n")
+			fmt.Fprint(writer, `data: {"id":"`+id+`","object":"chat.completion.chunk","created":1,"model":"test-model","choices":[],"usage":`+usage+`}`+"\n\n")
+		}
+		// 多子编排为异步：子 Run 排队后 root 立即继续自身轮次，子 Run 最终结果
+		// 只落子 Run 记录（ResultMessage），不进入 root 的后续轮次。请求按内容
+		// 路由（子 Run 系统提示、是否含 tool 结果），不依赖 root/子 Run 轮次的
+		// 到达顺序；轮次计数仅用于末端断言。
+		modelTurns.Add(1)
+		isChild := strings.Contains(bodyText, "这是受治理的子 Run")
+		hasToolResult := strings.Contains(bodyText, `"role":"tool"`)
+		switch {
+		case !isChild && !hasToolResult:
 			if !strings.Contains(bodyText, "cap_agent_run") || !strings.Contains(bodyText, "cap_campus_bus_routes_list") {
 				t.Errorf("root model request missing projected tools: %s", body)
 			}
-			fmt.Fprint(writer, `data: {"id":"one","object":"chat.completion.chunk","created":1,"model":"test-model","choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"delegate-call","type":"function","function":{"name":"cap_agent_run","arguments":"{\"task\":\"查询校巴线路\",\"capability_ids\":[\"campus.bus.routes.list\"]}"}}]},"finish_reason":null}]}`+"\n\n")
-			fmt.Fprint(writer, `data: {"id":"one","object":"chat.completion.chunk","created":1,"model":"test-model","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`+"\n\n")
-			fmt.Fprint(writer, `data: {"id":"one","object":"chat.completion.chunk","created":1,"model":"test-model","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12}}`+"\n\n")
-		case 2:
+			writeTurn("one", `{"role":"assistant","tool_calls":[{"index":0,"id":"delegate-call","type":"function","function":{"name":"cap_agent_run","arguments":"{\"task\":\"查询校巴线路\",\"capability_ids\":[\"campus.bus.routes.list\"]}"}}]}`, "tool_calls", `{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12}`)
+		case !isChild && hasToolResult:
+			if !strings.Contains(bodyText, "cap_agent_run") || !strings.Contains(bodyText, `"role":"tool"`) {
+				t.Errorf("root follow-up request is invalid: %s", body)
+			}
+			writeTurn("two", `{"role":"assistant","content":"当前有一条测试线路。"}`, "stop", `{"prompt_tokens":20,"completion_tokens":3,"total_tokens":23}`)
+		case isChild && !hasToolResult:
 			if strings.Contains(bodyText, "cap_agent_run") ||
 				!strings.Contains(bodyText, "cap_campus_bus_routes_list") ||
 				!strings.Contains(bodyText, "查询校巴线路") {
 				t.Errorf("child model request has wrong projection or task: %s", body)
 			}
-			fmt.Fprint(writer, `data: {"id":"two","object":"chat.completion.chunk","created":1,"model":"test-model","choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"child-route-call","type":"function","function":{"name":"cap_campus_bus_routes_list","arguments":"{\"limit\":10}"}}]},"finish_reason":null}]}`+"\n\n")
-			fmt.Fprint(writer, `data: {"id":"two","object":"chat.completion.chunk","created":1,"model":"test-model","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`+"\n\n")
-			fmt.Fprint(writer, `data: {"id":"two","object":"chat.completion.chunk","created":1,"model":"test-model","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12}}`+"\n\n")
-		case 3:
+			writeTurn("three", `{"role":"assistant","tool_calls":[{"index":0,"id":"child-route-call","type":"function","function":{"name":"cap_campus_bus_routes_list","arguments":"{\"limit\":10}"}}]}`, "tool_calls", `{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12}`)
+		case isChild && hasToolResult:
 			if strings.Contains(bodyText, "cap_agent_run") || !strings.Contains(bodyText, `"role":"tool"`) {
 				t.Errorf("child follow-up request is invalid: %s", body)
 			}
-			fmt.Fprint(writer, `data: {"id":"three","object":"chat.completion.chunk","created":1,"model":"test-model","choices":[{"index":0,"delta":{"role":"assistant","content":"子任务确认一条测试线路。"},"finish_reason":null}]}`+"\n\n")
-			fmt.Fprint(writer, `data: {"id":"three","object":"chat.completion.chunk","created":1,"model":"test-model","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`+"\n\n")
-			fmt.Fprint(writer, `data: {"id":"three","object":"chat.completion.chunk","created":1,"model":"test-model","choices":[],"usage":{"prompt_tokens":20,"completion_tokens":3,"total_tokens":23}}`+"\n\n")
-		case 4:
-			if !strings.Contains(bodyText, "cap_agent_run") ||
-				!strings.Contains(bodyText, `"role":"tool"`) ||
-				!strings.Contains(bodyText, "子任务确认一条测试线路") {
-				t.Errorf("root follow-up request did not contain child result: %s", body)
-			}
-			fmt.Fprint(writer, `data: {"id":"two","object":"chat.completion.chunk","created":1,"model":"test-model","choices":[{"index":0,"delta":{"role":"assistant","content":"当前有一条测试线路。"},"finish_reason":null}]}`+"\n\n")
-			fmt.Fprint(writer, `data: {"id":"two","object":"chat.completion.chunk","created":1,"model":"test-model","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`+"\n\n")
-			fmt.Fprint(writer, `data: {"id":"two","object":"chat.completion.chunk","created":1,"model":"test-model","choices":[],"usage":{"prompt_tokens":20,"completion_tokens":3,"total_tokens":23}}`+"\n\n")
+			writeTurn("four", `{"role":"assistant","content":"子任务确认一条测试线路。"}`, "stop", `{"prompt_tokens":20,"completion_tokens":3,"total_tokens":23}`)
 		default:
 			t.Errorf("unexpected model request: %s", body)
 			http.Error(writer, "unexpected model request", http.StatusBadRequest)

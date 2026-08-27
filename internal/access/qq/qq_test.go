@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -166,11 +165,7 @@ func (f *qqFakeOrchestrator) CreateIdempotent(ctx context.Context, request kerne
 }
 
 func TestNewRejectsInvalidBotQQID(t *testing.T) {
-	store, err := sqlite.Open(filepath.Join(t.TempDir(), "qq-config.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
+	store := newQQTestStore(t, "qq-config.db")
 	hub := newQQTestHub(t, store, stubResolver{user: "user-1"})
 	orchestrator := &qqFakeOrchestrator{store: store, created: make(chan struct{})}
 	for _, botQQID := range []string{"", " 2647414417", "02647414417", "-1", "all", "0"} {
@@ -190,11 +185,7 @@ func TestNewRejectsInvalidBotQQID(t *testing.T) {
 // 幂等 Echo → 订阅终态 → send_group_msg 回发。事件经 store 重放与实时
 // 发布双路径送达，消除订阅时序竞态。
 func TestQQAdapterIntakesAndReplies(t *testing.T) {
-	store, err := sqlite.Open(filepath.Join(t.TempDir(), "qq.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
+	store := newQQTestStore(t, "qq.db")
 	bot := newFakeOneBot(t)
 	hub := newQQTestHub(t, store, stubResolver{user: "user-1"})
 	events := access.NewEventHub()
@@ -260,11 +251,7 @@ func TestQQAdapterIntakesAndReplies(t *testing.T) {
 }
 
 func TestQQAdapterForwardsEverySubagentTerminalReply(t *testing.T) {
-	store, err := sqlite.Open(filepath.Join(t.TempDir(), "qq-subagents.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
+	store := newQQTestStore(t, "qq-subagents.db")
 	bot := newFakeOneBot(t)
 	hub := newQQTestHub(t, store, stubResolver{user: "user-1"})
 	events := access.NewEventHub()
@@ -351,11 +338,7 @@ func TestSubagentReplyLifecycleHandlesTerminalBeforeCreated(t *testing.T) {
 }
 
 func TestQQAdapterQuickReplySkipsAgentAndDoesNotMentionSender(t *testing.T) {
-	store, err := sqlite.Open(filepath.Join(t.TempDir(), "qq-quick-reply.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
+	store := newQQTestStore(t, "qq-quick-reply.db")
 	bot := newFakeOneBot(t)
 	hub := newQQTestHub(t, store, stubResolver{user: "user-1"})
 	orchestrator := &qqFakeOrchestrator{store: store, created: make(chan struct{})}
@@ -411,11 +394,7 @@ func assertGroupReply(t *testing.T, raw any, expectedUserID, expectedText string
 // TestQQAdapterProcessesEchoesConcurrently 验证 WebSocket 读取循环不会等待单个
 // Echo 终态，且同时处理的 Echo 数量受固定 worker 上限约束。
 func TestQQAdapterProcessesEchoesConcurrently(t *testing.T) {
-	store, err := sqlite.Open(filepath.Join(t.TempDir(), "qq-concurrent.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
+	store := newQQTestStore(t, "qq-concurrent.db")
 	bot := newFakeOneBot(t)
 	hub := newQQTestHub(t, store, stubResolver{user: "user-1"})
 	orchestrator := &blockingEchoStarter{
@@ -478,11 +457,7 @@ func TestQQAdapterProcessesEchoesConcurrently(t *testing.T) {
 // TestQQAdapterRepliesPublicErrorOnUnboundIdentity 验证未绑定身份的消息被
 // 安全拒绝并回发公共错误，不泄露内部细节。
 func TestQQAdapterRepliesPublicErrorOnUnboundIdentity(t *testing.T) {
-	store, err := sqlite.Open(filepath.Join(t.TempDir(), "qq-unbound.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
+	store := newQQTestStore(t, "qq-unbound.db")
 	bot := newFakeOneBot(t)
 	hub := newQQTestHub(t, store, stubResolver{err: identity.ErrNotFound})
 	adapter, err := New(Config{

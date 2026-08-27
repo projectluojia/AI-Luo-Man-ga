@@ -18,15 +18,11 @@ func (s *Store) Ensure(ctx context.Context, seed appconfig.Config) (result appco
 	if err != nil {
 		return appconfig.Config{}, false, err
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginTx(ctx, nil)
 	if err != nil {
 		return appconfig.Config{}, false, fmt.Errorf("begin app config ensure: %w", err)
 	}
-	defer func() {
-		if resultErr != nil {
-			resultErr = errors.Join(resultErr, tx.Rollback())
-		}
-	}()
+	defer s.finishTx(tx, &resultErr, "app config ensure")
 	existing, err := readCurrentAppConfig(ctx, tx, normalized.AppID)
 	if err == nil {
 		if err := tx.Commit(); err != nil {
@@ -100,15 +96,11 @@ func (s *Store) CompareAndSwap(ctx context.Context, expectedGeneration uint64, r
 	if err != nil {
 		return appconfig.Config{}, err
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginTx(ctx, nil)
 	if err != nil {
 		return appconfig.Config{}, fmt.Errorf("begin app config update: %w", err)
 	}
-	defer func() {
-		if resultErr != nil {
-			resultErr = errors.Join(resultErr, tx.Rollback())
-		}
-	}()
+	defer s.finishTx(tx, &resultErr, "app config update")
 	current, err := readCurrentAppConfig(ctx, tx, normalized.AppID)
 	if err != nil {
 		return appconfig.Config{}, err

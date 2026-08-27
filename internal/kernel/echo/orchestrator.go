@@ -600,7 +600,11 @@ func (o *Orchestrator) executeClaimedRun(ctx context.Context, request RunRequest
 			Payload:   encoded,
 			CreatedAt: o.now().UTC(),
 		}
-		event, err = o.store.AppendEchoEvent(runContext, event)
+		// 事件追加脱离取消上下文：取消竞速时用已取消 ctx 写库会中断语句并
+		// 遗留 SQLite 写锁（影响后续终态写入）；事件是持久日志，走有界独立上下文。
+		appendCtx, cancelAppend := context.WithTimeout(context.WithoutCancel(runContext), 5*time.Second)
+		event, err = o.store.AppendEchoEvent(appendCtx, event)
+		cancelAppend()
 		if err != nil {
 			observe.Error(ctx, "持久化 Echo 事件失败", err,
 				observe.StringAttr("event_type", eventType),
@@ -672,6 +676,10 @@ func (o *Orchestrator) executeClaimedRun(ctx context.Context, request RunRequest
 	}
 	if err := o.store.SetRunContext(runContext, run, snapshot.Digest, snapshot.SourcesJSON()); err != nil {
 		observe.Error(ctx, "固化 Run 上下文来源版本失败", err)
+		// 取消优先：上下文已取消时不得落入重试/失败路径。
+		if errors.Is(runContext.Err(), context.Canceled) {
+			return errors.Join(context.Canceled, o.completeRun(ctx, run, RunStatusCancelled, StatusCancelled, "", publicerror.Echo("cancelled")))
+		}
 		return errors.Join(err, o.fail(ctx, run, "internal_error", true))
 	}
 	if err := emitEvent("run.context", map[string]any{
@@ -682,6 +690,10 @@ func (o *Orchestrator) executeClaimedRun(ctx context.Context, request RunRequest
 		"history_trimmed":  snapshot.History.Trimmed,
 		"capability_count": len(capabilities),
 	}); err != nil {
+		// 事件持久化失败往往是取消导致的存储副作用，不得把取消落成失败/重试。
+		if errors.Is(runContext.Err(), context.Canceled) {
+			return errors.Join(context.Canceled, o.completeRun(ctx, run, RunStatusCancelled, StatusCancelled, "", publicerror.Echo("cancelled")))
+		}
 		return errors.Join(err, o.fail(ctx, run, "event_delivery_failed", true))
 	}
 	observe.Info(ctx, "Run 上下文快照已装配",
@@ -986,6 +998,10 @@ func (o *Orchestrator) executeClaimedRun(ctx context.Context, request RunRequest
 				observe.Error(ctx, "向执行者返回 Capability 结果失败", err,
 					observe.StringAttr("call_id", result.CallId),
 				)
+				// 取消优先于流错误：上下文已取消时落 cancelled 终态，避免二次失败篡改终态。
+				if errors.Is(runContext.Err(), context.Canceled) {
+					return errors.Join(context.Canceled, o.completeRun(ctx, run, RunStatusCancelled, StatusCancelled, "", publicerror.Echo("cancelled")))
+				}
 				runErr := fmt.Errorf("send capability result: %w", err)
 				return errors.Join(runErr, o.fail(ctx, run, "agent_stream_failed", automaticRetrySafe))
 			}
@@ -997,6 +1013,9 @@ func (o *Orchestrator) executeClaimedRun(ctx context.Context, request RunRequest
 				if err := emitEvent("subagent.created", map[string]any{
 					"run_id": child.RunID, "parent_run_id": run.ID, "status": child.Status,
 				}); err != nil {
+					if errors.Is(runContext.Err(), context.Canceled) {
+						return errors.Join(context.Canceled, o.completeRun(ctx, run, RunStatusCancelled, StatusCancelled, "", publicerror.Echo("cancelled")))
+					}
 					return errors.Join(err, o.fail(ctx, run, "event_delivery_failed", false))
 				}
 			}
@@ -1005,6 +1024,10 @@ func (o *Orchestrator) executeClaimedRun(ctx context.Context, request RunRequest
 				"capability_id": result.CapabilityId,
 				"success":       result.Success,
 			}); err != nil {
+				// 取消优先于事件持久化失败：追加失败往往是取消导致的存储副作用。
+				if errors.Is(runContext.Err(), context.Canceled) {
+					return errors.Join(context.Canceled, o.completeRun(ctx, run, RunStatusCancelled, StatusCancelled, "", publicerror.Echo("cancelled")))
+				}
 				return errors.Join(err, o.fail(ctx, run, "event_delivery_failed", automaticRetrySafe))
 			}
 		case *executor.Frame_ReplyDelta:
@@ -1016,6 +1039,9 @@ func (o *Orchestrator) executeClaimedRun(ctx context.Context, request RunRequest
 				observe.IntAttr("delta_length", utf8.RuneCountInString(body.ReplyDelta.Text)),
 			)
 			if err := emitEvent("reply.delta", map[string]string{"text": body.ReplyDelta.Text}); err != nil {
+				if errors.Is(runContext.Err(), context.Canceled) {
+					return errors.Join(context.Canceled, o.completeRun(ctx, run, RunStatusCancelled, StatusCancelled, "", publicerror.Echo("cancelled")))
+				}
 				return errors.Join(err, o.fail(ctx, run, "event_delivery_failed", automaticRetrySafe))
 			}
 		case *executor.Frame_FinalMessage:

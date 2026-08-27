@@ -425,50 +425,6 @@ func (a *Adapter) logInvalidSubagentLifecycle(ctx context.Context, echoID string
 	)
 }
 
-// waitReply 订阅 Echo 事件并等待终态：先重放已持久化事件，再等待实时事件。
-// 超时或流关闭无终态时返回空串（静默放弃，不伪造回复）。
-func (a *Adapter) waitReply(ctx context.Context, echoID string) string {
-	live, unsubscribe := a.events.Subscribe(a.cfg.AppID, echoID)
-	defer unsubscribe()
-	if _, persisted, err := a.reader.GetEcho(ctx, a.cfg.AppID, echoID); err == nil {
-		for _, event := range persisted {
-			if reply := terminalReply(event); reply != nil {
-				return *reply
-			}
-		}
-	} else {
-		// 重放读取失败（存储临时不可用等）：记录退化并继续等待实时事件，
-		// 不得静默跳过重放——Echo 若已终态，实时流关闭后将放弃回复。
-		observe.Warn(ctx, "QQ 回复重放读取失败，继续等待实时事件",
-			observe.StringAttr("echo_id", echoID),
-			observe.StringAttr("echo_error", publicErrorCode(err)),
-		)
-	}
-	timer := time.NewTimer(a.cfg.RunTimeout)
-	defer timer.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return ""
-		case <-timer.C:
-			observe.Warn(ctx, "等待 QQ 回复超时",
-				observe.StringAttr("echo_id", echoID),
-			)
-			return ""
-		case event, open := <-live:
-			if !open {
-				observe.Warn(ctx, "QQ 回复事件流关闭但未收到终态回复",
-					observe.StringAttr("echo_id", echoID),
-				)
-				return ""
-			}
-			if reply := terminalReply(event); reply != nil {
-				return *reply
-			}
-		}
-	}
-}
-
 // publicErrorCode 把重放读取错误归类为稳定日志字段，不输出原始错误正文。
 func publicErrorCode(err error) string {
 	if errors.Is(err, kernelecho.ErrEchoNotFound) {

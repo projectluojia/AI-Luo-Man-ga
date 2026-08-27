@@ -20,7 +20,6 @@ func (r *managerTestRunner) Run(ctx context.Context) error {
 
 type managerTestStore struct {
 	value qqsettings.Settings
-	count atomic.Int32
 }
 
 func (s *managerTestStore) EnsureQQSettings(_ context.Context, seed qqsettings.Settings) (qqsettings.Settings, bool, error) {

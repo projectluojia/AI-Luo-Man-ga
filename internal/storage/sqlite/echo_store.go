@@ -37,11 +37,11 @@ func (s *Store) CreateEchoRun(ctx context.Context, echo kernelecho.Record, run k
 	if err := validateNewRun(echo, run); err != nil {
 		return err
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin Echo/Run creation: %w", err)
 	}
-	defer finishTransaction(tx, &resultErr, "create Echo/Run")
+	defer s.finishTx(tx, &resultErr, "create Echo/Run")
 	if err := insertEchoRun(ctx, tx, echo, run); err != nil {
 		return err
 	}
@@ -70,11 +70,11 @@ func (s *Store) CreateEchoRunIdempotentLimited(
 	if err := validateNewRun(echo, run); err != nil {
 		return "", false, err
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginTx(ctx, nil)
 	if err != nil {
 		return "", false, fmt.Errorf("begin idempotent Echo/Run creation: %w", err)
 	}
-	defer finishTransaction(tx, &resultErr, "create idempotent Echo/Run")
+	defer s.finishTx(tx, &resultErr, "create idempotent Echo/Run")
 	var existingFingerprint string
 	var existingEchoID string
 	err = tx.QueryRowContext(ctx, `SELECT request_fingerprint,echo_id FROM echo_create_requests WHERE app_id=? AND idempotency_key=?`, echo.AppID, key).Scan(&existingFingerprint, &existingEchoID)
@@ -173,11 +173,11 @@ func (s *Store) CreateChildRun(ctx context.Context, parent, child kernelecho.Run
 	}, child); err != nil {
 		return err
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin child Run creation: %w", err)
 	}
-	defer finishTransaction(tx, &resultErr, "create child Run")
+	defer s.finishTx(tx, &resultErr, "create child Run")
 	var parentCount int
 	if err := tx.QueryRowContext(ctx, `
 SELECT count(*)
@@ -225,11 +225,11 @@ func (s *Store) ClaimRun(ctx context.Context, appID, echoID, leaseToken string, 
 	if appID == "" || echoID == "" || leaseToken == "" || startedAt.IsZero() || !leaseExpiresAt.After(startedAt) {
 		return kernelecho.RunRecord{}, kernelecho.ErrInvalidRunRecord
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginTx(ctx, nil)
 	if err != nil {
 		return kernelecho.RunRecord{}, fmt.Errorf("begin run claim: %w", err)
 	}
-	defer finishTransaction(tx, &resultErr, "claim Run")
+	defer s.finishTx(tx, &resultErr, "claim Run")
 	run, err := queryRun(tx.QueryRowContext(ctx, runSelect+` WHERE app_id=? AND echo_id=? AND parent_run_id IS NULL AND status=? AND julianday(available_at)<=julianday(?) ORDER BY attempt LIMIT 1`,
 		appID, echoID, kernelecho.RunStatusQueued, startedAt.UTC().Format(time.RFC3339Nano)))
 	if err != nil {
@@ -269,11 +269,11 @@ func (s *Store) ClaimChildRun(ctx context.Context, appID, echoID, runID, parentR
 		startedAt.IsZero() || !leaseExpiresAt.After(startedAt) {
 		return kernelecho.RunRecord{}, kernelecho.ErrInvalidRunRecord
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginTx(ctx, nil)
 	if err != nil {
 		return kernelecho.RunRecord{}, fmt.Errorf("begin child Run claim: %w", err)
 	}
-	defer finishTransaction(tx, &resultErr, "claim child Run")
+	defer s.finishTx(tx, &resultErr, "claim child Run")
 	run, err := queryRun(tx.QueryRowContext(ctx, runSelect+`
 WHERE app_id=? AND echo_id=? AND run_id=? AND parent_run_id=? AND status=? AND julianday(available_at)<=julianday(?)`,
 		appID, echoID, runID, parentRunID, kernelecho.RunStatusQueued, startedAt.UTC().Format(time.RFC3339Nano)))
@@ -453,11 +453,11 @@ func (s *Store) CancelQueuedRun(ctx context.Context, appID, echoID string, compl
 	if appID == "" || echoID == "" || completedAt.IsZero() {
 		return false, kernelecho.ErrInvalidRunRecord
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginTx(ctx, nil)
 	if err != nil {
 		return false, fmt.Errorf("begin queued Run cancellation: %w", err)
 	}
-	defer finishTransaction(tx, &resultErr, "cancel queued Run")
+	defer s.finishTx(tx, &resultErr, "cancel queued Run")
 	public := publicerror.Echo("cancelled")
 	result, err := tx.ExecContext(ctx, `UPDATE runs SET status=?,error_code=?,error_message=?,completed_at=? WHERE app_id=? AND echo_id=? AND status=?`,
 		kernelecho.RunStatusCancelled, public.Code, public.Message, completedAt.UTC().Format(time.RFC3339Nano),
@@ -520,11 +520,11 @@ func (s *Store) RetryRun(ctx context.Context, current, next kernelecho.RunRecord
 		return err
 	}
 	failure = publicerror.Echo(failure.Code)
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin Run retry: %w", err)
 	}
-	defer finishTransaction(tx, &resultErr, "retry Run")
+	defer s.finishTx(tx, &resultErr, "retry Run")
 	result, err := tx.ExecContext(ctx, `UPDATE runs SET status=?,lease_token=NULL,lease_expires_at=NULL,error_code=?,error_message=?,completed_at=? WHERE app_id=? AND run_id=? AND echo_id=? AND status=? AND lease_token=?`,
 		kernelecho.RunStatusFailed, failure.Code, failure.Message, completedAt.UTC().Format(time.RFC3339Nano),
 		current.AppID, current.ID, current.EchoID, kernelecho.RunStatusRunning, current.LeaseToken,
@@ -561,11 +561,11 @@ func (s *Store) CompleteRun(ctx context.Context, run kernelecho.RunRecord, runSt
 		failure = publicerror.Echo(failure.Code)
 		finalMessage = ""
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin Run/Echo completion: %w", err)
 	}
-	defer finishTransaction(tx, &resultErr, "complete Run")
+	defer s.finishTx(tx, &resultErr, "complete Run")
 	result, err := tx.ExecContext(ctx, `UPDATE runs SET status=?,lease_token=NULL,lease_expires_at=NULL,result_message=?,error_code=?,error_message=?,completed_at=? WHERE app_id=? AND run_id=? AND echo_id=? AND status=? AND lease_token=?`,
 		runStatus, finalMessage, failure.Code, failure.Message, completedAt.UTC().Format(time.RFC3339Nano),
 		run.AppID, run.ID, run.EchoID, kernelecho.RunStatusRunning, run.LeaseToken,
@@ -684,11 +684,11 @@ func (s *Store) CompleteChildRun(ctx context.Context, run kernelecho.RunRecord, 
 		resultMessage = ""
 		failure = publicerror.Echo(failure.Code)
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin child Run completion: %w", err)
 	}
-	defer finishTransaction(tx, &resultErr, "complete child Run")
+	defer s.finishTx(tx, &resultErr, "complete child Run")
 	result, err := tx.ExecContext(ctx, `
 UPDATE runs
 SET status=?,lease_token=NULL,lease_expires_at=NULL,result_message=?,error_code=?,error_message=?,completed_at=?
@@ -721,11 +721,16 @@ func (s *Store) AppendEchoEvent(ctx context.Context, event kernelecho.Event) (_ 
 	if event.AppID == "" || event.EchoID == "" || event.RunID == "" || event.Sequence != 0 || event.Type == "" || event.CreatedAt.IsZero() || !json.Valid(event.Payload) {
 		return kernelecho.Event{}, kernelecho.ErrInvalidEchoEvent
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	// 已取消的上下文不要开事务：modernc/sqlite 在取消竞速时开事务会遗留
+	// 写锁状态，导致后续写事务撞 busy_timeout 失败（事件在取消后本就不可用）。
+	if err := ctx.Err(); err != nil {
+		return kernelecho.Event{}, err
+	}
+	tx, err := s.beginTx(ctx, nil)
 	if err != nil {
 		return kernelecho.Event{}, fmt.Errorf("begin Echo event append: %w", err)
 	}
-	defer finishTransaction(tx, &resultErr, "append Echo event")
+	defer s.finishTx(tx, &resultErr, "append Echo event")
 	var runExists int
 	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM runs r JOIN echoes e ON e.app_id=r.app_id AND e.echo_id=r.echo_id WHERE r.app_id=? AND r.echo_id=? AND r.run_id=? AND r.status=? AND e.status=?`,
 		event.AppID, event.EchoID, event.RunID, kernelecho.RunStatusRunning, kernelecho.StatusRunning,
@@ -961,11 +966,11 @@ func (s *Store) FailAbandonedRuns(ctx context.Context, appID string, now time.Ti
 	if appID == "" || now.IsZero() {
 		return 0, kernelecho.ErrInvalidRunRecord
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginTx(ctx, nil)
 	if err != nil {
 		return 0, fmt.Errorf("begin abandoned Run reconciliation: %w", err)
 	}
-	defer finishTransaction(tx, &resultErr, "fail abandoned Runs")
+	defer s.finishTx(tx, &resultErr, "fail abandoned Runs")
 	rows, err := tx.QueryContext(ctx, `
 SELECT run_id,echo_id,coalesce(parent_run_id,''),status
 FROM runs

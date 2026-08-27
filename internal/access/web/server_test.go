@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
-	goruntime "runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -32,6 +31,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/session"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite/sqlitetest"
 )
 
 type fakeOrchestrator struct {
@@ -84,17 +84,6 @@ func newAuthenticatedServer(
 	platformHub *access.Hub,
 ) *web.Server {
 	return web.NewServer(ctx, orchestrator, reader, health, reg, policy, appID, platformHub, web.WithWebAuthenticator(testWebAuthenticator{}))
-}
-
-// closeStore 关闭测试存储。Windows 上 modernc SQLite 的文件句柄由运行时
-// 最终化器延迟释放（sqlite3_close_v2 语义），关闭后立即回收一次，
-// 避免 TempDir 清理与最终化时序竞争导致 RemoveAll 失败。
-func closeStore(t *testing.T, store *sqlite.Store) {
-	t.Helper()
-	if err := store.Close(); err != nil {
-		t.Errorf("close store: %v", err)
-	}
-	goruntime.GC()
 }
 
 type observedContext struct {
@@ -714,11 +703,12 @@ func TestMetricsEndpointUsesPrometheusFormatWithoutBusinessIdentifiers(t *testin
 }
 
 func TestWebAccessShutdownStopsAdmissionAndDrainsActiveRuns(t *testing.T) {
-	store, err := sqlite.Open(filepath.Join(t.TempDir(), "shutdown.db"))
+	tempDir := t.TempDir()
+	store, err := sqlite.Open(filepath.Join(tempDir, "shutdown.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer closeStore(t, store)
+	defer sqlitetest.CloseAndWait(t, store, tempDir)
 	backend := &fakeOrchestrator{store: store, block: true}
 	server := newAuthenticatedServer(
 		context.Background(),
@@ -732,7 +722,8 @@ func TestWebAccessShutdownStopsAdmissionAndDrainsActiveRuns(t *testing.T) {
 	)
 	handler := server.Handler()
 	echoID, _ := createEcho(t, handler, "shutdown")
-	shutdownContext, cancel := context.WithTimeout(context.Background(), time.Second)
+	// 排空含持久化与运行取消，CI 并行负载下 1 秒墙钟预算不足，放宽到 10 秒（断言语义不变）。
+	shutdownContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := server.Shutdown(shutdownContext); err != nil {
 		t.Fatalf("shutdown: %v", err)
@@ -806,7 +797,8 @@ func TestPersistentSchedulerBoundsConcurrentRuns(t *testing.T) {
 	if maximum := backend.maxActiveRuns.Load(); maximum != 4 {
 		t.Fatalf("scheduler exceeded worker limit after drain: %d", maximum)
 	}
-	shutdownContext, cancel := context.WithTimeout(context.Background(), time.Second)
+	// 排空含运行取消与持久化，CI 并行负载下 1 秒墙钟预算不足，放宽到 10 秒（断言语义不变）。
+	shutdownContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := server.Shutdown(shutdownContext); err != nil {
 		t.Fatal(err)
@@ -814,10 +806,12 @@ func TestPersistentSchedulerBoundsConcurrentRuns(t *testing.T) {
 }
 
 func TestShutdownWaitsForAdmittedCreationBeforeCancellingRun(t *testing.T) {
-	store, err := sqlite.Open(filepath.Join(t.TempDir(), "admission.db"))
+	tempDir := t.TempDir()
+	store, err := sqlite.Open(filepath.Join(tempDir, "admission.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer sqlitetest.CloseAndWait(t, store, tempDir)
 	backend := &fakeOrchestrator{
 		store:         store,
 		block:         true,
@@ -846,7 +840,8 @@ func TestShutdownWaitsForAdmittedCreationBeforeCancellingRun(t *testing.T) {
 	<-backend.createEntered
 	server.StopAccepting()
 	shutdownDone := make(chan error, 1)
-	shutdownContext, cancel := context.WithTimeout(context.Background(), time.Second)
+	// 等待已接入创建事务排空含持久化，CI 并行负载下 1 秒墙钟预算不足，放宽到 10 秒（断言语义不变）。
+	shutdownContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	go func() {
 		shutdownDone <- server.Shutdown(shutdownContext)
@@ -872,7 +867,7 @@ func TestShutdownWaitsForAdmittedCreationBeforeCancellingRun(t *testing.T) {
 	if err != nil || record.Status != kernelecho.StatusCancelled {
 		t.Fatalf("record=%#v err=%v", record, err)
 	}
-	closeStore(t, store)
+	sqlitetest.CloseAndWait(t, store, tempDir)
 }
 
 func newTestServer(t *testing.T, block bool) (http.Handler, *sqlite.Store) {
