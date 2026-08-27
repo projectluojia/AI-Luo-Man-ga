@@ -434,7 +434,8 @@ func localPathExists(path string) bool {
 // 先执行构建再返回（pack/publish 共用，构建失败即报错，不打包残缺工件）。
 func resolveSource(ctx context.Context, sourceDir string) (manifest packmgr.Manifest, manifestBytes []byte, err error) {
 	path := packagefmt.SourcePath(sourceDir)
-	if _, statErr := os.Stat(path); errors.Is(statErr, fs.ErrNotExist) {
+	_, statErr := os.Stat(path)
+	if errors.Is(statErr, fs.ErrNotExist) {
 		// 无 ailuo.toml：从源码自动提取并构建（作者零声明）。
 		capabilities, buildTool, extractErr := packagefmt.AutoExtract(ctx, sourceDir)
 		if extractErr != nil {
