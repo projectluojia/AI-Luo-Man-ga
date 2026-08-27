@@ -271,10 +271,12 @@ internal/
 ├─ kernel/            L2 Go 内核（治理/编排/协议/Loader/存储端口）
 ├─ access/ storage/ observe/   平台接入 · L1 适配器 · 可观测性
 ├─ tools/             共享原子 Tool 包（跨 Service 复用）
-│  └─ bus/            bus 域工具（stops/routes/journeys + Store 端口）
+│  ├─ bus/            bus 域工具（stops/routes/journeys + Store 端口）
+│  └─ weather/        天气原子 Tool（Open-Meteo / 小米天气 / AccuWeather）
 └─ services/          业务 Service 装配（对应安装形态 services/）
    ├─ agent/          Agent Service（isolated 运行时宿主 + agent.run）
-   └─ campus/         Campus Service（hosted 内置包）
+   ├─ campus/         Campus Service（hosted 内置包）
+   └─ weather/        Weather Service（当前/逐小时/AQI/预警 Capability）
       ├─ guest/       内置 wasm guest 源码与构建脚本（//go:build wasip1，主机构建忽略）
       ├─ builtin/     go:embed 嵌入工件（唯一副本）
       ├─ demo/        演示数据播种

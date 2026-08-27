@@ -40,6 +40,29 @@ func TestLoggerProducesReadableChineseAndRedactsSecrets(t *testing.T) {
 	}
 }
 
+func TestLoggerRedactsWeatherProviderSecrets(t *testing.T) {
+	buffer := &bytes.Buffer{}
+	logger, err := observe.New(observe.Config{
+		Service: "test", Environment: "test", Format: "json", Writer: buffer,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	logger.Log(context.Background(), slog.LevelInfo, "天气数据源响应已接收",
+		slog.String("apikey", "accu-secret"),
+		slog.String("appkey", "xiaomi-app"),
+		slog.String("sign", "xiaomi-sign"),
+		slog.String("provider", "accuweather"),
+	)
+	output := buffer.String()
+	if strings.Contains(output, "accu-secret") || strings.Contains(output, "xiaomi-app") || strings.Contains(output, "xiaomi-sign") {
+		t.Fatalf("天气凭据进入日志：%s", output)
+	}
+	if !strings.Contains(output, `"provider":"accuweather"`) {
+		t.Fatalf("稳定字段被误脱敏：%s", output)
+	}
+}
+
 func TestLoggerRejectsSourcePathDisclosure(t *testing.T) {
 	if _, err := observe.New(observe.Config{Service: "test", AddSource: true}); err == nil {
 		t.Fatal("日志器接受了源码路径输出")

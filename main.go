@@ -44,8 +44,10 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus/demo"
 	promptservice "github.com/projectluojia/AI-Luo-Man-ga/internal/services/prompt"
+	weatherservice "github.com/projectluojia/AI-Luo-Man-ga/internal/services/weather"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/blob"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/tools/weather"
 
 	"github.com/joho/godotenv"
 	"google.golang.org/grpc"
@@ -486,6 +488,10 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 			promptservice.PreferenceGetID,
 			promptservice.PreferenceSetID,
 			promptservice.PreferenceResetID,
+			weatherservice.CurrentCapabilityID,
+			weatherservice.HourlyCapabilityID,
+			weatherservice.AQICapabilityID,
+			weatherservice.AlertsCapabilityID,
 		},
 	})
 	if err != nil {
@@ -506,7 +512,7 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 		replacement.MaxOutputBytes = config.agentRun.MaxOutputBytes
 		replacement.SystemPrompt = baseSystemPrompt
 		replacement.ChannelPrompts = channelPrompts
-		replacement.EnabledCapabilities = ensurePromptCapabilities(app.EnabledCapabilities)
+		replacement.EnabledCapabilities = ensureAppCapabilities(app.EnabledCapabilities)
 		app, err = store.CompareAndSwap(ctx, app.Generation, replacement)
 		if err != nil {
 			return fmt.Errorf("migrate campus App prompt configuration: %w", err)
@@ -530,6 +536,20 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 	if err := promptservice.Register(reg, promptService); err != nil {
 		return fmt.Errorf("register prompt Service: %w", err)
 	}
+	weatherClient := weather.NewClient(weather.ClientConfig{
+		Cache:             store,
+		Timeout:           config.weatherTimeout,
+		MaxRetries:        config.weatherMaxRetries,
+		RetryBase:         config.weatherRetryBase,
+		RetryMax:          config.weatherRetryMax,
+		RequestsPerMinute: config.weatherRequestsMinute,
+		AccuWeatherAPIKey: config.accuWeatherAPIKey,
+		XiaomiAppKey:      config.xiaomiAppKey,
+		XiaomiSign:        config.xiaomiSign,
+	})
+	if err := weather.RegisterTools(reg, weatherClient); err != nil {
+		return fmt.Errorf("register weather tools: %w", err)
+	}
 	// 确认与副作用治理：持久确认服务注入 Dispatcher，凡声明 write/external 副作用
 	// 的 Capability 在未获批准前 fail-closed（缺确认标识或验证失败一律拒绝执行）。
 	confirmations := confirmation.NewService(store, confirmation.Config{})
@@ -538,6 +558,9 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 		IdempotencyStore:     store,
 		ConfirmationVerifier: confirmations,
 	})
+	if err := weatherservice.Register(reg, weatherservice.NewService(dispatcher, weatherClient)); err != nil {
+		return fmt.Errorf("register weather Service: %w", err)
+	}
 	// 统一 Loader：所有运行模式共享一个 Manager，清单在注册时按 Verify 精确绑定
 	// 到唯一宿主。内置 campus（hosted 沙箱）、内置 agent（isolated 进程）与
 	// installed 包（hosted/isolated）同池管理，不再按包分叉多个 Loader。
@@ -792,50 +815,58 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 }
 
 type config struct {
-	httpAddress         string
-	configUIAddress     string
-	localConfigRoot     string
-	agentAddress        string
-	pythonPath          string
-	databasePath        string
-	model               string
-	modelBaseURL        string
-	modelAPIKey         string
-	modelAPIKeyFile     string
-	modelRequestTimeout time.Duration
-	modelReadyTimeout   time.Duration
-	modelMaxRetries     int
-	modelRetryBase      time.Duration
-	modelRetryMax       time.Duration
-	modelRequestsMinute int
-	modelMaxConcurrency int
-	manageAgent         bool
-	loadDemoData        bool
-	environment         string
-	logLevel            slog.Level
-	logFormat           string
-	logSource           bool
-	logMaxValueLength   int
-	runtimeInstallRoot  string
-	runtimeHostAddress  string
-	qqWSURL             string
-	qqEnabled           bool
-	qqToken             string
-	qqBotID             string
-	qqAllowedGroupIDs   []string
-	qqAllowedPrivateIDs []string
-	qqQuickReplies      []qq.QuickReply
-	qqPokeReplies       []string
-	promptCatalog       promptcatalog.Catalog
-	baseSystemPrompt    string
-	channelPrompts      map[string]string
-	agentRun            controlconfig.AgentRunSettings
-	orchestration       controlconfig.OrchestrationSettings
-	contextAssembly     controlconfig.ContextAssemblySettings
-	scheduler           controlconfig.SchedulerSettings
-	qqConnection        controlconfig.QQConnectionSettings
-	agentProcess        controlconfig.AgentProcessSettings
-	governance          controlconfig.GovernanceSettings
+	httpAddress           string
+	configUIAddress       string
+	localConfigRoot       string
+	agentAddress          string
+	pythonPath            string
+	databasePath          string
+	model                 string
+	modelBaseURL          string
+	modelAPIKey           string
+	modelAPIKeyFile       string
+	modelRequestTimeout   time.Duration
+	modelReadyTimeout     time.Duration
+	modelMaxRetries       int
+	modelRetryBase        time.Duration
+	modelRetryMax         time.Duration
+	modelRequestsMinute   int
+	modelMaxConcurrency   int
+	manageAgent           bool
+	loadDemoData          bool
+	environment           string
+	logLevel              slog.Level
+	logFormat             string
+	logSource             bool
+	logMaxValueLength     int
+	runtimeInstallRoot    string
+	runtimeHostAddress    string
+	qqWSURL               string
+	qqEnabled             bool
+	qqToken               string
+	qqBotID               string
+	qqAllowedGroupIDs     []string
+	qqAllowedPrivateIDs   []string
+	qqQuickReplies        []qq.QuickReply
+	qqPokeReplies         []string
+	promptCatalog         promptcatalog.Catalog
+	baseSystemPrompt      string
+	channelPrompts        map[string]string
+	agentRun              controlconfig.AgentRunSettings
+	orchestration         controlconfig.OrchestrationSettings
+	contextAssembly       controlconfig.ContextAssemblySettings
+	scheduler             controlconfig.SchedulerSettings
+	qqConnection          controlconfig.QQConnectionSettings
+	agentProcess          controlconfig.AgentProcessSettings
+	governance            controlconfig.GovernanceSettings
+	weatherTimeout        time.Duration
+	weatherMaxRetries     int
+	weatherRetryBase      time.Duration
+	weatherRetryMax       time.Duration
+	weatherRequestsMinute int
+	accuWeatherAPIKey     string
+	xiaomiAppKey          string
+	xiaomiSign            string
 }
 
 func loadConfig() (config, error) {
@@ -890,39 +921,71 @@ func loadConfig() (config, error) {
 	if err != nil {
 		return config{}, err
 	}
+	weatherTimeout, err := envFloat("AILUO_WEATHER_TIMEOUT_SECONDS", 8)
+	if err != nil {
+		return config{}, err
+	}
+	weatherRetries, err := envIntRange("AILUO_WEATHER_MAX_RETRIES", 2, 0, 5)
+	if err != nil {
+		return config{}, err
+	}
+	weatherRetryBase, err := envFloat("AILUO_WEATHER_RETRY_BASE_SECONDS", 0.25)
+	if err != nil {
+		return config{}, err
+	}
+	weatherRetryMax, err := envFloat("AILUO_WEATHER_RETRY_MAX_SECONDS", 2)
+	if err != nil {
+		return config{}, err
+	}
+	weatherRPM, err := envIntRange("AILUO_WEATHER_REQUESTS_PER_MINUTE", 30, 1, 600)
+	if err != nil {
+		return config{}, err
+	}
+	accuWeatherKey, err := loadOptionalSecret("AILUO_ACCUWEATHER_API_KEY", "AILUO_ACCUWEATHER_API_KEY_FILE")
+	if err != nil {
+		return config{}, err
+	}
 	result := config{
-		httpAddress:         envOr("AILUO_HTTP_ADDRESS", "127.0.0.1:8080"),
-		configUIAddress:     envOr("AILUO_CONFIG_UI_ADDRESS", configui.DefaultAddress),
-		localConfigRoot:     envOr("AILUO_CONFIG_DIR", "var"),
-		agentAddress:        envOr("AILUO_AGENT_ADDRESS", "127.0.0.1:50051"),
-		pythonPath:          envOr("AILUO_PYTHON", agent.DefaultPythonPath(".")),
-		databasePath:        envOr("AILUO_DATABASE_PATH", "var/ailuo.db"),
-		model:               os.Getenv("AILUO_MODEL"),
-		modelBaseURL:        os.Getenv("AILUO_MODEL_BASE_URL"),
-		modelAPIKey:         envOr("AILUO_MODEL_API_KEY", os.Getenv("OPENAI_API_KEY")),
-		modelAPIKeyFile:     os.Getenv("AILUO_MODEL_API_KEY_FILE"),
-		modelRequestTimeout: time.Duration(requestTimeout * float64(time.Second)),
-		modelReadyTimeout:   time.Duration(readinessTimeout * float64(time.Second)),
-		modelMaxRetries:     maxRetries,
-		modelRetryBase:      time.Duration(retryBase * float64(time.Second)),
-		modelRetryMax:       time.Duration(retryMax * float64(time.Second)),
-		modelRequestsMinute: requestsMinute,
-		modelMaxConcurrency: maxConcurrency,
-		manageAgent:         manageAgent,
-		loadDemoData:        loadDemoData,
-		environment:         envOr("AILUO_ENVIRONMENT", "development"),
-		logLevel:            logLevel,
-		logFormat:           envOr("AILUO_LOG_FORMAT", "console"),
-		logSource:           logSource,
-		logMaxValueLength:   logMaxValueLength,
-		runtimeInstallRoot:  os.Getenv("AILUO_RUNTIME_INSTALL_ROOT"),
-		runtimeHostAddress:  os.Getenv("AILUO_RUNTIME_HOST_ADDRESS"),
-		qqWSURL:             os.Getenv("AILUO_QQ_WS_URL"),
-		qqEnabled:           os.Getenv("AILUO_QQ_WS_URL") != "",
-		qqToken:             os.Getenv("AILUO_QQ_WS_TOKEN"),
-		qqBotID:             os.Getenv("AILUO_QQ_BOT_ID"),
-		qqAllowedGroupIDs:   envCSV("AILUO_QQ_ALLOWED_GROUP_IDS"),
-		qqAllowedPrivateIDs: envCSV("AILUO_QQ_ALLOWED_PRIVATE_USER_IDS"),
+		httpAddress:           envOr("AILUO_HTTP_ADDRESS", "127.0.0.1:8080"),
+		configUIAddress:       envOr("AILUO_CONFIG_UI_ADDRESS", configui.DefaultAddress),
+		localConfigRoot:       envOr("AILUO_CONFIG_DIR", "var"),
+		agentAddress:          envOr("AILUO_AGENT_ADDRESS", "127.0.0.1:50051"),
+		pythonPath:            envOr("AILUO_PYTHON", agent.DefaultPythonPath(".")),
+		databasePath:          envOr("AILUO_DATABASE_PATH", "var/ailuo.db"),
+		model:                 os.Getenv("AILUO_MODEL"),
+		modelBaseURL:          os.Getenv("AILUO_MODEL_BASE_URL"),
+		modelAPIKey:           envOr("AILUO_MODEL_API_KEY", os.Getenv("OPENAI_API_KEY")),
+		modelAPIKeyFile:       os.Getenv("AILUO_MODEL_API_KEY_FILE"),
+		modelRequestTimeout:   time.Duration(requestTimeout * float64(time.Second)),
+		modelReadyTimeout:     time.Duration(readinessTimeout * float64(time.Second)),
+		modelMaxRetries:       maxRetries,
+		modelRetryBase:        time.Duration(retryBase * float64(time.Second)),
+		modelRetryMax:         time.Duration(retryMax * float64(time.Second)),
+		modelRequestsMinute:   requestsMinute,
+		modelMaxConcurrency:   maxConcurrency,
+		weatherTimeout:        time.Duration(weatherTimeout * float64(time.Second)),
+		weatherMaxRetries:     weatherRetries,
+		weatherRetryBase:      time.Duration(weatherRetryBase * float64(time.Second)),
+		weatherRetryMax:       time.Duration(weatherRetryMax * float64(time.Second)),
+		weatherRequestsMinute: weatherRPM,
+		accuWeatherAPIKey:     accuWeatherKey,
+		xiaomiAppKey:          os.Getenv("AILUO_WEATHER_XIAOMI_APP_KEY"),
+		xiaomiSign:            os.Getenv("AILUO_WEATHER_XIAOMI_SIGN"),
+		manageAgent:           manageAgent,
+		loadDemoData:          loadDemoData,
+		environment:           envOr("AILUO_ENVIRONMENT", "development"),
+		logLevel:              logLevel,
+		logFormat:             envOr("AILUO_LOG_FORMAT", "console"),
+		logSource:             logSource,
+		logMaxValueLength:     logMaxValueLength,
+		runtimeInstallRoot:    os.Getenv("AILUO_RUNTIME_INSTALL_ROOT"),
+		runtimeHostAddress:    os.Getenv("AILUO_RUNTIME_HOST_ADDRESS"),
+		qqWSURL:               os.Getenv("AILUO_QQ_WS_URL"),
+		qqEnabled:             os.Getenv("AILUO_QQ_WS_URL") != "",
+		qqToken:               os.Getenv("AILUO_QQ_WS_TOKEN"),
+		qqBotID:               os.Getenv("AILUO_QQ_BOT_ID"),
+		qqAllowedGroupIDs:     envCSV("AILUO_QQ_ALLOWED_GROUP_IDS"),
+		qqAllowedPrivateIDs:   envCSV("AILUO_QQ_ALLOWED_PRIVATE_USER_IDS"),
 	}
 	// Agent 进程规格要求绝对 Python 路径（Spawn 模式校验）；默认值与用户配置
 	// 都可能为相对路径，统一在装配前解析为绝对路径。
@@ -1228,13 +1291,31 @@ func cloneStringMap(values map[string]string) map[string]string {
 	return result
 }
 
-func ensurePromptCapabilities(existing []string) []string {
+func loadOptionalSecret(envName, fileEnvName string) (string, error) {
+	if file := strings.TrimSpace(os.Getenv(fileEnvName)); file != "" {
+		content, err := os.ReadFile(file)
+		if err != nil {
+			return "", fmt.Errorf("configuration error: cannot read %s: %w", fileEnvName, err)
+		}
+		if len(content) == 0 || len(content) > 16<<10 {
+			return "", fmt.Errorf("configuration error: %s must be a non-empty file no larger than 16 KiB", fileEnvName)
+		}
+		return strings.TrimSpace(string(content)), nil
+	}
+	return strings.TrimSpace(os.Getenv(envName)), nil
+}
+
+func ensureAppCapabilities(existing []string) []string {
 	result := append([]string(nil), existing...)
 	for _, capabilityID := range []string{
 		agent.StatusCapabilityID,
 		promptservice.PreferenceGetID,
 		promptservice.PreferenceSetID,
 		promptservice.PreferenceResetID,
+		weatherservice.CurrentCapabilityID,
+		weatherservice.HourlyCapabilityID,
+		weatherservice.AQICapabilityID,
+		weatherservice.AlertsCapabilityID,
 	} {
 		if !slices.Contains(result, capabilityID) {
 			result = append(result, capabilityID)
