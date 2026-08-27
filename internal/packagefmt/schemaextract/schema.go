@@ -9,10 +9,6 @@ import (
 )
 
 // structSchema 把 struct AST 编译为 JSON Schema（object + additionalProperties:false）。
-func structSchema(structType *ast.StructType) (json.RawMessage, error) {
-	return structSchemaWithTypes(structType, nil, make(map[string]bool))
-}
-
 func structSchemaWithTypes(structType *ast.StructType, types map[string]*ast.StructType, resolving map[string]bool) (json.RawMessage, error) {
 	if structType.Fields == nil || len(structType.Fields.List) == 0 {
 		return nil, fmt.Errorf("schemaextract: 参数 struct 不能为空")
@@ -63,10 +59,6 @@ func fieldJSONName(field *ast.Field) (name string, optional bool, err error) {
 }
 
 // fieldSchema 把字段类型 AST 编译为 JSON Schema 片段。
-func fieldSchema(expr ast.Expr) (any, error) {
-	return fieldSchemaWithTypes(expr, nil, make(map[string]bool))
-}
-
 func fieldSchemaWithTypes(expr ast.Expr, types map[string]*ast.StructType, resolving map[string]bool) (any, error) {
 	switch t := expr.(type) {
 	case *ast.Ident:
