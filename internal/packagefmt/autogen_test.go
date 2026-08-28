@@ -107,6 +107,9 @@ func TestZeroDeclarationCapabilityRunsThroughDispatcherAndWasmHost(t *testing.T)
 	if err := Build(ctx, sourceDir, manifest, BuildSpec{Tool: buildTool}); err != nil {
 		t.Fatalf("Build: %v", err)
 	}
+	if err := VerifyHostedProtocol(ctx, sourceDir, manifest); err != nil {
+		t.Fatalf("VerifyHostedProtocol: %v", err)
+	}
 	artifactPath := filepath.Join(sourceDir, "main.wasm")
 	artifact, err := os.ReadFile(artifactPath)
 	if err != nil {

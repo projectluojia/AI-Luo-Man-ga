@@ -457,6 +457,9 @@ func resolveSource(ctx context.Context, sourceDir, version string) (manifest pac
 		if err := packagefmt.Build(ctx, sourceDir, manifest, packagefmt.BuildSpec{Tool: buildTool}); err != nil {
 			return packmgr.Manifest{}, nil, err
 		}
+		if err := packagefmt.VerifyHostedProtocol(ctx, sourceDir, manifest); err != nil {
+			return packmgr.Manifest{}, nil, err
+		}
 		return manifest, manifestBytes, nil
 	}
 	if statErr != nil {
