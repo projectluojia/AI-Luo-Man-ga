@@ -41,6 +41,18 @@ func TestSchemaTypeEnum(t *testing.T) {
 	}
 }
 
+func TestSchemaTypeRejectsUnsafeEnumMemberNames(t *testing.T) {
+	for _, schema := range []string{
+		`{"type":"string","enum":[""]}`,
+		`{"type":"string","enum":["1active"]}`,
+		`{"type":"string","enum":["a-b","a_b"]}`,
+	} {
+		if _, err := schemaType(json.RawMessage(schema), "Status"); err == nil {
+			t.Fatalf("schemaType accepted unsafe enum names: %s", schema)
+		}
+	}
+}
+
 func TestSchemaTypeArray(t *testing.T) {
 	model, err := schemaType(json.RawMessage(`{"type":"array","items":{"type":"string"}}`), "Names")
 	if err != nil {

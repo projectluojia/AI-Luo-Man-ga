@@ -25,6 +25,7 @@ func emitTypeScript(packageID string, capabilities []capabilitySpec, models map[
 		}
 	}
 	// Client class：构造 + invoke 传输层 + 每 capability 方法。
+	builder.WriteString(tsClientTypes)
 	fmt.Fprintf(&builder, "export class %sClient {\n", strcase.ToCamel(pkgName))
 	builder.WriteString(strings.ReplaceAll(tsClientTemplate, "{Q}", "`"))
 	for _, capability := range capabilities {
@@ -38,30 +39,90 @@ func emitTypeScript(packageID string, capabilities []capabilitySpec, models map[
 func tsCapability(builder *strings.Builder, capability capabilitySpec, model *TypeModel, packageID string) {
 	name := tsMethodName(capability.ID, packageID)
 	// 根 schema 可能是标量（具名类型的 Name 才非空），故经 tsFieldType 映射。
-	fmt.Fprintf(builder, "  %s(input: %s): Promise<unknown> {\n", name, tsFieldType(model))
-	fmt.Fprintf(builder, "    return this.invoke(%q, input);\n", capability.ID)
+	fmt.Fprintf(builder, "  %s(input: %s, options?: CallOptions): Promise<unknown> {\n", name, tsFieldType(model))
+	fmt.Fprintf(builder, "    return this.invoke(%q, input, options);\n", capability.ID)
 	builder.WriteString("  }\n\n")
 }
 
 // tsClientTemplate 是 Client 构造与 invoke 传输层模板；{Q} 渲染时替换为反引号
 // （TypeScript 模板字符串语法，Go 反引号字符串无法直接承载）。
+const tsClientTypes = `export interface CallOptions {
+  idempotencyKey?: string;
+  confirmationId?: string;
+}
+
+export type HeaderProvider = (capabilityId: string) => HeadersInit;
+
+export interface ClientOptions {
+  headers?: HeadersInit;
+  headerProvider?: HeaderProvider;
+}
+
+export class InvokeError extends Error {
+  constructor(
+    public readonly status: number,
+    public readonly code: string,
+    public readonly message: string,
+    public readonly retryable: boolean,
+  ) {
+    super(message);
+    this.name = "InvokeError";
+  }
+}
+
+`
+
 const tsClientTemplate = `  private baseUrl: string;
-  constructor(baseUrl: string) {
+  private options: ClientOptions;
+  constructor(baseUrl: string, options: ClientOptions = {}) {
     this.baseUrl = baseUrl.replace(/\/+$/, "");
+    this.options = options;
   }
 
-  private async invoke(capabilityId: string, input: unknown): Promise<unknown> {
+  private async invoke(capabilityId: string, input: unknown, options?: CallOptions): Promise<unknown> {
+    const headers = new Headers(this.options.headers);
+    headers.set("Content-Type", "application/json");
+    if (this.options.headerProvider !== undefined) {
+      for (const [name, value] of new Headers(this.options.headerProvider(capabilityId))) {
+        headers.set(name, value);
+      }
+    }
+    if (options?.idempotencyKey !== undefined) {
+      headers.set("Idempotency-Key", options.idempotencyKey);
+    }
+    if (options?.confirmationId !== undefined) {
+      headers.set("X-Confirmation-ID", options.confirmationId);
+    }
     const response = await fetch({Q}${this.baseUrl}/api/v1/capabilities/${capabilityId}/invoke{Q}, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers,
       body: JSON.stringify({ input }),
     });
+    const body = await response.text();
     if (!response.ok) {
-      let message = "";
-      try { const body = await response.json() as { message?: string }; message = body.message ?? ""; } catch {}
-      throw new Error({Q}ailuo invoke ${capabilityId}: ${response.status}: ${message}{Q});
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(body);
+      } catch {
+        throw new InvokeError(response.status, "invalid_response", "服务端错误响应格式无效", false);
+      }
+      if (typeof parsed !== "object" || parsed === null ||
+          typeof (parsed as { code?: unknown }).code !== "string" ||
+          typeof (parsed as { message?: unknown }).message !== "string") {
+        throw new InvokeError(response.status, "invalid_response", "服务端错误响应格式无效", false);
+      }
+      const errorBody = parsed as { code: string; message: string; retryable?: unknown };
+      throw new InvokeError(response.status, errorBody.code, errorBody.message, errorBody.retryable === true);
     }
-    const envelope = (await response.json()) as { result: unknown };
+    let envelope: unknown;
+    try {
+      envelope = JSON.parse(body);
+    } catch {
+      throw new InvokeError(response.status, "invalid_response", "服务端成功响应格式无效", false);
+    }
+    if (typeof envelope !== "object" || envelope === null || !("result" in envelope)) {
+      throw new InvokeError(response.status, "invalid_response", "服务端成功响应格式无效", false);
+    }
     return envelope.result;
   }
 

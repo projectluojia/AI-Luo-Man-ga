@@ -81,15 +81,23 @@ func TestGenerateRejectsDuplicateCapabilityID(t *testing.T) {
 	}
 }
 
+func TestGenerateRejectsNormalizedCapabilityNameCollision(t *testing.T) {
+	schema := `{"type":"object","properties":{"value":{"type":"string"}},"additionalProperties":false}`
+	source := `{"capabilities":[{"id":"x.foo-bar","input_schema_json":` + strconv.Quote(schema) + `},{"id":"x.foo_bar","input_schema_json":` + strconv.Quote(schema) + `}]}`
+	if _, err := Generate(json.RawMessage(source), Options{Language: LanguageTypeScript, PackageID: "x"}); err == nil || !strings.Contains(err.Error(), "名称") {
+		t.Fatalf("normalized capability name collision = %v", err)
+	}
+}
+
 // TestGenerateScalarRootSchema 验证根 schema 为标量时签名类型正确：标量根没有
 // 具名类型，直接打印 TypeModel.Name 会生成 `input ` 这样的语法错误（Go 侧
 // format.Source 会直接失败）。
 func TestGenerateScalarRootSchema(t *testing.T) {
 	source := `{"capabilities":[{"id":"x.y","input_schema_json":"{\"type\":\"string\"}"}]}`
 	wants := map[Language]string{
-		LanguageGo:         "input string)",
-		LanguagePython:     "input: str)",
-		LanguageTypeScript: "input: string)",
+		LanguageGo:         "input string, options ...CallOption)",
+		LanguagePython:     "input: str, options: Optional[CallOptions] = None)",
+		LanguageTypeScript: "input: string, options?: CallOptions)",
 	}
 	for language, want := range wants {
 		files, err := Generate(json.RawMessage(source), Options{Language: language, PackageID: "x"})

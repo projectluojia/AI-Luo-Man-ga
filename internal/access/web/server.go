@@ -63,6 +63,7 @@ type Server struct {
 	policy             runtime.AppPolicy
 	appID              string
 	platformHub        *access.Hub
+	identityResolver   access.IdentityResolver
 	webAuthenticator   WebAuthenticator
 	qqAccessAdmin      QQAccessAdmin
 	hub                *access.EventHub
@@ -144,6 +145,9 @@ func NewServer(
 		schedulerWorkers:   schedulerWorkers,
 		schedulerPoll:      schedulerPoll,
 		schedulerBatchSize: schedulerBatchSize,
+	}
+	if platformHub != nil {
+		server.identityResolver = platformHub
 	}
 	for _, option := range options {
 		if option != nil {

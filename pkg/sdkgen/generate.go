@@ -39,6 +39,9 @@ func Generate(source json.RawMessage, options Options) ([]Generated, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := validateDerivedNames(capabilities, options.PackageID); err != nil {
+		return nil, err
+	}
 	models := make(map[string]*TypeModel, len(capabilities))
 	for index := range capabilities {
 		capability := &capabilities[index]

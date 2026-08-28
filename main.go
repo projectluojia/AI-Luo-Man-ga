@@ -232,7 +232,7 @@ func runPackageCommand(parent context.Context, arguments []string, output io.Wri
 	if *root == "" {
 		*root = defaultRuntimeRoot()
 	}
-	if *root == "" && command != "pack" && command != "publish" {
+	if *root == "" && command != "pack" && command != "publish" && command != "sdk-go" && command != "sdk-py" && command != "sdk-ts" {
 		return true, fmt.Errorf("configuration error: %s requires --root 或 AILUO_RUNTIME_INSTALL_ROOT", command)
 	}
 	ctx, cancel := context.WithTimeout(parent, 2*time.Minute)

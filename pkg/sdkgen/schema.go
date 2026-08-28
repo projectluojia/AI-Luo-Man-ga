@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"sort"
+
+	"github.com/iancoleman/strcase"
 )
 
 // TypeKind 是 JSON Schema 类型在生成目标语言中的中性表示。
@@ -112,11 +114,20 @@ func stringOrEnum(spec schemaSpec, name string) (*TypeModel, error) {
 			return nil, fmt.Errorf("sdkgen: enum 与 format 不能同时声明")
 		}
 		values := make([]string, 0, len(spec.Enum))
+		seenNames := make(map[string]struct{}, len(spec.Enum))
 		for _, raw := range spec.Enum {
 			var value string
 			if err := json.Unmarshal(raw, &value); err != nil {
 				return nil, fmt.Errorf("sdkgen: enum 值必须是 string: %w", err)
 			}
+			memberName := strcase.ToCamel(value)
+			if !identifierPattern.MatchString(memberName) {
+				return nil, fmt.Errorf("sdkgen: enum 值 %q 无法生成合法成员名", value)
+			}
+			if _, exists := seenNames[memberName]; exists {
+				return nil, fmt.Errorf("sdkgen: enum 值 %q 规范化后成员名 %q 重复", value, memberName)
+			}
+			seenNames[memberName] = struct{}{}
 			values = append(values, value)
 		}
 		return &TypeModel{Kind: KindEnum, Name: name, Values: values}, nil
