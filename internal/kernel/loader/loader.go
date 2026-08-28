@@ -147,8 +147,8 @@ type Manager struct {
 
 // packageGroup 是一个包的组件组：order 按依赖拓扑排列（Provider 在前）。
 type packageGroup struct {
-	id    string
-	order []*entry
+	order     []*entry
+	upgradeMu sync.Mutex
 }
 
 // New 构造统一 Loader：一个 Manager 持有全部运行模式的宿主，模式内部允许
@@ -594,28 +594,59 @@ func (m *Manager) Warmup(ctx context.Context, ids []string, concurrency int) err
 		ordered = append(ordered, id)
 	}
 	sort.Strings(ordered)
+	warmupGroups := make([][]string, 0, len(ordered))
+	covered := make(map[string]struct{}, len(ordered))
+	m.mu.RLock()
+	packageIDs := make([]string, 0, len(m.packages))
+	for packageID := range m.packages {
+		packageIDs = append(packageIDs, packageID)
+	}
+	sort.Strings(packageIDs)
+	for _, packageID := range packageIDs {
+		group := m.packages[packageID]
+		idsInOrder := make([]string, 0, len(group.order))
+		for _, item := range group.order {
+			id := item.manifest.ID
+			if _, ok := unique[id]; !ok {
+				continue
+			}
+			idsInOrder = append(idsInOrder, id)
+			covered[id] = struct{}{}
+		}
+		if len(idsInOrder) > 0 {
+			warmupGroups = append(warmupGroups, idsInOrder)
+		}
+	}
+	m.mu.RUnlock()
+	for _, id := range ordered {
+		if _, ok := covered[id]; !ok {
+			warmupGroups = append(warmupGroups, []string{id})
+		}
+	}
 	workerContext, cancel := context.WithCancel(ctx)
 	defer cancel()
-	jobs := make(chan string)
-	failures := make(chan error, len(ordered))
+	jobs := make(chan []string)
+	failures := make(chan error, len(warmupGroups))
 	var workers sync.WaitGroup
 	for index := 0; index < concurrency; index++ {
 		workers.Add(1)
 		go func() {
 			defer workers.Done()
-			for id := range jobs {
-				if err := m.EnsureLoaded(workerContext, id); err != nil {
-					failures <- fmt.Errorf("warm runtime %s: %w", id, err)
-					cancel()
-					return
+			for group := range jobs {
+				for _, id := range group {
+					if err := m.EnsureLoaded(workerContext, id); err != nil {
+						failures <- fmt.Errorf("warm runtime %s: %w", id, err)
+						cancel()
+						return
+					}
 				}
 			}
 		}()
 	}
 sendJobs:
-	for _, id := range ordered {
+	for _, group := range warmupGroups {
 		select {
-		case jobs <- id:
+		case jobs <- group:
 		case <-workerContext.Done():
 			break sendJobs
 		}

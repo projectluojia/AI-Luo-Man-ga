@@ -38,7 +38,7 @@ type aiLuoExtensions struct {
 }
 
 // InstalledRecord 是安装目录中单个组件（运行单元）的内核记录。
-// 一个包产生多条记录（每组件一条）；Runtime.ID 为组件运行时标识。
+// 一个包产生多条记录（每组件一条）；Runtime.ID 是包命名空间内的稳定组件标识。
 type InstalledRecord struct {
 	Directory    string
 	ArtifactPath string
@@ -235,12 +235,16 @@ func (c *Catalog) readPackage(ctx context.Context, directory string) ([]Installe
 	}
 	records := make([]InstalledRecord, 0, len(neutral.Manifest.Components))
 	for _, component := range neutral.Manifest.Components {
+		runtimeID := neutral.Manifest.ID + "." + component.ID
+		if !stableIDPattern.MatchString(runtimeID) || len(runtimeID) > 128 {
+			return nil, ErrInstallCatalogInvalid
+		}
 		artifact, ok := artifactsByComponent[component.ID]
 		if !ok {
 			return nil, ErrInstallCatalogInvalid
 		}
 		runtimeManifest := Manifest{
-			ID: component.ID, Version: neutral.Manifest.Version, Mode: component.Mode,
+			ID: runtimeID, Version: neutral.Manifest.Version, Mode: component.Mode,
 			Role: RoleCapability, LockedDigest: artifact.SHA256,
 			Pin: neutral.Manifest.Pin, IdleTTL: time.Duration(neutral.Manifest.IdleTTLMS) * time.Millisecond,
 			HostFunctions: packmgr.CloneHostedFunctions(component.HostFunctions),
@@ -297,21 +301,15 @@ func RegisterInstalled(ctx context.Context, manager *Manager, target *registry.R
 		for _, spec := range record.Tools {
 			tools = append(tools, registry.ToolRegistration{Spec: spec, Handler: handler})
 		}
-		entry, exists := serviceByPackage[record.PackageID]
-		if !exists {
-			entry = registry.ServiceRegistration{
-				Spec: record.Service,
-				Capabilities: make(map[string]struct {
-					Spec    registry.CapabilitySpec
-					Handler registry.Handler
-				}),
-			}
-		}
+		entry := serviceByPackage[record.PackageID]
 		if entry.Capabilities == nil {
 			entry.Capabilities = make(map[string]struct {
 				Spec    registry.CapabilitySpec
 				Handler registry.Handler
 			})
+		}
+		if record.ComponentOrder == 0 {
+			entry.Spec = record.Service
 		}
 		for _, spec := range record.Capabilities {
 			entry.Capabilities[spec.ID] = struct {

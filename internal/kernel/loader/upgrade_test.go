@@ -130,9 +130,7 @@ func TestManagerUpgradeCandidateFailureKeepsOldVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	if err := manager.Register(ctx, upgradeManifest("extension.test", "1.0.0")); err != nil {
-		t.Fatal(err)
-	}
+	registerSingleComponent(t, manager, "extension.test", "1.0.0")
 	if err := manager.EnsureLoaded(ctx, "extension.test"); err != nil {
 		t.Fatal(err)
 	}
@@ -168,6 +166,9 @@ func TestManagerTracksRetiredLeasesByRuntimeVersion(t *testing.T) {
 	if err := manager.Register(ctx, upgradeManifest("extension.test", "1.0.0")); err != nil {
 		t.Fatal(err)
 	}
+	if err := manager.RegisterPackage("extension.test", []string{"extension.test"}); err != nil {
+		t.Fatal(err)
+	}
 	if err := manager.EnsureLoaded(ctx, "extension.test"); err != nil {
 		t.Fatal(err)
 	}
@@ -175,14 +176,14 @@ func TestManagerTracksRetiredLeasesByRuntimeVersion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := manager.Upgrade(ctx, upgradeManifest("extension.test", "2.0.0")); err != nil {
+	if err := manager.UpgradePackage(ctx, upgradeSingleComponent("extension.test", "2.0.0")); err != nil {
 		t.Fatal(err)
 	}
 	leaseV2, err := manager.Acquire(ctx, "extension.test")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := manager.Upgrade(ctx, upgradeManifest("extension.test", "3.0.0")); err != nil {
+	if err := manager.UpgradePackage(ctx, upgradeSingleComponent("extension.test", "3.0.0")); err != nil {
 		t.Fatal(err)
 	}
 	leaseV2.Release()

@@ -540,7 +540,7 @@ Go 侧 `GRPCHost` 只接受绝对 Unix Socket 或 loopback 地址，并给收发
 
 isolated 扩展由 Go `IsolatedProcessHost` 启动。可执行文件、参数、工作目录和 Socket 只能来自受信任的已安装解析器，并在执行前再次按 lock 校验；路径必须绝对、非符号链接且不可被组或其他用户写入，Socket 必须位于该私有工作目录。子进程不继承 Go 环境，敏感凭据名和动态装载注入变量被拒绝，标准输出/错误被抑制，避免第三方明文绕过集中日志。Stop 先走协议宽限期，再有界发送进程组终止和强制结束，并只清理由该规格绑定的 Unix Socket。真实跨进程集成测试覆盖正常退出和忽略 Stop 后的强制清理。
 
-安装目录使用 `ailuo.install.v2` 清单与 lock。内核只接受由有效进程用户持有、目录链和文件均不允许组或其他用户写入、没有符号链接的绝对目录；严格拒绝未知字段、重复 JSON 键、超限文件、非法稳定 ID、跨目录路径和不完整引用。lock 同时固定清单原始字节与实现文件的 SHA-256；isolated 还固定完整进程规格。发现结果先作为一批完成 Runtime、Tool、Service、Capability 全量校验，再分别原子发布到 Loader 与 Registry，Registry 冲突时回滚 Loader 发布。主程序通过 `AILUO_RUNTIME_INSTALL_ROOT` 启用恢复；未显式设置时回退用户配置目录 `ailuo/runtime`（与 `ailuo install` 默认位置一致，目录不存在则视为未配置）。hosted 还必须提供本机 `AILUO_RUNTIME_HOST_ADDRESS`。启动只预热 `pin` 项，失败则整个内核拒绝就绪；非 pin 项保持首次调用懒加载。已注册 Capability 不会自动进入任何 App，仍须通过持久 App 配置显式启用。
+安装目录使用 `ailuo.package.v2` 清单与 lock。内核只接受由有效进程用户持有、目录链和文件均不允许组或其他用户写入、没有符号链接的绝对目录；严格拒绝未知字段、重复 JSON 键、超限文件、非法稳定 ID、跨目录路径和不完整引用。lock 同时固定清单原始字节与实现文件的 SHA-256；isolated 还固定完整进程规格。发现结果先作为一批完成 Runtime、Tool、Service、Capability 全量校验，再分别原子发布到 Loader 与 Registry，Registry 冲突时回滚 Loader 发布。主程序通过 `AILUO_RUNTIME_INSTALL_ROOT` 启用恢复；未显式设置时回退用户配置目录 `ailuo/runtime`（与 `ailuo install` 默认位置一致，目录不存在则视为未配置）。hosted 还必须提供本机 `AILUO_RUNTIME_HOST_ADDRESS`。启动只预热 `pin` 项，失败则整个内核拒绝就绪；非 pin 项保持首次调用懒加载。已注册 Capability 不会自动进入任何 App，仍须通过持久 App 配置显式启用。
 
 上述实现完成了可长期保留的 Runtime Host 协议、Go 客户端/宿主校验器、持久安装目录发现与内核启动重注册、hosted 连接与容量边界，以及 isolated 真进程监管，但还不等于完整包平台已经交付。仓库尚未提供承载某种扩展语言或包格式的真实 Host Backend；hosted 共享进程的 CPU、内存和文件系统级资源隔离也需结合最终 Deployment 方案完成。当前安装目录属主校验在非 Unix 平台关闭失败，因此该能力目前只支持 Unix Deployment。内置 Python Agent 已由 `internal/services/agent` 包以 isolated Runtime 形态纳管（见下）。产品链路接入真实扩展 Backend 并完成对应恢复和资源限制验证前，不得把测试夹具描述成已上线扩展。
 

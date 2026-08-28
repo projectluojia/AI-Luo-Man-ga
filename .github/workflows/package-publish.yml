@@ -11,7 +11,7 @@ on:
       package-dir:
         type: string
         default: "."
-        description: 源包目录（含 ailuo.toml 或 manifest.json 与 entrypoint 工件）
+        description: 源包目录（含 ailuo.toml 与 entrypoint 工件）
       build-command:
         type: string
         default: ""

@@ -30,7 +30,7 @@ func TestInstalledCatalogDiscoversVerifiesAndRegistersHostedRuntime(t *testing.T
 		t.Fatalf("records=%#v err=%v", records, err)
 	}
 	record := records[0]
-	if record.Runtime.ID != "extension.test" || record.Runtime.Mode != loader.ModeHosted ||
+	if record.Runtime.ID != "extension.test.extension.test" || record.Runtime.Mode != loader.ModeHosted ||
 		record.Process != nil || record.Service.ID != "extension" ||
 		len(record.Tools) != 1 || len(record.Capabilities) != 1 {
 		t.Fatalf("record=%#v", record)
@@ -137,7 +137,7 @@ func TestInstalledCatalogRejectsDuplicateJSONAndWritableDirectory(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	duplicate := append(manifest[:len(manifest)-1], []byte(`,"schema_version":"ailuo.package.v1"}`)...)
+	duplicate := append(manifest[:len(manifest)-1], []byte(`,"schema_version":"ailuo.package.v2"}`)...)
 	if err := os.WriteFile(manifestPath, duplicate, 0o640); err != nil {
 		t.Fatal(err)
 	}
@@ -335,7 +335,7 @@ func writeDeclaredFixture(t *testing.T, root, runtimeID string, decls []packmgr.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(records) != 1 || records[0].Runtime.ID != runtimeID || records[0].PackageID != runtimeID {
+	if len(records) != 1 || records[0].Runtime.ID != runtimeID+"."+runtimeID || records[0].PackageID != runtimeID {
 		t.Fatalf("Discover records = %+v, want single %q record", records, runtimeID)
 	}
 	return records[0]

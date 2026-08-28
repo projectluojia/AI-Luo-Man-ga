@@ -50,6 +50,40 @@ type recordingRuntime struct {
 	id       string
 }
 
+type warmupHost struct {
+	runtimes map[string]loader.Runtime
+}
+
+func (h *warmupHost) Mode() string { return loader.ModeHosted }
+
+func (h *warmupHost) Verify(context.Context, loader.Manifest) error { return nil }
+
+func (h *warmupHost) Load(_ context.Context, manifest loader.Manifest) (loader.Runtime, error) {
+	runtime, ok := h.runtimes[manifest.ID]
+	if !ok {
+		return nil, loader.ErrUnavailable
+	}
+	return runtime, nil
+}
+
+type warmupOrder struct {
+	mu  sync.Mutex
+	ids []string
+}
+
+type warmupRuntime struct {
+	*fakeRuntime
+	order *warmupOrder
+	id    string
+}
+
+func (r *warmupRuntime) Start(ctx context.Context) error {
+	r.order.mu.Lock()
+	r.order.ids = append(r.order.ids, r.id)
+	r.order.mu.Unlock()
+	return r.fakeRuntime.Start(ctx)
+}
+
 func (r *recordingRuntime) Stop(ctx context.Context) error {
 	r.recorder.record(r.id)
 	return r.fakeRuntime.Stop(ctx)
@@ -94,6 +128,10 @@ func TestUpgradePackageDrainsGroupInReverseOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	leaseA2, err := manager.Acquire(ctx, "pkg.test.a")
+	if err != nil {
+		t.Fatal(err)
+	}
 	leaseB, err := manager.Acquire(ctx, "pkg.test.b")
 	if err != nil {
 		t.Fatal(err)
@@ -126,6 +164,7 @@ func TestUpgradePackageDrainsGroupInReverseOrder(t *testing.T) {
 		t.Fatalf("old runtimes stopped before group drain: a=%d b=%d", a1.stops.Load(), b1.stops.Load())
 	}
 	leaseB.Release()
+	leaseA2.Release()
 	leaseA.Release()
 	waitForCount(t, "a stops", func() int64 { return int64(a1.stops.Load()) }, 1)
 	waitForCount(t, "b stops", func() int64 { return int64(b1.stops.Load()) }, 1)
@@ -133,6 +172,44 @@ func TestUpgradePackageDrainsGroupInReverseOrder(t *testing.T) {
 	seq := recorder.snapshot()
 	if len(seq) != 2 || seq[0] != "pkg.test.b" || seq[1] != "pkg.test.a" {
 		t.Fatalf("stop order = %v, want [pkg.test.b pkg.test.a]", seq)
+	}
+}
+
+func TestWarmupLoadsPinnedPackageInTopologyOrder(t *testing.T) {
+	order := &warmupOrder{}
+	provider := &warmupRuntime{
+		fakeRuntime: &fakeRuntime{description: loader.Description{ID: "pkg.warm.provider", Version: "1.0.0", Mode: loader.ModeHosted}},
+		order:       order, id: "provider",
+	}
+	consumer := &warmupRuntime{
+		fakeRuntime: &fakeRuntime{description: loader.Description{ID: "pkg.warm.consumer", Version: "1.0.0", Mode: loader.ModeHosted}},
+		order:       order, id: "consumer",
+	}
+	manager, err := loader.New(&warmupHost{runtimes: map[string]loader.Runtime{
+		"pkg.warm.provider": provider, "pkg.warm.consumer": consumer,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := manager.Register(ctx, loader.Manifest{ID: "pkg.warm.provider", Version: "1.0.0", Mode: loader.ModeHosted, Role: loader.RoleCapability, LockedDigest: digest, Pin: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Register(ctx, loader.Manifest{ID: "pkg.warm.consumer", Version: "1.0.0", Mode: loader.ModeHosted, Role: loader.RoleCapability, LockedDigest: digest, Pin: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.RegisterPackage("pkg.warm", []string{"pkg.warm.provider", "pkg.warm.consumer"}); err != nil {
+		t.Fatal(err)
+	}
+	pinned := manager.Pinned()
+	if err := manager.Warmup(ctx, pinned, 2); err != nil {
+		t.Fatal(err)
+	}
+	order.mu.Lock()
+	got := append([]string(nil), order.ids...)
+	order.mu.Unlock()
+	if len(got) != 2 || got[0] != "provider" || got[1] != "consumer" {
+		t.Fatalf("warmup order = %v, want [provider consumer]", got)
 	}
 }
 

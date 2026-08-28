@@ -158,11 +158,11 @@ func TestInstallRejectsInvalidSource(t *testing.T) {
 			os.Remove(filepath.Join(dir, "app.wasm"))
 		}},
 		{name: "entrypoint escapes source dir", mutate: func(dir string) {
-			manifest := []byte(`{"schema_version":"ailuo.package.v1","id":"demo.pkg","version":"1.0.0","components":[{"id":"core","mode":"hosted","entrypoint":"../outside"}]}`)
+			manifest := []byte(`{"schema_version":"ailuo.package.v2","id":"demo.pkg","version":"1.0.0","components":[{"id":"core","mode":"hosted","entrypoint":"../outside"}]}`)
 			os.WriteFile(filepath.Join(dir, "manifest.json"), manifest, 0o640)
 		}},
 		{name: "entrypoint uses foreign separator", mutate: func(dir string) {
-			os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(`{"schema_version":"ailuo.package.v1","id":"demo.pkg","version":"1.0.0","mode":"hosted","entrypoint":"..\\outside"}`), 0o640)
+			os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(`{"schema_version":"ailuo.package.v2","id":"demo.pkg","version":"1.0.0","components":[{"id":"core","mode":"hosted","entrypoint":"..\\outside"}]}`), 0o640)
 		}},
 	}
 	for _, tc := range cases {

@@ -43,7 +43,7 @@ func TestValidateManifestRejectsInvalidCore(t *testing.T) {
 		name   string
 		mutate func(*packmgr.Manifest)
 	}{
-		{name: "wrong schema version", mutate: func(m *packmgr.Manifest) { m.SchemaVersion = "ailuo.install.v2" }},
+		{name: "wrong schema version", mutate: func(m *packmgr.Manifest) { m.SchemaVersion = "ailuo.package.v1" }},
 		{name: "invalid id", mutate: func(m *packmgr.Manifest) { m.ID = "Campus.Bus" }},
 		{name: "invalid version", mutate: func(m *packmgr.Manifest) { m.Version = "1.2" }},
 		{name: "excessive idle ttl", mutate: func(m *packmgr.Manifest) { m.IdleTTLMS = 30*24*3600*1000 + 1 }},
@@ -181,8 +181,8 @@ func TestValidateProcessSpecRejectsNonLoopback(t *testing.T) {
 }
 
 func TestSchemaVersionConstantIsNeutral(t *testing.T) {
-	if packmgr.SchemaVersion != "ailuo.package.v1" {
-		t.Fatalf("SchemaVersion = %q, want ailuo.package.v1", packmgr.SchemaVersion)
+	if packmgr.SchemaVersion != "ailuo.package.v2" {
+		t.Fatalf("SchemaVersion = %q, want ailuo.package.v2", packmgr.SchemaVersion)
 	}
 }
 
