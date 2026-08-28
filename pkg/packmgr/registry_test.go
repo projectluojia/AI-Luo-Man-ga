@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
@@ -117,7 +118,15 @@ func TestInstallFromReleaseEndToEnd(t *testing.T) {
 func TestInstallFromReleaseRejectsManifestVersionBeforeInstall(t *testing.T) {
 	source := filepath.Join(t.TempDir(), "pkg")
 	writeSourcePackage(t, source, "demo.pkg", "2.0.0", packmgr.ModeHosted, "app.wasm", nil)
-	tarballPath, err := packmgr.Pack(context.Background(), source, t.TempDir())
+	manifestBytes, err := os.ReadFile(filepath.Join(source, "manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest packmgr.Manifest
+	if err := packmgr.DecodeStrictJSON(manifestBytes, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	tarballPath, err := packmgr.PackFromSource(context.Background(), source, t.TempDir(), manifest, manifestBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,10 +190,10 @@ func TestPublishCreatesReleaseAndUploadsAsset(t *testing.T) {
 func TestPublishRemovesReleaseAfterUploadFailure(t *testing.T) {
 	source := filepath.Join(t.TempDir(), "pkg")
 	writeSourcePackage(t, source, "demo.pkg", "1.0.0", packmgr.ModeHosted, "app.wasm", nil)
-	var deleted bool
+	var deleted atomic.Bool
 	client, _, _ := newGitHubTestClient(t, func(writer http.ResponseWriter, request *http.Request) {
 		if request.Method == http.MethodDelete {
-			deleted = true
+			deleted.Store(true)
 			writer.WriteHeader(http.StatusNoContent)
 			return
 		}
@@ -196,7 +205,7 @@ func TestPublishRemovesReleaseAfterUploadFailure(t *testing.T) {
 	if _, err := client.Publish(context.Background(), "owner", "repo", source); err == nil {
 		t.Fatal("Publish upload failure = nil")
 	}
-	if !deleted {
+	if !deleted.Load() {
 		t.Fatal("Publish did not remove the incomplete release")
 	}
 }
