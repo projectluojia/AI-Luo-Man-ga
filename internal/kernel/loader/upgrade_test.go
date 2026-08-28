@@ -3,6 +3,7 @@ package loader_test
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -13,6 +14,38 @@ import (
 type versionedHost struct {
 	runtimes map[string]*fakeRuntime
 	mode     string
+}
+
+type shutdownUpgradeHost struct {
+	runtimes       map[string]loader.Runtime
+	upgradeStarted chan struct{}
+	upgradeRelease chan struct{}
+	closed         atomic.Int32
+}
+
+func (h *shutdownUpgradeHost) Mode() string { return loader.ModeHosted }
+
+func (h *shutdownUpgradeHost) Verify(context.Context, loader.Manifest) error { return nil }
+
+func (h *shutdownUpgradeHost) Load(ctx context.Context, manifest loader.Manifest) (loader.Runtime, error) {
+	if manifest.Version == "2.0.0" {
+		close(h.upgradeStarted)
+		select {
+		case <-h.upgradeRelease:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	runtime, ok := h.runtimes[manifest.Version]
+	if !ok {
+		return nil, loader.ErrUnavailable
+	}
+	return runtime, nil
+}
+
+func (h *shutdownUpgradeHost) Close(context.Context) error {
+	h.closed.Add(1)
+	return nil
 }
 
 func (h *versionedHost) Mode() string {
@@ -194,6 +227,51 @@ func TestManagerTracksRetiredLeasesByRuntimeVersion(t *testing.T) {
 	defer cancel()
 	if err := manager.Shutdown(shutdownCtx); err != nil {
 		t.Fatalf("Shutdown: %v", err)
+	}
+}
+
+func TestShutdownWaitsForUpgradeAndRejectsNewUpgrade(t *testing.T) {
+	v1 := &fakeRuntime{description: loader.Description{ID: "extension.test", Version: "1.0.0", Mode: loader.ModeHosted}}
+	v2 := &fakeRuntime{description: loader.Description{ID: "extension.test", Version: "2.0.0", Mode: loader.ModeHosted}}
+	host := &shutdownUpgradeHost{
+		runtimes:       map[string]loader.Runtime{"1.0.0": v1, "2.0.0": v2},
+		upgradeStarted: make(chan struct{}), upgradeRelease: make(chan struct{}),
+	}
+	manager, err := loader.New(host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	registerSingleComponent(t, manager, "extension.test", "1.0.0")
+	if err := manager.EnsureLoaded(ctx, "extension.test"); err != nil {
+		t.Fatal(err)
+	}
+	upgradeDone := make(chan error, 1)
+	go func() { upgradeDone <- manager.UpgradePackage(ctx, upgradeSingleComponent("extension.test", "2.0.0")) }()
+	<-host.upgradeStarted
+
+	shutdownCtx, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
+	defer cancel()
+	if err := manager.Shutdown(shutdownCtx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Shutdown during upgrade = %v, want deadline", err)
+	}
+	if host.closed.Load() != 0 {
+		t.Fatal("Shutdown closed host while upgrade was active")
+	}
+	close(host.upgradeRelease)
+	if err := <-upgradeDone; err != nil {
+		t.Fatalf("active upgrade = %v", err)
+	}
+	finalCtx, cancelFinal := context.WithTimeout(ctx, time.Second)
+	defer cancelFinal()
+	if err := manager.Shutdown(finalCtx); err != nil {
+		t.Fatalf("final Shutdown: %v", err)
+	}
+	if host.closed.Load() != 1 {
+		t.Fatalf("host close count = %d, want 1", host.closed.Load())
+	}
+	if err := manager.UpgradePackage(ctx, upgradeSingleComponent("extension.test", "3.0.0")); !errors.Is(err, loader.ErrShuttingDown) {
+		t.Fatalf("upgrade after Shutdown = %v, want ErrShuttingDown", err)
 	}
 }
 

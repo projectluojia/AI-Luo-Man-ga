@@ -86,6 +86,10 @@ func (m *Manager) UpgradePackage(ctx context.Context, spec PackageSpec) error {
 	if err := validatePackageSpec(spec); err != nil {
 		return err
 	}
+	if err := m.beginUpgrade(); err != nil {
+		return err
+	}
+	defer m.endUpgrade()
 	m.mu.RLock()
 	group := m.packages[spec.ID]
 	m.mu.RUnlock()
