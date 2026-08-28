@@ -114,11 +114,13 @@ type entry struct {
 	// Upgrade 切换版本时随候选重新绑定。
 	host Host
 
-	mu         sync.Mutex
-	state      string
-	runtime    Runtime
-	inFlight   int
-	transition chan struct{}
+	mu              sync.Mutex
+	upgradeMu       sync.Mutex
+	state           string
+	runtime         Runtime
+	inFlight        int
+	currentInFlight int
+	transition      chan struct{}
 	// retired 是升级后被替换、仍在 drain 的旧版本运行时；在途调用排空后停止。
 	retired []*retiredRuntime
 }
@@ -265,6 +267,8 @@ func (m *Manager) Upgrade(ctx context.Context, candidate Manifest) error {
 	if err != nil {
 		return err
 	}
+	item.upgradeMu.Lock()
+	defer item.upgradeMu.Unlock()
 	item.mu.Lock()
 	if item.state != StateReady || item.runtime == nil {
 		item.mu.Unlock()
@@ -294,18 +298,20 @@ func (m *Manager) Upgrade(ctx context.Context, candidate Manifest) error {
 		_ = loaded.runtime.Stop(stopContext)
 		return ErrUnavailable
 	}
-	retired := &retiredRuntime{runtime: item.runtime, inFlight: item.inFlight, stopped: make(chan struct{})}
+	retired := &retiredRuntime{runtime: item.runtime, inFlight: item.currentInFlight, stopped: make(chan struct{})}
+	stopRetired := retired.inFlight == 0
 	item.retired = append(item.retired, retired)
 	item.manifest = candidate
 	item.host = host
 	item.runtime = loaded.runtime
+	item.currentInFlight = 0
 	item.mu.Unlock()
 	observe.Info(ctx, "运行时已原子升级",
 		observe.StringAttr("runtime_id", candidate.ID),
 		observe.StringAttr("runtime_version", candidate.Version),
 		observe.StringAttr("runtime_mode", candidate.Mode),
 	)
-	if retired.inFlight == 0 {
+	if stopRetired {
 		stopRetiredRuntime(retired)
 	}
 	return nil
@@ -511,6 +517,7 @@ func (m *Manager) Acquire(ctx context.Context, id string) (*Lease, error) {
 		}
 	}
 	item.inFlight++
+	item.currentInFlight++
 	loadedRuntime := item.runtime
 	item.mu.Unlock()
 	m.mu.RUnlock()
@@ -550,7 +557,9 @@ func (l *Lease) Release() {
 		item.mu.Lock()
 		item.inFlight--
 		var retired *retiredRuntime
-		if l.runtime != item.runtime {
+		if l.runtime == item.runtime {
+			item.currentInFlight--
+		} else {
 			for _, candidate := range item.retired {
 				if candidate.runtime == l.runtime {
 					retired = candidate
@@ -781,7 +790,10 @@ func (m *Manager) Shutdown(ctx context.Context) error {
 		// 升级替换的旧版本在 inFlight 归零后已触发停止；此处兜底再次触发
 		// 并等待其完成，避免在途全部释放前 Shutdown 提前返回。
 		for _, old := range retired {
-			if old.inFlight <= 0 {
+			item.mu.Lock()
+			drained := old.inFlight <= 0
+			item.mu.Unlock()
+			if drained {
 				stopRetiredRuntime(old)
 			}
 		}

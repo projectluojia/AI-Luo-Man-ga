@@ -33,6 +33,10 @@ func TestResolveReleasePicksHighestMatchingConstraint(t *testing.T) {
 			http.NotFound(writer, request)
 			return
 		}
+		if request.URL.Query().Get("page") != "1" {
+			_ = json.NewEncoder(writer).Encode([]map[string]any{})
+			return
+		}
 		// GitHub API 按新到旧返回 Release。
 		_ = json.NewEncoder(writer).Encode([]map[string]any{
 			{"tag_name": "v1.2.0", "assets": []map[string]any{
@@ -80,7 +84,11 @@ func TestInstallFromReleaseEndToEnd(t *testing.T) {
 	}))
 	t.Cleanup(assets.Close)
 	// Release 列表端点。
-	client, _, _ := newGitHubTestClient(t, func(writer http.ResponseWriter, _ *http.Request) {
+	client, _, _ := newGitHubTestClient(t, func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Query().Get("page") != "1" {
+			_ = json.NewEncoder(writer).Encode([]map[string]any{})
+			return
+		}
 		_ = json.NewEncoder(writer).Encode([]map[string]any{
 			{"tag_name": "v1.0.0", "assets": []map[string]any{
 				{"name": "demo.pkg-1.0.0.tgz", "browser_download_url": assets.URL + "/demo.pkg-1.0.0.tgz"},
@@ -95,6 +103,41 @@ func TestInstallFromReleaseEndToEnd(t *testing.T) {
 	}
 	if record.Manifest.Version != "1.0.0" {
 		t.Fatalf("installed version = %s, want 1.0.0", record.Manifest.Version)
+	}
+}
+
+func TestInstallFromReleaseRejectsManifestVersionBeforeInstall(t *testing.T) {
+	source := filepath.Join(t.TempDir(), "pkg")
+	writeSourcePackage(t, source, "demo.pkg", "2.0.0", packmgr.ModeHosted, "app.wasm", nil)
+	tarballPath, err := packmgr.Pack(context.Background(), source, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tarballBytes, err := os.ReadFile(tarballPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assets := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		_, _ = writer.Write(tarballBytes)
+	}))
+	t.Cleanup(assets.Close)
+	client, _, _ := newGitHubTestClient(t, func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Query().Get("page") != "1" {
+			_ = json.NewEncoder(writer).Encode([]map[string]any{})
+			return
+		}
+		_ = json.NewEncoder(writer).Encode([]map[string]any{{
+			"tag_name": "v1.0.0", "assets": []map[string]any{{
+				"name": "demo.pkg-1.0.0.tgz", "browser_download_url": assets.URL,
+			}},
+		}})
+	}, http.NotFound)
+	root := t.TempDir()
+	if _, err := packmgr.InstallFromRelease(context.Background(), root, client, "owner", "repo", ""); err == nil {
+		t.Fatal("InstallFromRelease accepted mismatched manifest version")
+	}
+	if _, err := os.Stat(filepath.Join(root, "demo.pkg")); !os.IsNotExist(err) {
+		t.Fatalf("mismatched release mutated install root: %v", err)
 	}
 }
 
@@ -124,6 +167,29 @@ func TestPublishCreatesReleaseAndUploadsAsset(t *testing.T) {
 	}
 	if !strings.Contains(uploadPath, "demo.pkg-1.0.0.tgz") {
 		t.Fatalf("upload path = %s, want asset name demo.pkg-1.0.0.tgz", uploadPath)
+	}
+}
+
+func TestPublishRemovesReleaseAfterUploadFailure(t *testing.T) {
+	source := filepath.Join(t.TempDir(), "pkg")
+	writeSourcePackage(t, source, "demo.pkg", "1.0.0", packmgr.ModeHosted, "app.wasm", nil)
+	var deleted bool
+	client, _, _ := newGitHubTestClient(t, func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method == http.MethodDelete {
+			deleted = true
+			writer.WriteHeader(http.StatusNoContent)
+			return
+		}
+		writer.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(writer).Encode(map[string]any{"id": 7, "html_url": "https://example.com/release"})
+	}, func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusBadGateway)
+	})
+	if _, err := client.Publish(context.Background(), "owner", "repo", source); err == nil {
+		t.Fatal("Publish upload failure = nil")
+	}
+	if !deleted {
+		t.Fatal("Publish did not remove the incomplete release")
 	}
 }
 

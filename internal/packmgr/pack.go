@@ -78,6 +78,7 @@ func unpackTarball(tarball, dest string) error {
 	defer gzipReader.Close()
 	tarReader := tar.NewReader(gzipReader)
 	var total int64
+	entries := 0
 	for {
 		header, err := tarReader.Next()
 		if errors.Is(err, io.EOF) {
@@ -86,7 +87,8 @@ func unpackTarball(tarball, dest string) error {
 		if err != nil {
 			return ErrInvalidFormat
 		}
-		if !filepath.IsLocal(header.Name) {
+		entries++
+		if entries > 4096 || !isPackageEntrypoint(header.Name) {
 			return fmt.Errorf("%w: tarball 条目路径非法 %q", ErrInvalidFormat, header.Name)
 		}
 		if header.Size < 0 || header.Size > MaxArtifactBytes {

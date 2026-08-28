@@ -92,6 +92,9 @@ func ListInstalled(ctx context.Context, root string) ([]InstalledRecord, error) 
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
+		if strings.HasPrefix(entry.Name(), stagePrefix) || strings.HasPrefix(entry.Name(), backupPrefix) {
+			continue
+		}
 		if strings.HasPrefix(entry.Name(), ".") || !entry.IsDir() {
 			return nil, fmt.Errorf("%w: 安装根包含非包目录 %q", ErrInvalidFormat, entry.Name())
 		}

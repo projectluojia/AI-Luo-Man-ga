@@ -140,6 +140,49 @@ func TestManagerUpgradeCandidateFailureKeepsOldVersion(t *testing.T) {
 	}
 }
 
+func TestManagerTracksRetiredLeasesByRuntimeVersion(t *testing.T) {
+	v1 := &fakeRuntime{description: loader.Description{ID: "extension.test", Version: "1.0.0", Mode: loader.ModeHosted}}
+	v2 := &fakeRuntime{description: loader.Description{ID: "extension.test", Version: "2.0.0", Mode: loader.ModeHosted}}
+	v3 := &fakeRuntime{description: loader.Description{ID: "extension.test", Version: "3.0.0", Mode: loader.ModeHosted}}
+	host := &versionedHost{runtimes: map[string]*fakeRuntime{
+		"1.0.0": v1, "2.0.0": v2, "3.0.0": v3,
+	}}
+	manager, err := loader.New(host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := manager.Register(ctx, upgradeManifest("extension.test", "1.0.0")); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.EnsureLoaded(ctx, "extension.test"); err != nil {
+		t.Fatal(err)
+	}
+	leaseV1, err := manager.Acquire(ctx, "extension.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Upgrade(ctx, upgradeManifest("extension.test", "2.0.0")); err != nil {
+		t.Fatal(err)
+	}
+	leaseV2, err := manager.Acquire(ctx, "extension.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Upgrade(ctx, upgradeManifest("extension.test", "3.0.0")); err != nil {
+		t.Fatal(err)
+	}
+	leaseV2.Release()
+	leaseV1.Release()
+	waitForCount(t, "v1 stops", func() int64 { return int64(v1.stops.Load()) }, 1)
+	waitForCount(t, "v2 stops", func() int64 { return int64(v2.stops.Load()) }, 1)
+	shutdownCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := manager.Shutdown(shutdownCtx); err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+}
+
 func TestManagerUpgradeRejectsInvalidTargets(t *testing.T) {
 	v1 := &fakeRuntime{description: loader.Description{ID: "extension.test", Version: "1.0.0", Mode: loader.ModeHosted}}
 	host := &versionedHost{runtimes: map[string]*fakeRuntime{"1.0.0": v1}}

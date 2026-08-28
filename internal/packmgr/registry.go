@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -19,9 +20,8 @@ import (
 // 下载。token 来自 GITHUB_TOKEN/GH_TOKEN（发布与私有仓库需要，公开安装可缺省）。
 
 const (
-	githubAPI      = "https://api.github.com"
-	githubUploads  = "https://uploads.github.com"
-	githubMaxPages = 2 // 解析最多扫描 2 页（200 个 Release），命中即返回
+	githubAPI     = "https://api.github.com"
+	githubUploads = "https://uploads.github.com"
 )
 
 // GitHubClient 是 GitHub Releases 分发后端客户端。
@@ -72,29 +72,55 @@ func (c *GitHubClient) Publish(ctx context.Context, owner, repo, sourceDir strin
 	if err != nil {
 		return "", err
 	}
+	cleanupRelease := func(primary error) error {
+		cleanupContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		if cleanupErr := c.deleteRelease(cleanupContext, owner, repo, release.ID); cleanupErr != nil {
+			return errors.Join(primary, fmt.Errorf("清理失败的 Release: %w", cleanupErr))
+		}
+		return primary
+	}
 	assetName := source.Manifest.ID + "-" + source.Manifest.Version + ".tgz"
 	assetURL := fmt.Sprintf("%s/repos/%s/%s/releases/%d/assets?name=%s",
 		c.UploadBase, owner, repo, release.ID, url.QueryEscape(assetName))
 	file, err := os.Open(tarballPath)
 	if err != nil {
-		return "", err
+		return "", cleanupRelease(err)
 	}
 	defer file.Close()
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, assetURL, file)
 	if err != nil {
-		return "", err
+		return "", cleanupRelease(err)
 	}
 	request.Header.Set("Content-Type", "application/octet-stream")
 	request.Header.Set("Authorization", "Bearer "+c.Token)
 	response, err := c.HTTP.Do(request)
 	if err != nil {
-		return "", err
+		return "", cleanupRelease(err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusCreated {
-		return "", fmt.Errorf("上传资产失败（HTTP %d）", response.StatusCode)
+		return "", cleanupRelease(fmt.Errorf("上传资产失败（HTTP %d）", response.StatusCode))
 	}
 	return release.HTMLURL, nil
+}
+
+func (c *GitHubClient) deleteRelease(ctx context.Context, owner, repo string, releaseID int64) error {
+	request, err := http.NewRequestWithContext(ctx, http.MethodDelete,
+		fmt.Sprintf("%s/repos/%s/%s/releases/%d", c.APIBase, owner, repo, releaseID), nil)
+	if err != nil {
+		return err
+	}
+	request.Header.Set("Authorization", "Bearer "+c.Token)
+	response, err := c.HTTP.Do(request)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusNoContent {
+		return fmt.Errorf("删除 Release 失败（HTTP %d）", response.StatusCode)
+	}
+	return nil
 }
 
 // gitHubRelease 是创建 Release 响应的最小结构。
@@ -147,7 +173,10 @@ func (c *GitHubClient) ResolveRelease(ctx context.Context, owner, repo, constrai
 			return "", "", err
 		}
 	}
-	for page := 1; page <= githubMaxPages; page++ {
+	var bestVersion Version
+	bestURL := ""
+	found := false
+	for page := 1; ; page++ {
 		request, err := http.NewRequestWithContext(ctx, http.MethodGet,
 			fmt.Sprintf("%s/repos/%s/%s/releases?per_page=100&page=%d", c.APIBase, owner, repo, page), nil)
 		if err != nil {
@@ -180,6 +209,9 @@ func (c *GitHubClient) ResolveRelease(ctx context.Context, owner, repo, constrai
 			return "", "", err
 		}
 		response.Body.Close()
+		if len(releases) == 0 {
+			break
+		}
 		for _, release := range releases {
 			version, err := ParseVersion(strings.TrimPrefix(release.TagName, "v"))
 			if err != nil {
@@ -190,10 +222,16 @@ func (c *GitHubClient) ResolveRelease(ctx context.Context, owner, repo, constrai
 			}
 			for _, asset := range release.Assets {
 				if strings.HasSuffix(asset.Name, ".tgz") {
-					return version.String(), asset.BrowserDownloadURL, nil
+					if !found || CompareVersions(version, bestVersion) > 0 {
+						bestVersion, bestURL, found = version, asset.BrowserDownloadURL, true
+					}
+					break
 				}
 			}
 		}
+	}
+	if found {
+		return bestVersion.String(), bestURL, nil
 	}
 	return "", "", fmt.Errorf("仓库 %s/%s 没有满足约束 %q 的发布包", owner, repo, constraint)
 }
@@ -245,22 +283,26 @@ func InstallFromRelease(ctx context.Context, root string, client *GitHubClient, 
 	if err := client.DownloadRelease(ctx, assetURL, tarball); err != nil {
 		return InstalledRecord{}, err
 	}
-	record, err := Install(ctx, root, tarball)
+	sourceDir, cleanup, err := unpackSource(tarball)
 	if err != nil {
 		return InstalledRecord{}, err
 	}
-	if constraint != "" {
-		resolved, err := ParseVersion(version)
-		if err != nil {
-			return InstalledRecord{}, err
-		}
-		installed, err := ParseVersion(record.Manifest.Version)
-		if err != nil {
-			return InstalledRecord{}, err
-		}
-		if CompareVersions(resolved, installed) != 0 {
-			return InstalledRecord{}, fmt.Errorf("发布包版本 %s 与解析版本 %s 不一致", record.Manifest.Version, version)
-		}
+	defer cleanup()
+	source, err := readSourceManifest(sourceDir)
+	if err != nil {
+		return InstalledRecord{}, err
+	}
+	resolved, err := ParseVersion(version)
+	if err != nil {
+		return InstalledRecord{}, err
+	}
+	manifestVersion, err := ParseVersion(source.Manifest.Version)
+	if err != nil || CompareVersions(resolved, manifestVersion) != 0 {
+		return InstalledRecord{}, fmt.Errorf("发布包版本 %s 与解析版本 %s 不一致", source.Manifest.Version, version)
+	}
+	record, err := Install(ctx, root, sourceDir)
+	if err != nil {
+		return InstalledRecord{}, err
 	}
 	return record, nil
 }

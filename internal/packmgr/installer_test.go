@@ -101,6 +101,43 @@ func TestInstallResolvesDependenciesAgainstInstalled(t *testing.T) {
 	}
 }
 
+func TestInstallIsolatedWritesProcessSpec(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(t.TempDir(), "isolated")
+	writeSourcePackage(t, source, "demo.isolated", "1.0.0", packmgr.ModeIsolated, "app", nil)
+	record, err := packmgr.Install(context.Background(), root, source)
+	if err != nil {
+		t.Fatalf("Install isolated: %v", err)
+	}
+	if record.Process == nil || record.Process.Path != filepath.Join(root, "demo.isolated", "app") {
+		t.Fatalf("process = %+v, want installed artifact path", record.Process)
+	}
+}
+
+func TestInstallRejectsBreakingReverseDependency(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	depV1 := filepath.Join(t.TempDir(), "dep-v1")
+	writeSourcePackage(t, depV1, "demo.dep", "1.0.0", packmgr.ModeHosted, "dep.wasm", nil)
+	if _, err := packmgr.Install(ctx, root, depV1); err != nil {
+		t.Fatal(err)
+	}
+	app := filepath.Join(t.TempDir(), "app")
+	writeSourcePackage(t, app, "demo.app", "1.0.0", packmgr.ModeHosted, "app.wasm",
+		[]packmgr.Dependency{{ID: "demo.dep", Constraint: "^1.0.0"}})
+	if _, err := packmgr.Install(ctx, root, app); err != nil {
+		t.Fatal(err)
+	}
+	depV2 := filepath.Join(t.TempDir(), "dep-v2")
+	writeSourcePackage(t, depV2, "demo.dep", "2.0.0", packmgr.ModeHosted, "dep.wasm", nil)
+	if _, err := packmgr.Install(ctx, root, depV2); err == nil {
+		t.Fatal("Install breaking dependency = nil")
+	}
+	if err := packmgr.Uninstall(ctx, root, "demo.dep"); err == nil {
+		t.Fatal("Uninstall depended-on package = nil")
+	}
+}
+
 func TestInstallRejectsInvalidSource(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
@@ -118,6 +155,9 @@ func TestInstallRejectsInvalidSource(t *testing.T) {
 		}},
 		{name: "entrypoint escapes source dir", mutate: func(dir string) {
 			os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(`{"schema_version":"ailuo.package.v1","id":"demo.pkg","version":"1.0.0","mode":"hosted","entrypoint":"../outside"}`), 0o640)
+		}},
+		{name: "entrypoint uses foreign separator", mutate: func(dir string) {
+			os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(`{"schema_version":"ailuo.package.v1","id":"demo.pkg","version":"1.0.0","mode":"hosted","entrypoint":"..\\outside"}`), 0o640)
 		}},
 	}
 	for _, tc := range cases {

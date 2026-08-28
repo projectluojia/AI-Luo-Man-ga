@@ -3,8 +3,7 @@ name: 包发布流水线（可复用）
 # npm 式包发布流水线：构建 → 版本一致性 → pack（tarball）→ 冒烟安装验证 →
 # （tag 发布时）附 GitHub Release。包作者仓库通过
 # `uses: projectluojia/AI-Luo-Man-ga/.github/workflows/package-publish.yml@ref`
-# 复用；CLI 现阶段由本仓库根模块构建（packmgr 尚在 internal/），待 CLI 独立
-# 发布后改为下载发布二进制。
+# 复用；CLI 从本仓库固定提交构建，不能把调用方源码当作 CLI 仓库。
 
 on:
   workflow_call:
@@ -51,23 +50,34 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: projectluojia/AI-Luo-Man-ga
+          ref: 59a056d95bee0e6f0f41484b1753892f514edb70
+          path: .ailuo-cli
+          persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: go.mod
+          go-version-file: .ailuo-cli/go.mod
           cache: true
       - name: 构建 ailuo CLI
         run: go build -o ailuo .
+        working-directory: .ailuo-cli
       - name: 构建包工件
         if: ${{ inputs.build-command != '' }}
-        run: ${{ inputs.build-command }}
+        env:
+          BUILD_COMMAND: ${{ inputs.build-command }}
+        run: bash -euo pipefail -c "$BUILD_COMMAND"
         working-directory: ${{ inputs.package-dir }}
       - name: 校验清单版本与 git tag 一致
         if: ${{ inputs.tag-required }}
         shell: bash
+        env:
+          PACKAGE_DIR: ${{ inputs.package-dir }}
         run: |
           tag="${GITHUB_REF#refs/tags/}"
           tag="${tag#v}"
-          version="$(jq -r .version "${{ inputs.package-dir }}/manifest.json")"
+          version="$(jq -r .version "$PACKAGE_DIR/manifest.json")"
           test "$tag" = "$version" || {
             echo "git tag $tag 与 manifest.version $version 不一致" >&2
             exit 1
@@ -75,15 +85,17 @@ jobs:
       - name: 打包并冒烟安装验证
         id: pack
         shell: bash
+        env:
+          PACKAGE_DIR: ${{ inputs.package-dir }}
         run: |
           set -euo pipefail
-          id="$(jq -r .id "${{ inputs.package-dir }}/manifest.json")"
-          version="$(jq -r .version "${{ inputs.package-dir }}/manifest.json")"
-          ./ailuo pack "${{ inputs.package-dir }}" --out dist
+          id="$(jq -r .id "$PACKAGE_DIR/manifest.json")"
+          version="$(jq -r .version "$PACKAGE_DIR/manifest.json")"
+          ./.ailuo-cli/ailuo pack "$PACKAGE_DIR" dist
           tarball="$(ls dist/*.tgz)"
           # 发布物必须可安装并可列出（真实闭环，不信任"打包成功"本身）。
-          ./ailuo install "$tarball" --root "$RUNNER_TEMP/pkgroot"
-          ./ailuo list --root "$RUNNER_TEMP/pkgroot" | grep -q "^${id}@${version}"
+          ./.ailuo-cli/ailuo install --root "$RUNNER_TEMP/pkgroot" "$tarball"
+          ./.ailuo-cli/ailuo list --root "$RUNNER_TEMP/pkgroot" | grep -q "^${id}@${version}"
           echo "package-id=$id" >> "$GITHUB_OUTPUT"
           echo "package-version=$version" >> "$GITHUB_OUTPUT"
           echo "tarball=$tarball" >> "$GITHUB_OUTPUT"
@@ -91,15 +103,19 @@ jobs:
         if: ${{ inputs.tag-required }}
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: ./ailuo publish "${{ inputs.package-dir }}" --repo "${{ github.repository }}"
+          PACKAGE_DIR: ${{ inputs.package-dir }}
+          REPOSITORY: ${{ github.repository }}
+        run: ./.ailuo-cli/ailuo publish --repo "$REPOSITORY" "$PACKAGE_DIR"
       - name: 从注册表安装验证（发布物真实闭环）
         if: ${{ inputs.tag-required }}
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          PACKAGE_DIR: ${{ inputs.package-dir }}
+          REPOSITORY: ${{ github.repository }}
         shell: bash
         run: |
           set -euo pipefail
-          id="$(jq -r .id "${{ inputs.package-dir }}/manifest.json")"
-          version="$(jq -r .version "${{ inputs.package-dir }}/manifest.json")"
-          ./ailuo install --root "$RUNNER_TEMP/pkgroot-registry" "${{ github.repository }}@$version"
-          ./ailuo list --root "$RUNNER_TEMP/pkgroot-registry" | grep -q "^${id}@${version}"
+          id="$(jq -r .id "$PACKAGE_DIR/manifest.json")"
+          version="$(jq -r .version "$PACKAGE_DIR/manifest.json")"
+          ./.ailuo-cli/ailuo install --root "$RUNNER_TEMP/pkgroot-registry" "$REPOSITORY@$version"
+          ./.ailuo-cli/ailuo list --root "$RUNNER_TEMP/pkgroot-registry" | grep -q "^${id}@${version}"

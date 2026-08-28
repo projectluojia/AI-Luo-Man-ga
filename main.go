@@ -195,7 +195,7 @@ func runMaintenanceCommand(arguments []string, output io.Writer) (bool, error) {
 		_, err = fmt.Fprintf(output, "身份解绑完成：app=%s 平台=%s space=%s platform_user=%s\n", *appID, *platform, *space, *platformUser)
 		return true, err
 	case "install", "upgrade", "uninstall", "list", "pack", "publish":
-		return runPackageCommand(arguments, output)
+		return runPackageCommand(ctx, arguments, output)
 	default:
 		return true, fmt.Errorf("configuration error: unknown command")
 	}
@@ -203,7 +203,7 @@ func runMaintenanceCommand(arguments []string, output io.Writer) (bool, error) {
 
 // runPackageCommand 执行包管理 CLI：install 支持本地目录/tarball/GitHub
 // Release 源（owner/repo[@约束]），upgrade/uninstall/list/pack/publish 见各分支。
-func runPackageCommand(arguments []string, output io.Writer) (bool, error) {
+func runPackageCommand(parent context.Context, arguments []string, output io.Writer) (bool, error) {
 	command := arguments[0]
 	flags := flag.NewFlagSet(command, flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
@@ -215,7 +215,7 @@ func runPackageCommand(arguments []string, output io.Writer) (bool, error) {
 	if *root == "" && command != "pack" && command != "publish" {
 		return true, fmt.Errorf("configuration error: %s requires --root 或 AILUO_RUNTIME_INSTALL_ROOT", command)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	ctx, cancel := context.WithTimeout(parent, 2*time.Minute)
 	defer cancel()
 	switch command {
 	case "install":
@@ -264,9 +264,6 @@ func runPackageCommand(arguments []string, output io.Writer) (bool, error) {
 			return true, fmt.Errorf("configuration error: pack requires source package directory [and optional output directory]")
 		}
 		outputDir := "."
-		if *root != "" {
-			outputDir = *root
-		}
 		if flags.NArg() == 2 {
 			outputDir = flags.Arg(1)
 		}

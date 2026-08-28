@@ -13,7 +13,7 @@ func TestValidateManifestAcceptsNeutralCore(t *testing.T) {
 	extensions := json.RawMessage(`{"tools":[],"service":{},"capabilities":[]}`)
 	manifest := packmgr.Manifest{
 		SchemaVersion: packmgr.SchemaVersion, ID: "campus.bus", Version: "1.2.3",
-		Mode: packmgr.ModeHosted, Pin: true, IdleTTLMS: 1000, Extensions: extensions,
+		Mode: packmgr.ModeHosted, Entrypoint: "campus.wasm", Pin: true, IdleTTLMS: 1000, Extensions: extensions,
 		HostFunctions: []packmgr.HostedFunctionDecl{{Module: "ailuo.bus", Name: "query", Purpose: "权威存储查询"}},
 		Storage: &packmgr.Storage{
 			Namespace: "campus/bus", SchemaVersion: 1,

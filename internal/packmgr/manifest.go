@@ -1,6 +1,8 @@
 package packmgr
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net"
 	"path/filepath"
@@ -76,6 +78,9 @@ func ValidateManifest(manifest Manifest) error {
 	if manifest.Mode != ModeHosted && manifest.Mode != ModeIsolated {
 		return ErrInvalidFormat
 	}
+	if !isPackageEntrypoint(manifest.Entrypoint) {
+		return ErrInvalidFormat
+	}
 	if manifest.IdleTTLMS > 2592000000 { // 30 天
 		return ErrInvalidFormat
 	}
@@ -111,13 +116,26 @@ func ValidateLock(lock Lock) error {
 	if lock.Mode != ModeHosted && lock.Mode != ModeIsolated {
 		return ErrInvalidFormat
 	}
-	if len(lock.ManifestSHA256) != 64 || len(lock.ArtifactSHA256) != 64 {
+	if !isSHA256Hex(lock.ManifestSHA256) || !isSHA256Hex(lock.ArtifactSHA256) {
 		return ErrInvalidFormat
 	}
 	if !filepath.IsAbs(lock.ArtifactPath) || filepath.Clean(lock.ArtifactPath) != lock.ArtifactPath {
 		return ErrInvalidFormat
 	}
 	return nil
+}
+
+// isPackageEntrypoint 只接受包根目录下的普通文件名。包格式明确采用扁平工件
+// 布局，不能依赖运行验证器所在平台解释路径分隔符或盘符。
+func isPackageEntrypoint(value string) bool {
+	return value != "" && value != "." && value != ".." &&
+		!strings.ContainsAny(value, `/\\:`) && !strings.ContainsRune(value, '\x00')
+}
+
+// isSHA256Hex 判断摘要是否恰好是 32 字节的小写或大写十六进制值。
+func isSHA256Hex(value string) bool {
+	decoded, err := hex.DecodeString(value)
+	return err == nil && len(decoded) == sha256.Size
 }
 
 // ValidateProcessSpec 校验进程执行规格的形状：绝对路径、本地地址、参数与
