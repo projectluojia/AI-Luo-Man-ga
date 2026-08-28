@@ -30,19 +30,73 @@ const goClient = `import (
 	"time"
 )
 
+// HeaderProvider 在发送请求前注入认证材料；实现不得把凭据写入日志。
+type HeaderProvider func(context.Context, *http.Request) error
+
+// ClientOption 配置消费方客户端。
+type ClientOption func(*Client)
+
+// CallOption 配置一次 Capability 调用的治理字段。
+type CallOption func(*callOptions)
+
+type callOptions struct {
+	IdempotencyKey string
+	ConfirmationID string
+}
+
+// WithHeaderProvider 注入认证或其他受信请求头。
+func WithHeaderProvider(provider HeaderProvider) ClientOption {
+	return func(client *Client) { client.headerProvider = provider }
+}
+
+// WithIdempotencyKey 为写入或外部副作用调用设置幂等键。
+func WithIdempotencyKey(value string) CallOption {
+	return func(options *callOptions) { options.IdempotencyKey = value }
+}
+
+// WithConfirmationID 为需要确认的调用设置已批准确认标识。
+func WithConfirmationID(value string) CallOption {
+	return func(options *callOptions) { options.ConfirmationID = value }
+}
+
+// Error 是 invoke 端点返回的稳定结构化错误。
+type Error struct {
+	Status    int
+	Code      string
+	Message   string
+	Retryable bool
+}
+
+func (e *Error) Error() string {
+	return fmt.Sprintf("ailuo invoke failed: HTTP %d %s: %s", e.Status, e.Code, e.Message)
+}
+
 // Client 调用内核 capability，经 invoke 端点（POST /api/v1/capabilities/{id}/invoke）。
 type Client struct {
-	baseURL string
-	http    *http.Client
+	baseURL        string
+	http           *http.Client
+	headerProvider HeaderProvider
 }
 
 // NewClient 构造消费方客户端。
-func NewClient(baseURL string) *Client {
-	return &Client{baseURL: strings.TrimRight(baseURL, "/"), http: &http.Client{Timeout: 30 * time.Second}}
+func NewClient(baseURL string, options ...ClientOption) *Client {
+	client := &Client{baseURL: strings.TrimRight(baseURL, "/"), http: &http.Client{Timeout: 30 * time.Second}}
+	for _, option := range options {
+		if option != nil {
+			option(client)
+		}
+	}
+	return client
 }
 
 // invoke 是最小传输信封：{"input": <payload>} → {"result": <value>}。
-func (c *Client) invoke(ctx context.Context, capabilityID string, input any) (json.RawMessage, error) {
+func (c *Client) invoke(ctx context.Context, capabilityID string, input any, options ...CallOption) (json.RawMessage, error) {
+	call := callOptions{}
+	for _, option := range options {
+		if option != nil {
+			option(&call)
+		}
+	}
 	payload, err := json.Marshal(struct {
 		Input any {Q}json:"input"{Q}
 	}{Input: input})
@@ -55,6 +109,17 @@ func (c *Client) invoke(ctx context.Context, capabilityID string, input any) (js
 		return nil, err
 	}
 	request.Header.Set("Content-Type", "application/json")
+	if c.headerProvider != nil {
+		if err := c.headerProvider(ctx, request); err != nil {
+			return nil, err
+		}
+	}
+	if call.IdempotencyKey != "" {
+		request.Header.Set("Idempotency-Key", call.IdempotencyKey)
+	}
+	if call.ConfirmationID != "" {
+		request.Header.Set("X-Confirmation-ID", call.ConfirmationID)
+	}
 	response, err := c.http.Do(request)
 	if err != nil {
 		return nil, err
@@ -66,11 +131,14 @@ func (c *Client) invoke(ctx context.Context, capabilityID string, input any) (js
 	}
 	if response.StatusCode != http.StatusOK {
 		var apiError struct {
-			Code    string {Q}json:"code"{Q}
-			Message string {Q}json:"message"{Q}
+			Code      string {Q}json:"code"{Q}
+			Message   string {Q}json:"message"{Q}
+			Retryable bool   {Q}json:"retryable"{Q}
 		}
-		_ = json.Unmarshal(body, &apiError)
-		return nil, fmt.Errorf("ailuo invoke %s: %s: %s", capabilityID, response.Status, apiError.Message)
+		if err := json.Unmarshal(body, &apiError); err != nil || apiError.Code == "" {
+			return nil, &Error{Status: response.StatusCode, Code: "invalid_response", Message: "服务端错误响应格式无效"}
+		}
+		return nil, &Error{Status: response.StatusCode, Code: apiError.Code, Message: apiError.Message, Retryable: apiError.Retryable}
 	}
 	var envelope struct {
 		Result json.RawMessage {Q}json:"result"{Q}
@@ -96,8 +164,8 @@ func goCapability(builder *strings.Builder, capability capabilitySpec, model *Ty
 	method := goMethodName(capability.ID, packageID)
 	fmt.Fprintf(builder, "// %s 调用 %s。\n", method, capability.ID)
 	// 根 schema 可能是标量（具名类型的 Name 才非空），故经 goFieldType 映射。
-	fmt.Fprintf(builder, "func (c *Client) %s(ctx context.Context, input %s) (json.RawMessage, error) {\n", method, goFieldType(model, true))
-	fmt.Fprintf(builder, "\treturn c.invoke(ctx, %q, input)\n}\n\n", capability.ID)
+	fmt.Fprintf(builder, "func (c *Client) %s(ctx context.Context, input %s, options ...CallOption) (json.RawMessage, error) {\n", method, goFieldType(model, true))
+	fmt.Fprintf(builder, "\treturn c.invoke(ctx, %q, input, options...)\n}\n\n", capability.ID)
 }
 
 // goEnumType 渲染 enum 具名类型与常量（enum 基类型只有 string，见 schema.go）。
@@ -141,7 +209,11 @@ func goFieldType(model *TypeModel, required bool) string {
 	case KindEnum, KindObject:
 		base = model.Name
 	case KindArray:
-		return "[]" + goFieldType(model.Elem, true)
+		base = "[]" + goFieldType(model.Elem, true)
+		if !required {
+			return "*" + base
+		}
+		return base
 	}
 	if !required {
 		return "*" + base

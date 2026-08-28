@@ -56,7 +56,7 @@ from datetime import datetime, timedelta
 sys.path.insert(0, sys.argv[1])
 from campus import Client, BusJourneysSearchInput, bus_journeys_search
 
-client = Client(sys.argv[2])
+client = Client(sys.argv[2], headers={"Authorization": "Bearer sdk-test"})
 result = bus_journeys_search(client, BusJourneysSearchInput(
     origin_stop_id="stop-a",
     destination_stop_id="stop-b",
@@ -102,7 +102,7 @@ func TestGeneratedTypeScriptSDKInvokesRealCapability(t *testing.T) {
 	main := `import { CampusClient } from "./campus/client";
 
 async function main(): Promise<void> {
-  const client = new CampusClient(process.argv[2]);
+  const client = new CampusClient(process.argv[2], { headers: { "Authorization": "Bearer sdk-test" } });
   const result = await client.busJourneysSearch({
     origin_stop_id: "stop-a",
     destination_stop_id: "stop-b",

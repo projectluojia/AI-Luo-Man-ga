@@ -133,6 +133,37 @@ func (h *Hub) Intake(ctx context.Context, message InboundMessage) (IntakeResult,
 	}, nil
 }
 
+// ResolveIdentity 解析并校验当前 App 的外部身份，返回包含成员关系和生效权限
+// 的受治理身份快照。它供非消息入口（例如 Capability invoke）复用同一身份边界。
+func (h *Hub) ResolveIdentity(ctx context.Context, appID, platform, platformSpaceID, platformUserID string) (identity.IdentityContext, error) {
+	if h == nil || appID != h.appID {
+		return identity.IdentityContext{}, ErrAppMismatch
+	}
+	resolved, err := h.identities.ResolveIdentity(ctx, appID, platform, platformSpaceID, platformUserID)
+	if err != nil {
+		return identity.IdentityContext{}, fmt.Errorf("resolve platform identity: %w", err)
+	}
+	if err := ValidateIdentityContext(h.appID, resolved); err != nil {
+		return identity.IdentityContext{}, err
+	}
+	return resolved, nil
+}
+
+// ValidateIdentityContext 校验身份解析器返回的 App 边界与成员关系。
+// 非消息入口必须复用该校验，不能把外部平台标识直接当作内部用户。
+func ValidateIdentityContext(appID string, resolved identity.IdentityContext) error {
+	if resolved.AppID != appID || !session.ValidStableID(resolved.UserID) {
+		return ErrIdentityContextInvalid
+	}
+	if resolved.Membership == nil {
+		return ErrMembershipRequired
+	}
+	if resolved.Membership.AppID != appID || resolved.Membership.UserID != resolved.UserID {
+		return ErrIdentityContextInvalid
+	}
+	return nil
+}
+
 func (h *Hub) validate(message InboundMessage) error {
 	if message.AppID != h.appID {
 		return fmt.Errorf("%w: app_id=%q", ErrAppMismatch, message.AppID)
@@ -163,18 +194,9 @@ func (h *Hub) validate(message InboundMessage) error {
 }
 
 func (h *Hub) resolveUser(ctx context.Context, message InboundMessage) (string, error) {
-	resolved, err := h.identities.ResolveIdentity(ctx, message.AppID, message.Platform, message.PlatformSpaceID, message.PlatformUserID)
+	resolved, err := h.ResolveIdentity(ctx, message.AppID, message.Platform, message.PlatformSpaceID, message.PlatformUserID)
 	if err != nil {
-		return "", fmt.Errorf("resolve platform identity: %w", err)
-	}
-	if resolved.AppID != h.appID || !session.ValidStableID(resolved.UserID) {
-		return "", ErrIdentityContextInvalid
-	}
-	if resolved.Membership == nil {
-		return "", ErrMembershipRequired
-	}
-	if resolved.Membership.AppID != h.appID || resolved.Membership.UserID != resolved.UserID {
-		return "", ErrIdentityContextInvalid
+		return "", err
 	}
 	return resolved.UserID, nil
 }

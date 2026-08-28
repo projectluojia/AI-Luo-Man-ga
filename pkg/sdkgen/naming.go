@@ -28,6 +28,32 @@ func validateCapabilityID(id string) error {
 	return nil
 }
 
+func validateDerivedNames(capabilities []capabilitySpec, packageID string) error {
+	seenTypes := make(map[string]string, len(capabilities))
+	seenGoMethods := make(map[string]string, len(capabilities))
+	seenPythonMethods := make(map[string]string, len(capabilities))
+	seenTSMethods := make(map[string]string, len(capabilities))
+	for _, capability := range capabilities {
+		for _, names := range []struct {
+			kind string
+			name string
+			seen map[string]string
+		}{
+			{kind: "type", name: typeName(capability.ID, packageID), seen: seenTypes},
+			{kind: "Go method", name: goMethodName(capability.ID, packageID), seen: seenGoMethods},
+			{kind: "Python method", name: pythonMethodName(capability.ID, packageID), seen: seenPythonMethods},
+			{kind: "TypeScript method", name: tsMethodName(capability.ID, packageID), seen: seenTSMethods},
+		} {
+			if previous, exists := names.seen[names.name]; exists {
+				return fmt.Errorf("sdkgen: %s 名称 %q 在 capability %q 与 %q 间冲突",
+					names.kind, names.name, previous, capability.ID)
+			}
+			names.seen[names.name] = capability.ID
+		}
+	}
+	return nil
+}
+
 // identifierPattern 是 Python/TS 可直接作标识符的字段名形状。JSON key 允许
 // "user-name"、"2fa"、"a b"，但它们作 dataclass 属性/interface 属性都是语法
 // 错误，生成阶段就必须拒绝。

@@ -3,6 +3,8 @@ package web_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
@@ -21,6 +23,17 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/pkg/bus"
 	"github.com/projectluojia/AI-Luo-Man-ga/pkg/sdkgen"
 )
+
+type sdkTestWebAuthenticator struct{}
+
+func (sdkTestWebAuthenticator) Authenticate(request *http.Request) (web.AuthenticatedWebIdentity, error) {
+	if request.Header.Get("Authorization") != "Bearer sdk-test" {
+		return web.AuthenticatedWebIdentity{}, errors.New("missing test authorization")
+	}
+	return web.AuthenticatedWebIdentity{
+		PlatformSpaceID: "web", PlatformUserID: "web-test-subject", PlatformSessionID: "web-test-session",
+	}, nil
+}
 
 // TestGeneratedGoSDKInvokesRealCapability 是端到端真实链路：
 // 真实 ailuo.toml 契约 → sdkgen 生成 Go SDK → 临时模块编译运行 →
@@ -54,6 +67,7 @@ func TestGeneratedGoSDKInvokesRealCapability(t *testing.T) {
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"time"
 
@@ -61,7 +75,10 @@ import (
 )
 
 func main() {
-	client := campus.NewClient(os.Args[1])
+	client := campus.NewClient(os.Args[1], campus.WithHeaderProvider(func(_ context.Context, request *http.Request) error {
+		request.Header.Set("Authorization", "Bearer sdk-test")
+		return nil
+	}))
 	// depart_after 传过去时间，确保覆盖 store 中所有行程
 	// （guest 对缺省值会归一化为 now，过滤掉更早的行程）。
 	departAfter := time.Now().Add(-400 * 24 * time.Hour)
@@ -112,6 +129,7 @@ func TestInvokeEndpointRejectsUnknownCapability(t *testing.T) {
 		context.Background(), &fakeOrchestrator{}, nil, nil,
 		reg, policy, campus.AppID, nil,
 		web.WithWebAuthenticator(testWebAuthenticator{}),
+		web.WithIdentityResolver(testWebResolver{}),
 		web.WithDispatcher(dispatcher),
 	)
 	response := invokeRequest(t, server.Handler(), "campus.bus.missing", `{"input":{}}`)
@@ -167,7 +185,8 @@ func newCampusE2E(t *testing.T) (*httptest.Server, json.RawMessage) {
 	server := web.NewServer(
 		context.Background(), &fakeOrchestrator{}, nil, nil,
 		reg, policy, campus.AppID, nil,
-		web.WithWebAuthenticator(testWebAuthenticator{}),
+		web.WithWebAuthenticator(sdkTestWebAuthenticator{}),
+		web.WithIdentityResolver(testWebResolver{}),
 		web.WithDispatcher(dispatcher),
 	)
 	testServer := httptest.NewServer(server.Handler())

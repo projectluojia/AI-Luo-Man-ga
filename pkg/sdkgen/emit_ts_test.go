@@ -23,11 +23,14 @@ func TestGenerateTypeScriptShape(t *testing.T) {
 		"  destination_stop_id: string;",
 		"  depart_after?: Date;",
 		"export class CampusClient {",
-		"private async invoke(capabilityId: string, input: unknown): Promise<unknown> {",
+		"export class InvokeError extends Error",
+		"headers.set(\"Idempotency-Key\", options.idempotencyKey);",
+		"headers.set(\"X-Confirmation-ID\", options.confirmationId);",
+		"private async invoke(capabilityId: string, input: unknown, options?: CallOptions): Promise<unknown> {",
 		"/api/v1/capabilities/${capabilityId}/invoke",
-		"busStopsSearch(input: BusStopsSearchInput): Promise<unknown> {",
-		`return this.invoke("campus.bus.stops.search", input);`,
-		"busJourneysSearch(input: BusJourneysSearchInput): Promise<unknown> {",
+		"busStopsSearch(input: BusStopsSearchInput, options?: CallOptions): Promise<unknown> {",
+		`return this.invoke("campus.bus.stops.search", input, options);`,
+		"busJourneysSearch(input: BusJourneysSearchInput, options?: CallOptions): Promise<unknown> {",
 	}
 	for _, want := range required {
 		if !strings.Contains(code, want) {
