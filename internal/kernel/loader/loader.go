@@ -769,10 +769,6 @@ func (m *Manager) Shutdown(ctx context.Context) error {
 		items = append(items, item)
 	}
 	m.mu.Unlock()
-	if upgradeDone == nil {
-		upgradeDone = make(chan struct{})
-		close(upgradeDone)
-	}
 	select {
 	case <-upgradeDone:
 	case <-ctx.Done():

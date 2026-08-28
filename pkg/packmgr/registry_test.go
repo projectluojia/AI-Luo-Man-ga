@@ -27,6 +27,19 @@ func newGitHubTestClient(t *testing.T, apiHandler, uploadsHandler http.HandlerFu
 	return client, api, uploads
 }
 
+func readSourceManifest(t *testing.T, source string) (packmgr.Manifest, []byte) {
+	t.Helper()
+	manifestBytes, err := os.ReadFile(filepath.Join(source, "manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest packmgr.Manifest
+	if err := packmgr.DecodeStrictJSON(manifestBytes, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	return manifest, manifestBytes
+}
+
 func TestResolveReleasePicksHighestMatchingConstraint(t *testing.T) {
 	ctx := context.Background()
 	client, _, _ := newGitHubTestClient(t, func(writer http.ResponseWriter, request *http.Request) {
@@ -144,6 +157,20 @@ func TestResolveReleaseScansAllPages(t *testing.T) {
 	}
 }
 
+func TestResolveReleaseBoundsPagination(t *testing.T) {
+	var pages atomic.Int32
+	client, _, _ := newGitHubTestClient(t, func(writer http.ResponseWriter, _ *http.Request) {
+		pages.Add(1)
+		_ = json.NewEncoder(writer).Encode([]map[string]any{{"tag_name": "not-semver"}})
+	}, http.NotFound)
+	if _, _, err := client.ResolveRelease(context.Background(), "owner", "repo", ""); err == nil {
+		t.Fatal("ResolveRelease with endless non-semver pages = nil, want error")
+	}
+	if pages.Load() != 100 {
+		t.Fatalf("ResolveRelease pages = %d, want bounded scan of 100 pages", pages.Load())
+	}
+}
+
 func TestInstallFromReleaseEndToEnd(t *testing.T) {
 	// 先打一个真实 tarball，让 mock 服务器直接喂给客户端。
 	source := filepath.Join(t.TempDir(), "pkg")
@@ -238,6 +265,7 @@ func TestInstallFromReleaseRejectsManifestVersionBeforeInstall(t *testing.T) {
 func TestPublishCreatesReleaseAndUploadsAsset(t *testing.T) {
 	source := filepath.Join(t.TempDir(), "pkg")
 	writeSourcePackage(t, source, "demo.pkg", "1.0.0", packmgr.ModeHosted, "app.wasm", nil)
+	manifest, manifestBytes := readSourceManifest(t, source)
 
 	var uploadPath string
 	client, _, _ := newGitHubTestClient(t, func(writer http.ResponseWriter, request *http.Request) {
@@ -252,9 +280,9 @@ func TestPublishCreatesReleaseAndUploadsAsset(t *testing.T) {
 		writer.WriteHeader(http.StatusCreated)
 	})
 
-	htmlURL, err := client.Publish(context.Background(), "owner", "repo", source)
+	htmlURL, err := client.PublishFromSource(context.Background(), "owner", "repo", source, manifest, manifestBytes)
 	if err != nil {
-		t.Fatalf("Publish: %v", err)
+		t.Fatalf("PublishFromSource: %v", err)
 	}
 	if htmlURL != "https://github.com/owner/repo/releases/tag/v1.0.0" {
 		t.Fatalf("html url = %s", htmlURL)
@@ -267,14 +295,8 @@ func TestPublishCreatesReleaseAndUploadsAsset(t *testing.T) {
 func TestPublishTarballCreatesReleaseAndUploadsAsset(t *testing.T) {
 	source := filepath.Join(t.TempDir(), "pkg")
 	writeSourcePackage(t, source, "demo.pkg", "1.0.0", packmgr.ModeHosted, "app.wasm", []packmgr.Dependency{{ID: "dependency.pkg", Constraint: "^1.0.0"}})
-	manifestBytes, err := os.ReadFile(filepath.Join(source, "manifest.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var manifest packmgr.Manifest
-	if err := json.Unmarshal(manifestBytes, &manifest); err != nil {
-		t.Fatal(err)
-	}
+	manifest, manifestBytes := readSourceManifest(t, source)
+	var err error
 	tarball, err := packmgr.PackFromSource(context.Background(), source, t.TempDir(), manifest, manifestBytes)
 	if err != nil {
 		t.Fatal(err)
@@ -302,6 +324,7 @@ func TestPublishTarballCreatesReleaseAndUploadsAsset(t *testing.T) {
 func TestPublishRemovesReleaseAfterUploadFailure(t *testing.T) {
 	source := filepath.Join(t.TempDir(), "pkg")
 	writeSourcePackage(t, source, "demo.pkg", "1.0.0", packmgr.ModeHosted, "app.wasm", nil)
+	manifest, manifestBytes := readSourceManifest(t, source)
 	var deleted atomic.Bool
 	client, _, _ := newGitHubTestClient(t, func(writer http.ResponseWriter, request *http.Request) {
 		switch request.Method {
@@ -318,7 +341,7 @@ func TestPublishRemovesReleaseAfterUploadFailure(t *testing.T) {
 	}, func(writer http.ResponseWriter, _ *http.Request) {
 		writer.WriteHeader(http.StatusInternalServerError)
 	})
-	if _, err := client.Publish(context.Background(), "owner", "repo", source); err == nil {
+	if _, err := client.PublishFromSource(context.Background(), "owner", "repo", source, manifest, manifestBytes); err == nil {
 		t.Fatal("Publish upload failure = nil, want error")
 	}
 	if !deleted.Load() {
@@ -329,10 +352,11 @@ func TestPublishRemovesReleaseAfterUploadFailure(t *testing.T) {
 func TestPublishRejectsImmutableVersion(t *testing.T) {
 	source := filepath.Join(t.TempDir(), "pkg")
 	writeSourcePackage(t, source, "demo.pkg", "1.0.0", packmgr.ModeHosted, "app.wasm", nil)
+	manifest, manifestBytes := readSourceManifest(t, source)
 	client, _, _ := newGitHubTestClient(t, func(writer http.ResponseWriter, _ *http.Request) {
 		writer.WriteHeader(http.StatusUnprocessableEntity)
 	}, http.NotFound)
-	if _, err := client.Publish(context.Background(), "owner", "repo", source); err == nil ||
+	if _, err := client.PublishFromSource(context.Background(), "owner", "repo", source, manifest, manifestBytes); err == nil ||
 		!strings.Contains(err.Error(), "不可变") {
 		t.Fatalf("Publish duplicate error = %v, want immutable-version error", err)
 	}
@@ -341,9 +365,10 @@ func TestPublishRejectsImmutableVersion(t *testing.T) {
 func TestPublishRequiresToken(t *testing.T) {
 	source := filepath.Join(t.TempDir(), "pkg")
 	writeSourcePackage(t, source, "demo.pkg", "1.0.0", packmgr.ModeHosted, "app.wasm", nil)
+	manifest, manifestBytes := readSourceManifest(t, source)
 	client := packmgr.NewGitHubClient()
 	client.Token = ""
-	if _, err := client.Publish(context.Background(), "owner", "repo", source); err == nil {
+	if _, err := client.PublishFromSource(context.Background(), "owner", "repo", source, manifest, manifestBytes); err == nil {
 		t.Fatal("Publish without token = nil, want error")
 	}
 }
