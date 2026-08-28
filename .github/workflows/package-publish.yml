@@ -57,7 +57,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: projectluojia/AI-Luo-Man-ga
-          ref: 2353f9c273d83365136a3625d24ab4a2c1292003
+          ref: fd34393
           path: .ailuo-cli
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -81,7 +81,12 @@ jobs:
           PACKAGE_DIR: ${{ inputs.package-dir }}
         run: |
           set -euo pipefail
-          ./.ailuo-cli/ailuo pack "$PACKAGE_DIR" dist
+          package_version="0.1.0"
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            package_version="${GITHUB_REF#refs/tags/}"
+            package_version="${package_version#v}"
+          fi
+          ./.ailuo-cli/ailuo pack --version "$package_version" "$PACKAGE_DIR" dist
           tarball="$(ls dist/*.tgz)"
           # pack 的输出目录是第二个位置参数；flag 必须在位置参数之前
           # （Go flag 包遇到首个位置参数即停止解析）。
@@ -134,7 +139,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: projectluojia/AI-Luo-Man-ga
-          ref: 2353f9c273d83365136a3625d24ab4a2c1292003
+          ref: fd34393
           path: .ailuo-cli
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
