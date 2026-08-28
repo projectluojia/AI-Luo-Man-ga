@@ -52,20 +52,17 @@ func fileACLRestrictedToCurrentUser(path string) bool {
 	if err != nil || dacl == nil {
 		return false
 	}
-	// ACE 紧接 ACL 头之后，每条按 AceSize 推进（ACCESS_ALLOWED_ACE 布局：
-	// ACE_HEADER + ACCESS_MASK + SidStart）；遍历必须做指针运算，用 unsafe.Add
-	// 表达（go vet unsafeptr 允许的形态）。
-	acePtr := unsafe.Add(unsafe.Pointer(dacl), int(unsafe.Sizeof(*dacl)))
-	for i := uint16(0); i < dacl.AceCount; i++ {
-		ace := (*windows.ACCESS_ALLOWED_ACE)(acePtr)
-		if ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE || ace.Header.AceSize == 0 {
+	for index := uint32(0); index < uint32(dacl.AceCount); index++ {
+		var ace *windows.ACCESS_ALLOWED_ACE
+		if err := windows.GetAce(dacl, index, &ace); err != nil || ace == nil ||
+			ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE ||
+			uint32(ace.Header.AceSize) < uint32(unsafe.Sizeof(*ace)) {
 			return false
 		}
 		sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
 		if sid.String() != user.User.Sid.String() {
 			return false
 		}
-		acePtr = unsafe.Add(acePtr, int(ace.Header.AceSize))
 	}
 	return true
 }
