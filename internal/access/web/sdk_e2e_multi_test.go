@@ -118,7 +118,7 @@ void main();
 	// npx 首次运行需下载 tsx，超时给足；工具链存在但运行失败必须让测试失败。
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	command := exec.CommandContext(ctx, "npx", "--yes", "tsx", "main.ts", testServer.URL)
+	command := exec.CommandContext(ctx, "npx", "--yes", "tsx@4.20.5", "main.ts", testServer.URL)
 	command.Dir = dir
 	output, err := command.CombinedOutput()
 	if err != nil {

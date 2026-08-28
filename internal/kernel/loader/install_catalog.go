@@ -72,6 +72,9 @@ func (c *Catalog) Discover(ctx context.Context) ([]InstalledRecord, error) {
 	if err := validateSecureDirectory(c.root); err != nil {
 		return nil, errors.Join(ErrInstallCatalogInvalid, err)
 	}
+	if err := packmgr.RecoverInstallRoot(ctx, c.root); err != nil {
+		return nil, errors.Join(ErrInstallCatalogInvalid, err)
+	}
 	entries, err := os.ReadDir(c.root)
 	if err != nil {
 		return nil, errors.Join(ErrInstallCatalogInvalid, err)
@@ -83,6 +86,12 @@ func (c *Catalog) Discover(ctx context.Context) ([]InstalledRecord, error) {
 	for _, entry := range entries {
 		if err := ctx.Err(); err != nil {
 			return nil, err
+		}
+		if packmgr.IsTransientInstallDirectory(entry.Name()) {
+			if !entry.IsDir() {
+				return nil, ErrInstallCatalogInvalid
+			}
+			continue
 		}
 		if strings.HasPrefix(entry.Name(), ".") {
 			return nil, ErrInstallCatalogInvalid
@@ -176,11 +185,17 @@ func (c *Catalog) readRecordByID(ctx context.Context, id string) (InstalledRecor
 	if err := validateSecureDirectory(c.root); err != nil {
 		return InstalledRecord{}, errors.Join(ErrInstallCatalogInvalid, err)
 	}
+	if err := packmgr.RecoverInstallRoot(ctx, c.root); err != nil {
+		return InstalledRecord{}, errors.Join(ErrInstallCatalogInvalid, err)
+	}
 	entries, err := os.ReadDir(c.root)
 	if err != nil {
 		return InstalledRecord{}, errors.Join(ErrInstallCatalogInvalid, err)
 	}
 	for _, entry := range entries {
+		if packmgr.IsTransientInstallDirectory(entry.Name()) {
+			continue
+		}
 		if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
 			continue
 		}

@@ -87,6 +87,15 @@ type Hello struct { Name string }
 	}
 }
 
+func TestAnalyzeGoRejectsUnsupportedJSONTagOptions(t *testing.T) {
+	for _, tag := range []string{"json:\"count,string\"", "json:\"count,omitempty,string\"", "json:\"count,omitzero\""} {
+		source := []byte("package main\nfunc hello(args Hello) {}\ntype Hello struct { Count int `" + tag + "` }\n")
+		if _, err := AnalyzeGo(source, "x"); err == nil || !strings.Contains(err.Error(), "json tag") {
+			t.Errorf("tag %s error = %v, want unsupported json tag option", tag, err)
+		}
+	}
+}
+
 func TestAnalyzeGoRejectsUnknownType(t *testing.T) {
 	source := []byte(`package main
 func hello(args Hello) {}

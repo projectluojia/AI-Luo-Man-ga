@@ -124,7 +124,8 @@ func ValidateManifest(manifest Manifest) error {
 		if component.Mode != ModeHosted && component.Mode != ModeIsolated {
 			return ErrInvalidFormat
 		}
-		if !isPackageEntrypoint(component.Entrypoint) {
+		if !isPackageEntrypoint(component.Entrypoint) ||
+			component.Entrypoint == "manifest.json" || component.Entrypoint == "lock.json" {
 			return ErrInvalidFormat
 		}
 		for _, id := range append(append([]string(nil), component.Exports...), component.Imports...) {
@@ -259,8 +260,7 @@ func ValidateLock(lock Lock, manifest Manifest) error {
 // isPackageEntrypoint 只接受包根目录下的普通文件名。包格式明确采用扁平工件
 // 布局，不能依赖运行验证器所在平台解释路径分隔符或盘符。
 func isPackageEntrypoint(value string) bool {
-	return value != "" && value != "." && value != ".." &&
-		!strings.ContainsAny(value, `/\\:`) && !strings.ContainsRune(value, '\x00')
+	return IsPackagePath(value) && value != "." && !strings.ContainsRune(value, '/')
 }
 
 // isSHA256Hex 判断字符串是否为合法十六进制 SHA-256 摘要。只校验长度会让 64 个

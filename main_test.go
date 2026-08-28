@@ -178,6 +178,36 @@ func TestDefaultRuntimeRootIsAbsoluteOrEmpty(t *testing.T) {
 	}
 }
 
+func TestResolveSourceRequiresVersionForZeroDeclarationPackage(t *testing.T) {
+	sourceDir := filepath.Join(t.TempDir(), "hello.pkg")
+	if err := os.MkdirAll(sourceDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceDir, "main.go"), []byte("package main\nfunc hello(args HelloArgs) {}\ntype HelloArgs struct { Name string `json:\"name\"` }\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := resolveSource(t.Context(), sourceDir, ""); err == nil || !strings.Contains(err.Error(), "--version") {
+		t.Fatalf("resolveSource error = %v, want required version", err)
+	}
+}
+
+func TestResolveSDKSourceExtractsZeroDeclarationContract(t *testing.T) {
+	sourceDir := filepath.Join(t.TempDir(), "hello.pkg")
+	if err := os.MkdirAll(sourceDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceDir, "main.go"), []byte("package main\nfunc hello(args HelloArgs) {}\ntype HelloArgs struct { Name string `json:\"name\"` }\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	packageID, extensions, err := resolveSDKSource(t.Context(), sourceDir)
+	if err != nil {
+		t.Fatalf("resolveSDKSource: %v", err)
+	}
+	if packageID != "hello.pkg" || len(extensions) == 0 {
+		t.Fatalf("package ID/extensions = %q/%s, want extracted extensions", packageID, extensions)
+	}
+}
+
 func TestConfigureInstalledRuntimesAllowsEmptySecureCatalog(t *testing.T) {
 	if !unixSecurityAvailable {
 		t.Skip("非 Unix 平台显式关闭安装目录属主校验")

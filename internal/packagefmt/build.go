@@ -24,6 +24,8 @@ const BuildToolGoWasm = "go-wasm"
 // 需 node/npx 环境；guest 用 AssemblyScript 语法（TS 严格子集）。
 const BuildToolAssemblyScript = "ts-as"
 
+const assemblyScriptPackage = "assemblyscript@0.27.31"
+
 var (
 	// ErrBuildUnsupported 是声明了未知构建器的错误（fail-closed，不静默跳过构建）。
 	ErrBuildUnsupported = errors.New("unsupported build tool")
@@ -70,7 +72,7 @@ func buildGoWasm(ctx context.Context, sourceDir string, manifest packmgr.Manifes
 	if source == "" {
 		source = "."
 	}
-	if !filepath.IsLocal(source) {
+	if !packmgr.IsPackagePath(source) {
 		return fmt.Errorf("%w: 源码目录非法 %q", ErrBuildFailed, source)
 	}
 	workDir := filepath.Join(absoluteSourceDir, source)
@@ -78,7 +80,7 @@ func buildGoWasm(ctx context.Context, sourceDir string, manifest packmgr.Manifes
 		if component.Mode != packmgr.ModeHosted {
 			continue
 		}
-		if component.Entrypoint == "" || !filepath.IsLocal(component.Entrypoint) {
+		if component.Entrypoint == "" || !packmgr.IsPackagePath(component.Entrypoint) {
 			return fmt.Errorf("%w: 组件 %s entrypoint 非法 %q", ErrBuildFailed, component.ID, component.Entrypoint)
 		}
 		output := filepath.Join(absoluteSourceDir, component.Entrypoint)
@@ -109,7 +111,7 @@ func buildAssemblyScript(ctx context.Context, sourceDir string, manifest packmgr
 	if source == "" {
 		source = "."
 	}
-	if !filepath.IsLocal(source) {
+	if !packmgr.IsPackagePath(source) {
 		return fmt.Errorf("%w: 源码目录非法 %q", ErrBuildFailed, source)
 	}
 	workDir := filepath.Join(absoluteSourceDir, source)
@@ -117,7 +119,7 @@ func buildAssemblyScript(ctx context.Context, sourceDir string, manifest packmgr
 		if component.Mode != packmgr.ModeHosted {
 			continue
 		}
-		if component.Entrypoint == "" || !filepath.IsLocal(component.Entrypoint) {
+		if component.Entrypoint == "" || !packmgr.IsPackagePath(component.Entrypoint) {
 			return fmt.Errorf("%w: 组件 %s entrypoint 非法 %q", ErrBuildFailed, component.ID, component.Entrypoint)
 		}
 		output := filepath.Join(absoluteSourceDir, component.Entrypoint)
@@ -126,7 +128,7 @@ func buildAssemblyScript(ctx context.Context, sourceDir string, manifest packmgr
 		}
 		// 源码名 = entrypoint 去 .wasm 后缀 + .ts（main.wasm → main.ts）。
 		input := filepath.Join(workDir, strings.TrimSuffix(filepath.Base(component.Entrypoint), ".wasm")+".ts")
-		command := exec.CommandContext(ctx, "npx", "--yes", "--package", "assemblyscript", "asc", input, "-o", output)
+		command := exec.CommandContext(ctx, "npx", "--yes", "--package", assemblyScriptPackage, "asc", input, "-o", output)
 		command.Dir = workDir
 		outputBytes, err := command.CombinedOutput()
 		if err != nil {

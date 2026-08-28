@@ -10,6 +10,13 @@ import (
 	"regexp"
 	"strings"
 	"unicode"
+
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/sdkgen"
+)
+
+const (
+	// SchemaGeneratorPackage 是固定版本的 TypeScript Schema 提取工具。
+	SchemaGeneratorPackage = "ts-json-schema-generator@2.4.0"
 )
 
 // tsFunctionPattern 匹配仅有一个带约定类型参数的 TS 导出处理函数。
@@ -39,7 +46,7 @@ func analyzeTS(ctx context.Context, source []byte, packageID, workDir string, ru
 	for _, name := range names {
 		// 类型名约定：<CapabilityName>Args（首字母大写，与 Go 参数 struct 一致）。
 		typeName := upperFirst(name) + "Args"
-		output, err := run(ctx, workDir, "npx", "--yes", "ts-json-schema-generator",
+		output, err := run(ctx, workDir, "npx", "--yes", "--package", SchemaGeneratorPackage, "ts-json-schema-generator",
 			"--path", "main.ts", "--type", typeName, "--no-top-ref")
 		if err != nil {
 			return nil, fmt.Errorf("schemaextract: ts-json-schema-generator 失败（%s）：%w：%s", name, err, strings.TrimSpace(string(output)))
@@ -48,7 +55,9 @@ func analyzeTS(ctx context.Context, source []byte, packageID, workDir string, ru
 		if err := json.Unmarshal(output, &schema); err != nil {
 			return nil, fmt.Errorf("schemaextract: schema 输出非法：%w", err)
 		}
-		// tjsg 默认输出 additionalProperties:false，无需后处理加。
+		if err := sdkgen.ValidateSchema(output); err != nil {
+			return nil, fmt.Errorf("schemaextract: capability %s 的 schema 不受支持：%w", name, err)
+		}
 		normalized, err := json.Marshal(schema)
 		if err != nil {
 			return nil, err

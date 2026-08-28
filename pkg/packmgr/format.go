@@ -7,6 +7,7 @@ package packmgr
 import (
 	"errors"
 	"regexp"
+	"strings"
 	"unicode/utf8"
 )
 
@@ -108,6 +109,23 @@ func ValidateDependency(dep Dependency) error {
 // 该键只作进程内查找，不序列化、不出现在任何契约里。
 func HostedFunctionKey(module, name string) string {
 	return module + "\x00" + name
+}
+
+// IsPackagePath 校验包内相对路径，使用与宿主平台无关的正斜杠语法。
+// 点路径允许表示包根目录；其他路径不得含空段、.、..、反斜杠或卷标。
+func IsPackagePath(value string) bool {
+	if value == "." {
+		return true
+	}
+	if value == "" || strings.ContainsAny(value, "\\:\x00") || strings.HasPrefix(value, "/") {
+		return false
+	}
+	for _, part := range strings.Split(value, "/") {
+		if part == "" || part == "." || part == ".." {
+			return false
+		}
+	}
+	return true
 }
 
 // EqualHostedFunctions 比较声明集合（忽略用途文本：用途只作说明，不参与身份）。

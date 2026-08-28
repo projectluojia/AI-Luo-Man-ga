@@ -105,7 +105,7 @@ func ReadFileLimited(path string, maximum int64) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	opened, err := file.Stat()
 	if err != nil || !os.SameFile(info, opened) {
 		return nil, ErrInvalidFormat
@@ -127,7 +127,7 @@ func HashFile(ctx context.Context, path string, maximum int64) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	opened, err := file.Stat()
 	if err != nil || !os.SameFile(info, opened) {
 		return "", ErrInvalidFormat

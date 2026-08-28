@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -222,6 +223,7 @@ func runPackageCommand(parent context.Context, arguments []string, output io.Wri
 	flags.SetOutput(io.Discard)
 	root := flags.String("root", "", "安装根目录（默认 AILUO_RUNTIME_INSTALL_ROOT，再默认用户配置目录 ailuo/runtime）")
 	repo := flags.String("repo", "", "GitHub 仓库（owner/repo），publish 使用")
+	version := flags.String("version", "", "零声明包自动生成的 semver 版本")
 	if err := flags.Parse(arguments[1:]); err != nil {
 		return true, fmt.Errorf("configuration error: %s", err)
 	}
@@ -288,7 +290,7 @@ func runPackageCommand(parent context.Context, arguments []string, output io.Wri
 		if flags.NArg() == 2 {
 			outputDir = flags.Arg(1)
 		}
-		manifest, manifestBytes, err := resolveSource(ctx, flags.Arg(0))
+		manifest, manifestBytes, err := resolveSource(ctx, flags.Arg(0), *version)
 		if err != nil {
 			return true, err
 		}
@@ -314,7 +316,7 @@ func runPackageCommand(parent context.Context, arguments []string, output io.Wri
 		if strings.HasSuffix(strings.ToLower(flags.Arg(0)), ".tgz") {
 			htmlURL, err = client.PublishTarball(ctx, owner, name, flags.Arg(0))
 		} else {
-			manifest, manifestBytes, resolveErr := resolveSource(ctx, flags.Arg(0))
+			manifest, manifestBytes, resolveErr := resolveSource(ctx, flags.Arg(0), *version)
 			if resolveErr != nil {
 				return true, resolveErr
 			}
@@ -338,11 +340,11 @@ func runPackageCommand(parent context.Context, arguments []string, output io.Wri
 		if command == "sdk-ts" {
 			language = sdkgen.LanguageTypeScript
 		}
-		manifest, _, _, err := packagefmt.Parse(packagefmt.SourcePath(flags.Arg(0)))
+		packageID, extensions, err := resolveSDKSource(ctx, flags.Arg(0))
 		if err != nil {
 			return true, err
 		}
-		files, err := sdkgen.Generate(manifest.Extensions, sdkgen.Options{Language: language, PackageID: manifest.ID})
+		files, err := sdkgen.Generate(extensions, sdkgen.Options{Language: language, PackageID: packageID})
 		if err != nil {
 			return true, err
 		}
@@ -432,10 +434,13 @@ func localPathExists(path string) bool {
 // resolveSource 解析源包目录：优先 ailuo.toml（显式声明，含宿主函数/存储），
 // 无则从源码自动提取清单并构建（作者零声明，纯计算包）。清单声明 [build] 时
 // 先执行构建再返回（pack/publish 共用，构建失败即报错，不打包残缺工件）。
-func resolveSource(ctx context.Context, sourceDir string) (manifest packmgr.Manifest, manifestBytes []byte, err error) {
+func resolveSource(ctx context.Context, sourceDir, version string) (manifest packmgr.Manifest, manifestBytes []byte, err error) {
 	path := packagefmt.SourcePath(sourceDir)
 	_, statErr := os.Stat(path)
 	if errors.Is(statErr, fs.ErrNotExist) {
+		if version == "" {
+			return packmgr.Manifest{}, nil, fmt.Errorf("配置错误：零声明包必须通过 --version 提供版本")
+		}
 		// 无 ailuo.toml：从源码自动提取并构建（作者零声明）。
 		capabilities, buildTool, extractErr := packagefmt.AutoExtract(ctx, sourceDir)
 		if extractErr != nil {
@@ -445,7 +450,7 @@ func resolveSource(ctx context.Context, sourceDir string) (manifest packmgr.Mani
 		if absErr != nil {
 			return packmgr.Manifest{}, nil, absErr
 		}
-		manifest, manifestBytes, err = packagefmt.ManifestFromCapabilities(filepath.Base(absolute), capabilities)
+		manifest, manifestBytes, err = packagefmt.ManifestFromCapabilities(filepath.Base(absolute), version, capabilities)
 		if err != nil {
 			return packmgr.Manifest{}, nil, err
 		}
@@ -467,6 +472,33 @@ func resolveSource(ctx context.Context, sourceDir string) (manifest packmgr.Mani
 		}
 	}
 	return manifest, manifestBytes, nil
+}
+
+// resolveSDKSource 读取显式源清单，或只提取零声明源码的 extensions；SDK 生成不构建
+// guest 工件，也不需要虚构一个包版本。
+func resolveSDKSource(ctx context.Context, sourceDir string) (string, json.RawMessage, error) {
+	path := packagefmt.SourcePath(sourceDir)
+	_, statErr := os.Stat(path)
+	if statErr == nil {
+		manifest, _, _, err := packagefmt.Parse(path)
+		return manifest.ID, manifest.Extensions, err
+	}
+	if !errors.Is(statErr, fs.ErrNotExist) {
+		return "", nil, fmt.Errorf("读取源清单失败: %w", statErr)
+	}
+	absolute, err := filepath.Abs(sourceDir)
+	if err != nil {
+		return "", nil, err
+	}
+	capabilities, _, err := packagefmt.AutoExtract(ctx, sourceDir)
+	if err != nil {
+		return "", nil, err
+	}
+	extensions, err := packagefmt.ExtensionsFromCapabilities(filepath.Base(absolute), capabilities)
+	if err != nil {
+		return "", nil, err
+	}
+	return filepath.Base(absolute), extensions, nil
 }
 
 // identityProvision 是 identity-bind 命令的输入。
