@@ -61,7 +61,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: projectluojia/AI-Luo-Man-ga
-          ref: 084bee2bbff7a612856c93e7334ac5522207635c
+          ref: 975d4f74d05fa07f326ecdf1a4bae352b819f1b3
           path: .ailuo-cli
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -149,7 +149,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: projectluojia/AI-Luo-Man-ga
-          ref: 084bee2bbff7a612856c93e7334ac5522207635c
+          ref: 975d4f74d05fa07f326ecdf1a4bae352b819f1b3
           path: .ailuo-cli
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
