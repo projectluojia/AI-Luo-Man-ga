@@ -1,6 +1,7 @@
 package schemaextract
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -123,5 +124,11 @@ func upperFirst(value string) string {
 func execCommand(ctx context.Context, dir string, name string, args ...string) ([]byte, error) {
 	command := exec.CommandContext(ctx, name, args...)
 	command.Dir = dir
-	return command.CombinedOutput()
+	var stderr bytes.Buffer
+	command.Stderr = &stderr
+	output, err := command.Output()
+	if err != nil {
+		return append(output, stderr.Bytes()...), err
+	}
+	return output, nil
 }
