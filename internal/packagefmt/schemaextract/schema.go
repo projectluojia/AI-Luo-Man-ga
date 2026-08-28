@@ -21,11 +21,16 @@ func structSchemaWithTypes(structType *ast.StructType, types map[string]*ast.Str
 	}
 	properties := schema["properties"].(map[string]any)
 	required := schema["required"].([]string)
+	seenNames := make(map[string]struct{}, len(structType.Fields.List))
 	for _, field := range structType.Fields.List {
 		name, optional, err := fieldJSONName(field)
 		if err != nil {
 			return nil, err
 		}
+		if _, exists := seenNames[name]; exists {
+			return nil, fmt.Errorf("schemaextract: JSON 字段名 %q 重复", name)
+		}
+		seenNames[name] = struct{}{}
 		fieldSchema, err := fieldSchemaWithTypes(field.Type, types, resolving)
 		if err != nil {
 			return nil, fmt.Errorf("schemaextract: 字段 %q: %w", name, err)
@@ -42,7 +47,7 @@ func structSchemaWithTypes(structType *ast.StructType, types map[string]*ast.Str
 // fieldJSONName 解析字段 json tag：`json:"name"` 或 `json:"name,omitempty"`。
 // 无 tag 拒绝（契约必须显式声明 JSON 名）。
 func fieldJSONName(field *ast.Field) (name string, optional bool, err error) {
-	if field.Tag == nil || len(field.Names) == 0 {
+	if field.Tag == nil || len(field.Names) != 1 {
 		return "", false, fmt.Errorf("schemaextract: 字段缺少 json tag")
 	}
 	tag := strings.Trim(field.Tag.Value, "`")
@@ -54,8 +59,17 @@ func fieldJSONName(field *ast.Field) (name string, optional bool, err error) {
 	if parts[0] == "" || parts[0] == "-" {
 		return "", false, fmt.Errorf("schemaextract: 字段 %q 的 json tag 无效", field.Names[0].Name)
 	}
-	optional = len(parts) > 1 && parts[1] == "omitempty"
-	return parts[0], optional, nil
+	switch len(parts) {
+	case 1:
+		return parts[0], false, nil
+	case 2:
+		if parts[1] != "omitempty" {
+			return "", false, fmt.Errorf("schemaextract: 字段 %q 的 json tag 选项 %q 不支持", field.Names[0].Name, parts[1])
+		}
+		return parts[0], true, nil
+	default:
+		return "", false, fmt.Errorf("schemaextract: 字段 %q 的 json tag 选项不支持", field.Names[0].Name)
+	}
 }
 
 // fieldSchema 把字段类型 AST 编译为 JSON Schema 片段。

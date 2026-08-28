@@ -1,9 +1,20 @@
 package packagefmt
 
 import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
 
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime/runtimetest"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/packagefmt/schemaextract"
 )
 
@@ -22,11 +33,11 @@ type HelloArgs struct {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manifest, manifestBytes, err := ManifestFromCapabilities("hello.pkg", capabilities)
+	manifest, manifestBytes, err := ManifestFromCapabilities("hello.pkg", "1.2.3", capabilities)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if manifest.ID != "hello.pkg" || manifest.Version != "0.1.0" {
+	if manifest.ID != "hello.pkg" || manifest.Version != "1.2.3" {
 		t.Fatalf("manifest id/version = %q/%q", manifest.ID, manifest.Version)
 	}
 	if len(manifest.Components) != 1 || manifest.Components[0].Entrypoint != "main.wasm" {
@@ -61,7 +72,102 @@ type HelloArgs struct {
 }
 
 func TestManifestFromCapabilitiesRejectsEmpty(t *testing.T) {
-	if _, _, err := ManifestFromCapabilities("hello.pkg", nil); err == nil {
+	if _, _, err := ManifestFromCapabilities("hello.pkg", "1.0.0", nil); err == nil {
 		t.Fatal("期望拒绝空 capabilities")
+	}
+}
+
+func TestZeroDeclarationCapabilityRunsThroughDispatcherAndWasmHost(t *testing.T) {
+	ctx := context.Background()
+	sourceDir := filepath.Join(t.TempDir(), "hello.pkg")
+	if err := os.MkdirAll(sourceDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	source, err := os.ReadFile(filepath.Join("..", "..", "testdata", "hello.pkg", "main.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceDir, "main.go"), source, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceDir, "go.mod"), []byte("module hello-e2e\n\ngo 1.26\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	capabilities, buildTool, err := AutoExtract(ctx, sourceDir)
+	if err != nil {
+		t.Fatalf("AutoExtract: %v", err)
+	}
+	if buildTool != BuildToolGoWasm || len(capabilities) != 1 {
+		t.Fatalf("extraction = %s %#v", buildTool, capabilities)
+	}
+	manifest, _, err := ManifestFromCapabilities("hello.pkg", "1.0.0", capabilities)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Build(ctx, sourceDir, manifest, BuildSpec{Tool: buildTool}); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	artifactPath := filepath.Join(sourceDir, "main.wasm")
+	artifact, err := os.ReadFile(artifactPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(artifact)
+	host, err := loader.NewWasmHost(loader.WasmHostConfig{
+		ReadArtifact: func(context.Context, loader.Manifest) ([]byte, error) {
+			return os.ReadFile(artifactPath)
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager, err := loader.New(host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtimeID := "hello.pkg.main"
+	if err := manager.Register(ctx, loader.Manifest{
+		ID: runtimeID, Version: manifest.Version, Mode: loader.ModeHosted,
+		Role: loader.RoleCapability, LockedDigest: hex.EncodeToString(digest[:]),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := manager.Shutdown(context.Background()); err != nil {
+			t.Errorf("Shutdown: %v", err)
+		}
+	})
+	reg := registry.New()
+	capability := capabilities[0]
+	if err := reg.RegisterService(registry.ServiceRegistration{
+		Spec: registry.ServiceSpec{ID: manifest.ID, Version: manifest.Version},
+		Capabilities: map[string]struct {
+			Spec    registry.CapabilitySpec
+			Handler registry.Handler
+		}{
+			capability.ID: {
+				Spec: registry.CapabilitySpec{
+					ID: capability.ID, Version: manifest.Version, ServiceID: manifest.ID,
+					InputSchemaJSON: string(capability.InputSchema), SideEffect: registry.SideEffectRead,
+					ToolID: capability.ID,
+				},
+				Handler: manager.Handler(runtimeID),
+			},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	policy := runtimetest.NewStaticAppPolicy()
+	policy.Enable(manifest.ID, capability.ID)
+	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{})
+	result, err := dispatcher.InvokeCapability(ctx, contracts.RequestContext{
+		AppID: manifest.ID, EchoID: "echo-1", RequestID: "request-1",
+		UserID: "user-1", Deadline: time.Now().Add(time.Minute),
+	}, capability.ID, json.RawMessage(`{"name":"Ada"}`))
+	if err != nil {
+		t.Fatalf("InvokeCapability: %v", err)
+	}
+	if string(result) != `{"message":"hello, Ada"}` {
+		t.Fatalf("result = %s", result)
 	}
 }

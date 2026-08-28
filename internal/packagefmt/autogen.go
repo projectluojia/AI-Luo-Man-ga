@@ -3,6 +3,7 @@ package packagefmt
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -25,30 +26,34 @@ func AutoExtract(ctx context.Context, sourceDir string) ([]schemaextract.Capabil
 		return nil, "", err
 	}
 	id := filepath.Base(absolute)
-	if source, err := os.ReadFile(filepath.Join(sourceDir, "main.go")); err == nil {
+	source, err := os.ReadFile(filepath.Join(sourceDir, "main.go"))
+	if err == nil {
 		capabilities, analyzeErr := schemaextract.AnalyzeGo(source, id)
 		return capabilities, BuildToolGoWasm, analyzeErr
 	}
-	if source, err := os.ReadFile(filepath.Join(sourceDir, "main.ts")); err == nil {
+	if !errors.Is(err, os.ErrNotExist) {
+		return nil, "", fmt.Errorf("packagefmt: 读取 %q 失败: %w", filepath.Join(sourceDir, "main.go"), err)
+	}
+	source, err = os.ReadFile(filepath.Join(sourceDir, "main.ts"))
+	if err == nil {
 		capabilities, analyzeErr := schemaextract.AnalyzeTS(ctx, source, id, sourceDir)
 		return capabilities, BuildToolAssemblyScript, analyzeErr
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return nil, "", fmt.Errorf("packagefmt: 读取 %q 失败: %w", filepath.Join(sourceDir, "main.ts"), err)
 	}
 	return nil, "", fmt.Errorf("packagefmt: %q 未找到 main.go 或 main.ts", sourceDir)
 }
 
-// ManifestFromCapabilities 从源码提取的 capabilities 自动生成纯计算包清单
-// （ailuo pack 在无 ailuo.toml 时使用）：作者只写 guest 源码，component/build/
-// capability 全部自动推导。工具 schema 来自提取器，side_effect 统一 read
-// （纯计算无副作用；需要写/宿主能力的包仍用 ailuo.toml 显式声明）。
-func ManifestFromCapabilities(packageID string, capabilities []schemaextract.Capability) (packmgr.Manifest, []byte, error) {
+func capabilitiesSource(packageID, version string, capabilities []schemaextract.Capability) (sourceManifest, []string, error) {
 	if !packageIDPattern.MatchString(packageID) {
-		return packmgr.Manifest{}, nil, fmt.Errorf("packagefmt: 包 id %q 不合法", packageID)
+		return sourceManifest{}, nil, fmt.Errorf("packagefmt: 包 id %q 不合法", packageID)
 	}
 	if len(capabilities) == 0 {
-		return packmgr.Manifest{}, nil, fmt.Errorf("packagefmt: 源码未提取到任何 capability")
+		return sourceManifest{}, nil, fmt.Errorf("packagefmt: 源码未提取到任何 capability")
 	}
 	source := sourceManifest{
-		Package: sourcePackage{ID: packageID, Version: "0.1.0"},
+		Package: sourcePackage{ID: packageID, Version: version},
 		Tools:   make(map[string]sourceTool, len(capabilities)),
 	}
 	exportIDs := make([]string, 0, len(capabilities))
@@ -65,6 +70,32 @@ func ManifestFromCapabilities(packageID string, capabilities []schemaextract.Cap
 		exportIDs = append(exportIDs, capability.ID)
 	}
 	sort.Strings(exportIDs)
+	return source, exportIDs, nil
+}
+
+// ExtensionsFromCapabilities 只构造 SDK 所需的宿主扩展段，不生成安装清单。
+// SDK 源码可以由零声明包直接生成，无需虚构或持久化包版本。
+func ExtensionsFromCapabilities(packageID string, capabilities []schemaextract.Capability) (json.RawMessage, error) {
+	source, _, err := capabilitiesSource(packageID, "", capabilities)
+	if err != nil {
+		return nil, err
+	}
+	return source.buildExtensions()
+}
+
+// ManifestFromCapabilities 从源码提取的 capabilities 自动生成纯计算包清单
+// （ailuo pack 在无 ailuo.toml 时使用）：作者只写 guest 源码，component/build/
+// capability 全部自动推导。工具 schema 来自提取器，side_effect 统一 read
+// （纯计算无副作用；需要写/宿主能力的包仍用 ailuo.toml 显式声明）。
+
+func ManifestFromCapabilities(packageID, version string, capabilities []schemaextract.Capability) (packmgr.Manifest, []byte, error) {
+	if _, err := packmgr.ParseVersion(version); err != nil {
+		return packmgr.Manifest{}, nil, fmt.Errorf("packagefmt: 包版本 %q 不合法", version)
+	}
+	source, exportIDs, err := capabilitiesSource(packageID, version, capabilities)
+	if err != nil {
+		return packmgr.Manifest{}, nil, err
+	}
 	extensions, err := source.buildExtensions()
 	if err != nil {
 		return packmgr.Manifest{}, nil, err
@@ -72,7 +103,7 @@ func ManifestFromCapabilities(packageID string, capabilities []schemaextract.Cap
 	manifest := packmgr.Manifest{
 		SchemaVersion: packmgr.SchemaVersion,
 		ID:            packageID,
-		Version:       "0.1.0",
+		Version:       version,
 		Components: []packmgr.Component{{
 			ID: "main", Mode: "hosted", Entrypoint: "main.wasm", Exports: exportIDs,
 		}},

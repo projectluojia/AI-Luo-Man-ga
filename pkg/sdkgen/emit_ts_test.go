@@ -57,7 +57,7 @@ func TestGenerateTypeScriptCompiles(t *testing.T) {
 	// npx 首次运行需下载 typescript：绑定超时上下文，卡在网络时子进程被杀。
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	command := exec.CommandContext(ctx, "npx", "--yes", "--package", "typescript", "tsc", "-p", ".")
+	command := exec.CommandContext(ctx, "npx", "--yes", "--package", "typescript@5.9.3", "tsc", "-p", ".")
 	command.Dir = dir
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("tsc 编译失败: %v\n%s", err, output)

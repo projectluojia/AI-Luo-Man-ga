@@ -229,7 +229,6 @@ paths:
                     type: string
                   result:
                     description: Capability output payload.
-                    type: object
         "400":
           description: Malformed request body, schema violation, or missing idempotency key for a side-effecting Capability.
           content:
@@ -262,18 +261,6 @@ paths:
                 $ref: "#/components/schemas/Error"
         "404":
           description: The Capability does not exist or is not enabled for the App.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-        "409":
-          description: The Capability requires a governed confirmation before it can run.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-        "500":
-          description: The Capability invocation failed; no internal detail is disclosed.
           content:
             application/json:
               schema:

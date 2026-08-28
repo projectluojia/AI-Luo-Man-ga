@@ -266,7 +266,7 @@ func TestPublishCreatesReleaseAndUploadsAsset(t *testing.T) {
 
 func TestPublishTarballCreatesReleaseAndUploadsAsset(t *testing.T) {
 	source := filepath.Join(t.TempDir(), "pkg")
-	writeSourcePackage(t, source, "demo.pkg", "1.0.0", packmgr.ModeHosted, "app.wasm", nil)
+	writeSourcePackage(t, source, "demo.pkg", "1.0.0", packmgr.ModeHosted, "app.wasm", []packmgr.Dependency{{ID: "dependency.pkg", Constraint: "^1.0.0"}})
 	manifestBytes, err := os.ReadFile(filepath.Join(source, "manifest.json"))
 	if err != nil {
 		t.Fatal(err)

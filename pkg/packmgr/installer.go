@@ -59,15 +59,15 @@ func Install(ctx context.Context, root, sourcePath string) (InstalledRecord, err
 	if err := os.MkdirAll(root, 0o750); err != nil {
 		return InstalledRecord{}, err
 	}
-	installLock := packageInstallLock(root, source.Manifest.ID)
-	installLock.Lock()
-	defer installLock.Unlock()
+	if err := RecoverInstallRoot(ctx, root); err != nil {
+		return InstalledRecord{}, err
+	}
 	if err := resolveDependencies(ctx, root, source.Manifest.Dependencies); err != nil {
 		return InstalledRecord{}, err
 	}
-	lock := packageInstallLock(root, source.Manifest.ID)
-	lock.Lock()
-	defer lock.Unlock()
+	installLock := packageInstallLock(root, source.Manifest.ID)
+	installLock.Lock()
+	defer installLock.Unlock()
 	targetDir := filepath.Join(root, source.Manifest.ID)
 	if existing, err := ReadInstalled(ctx, targetDir); err == nil {
 		if existing.Manifest.Version == source.Manifest.Version {
@@ -82,7 +82,7 @@ func Install(ctx context.Context, root, sourcePath string) (InstalledRecord, err
 	if err != nil {
 		return InstalledRecord{}, err
 	}
-	defer os.RemoveAll(stageDir)
+	defer func() { _ = os.RemoveAll(stageDir) }()
 	// 写入 manifest（保留源字节，lock 中的 manifest digest 必须一致）。
 	if err := os.WriteFile(filepath.Join(stageDir, "manifest.json"), source.manifestBytes, 0o640); err != nil {
 		return InstalledRecord{}, err
@@ -215,6 +215,9 @@ func Upgrade(ctx context.Context, root, id, sourceDir string) (InstalledRecord, 
 	if err != nil {
 		return InstalledRecord{}, err
 	}
+	if err := RecoverInstallRoot(ctx, absoluteRoot); err != nil {
+		return InstalledRecord{}, err
+	}
 	existing, err := ReadInstalled(ctx, filepath.Join(absoluteRoot, id))
 	if err != nil {
 		return InstalledRecord{}, fmt.Errorf("包 %q 未安装", id)
@@ -242,6 +245,9 @@ func Uninstall(ctx context.Context, root, id string) error {
 		return err
 	}
 	if err := os.MkdirAll(absoluteRoot, 0o750); err != nil {
+		return err
+	}
+	if err := RecoverInstallRoot(ctx, absoluteRoot); err != nil {
 		return err
 	}
 	lock := packageInstallLock(absoluteRoot, id)
@@ -346,10 +352,10 @@ func unpackSource(source string) (string, func(), error) {
 		return "", nil, err
 	}
 	if err := unpackTarball(source, temp); err != nil {
-		os.RemoveAll(temp)
+		_ = os.RemoveAll(temp)
 		return "", nil, err
 	}
-	return temp, func() { os.RemoveAll(temp) }, nil
+	return temp, func() { _ = os.RemoveAll(temp) }, nil
 }
 
 // resolveDependencies 检查每个依赖在安装根内存在已安装包且版本满足约束。
@@ -357,7 +363,7 @@ func resolveDependencies(ctx context.Context, root string, deps []Dependency) er
 	if len(deps) == 0 {
 		return nil
 	}
-	installed, err := ListInstalled(ctx, root)
+	installed, err := listInstalled(ctx, root)
 	if err != nil {
 		return err
 	}
@@ -392,7 +398,7 @@ func resolveDependencies(ctx context.Context, root string, deps []Dependency) er
 
 // validateDependents 拒绝会破坏已安装直接依赖者的卸载或升级。
 func validateDependents(ctx context.Context, root, id, replacement string) error {
-	installed, err := ListInstalled(ctx, root)
+	installed, err := listInstalled(ctx, root)
 	if err != nil {
 		return err
 	}

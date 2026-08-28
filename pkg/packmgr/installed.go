@@ -19,10 +19,22 @@ const (
 	MaxArtifactBytes = int64(1 << 30)
 )
 
+// IsTransientInstallDirectory 判断安装根内的阶段/备份工作目录。
+func IsTransientInstallDirectory(name string) bool {
+	return strings.HasPrefix(name, stagePrefix) || strings.HasPrefix(name, backupPrefix)
+}
+
 // ReadInstalled 从中性角度读取安装目录：严格解析 manifest + lock、校验内部
 // 一致性与每个组件的工件哈希。部署级安全（目录属主/符号链接/权限位）由宿主
 // 在发现时叠加校验，本函数面向 CLI 工具、依赖解析与安装回读验证。
 func ReadInstalled(ctx context.Context, directory string) (InstalledRecord, error) {
+	if directory == "" {
+		return InstalledRecord{}, ErrInvalidFormat
+	}
+	root, err := filepath.Abs(directory)
+	if err != nil {
+		return InstalledRecord{}, err
+	}
 	manifestBytes, err := ReadFileLimited(filepath.Join(directory, "manifest.json"), MaxManifestBytes)
 	if err != nil {
 		return InstalledRecord{}, err
@@ -50,6 +62,10 @@ func ReadInstalled(ctx context.Context, directory string) (InstalledRecord, erro
 		return InstalledRecord{}, ErrInvalidFormat
 	}
 	for _, artifact := range lock.Artifacts {
+		relative, err := filepath.Rel(root, filepath.Clean(artifact.Path))
+		if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+			return InstalledRecord{}, ErrInvalidFormat
+		}
 		artifactDigest, err := HashFile(ctx, artifact.Path, MaxArtifactBytes)
 		if err != nil || artifactDigest != artifact.SHA256 {
 			return InstalledRecord{}, ErrInvalidFormat
@@ -58,11 +74,87 @@ func ReadInstalled(ctx context.Context, directory string) (InstalledRecord, erro
 	return InstalledRecord{Directory: directory, Manifest: manifest, Lock: lock}, nil
 }
 
+// RecoverInstallRoot 恢复安装发布过程中遗留的备份目录。
+// 发布先把旧目录移到备份再放入新目录；进程可能在两次 rename 之间退出，
+// 启动或列表读取时必须先恢复旧安装，不能把临时目录静默当作不存在。
+func RecoverInstallRoot(ctx context.Context, root string) error {
+	if root == "" {
+		return ErrInvalidFormat
+	}
+	entries, err := os.ReadDir(root)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if !strings.HasPrefix(entry.Name(), backupPrefix) {
+			continue
+		}
+		if !entry.IsDir() {
+			return fmt.Errorf("%w: 备份路径不是目录 %q", ErrInvalidFormat, entry.Name())
+		}
+		if err := recoverInstallBackup(ctx, root, entry.Name()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func recoverInstallBackup(ctx context.Context, root, name string) error {
+	backup := filepath.Join(root, name)
+	source, err := readSourceManifest(backup)
+	if err != nil {
+		children, readErr := os.ReadDir(backup)
+		if readErr == nil && len(children) == 0 {
+			return nil
+		}
+		return fmt.Errorf("恢复安装备份 %q 失败: %w", name, err)
+	}
+	lock := packageInstallLock(root, source.Manifest.ID)
+	lock.Lock()
+	defer lock.Unlock()
+	if _, err := os.Lstat(backup); errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return fmt.Errorf("检查安装备份 %q 失败: %w", name, err)
+	}
+	target := filepath.Join(root, source.Manifest.ID)
+	_, targetErr := os.Lstat(target)
+	switch {
+	case errors.Is(targetErr, os.ErrNotExist):
+		if err := os.Rename(backup, target); err != nil {
+			return fmt.Errorf("恢复安装备份 %q 失败: %w", name, err)
+		}
+	case targetErr != nil:
+		return fmt.Errorf("检查安装目录 %q 失败: %w", target, targetErr)
+	default:
+		if _, err := ReadInstalled(ctx, target); err != nil {
+			return fmt.Errorf("安装目录 %q 与备份同时存在且校验失败: %w", target, err)
+		}
+		if err := os.RemoveAll(backup); err != nil {
+			return fmt.Errorf("清理已发布安装备份失败: %w", err)
+		}
+	}
+	return nil
+}
+
 // ListInstalled 列出安装根目录内的全部已安装包（按 ID 排序）。
 func ListInstalled(ctx context.Context, root string) ([]InstalledRecord, error) {
 	if root == "" {
 		return nil, ErrInvalidFormat
 	}
+	if err := RecoverInstallRoot(ctx, root); err != nil {
+		return nil, err
+	}
+	return listInstalled(ctx, root)
+}
+
+func listInstalled(ctx context.Context, root string) ([]InstalledRecord, error) {
 	entries, err := os.ReadDir(root)
 	if errors.Is(err, os.ErrNotExist) {
 		return []InstalledRecord{}, nil
@@ -79,7 +171,10 @@ func ListInstalled(ctx context.Context, root string) ([]InstalledRecord, error) 
 		// Install 的阶段/备份目录建在安装根内（同文件系统才能原子 rename）。
 		// 崩溃后可能残留，跳过而不是报错——否则一次失败的安装会让列表与依赖
 		// 解析永久失败。其他非包条目仍然 fail closed。
-		if strings.HasPrefix(entry.Name(), stagePrefix) || strings.HasPrefix(entry.Name(), backupPrefix) {
+		if IsTransientInstallDirectory(entry.Name()) {
+			if !entry.IsDir() {
+				return nil, fmt.Errorf("%w: 临时安装路径不是目录 %q", ErrInvalidFormat, entry.Name())
+			}
 			continue
 		}
 		if strings.HasPrefix(entry.Name(), ".") || !entry.IsDir() {

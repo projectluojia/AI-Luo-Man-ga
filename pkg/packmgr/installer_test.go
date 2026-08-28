@@ -2,6 +2,8 @@ package packmgr_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"os"
@@ -181,6 +183,44 @@ func TestInstallRejectsInvalidSource(t *testing.T) {
 	}
 }
 
+func TestReadInstalledRejectsArtifactOutsidePackage(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	source := filepath.Join(t.TempDir(), "pkg")
+	writeSourcePackage(t, source, "demo.pkg", "1.0.0", packmgr.ModeHosted, "app.wasm", nil)
+	if _, err := packmgr.Install(ctx, root, source); err != nil {
+		t.Fatal(err)
+	}
+	outsideDir := t.TempDir()
+	outsidePath := filepath.Join(outsideDir, "app.wasm")
+	outsideBody := []byte("outside")
+	if err := os.WriteFile(outsidePath, outsideBody, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	lockPath := filepath.Join(root, "demo.pkg", "lock.json")
+	lockBytes, err := os.ReadFile(lockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lock packmgr.Lock
+	if err := json.Unmarshal(lockBytes, &lock); err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(outsideBody)
+	lock.Artifacts[0].Path = outsidePath
+	lock.Artifacts[0].SHA256 = hex.EncodeToString(digest[:])
+	lockBytes, err = json.Marshal(lock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(lockPath, lockBytes, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := packmgr.ReadInstalled(ctx, filepath.Join(root, "demo.pkg")); err == nil {
+		t.Fatal("ReadInstalled accepted artifact outside package directory")
+	}
+}
+
 func TestUpgradeAndUninstall(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
@@ -230,19 +270,17 @@ func TestUpgradeAndUninstall(t *testing.T) {
 // 记录指向同一个文件，必须在读源阶段拒绝。
 func TestInstallRejectsEntrypointBasenameCollision(t *testing.T) {
 	source := filepath.Join(t.TempDir(), "pkg")
-	for _, sub := range []string{"a", "b"} {
-		if err := os.MkdirAll(filepath.Join(source, sub), 0o750); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(source, sub, "mod.wasm"), []byte("bytes-"+sub), 0o640); err != nil {
-			t.Fatal(err)
-		}
+	if err := os.MkdirAll(source, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "mod.wasm"), []byte("bytes"), 0o640); err != nil {
+		t.Fatal(err)
 	}
 	manifest, err := json.Marshal(packmgr.Manifest{
 		SchemaVersion: packmgr.SchemaVersion, ID: "demo.pkg", Version: "1.0.0",
 		Components: []packmgr.Component{
-			{ID: "one", Mode: packmgr.ModeHosted, Entrypoint: "a/mod.wasm"},
-			{ID: "two", Mode: packmgr.ModeHosted, Entrypoint: "b/mod.wasm"},
+			{ID: "one", Mode: packmgr.ModeHosted, Entrypoint: "mod.wasm"},
+			{ID: "two", Mode: packmgr.ModeHosted, Entrypoint: "mod.wasm"},
 		},
 	})
 	if err != nil {

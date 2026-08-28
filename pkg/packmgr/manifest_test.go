@@ -221,6 +221,19 @@ func TestSchemaVersionConstantIsNeutral(t *testing.T) {
 	}
 }
 
+func TestIsPackagePathIsPlatformNeutral(t *testing.T) {
+	for _, valid := range []string{".", "guest", "guest/main.ts"} {
+		if !packmgr.IsPackagePath(valid) {
+			t.Errorf("IsPackagePath(%q) = false", valid)
+		}
+	}
+	for _, invalid := range []string{"", "../outside", `..\outside`, `C:\\pkg\\main.wasm`, "/tmp/main.wasm", "guest//main.ts", "guest/./main.ts"} {
+		if packmgr.IsPackagePath(invalid) {
+			t.Errorf("IsPackagePath(%q) = true", invalid)
+		}
+	}
+}
+
 func TestValidateDependencyRejectsMalformedConstraint(t *testing.T) {
 	if err := packmgr.ValidateDependency(packmgr.Dependency{ID: "bus.query", Constraint: "not-a-constraint"}); !errors.Is(err, packmgr.ErrInvalidFormat) {
 		t.Fatalf("ValidateDependency error = %v, want ErrInvalidFormat", err)

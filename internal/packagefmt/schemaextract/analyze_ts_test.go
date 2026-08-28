@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -42,7 +43,11 @@ export function hello(args: HelloArgs): any {
 }
 `)
 	dir := t.TempDir()
-	fakeRunner := func(_ context.Context, _, _ string, _ ...string) ([]byte, error) {
+	fakeRunner := func(_ context.Context, _, name string, args ...string) ([]byte, error) {
+		wantArgs := "--yes --package " + SchemaGeneratorPackage + " ts-json-schema-generator --path main.ts --type HelloArgs --no-top-ref"
+		if name != "npx" || strings.Join(args, " ") != wantArgs {
+			t.Fatalf("schema generator command = %s %s", name, strings.Join(args, " "))
+		}
 		return json.Marshal(map[string]any{
 			"type": "object", "properties": map[string]any{
 				"name": map[string]any{"type": "string"},
@@ -65,6 +70,18 @@ export function hello(args: HelloArgs): any {
 	json.Unmarshal(capabilities[0].InputSchema, &schema)
 	if schema["additionalProperties"] != false {
 		t.Fatalf("schema 缺少 additionalProperties:false: %+v", schema)
+	}
+}
+
+func TestAnalyzeTSRejectsUnsupportedSchema(t *testing.T) {
+	source := []byte(`export function hello(args: HelloArgs): any {}
+export interface HelloArgs { values: { [key: string]: string }; }
+`)
+	_, err := analyzeTS(context.Background(), source, "my.pkg", t.TempDir(), func(context.Context, string, string, ...string) ([]byte, error) {
+		return []byte(`{"type":"object","properties":{"values":{"type":"object","additionalProperties":{"type":"string"}}},"required":["values"],"additionalProperties":false}`), nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "schema 不受支持") {
+		t.Fatalf("unsupported generated schema error = %v", err)
 	}
 }
 

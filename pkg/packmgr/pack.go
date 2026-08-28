@@ -41,7 +41,7 @@ func PackFromSource(ctx context.Context, sourceDir, outputDir string, manifest M
 	closed := false
 	defer func() {
 		if !closed {
-			file.Close()
+			_ = file.Close()
 		}
 	}()
 	gzipWriter := gzip.NewWriter(file)
@@ -65,23 +65,23 @@ func PackFromSource(ctx context.Context, sourceDir, outputDir string, manifest M
 		}
 		info, err := file.Stat()
 		if err != nil {
-			file.Close()
+			_ = file.Close()
 			return "", err
 		}
 		digest, err := hashReader(file)
 		if err != nil {
-			file.Close()
+			_ = file.Close()
 			return "", err
 		}
 		if _, err := file.Seek(0, io.SeekStart); err != nil {
-			file.Close()
+			_ = file.Close()
 			return "", err
 		}
 		if err := writeEntry(filepath.Base(artifact.path), info.Size(), file); err != nil {
-			file.Close()
+			_ = file.Close()
 			return "", err
 		}
-		file.Close()
+		_ = file.Close()
 		lockEntries = append(lockEntries, LockedArtifact{
 			ComponentID: artifact.componentID,
 			Path:        filepath.Base(artifact.path),
@@ -134,12 +134,12 @@ func unpackTarball(tarball, dest string) error {
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	gzipReader, err := gzip.NewReader(file)
 	if err != nil {
 		return ErrInvalidFormat
 	}
-	defer gzipReader.Close()
+	defer func() { _ = gzipReader.Close() }()
 	destination, err := os.OpenRoot(dest)
 	if err != nil {
 		return err
@@ -182,7 +182,7 @@ func unpackTarball(tarball, dest string) error {
 			}
 			// tar.Reader 按条目边界供给，超量读不到；不足声明大小（截断）报错。
 			if _, err := io.CopyN(file, tarReader, header.Size); err != nil {
-				file.Close()
+				_ = file.Close()
 				return ErrInvalidFormat
 			}
 			if err := file.Close(); err != nil {

@@ -81,6 +81,39 @@ func TestPublishStageRestoresPreviousInstallOnVerifyFailure(t *testing.T) {
 	}
 }
 
+func TestListInstalledRecoversInterruptedPublication(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	source := filepath.Join(t.TempDir(), "pkg")
+	if err := os.MkdirAll(source, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "app.wasm"), []byte("artifact"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	manifest := `{"schema_version":"` + SchemaVersion + `","id":"demo.pkg","version":"1.0.0",` +
+		`"components":[{"id":"core","mode":"hosted","entrypoint":"app.wasm"}]}`
+	if err := os.WriteFile(filepath.Join(source, "manifest.json"), []byte(manifest), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Install(ctx, root, source); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	if _, err := reserveBackupDir(root, filepath.Join(root, "demo.pkg")); err != nil {
+		t.Fatalf("reserveBackupDir: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "demo.pkg")); !os.IsNotExist(err) {
+		t.Fatalf("canonical package still exists: %v", err)
+	}
+	records, err := ListInstalled(ctx, root)
+	if err != nil {
+		t.Fatalf("ListInstalled: %v", err)
+	}
+	if len(records) != 1 || records[0].Manifest.ID != "demo.pkg" {
+		t.Fatalf("recovered records = %#v", records)
+	}
+}
+
 func TestPublishStageRestoresPreviousInstallOnRenameFailure(t *testing.T) {
 	root := t.TempDir()
 	source := filepath.Join(t.TempDir(), "pkg")
