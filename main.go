@@ -285,17 +285,11 @@ func runPackageCommand(parent context.Context, arguments []string, output io.Wri
 		if flags.NArg() == 2 {
 			outputDir = flags.Arg(1)
 		}
-		// 优先作者侧源清单 ailuo.toml（resolveSource 解析并执行 [build] 构建），
-		// 否则兼容旧 manifest.json 直接打包（packmgr.Pack）。
-		var tarballPath string
-		var err error
-		if manifest, manifestBytes, ok, resolveErr := resolveSource(ctx, flags.Arg(0)); resolveErr != nil {
-			return true, resolveErr
-		} else if ok {
-			tarballPath, err = packmgr.PackFromSource(ctx, flags.Arg(0), outputDir, manifest, manifestBytes)
-		} else {
-			tarballPath, err = packmgr.Pack(ctx, flags.Arg(0), outputDir)
+		manifest, manifestBytes, err := resolveSource(ctx, flags.Arg(0))
+		if err != nil {
+			return true, err
 		}
+		tarballPath, err := packmgr.PackFromSource(ctx, flags.Arg(0), outputDir, manifest, manifestBytes)
 		if err != nil {
 			return true, err
 		}
@@ -312,15 +306,11 @@ func runPackageCommand(parent context.Context, arguments []string, output io.Wri
 			return true, fmt.Errorf("configuration error: publish requires --repo owner/repo")
 		}
 		client := packmgr.NewGitHubClient()
-		var htmlURL string
-		var err error
-		if manifest, manifestBytes, ok, resolveErr := resolveSource(ctx, flags.Arg(0)); resolveErr != nil {
-			return true, resolveErr
-		} else if ok {
-			htmlURL, err = client.PublishFromSource(ctx, owner, name, flags.Arg(0), manifest, manifestBytes)
-		} else {
-			htmlURL, err = client.Publish(ctx, owner, name, flags.Arg(0))
+		manifest, manifestBytes, err := resolveSource(ctx, flags.Arg(0))
+		if err != nil {
+			return true, err
 		}
+		htmlURL, err := client.PublishFromSource(ctx, owner, name, flags.Arg(0), manifest, manifestBytes)
 		if err != nil {
 			return true, err
 		}
@@ -374,24 +364,22 @@ func localPathExists(path string) bool {
 	return err == nil
 }
 
-// resolveSource 解析源包目录：优先 ailuo.toml；found=false 表示无 ailuo.toml
-// （由旧 manifest.json 路径处理）。若清单声明 [build]，先执行构建再返回
-// （pack/publish 共用，构建失败即报错，不打包残缺工件）。
-func resolveSource(ctx context.Context, sourceDir string) (manifest packmgr.Manifest, manifestBytes []byte, found bool, err error) {
+// resolveSource 解析作者侧 ailuo.toml；若清单声明 [build]，先执行构建再返回。
+func resolveSource(ctx context.Context, sourceDir string) (manifest packmgr.Manifest, manifestBytes []byte, err error) {
 	path := packagefmt.SourcePath(sourceDir)
 	if _, statErr := os.Stat(path); statErr != nil {
-		return packmgr.Manifest{}, nil, false, nil
+		return packmgr.Manifest{}, nil, fmt.Errorf("读取源清单失败: %w", statErr)
 	}
 	manifest, manifestBytes, build, err := packagefmt.Parse(path)
 	if err != nil {
-		return packmgr.Manifest{}, nil, true, err
+		return packmgr.Manifest{}, nil, err
 	}
 	if build != nil {
 		if err := packagefmt.Build(ctx, sourceDir, manifest, *build); err != nil {
-			return packmgr.Manifest{}, nil, true, err
+			return packmgr.Manifest{}, nil, err
 		}
 	}
-	return manifest, manifestBytes, true, nil
+	return manifest, manifestBytes, nil
 }
 
 // identityProvision 是 identity-bind 命令的输入。
@@ -807,7 +795,7 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 		}
 	}
 	if !campusInstalled {
-		return fmt.Errorf("campus.bus 未安装：请先 ailuo install campus.bus（无 --root 时自动装到默认用户目录）")
+		return fmt.Errorf("campus.bus 未安装：请先安装其 .tgz 发布物或 owner/repo[@version] 发布包")
 	}
 	// 预热全部声明 pin 的运行时（内置 agent 与 installed pin）：编译/启动
 	// 失败则内核拒绝就绪（fail-closed）。预热清单由各清单声明推导，不再硬编码。

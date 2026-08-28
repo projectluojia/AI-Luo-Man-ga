@@ -292,17 +292,16 @@ func readSourceArtifacts(sourceDir string, manifest Manifest) ([]sourceArtifact,
 	seenNames := make(map[string]struct{}, len(manifest.Components))
 	for _, component := range manifest.Components {
 		artifactPath := filepath.Join(sourceDir, component.Entrypoint)
-		relative, err := filepath.Rel(sourceDir, artifactPath)
-		if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-			return nil, fmt.Errorf("组件 %s entrypoint 超出源目录", component.ID)
-		}
 		info, err := os.Lstat(artifactPath)
-		if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > MaxArtifactBytes {
-			return nil, fmt.Errorf("组件 %s entrypoint 工件无效: %w", component.ID, err)
+		if err != nil {
+			return nil, fmt.Errorf("组件 %s entrypoint 工件不可读: %w", component.ID, err)
+		}
+		if !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > MaxArtifactBytes {
+			return nil, fmt.Errorf("组件 %s entrypoint 工件无效", component.ID)
 		}
 		name := filepath.Base(artifactPath)
 		if _, exists := seenNames[name]; exists {
-			return sourcePackage{}, fmt.Errorf("%w: 组件 entrypoint basename 重复 %q", ErrInvalidFormat, name)
+			return nil, fmt.Errorf("%w: 组件 entrypoint basename 重复 %q", ErrInvalidFormat, name)
 		}
 		seenNames[name] = struct{}{}
 		artifacts = append(artifacts, sourceArtifact{componentID: component.ID, path: artifactPath})

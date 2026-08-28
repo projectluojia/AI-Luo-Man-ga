@@ -56,7 +56,7 @@ func TestRuntimeHostProductionWiring(t *testing.T) {
 		SchemaVersion: packmgr.SchemaVersion, ID: "strings.tool", Version: "1.0.0",
 		Pin: true, Extensions: extensions,
 		Components: []packmgr.Component{{
-			ID: "strings.tool", Mode: loader.ModeHosted, Entrypoint: "strings.tool.wasm",
+			ID: "core", Mode: loader.ModeHosted, Entrypoint: "strings.tool.wasm",
 			Exports: []string{"strings.len.cap"},
 		}},
 	}
@@ -74,7 +74,7 @@ func TestRuntimeHostProductionWiring(t *testing.T) {
 		PackageVersion: "1.0.0",
 		ManifestSHA256: hex.EncodeToString(manifestDigest[:]),
 		Artifacts: []packmgr.LockedArtifact{{
-			ComponentID: "strings.tool", Path: artifactPath, SHA256: hex.EncodeToString(artifactDigest[:]),
+			ComponentID: "core", Path: artifactPath, SHA256: hex.EncodeToString(artifactDigest[:]),
 		}},
 	}
 	lockBytes, err := json.Marshal(lock)
@@ -90,7 +90,7 @@ func TestRuntimeHostProductionWiring(t *testing.T) {
 		t.Fatal(err)
 	}
 	records, err := catalog.Discover(t.Context())
-	if err != nil || len(records) != 1 || records[0].Runtime.ID != "strings.tool" {
+	if err != nil || len(records) != 1 || records[0].Runtime.ID != "strings.tool.core" {
 		t.Fatalf("discover records=%#v err=%v", records, err)
 	}
 	backend, err := loader.NewHostedRuntimeBackend(loader.WasmHostConfig{ReadArtifact: catalog.ReadArtifact})
@@ -119,10 +119,10 @@ func TestRuntimeHostProductionWiring(t *testing.T) {
 		t.Fatal(err)
 	}
 	// 预热触发完整装载（验证 → 协议 Describe/Start/Health），编译失败内核拒绝就绪。
-	if err := manager.Warmup(context.Background(), []string{"strings.tool"}, 1); err != nil {
+	if err := manager.Warmup(context.Background(), []string{"strings.tool.core"}, 1); err != nil {
 		t.Fatal(err)
 	}
-	result, err := manager.Handler("strings.tool")(
+	result, err := manager.Handler("strings.tool.core")(
 		context.Background(), toolRuntimeRequest(), json.RawMessage(`{"value":"hello"}`),
 	)
 	if err != nil {

@@ -30,33 +30,36 @@ type packageCandidate struct {
 // retiredGroup 是升级后旧版本组件的退役组：全部 inFlight 归零后反序停止。
 type retiredGroup struct {
 	mu        sync.Mutex
-	remaining int
+	draining  int
 	triggered bool
 	order     []*retiredRuntime // 反序（停止顺序）
 }
 
-// memberDrained 由 Release 在退役成员排空时调用。
+// memberDrained 由 Release 在退役成员排空时调用，每个成员只调用一次。
 func (g *retiredGroup) memberDrained() {
 	g.mu.Lock()
-	if g.remaining > 0 {
-		g.remaining--
-	}
-	all := !g.triggered && g.remaining <= 0
-	if all {
-		g.triggered = true
-	}
+	g.draining--
 	g.mu.Unlock()
-	if all {
-		for _, member := range g.order {
-			stopRetiredRuntime(member)
-		}
+	g.stopIfDrained()
+}
+
+func (g *retiredGroup) stopIfDrained() {
+	g.mu.Lock()
+	if g.triggered || g.draining > 0 {
+		g.mu.Unlock()
+		return
+	}
+	g.triggered = true
+	g.mu.Unlock()
+	for _, member := range g.order {
+		stopRetiredRuntime(member)
 	}
 }
 
 // RegisterPackage 记录包的组件分组。组件运行时已通过 RegisterBatch 注册。
 // orderedComponentIDs 按依赖拓扑排列（Provider 在前）。
 func (m *Manager) RegisterPackage(pkgID string, orderedComponentIDs []string) error {
-	group := &packageGroup{id: pkgID}
+	group := &packageGroup{}
 	for _, componentID := range orderedComponentIDs {
 		item, err := m.resolve(componentID)
 		if err != nil {
@@ -89,6 +92,8 @@ func (m *Manager) UpgradePackage(ctx context.Context, spec PackageSpec) error {
 	if group == nil {
 		return fmt.Errorf("%w: package %q not registered", ErrNotFound, spec.ID)
 	}
+	group.upgradeMu.Lock()
+	defer group.upgradeMu.Unlock()
 	if len(spec.Components) != len(group.order) {
 		return ErrInvalidManifest
 	}
@@ -140,7 +145,7 @@ func (m *Manager) UpgradePackage(ctx context.Context, spec PackageSpec) error {
 	for index, item := range entries {
 		old := &retiredRuntime{
 			runtime:  item.runtime,
-			inFlight: item.inFlight,
+			inFlight: item.currentInFlight,
 			stopped:  make(chan struct{}),
 			group:    retired,
 		}
@@ -148,7 +153,10 @@ func (m *Manager) UpgradePackage(ctx context.Context, spec PackageSpec) error {
 		item.manifest = spec.Components[index].Runtime
 		item.host = candidates[index].host
 		item.runtime = candidates[index].runtime
-		retired.remaining += old.inFlight
+		item.currentInFlight = 0
+		if old.inFlight > 0 {
+			retired.draining++
+		}
 	}
 	// 反序：停止顺序 = 消费者先停。
 	for i := len(entries) - 1; i >= 0; i-- {
@@ -163,9 +171,7 @@ func (m *Manager) UpgradePackage(ctx context.Context, spec PackageSpec) error {
 		observe.StringAttr("package_id", spec.ID),
 		observe.StringAttr("package_version", spec.Components[0].Runtime.Version),
 	)
-	if retired.remaining <= 0 {
-		retired.memberDrained()
-	}
+	retired.stopIfDrained()
 	return nil
 }
 
