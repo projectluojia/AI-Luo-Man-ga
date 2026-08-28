@@ -137,12 +137,14 @@ type retiredRuntime struct {
 }
 
 type Manager struct {
-	mu        sync.RWMutex
-	entries   map[string]*entry
-	hosts     map[string][]Host
-	packages  map[string]*packageGroup
-	accepting bool
-	now       func() time.Time
+	mu             sync.RWMutex
+	entries        map[string]*entry
+	hosts          map[string][]Host
+	packages       map[string]*packageGroup
+	accepting      bool
+	activeUpgrades int
+	upgradeDone    chan struct{}
+	now            func() time.Time
 }
 
 // packageGroup 是一个包的组件组：order 按依赖拓扑排列（Provider 在前）。
@@ -168,13 +170,38 @@ func New(hosts ...Host) (*Manager, error) {
 		}
 		grouped[mode] = append(grouped[mode], host)
 	}
+	upgradeDone := make(chan struct{})
+	close(upgradeDone)
 	return &Manager{
-		entries:   make(map[string]*entry),
-		hosts:     grouped,
-		packages:  make(map[string]*packageGroup),
-		accepting: true,
-		now:       time.Now,
+		entries:     make(map[string]*entry),
+		hosts:       grouped,
+		packages:    make(map[string]*packageGroup),
+		accepting:   true,
+		upgradeDone: upgradeDone,
+		now:         time.Now,
 	}, nil
+}
+
+func (m *Manager) beginUpgrade() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.accepting {
+		return ErrShuttingDown
+	}
+	if m.activeUpgrades == 0 {
+		m.upgradeDone = make(chan struct{})
+	}
+	m.activeUpgrades++
+	return nil
+}
+
+func (m *Manager) endUpgrade() {
+	m.mu.Lock()
+	m.activeUpgrades--
+	if m.activeUpgrades == 0 {
+		close(m.upgradeDone)
+	}
+	m.mu.Unlock()
 }
 
 // selectHost 按清单 Verify 绑定唯一宿主：同一模式存在多个宿主时，恰好一个
@@ -737,11 +764,21 @@ func (m *Manager) unload(ctx context.Context, item *entry) error {
 func (m *Manager) Shutdown(ctx context.Context) error {
 	m.mu.Lock()
 	m.accepting = false
+	upgradeDone := m.upgradeDone
 	items := make([]*entry, 0, len(m.entries))
 	for _, item := range m.entries {
 		items = append(items, item)
 	}
 	m.mu.Unlock()
+	if upgradeDone == nil {
+		upgradeDone = make(chan struct{})
+		close(upgradeDone)
+	}
+	select {
+	case <-upgradeDone:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
 	for {
