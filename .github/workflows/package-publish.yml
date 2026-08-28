@@ -20,6 +20,10 @@ on:
         type: string
         default: ""
         description: 在 package-dir 内构建工件的命令；空表示工件已提交
+      test-command:
+        type: string
+        required: true
+        description: 在 package-dir 内运行的发布前测试命令
       tag-required:
         type: boolean
         default: false
@@ -31,9 +35,9 @@ on:
       package-version:
         description: 打包出的包版本
         value: ${{ jobs.package.outputs.package-version }}
-      tarball:
-        description: 生成的 tarball 相对路径
-        value: ${{ jobs.package.outputs.tarball }}
+      artifact-id:
+        description: 已验证 tarball 的 workflow artifact ID
+        value: ${{ jobs.package.outputs.artifact-id }}
 
 permissions:
   contents: read
@@ -48,7 +52,7 @@ jobs:
     outputs:
       package-id: ${{ steps.pack.outputs.package-id }}
       package-version: ${{ steps.pack.outputs.package-version }}
-      tarball: ${{ steps.pack.outputs.tarball }}
+      artifact-id: ${{ steps.upload.outputs.artifact-id }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -57,7 +61,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: projectluojia/AI-Luo-Man-ga
-          ref: 0cc4ab0
+          ref: 084bee2bbff7a612856c93e7334ac5522207635c
           path: .ailuo-cli
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -71,8 +75,13 @@ jobs:
         if: ${{ inputs.build-command != '' }}
         env:
           BUILD_COMMAND: ${{ inputs.build-command }}
-        run: bash -euo pipefail -c "$BUILD_COMMAND"
-        working-directory: ${{ inputs.package-dir }}
+          PACKAGE_DIR: ${{ inputs.package-dir }}
+        run: cd "$PACKAGE_DIR" && bash -euo pipefail -c "$BUILD_COMMAND"
+      - name: 测试包工件
+        env:
+          PACKAGE_DIR: ${{ inputs.package-dir }}
+          TEST_COMMAND: ${{ inputs.test-command }}
+        run: cd "$PACKAGE_DIR" && bash -euo pipefail -c "$TEST_COMMAND"
       - name: 打包并冒烟安装验证
         id: pack
         shell: bash
@@ -100,7 +109,7 @@ jobs:
           ./.ailuo-cli/ailuo list --root "$RUNNER_TEMP/pkgroot" | grep -q "^${id}@${version}"
           echo "package-id=$id" >> "$GITHUB_OUTPUT"
           echo "package-version=$version" >> "$GITHUB_OUTPUT"
-          echo "tarball=$tarball" >> "$GITHUB_OUTPUT"
+          echo "tarball-path=$tarball" >> "$GITHUB_OUTPUT"
       - name: 校验包版本与 git tag 一致
         if: ${{ inputs.tag-required }}
         shell: bash
@@ -115,10 +124,11 @@ jobs:
           }
 
       - name: 上传已验证发布物
+        id: upload
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ailuo-package
-          path: ${{ steps.pack.outputs.tarball }}
+          path: ${{ steps.pack.outputs.tarball-path }}
           if-no-files-found: error
 
   # Release 发布单独成 job：只有它需要 contents: write，且只在 tag 发布时运行。
@@ -133,13 +143,13 @@ jobs:
     steps:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: ailuo-package
+          artifact-ids: ${{ needs.package.outputs.artifact-id }}
           path: package-artifact
       # 只检出固定版本的 CLI；不检出或执行调用方仓库代码。
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: projectluojia/AI-Luo-Man-ga
-          ref: 0cc4ab0
+          ref: 084bee2bbff7a612856c93e7334ac5522207635c
           path: .ailuo-cli
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
