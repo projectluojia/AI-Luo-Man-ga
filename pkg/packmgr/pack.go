@@ -15,8 +15,8 @@ import (
 	"path/filepath"
 )
 
-// Pack 把源包目录打成可分发 tarball（npm pack 等价物）：校验清单与工件后
-// 生成 `<id>-<version>.tgz`，条目为扁平布局（manifest.json + lock.json + 工件），
+const maxTarEntries = 4096
+
 // PackFromSource 用调用方提供的清单（如从 ailuo.toml 源清单或 schemaextract
 // 自动提取）打包：校验清单与源目录工件，生成 tarball 并附带按工件 SHA-256
 // 锁定的 lock.json。清单来源由调用方决定，本函数不读取 manifest.json。
@@ -157,7 +157,10 @@ func unpackTarball(tarball, dest string) error {
 			return ErrInvalidFormat
 		}
 		entries++
-		if entries > 4096 || !isPackageEntrypoint(header.Name) {
+		if entries > maxTarEntries {
+			return fmt.Errorf("%w: tarball 条目数超过上限 %d", ErrInvalidFormat, maxTarEntries)
+		}
+		if !isPackageEntrypoint(header.Name) {
 			return fmt.Errorf("%w: tarball 条目路径非法 %q", ErrInvalidFormat, header.Name)
 		}
 		if header.Size < 0 || header.Size > MaxArtifactBytes {

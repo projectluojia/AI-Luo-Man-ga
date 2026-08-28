@@ -22,8 +22,9 @@ import (
 // 下载。token 来自 GITHUB_TOKEN/GH_TOKEN（发布与私有仓库需要，公开安装可缺省）。
 
 const (
-	githubAPI     = "https://api.github.com"
-	githubUploads = "https://uploads.github.com"
+	githubAPI      = "https://api.github.com"
+	githubUploads  = "https://uploads.github.com"
+	githubMaxPages = 100
 )
 
 // GitHubClient 是 GitHub Releases 分发后端客户端。
@@ -46,25 +47,21 @@ func NewGitHubClient() *GitHubClient {
 	}
 }
 
-// Publish 打包并发布到 GitHub Release：API 自动从默认分支创建 tag
-// v{version}（无 git CLI 依赖），创建 Release 并上传 tarball。同版本
-// 重复发布返回错误（版本不可变）。清单来自源目录 manifest.json。
-func (c *GitHubClient) Publish(ctx context.Context, owner, repo, sourceDir string) (string, error) {
-	source, err := readSourceManifest(sourceDir)
-	if err != nil {
-		return "", err
+func (c *GitHubClient) validatePublishArgs(owner, repo string) error {
+	if owner == "" || repo == "" {
+		return fmt.Errorf("发布需要 --repo owner/repo")
 	}
-	return c.PublishFromSource(ctx, owner, repo, sourceDir, source.Manifest, source.manifestBytes)
+	if c.Token == "" {
+		return fmt.Errorf("发布需要 GITHUB_TOKEN（或 GH_TOKEN）")
+	}
+	return nil
 }
 
 // PublishFromSource 用调用方提供的清单发布（与 PackFromSource 对称）：供作者侧
 // 源清单（ailuo.toml）路径使用，不读取 manifest.json。
 func (c *GitHubClient) PublishFromSource(ctx context.Context, owner, repo, sourceDir string, manifest Manifest, manifestBytes []byte) (string, error) {
-	if owner == "" || repo == "" {
-		return "", fmt.Errorf("发布需要 --repo owner/repo")
-	}
-	if c.Token == "" {
-		return "", fmt.Errorf("发布需要 GITHUB_TOKEN（或 GH_TOKEN）")
+	if err := c.validatePublishArgs(owner, repo); err != nil {
+		return "", err
 	}
 	tempDir, err := os.MkdirTemp("", "ailuo-publish-")
 	if err != nil {
@@ -81,11 +78,8 @@ func (c *GitHubClient) PublishFromSource(ctx context.Context, owner, repo, sourc
 // PublishTarball 校验并发布已打包的 tarball。构建与发布分离时，发布端只需
 // 处理已验证的发布物，不执行调用方提供的构建命令。
 func (c *GitHubClient) PublishTarball(ctx context.Context, owner, repo, tarballPath string) (string, error) {
-	if owner == "" || repo == "" {
-		return "", fmt.Errorf("发布需要 --repo owner/repo")
-	}
-	if c.Token == "" {
-		return "", fmt.Errorf("发布需要 GITHUB_TOKEN（或 GH_TOKEN）")
+	if err := c.validatePublishArgs(owner, repo); err != nil {
+		return "", err
 	}
 	manifest, err := validateTarball(ctx, tarballPath)
 	if err != nil {
@@ -272,7 +266,7 @@ func (c *GitHubClient) ResolveRelease(ctx context.Context, owner, repo, constrai
 		bestURL     string
 		found       bool
 	)
-	for page := 1; ; page++ {
+	for page := 1; page <= githubMaxPages; page++ {
 		request, err := http.NewRequestWithContext(ctx, http.MethodGet,
 			fmt.Sprintf("%s/repos/%s/%s/releases?per_page=100&page=%d", c.APIBase, owner, repo, page), nil)
 		if err != nil {

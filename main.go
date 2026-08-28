@@ -247,8 +247,11 @@ func runPackageCommand(parent context.Context, arguments []string, output io.Wri
 		owner, name, constraint, isRegistry := splitRegistryRef(source)
 		var record packmgr.InstalledRecord
 		var err error
-		if !localPathExists(source) && isRegistry {
+		_, sourceErr := os.Stat(source)
+		if errors.Is(sourceErr, fs.ErrNotExist) && isRegistry {
 			record, err = packmgr.InstallFromRelease(ctx, *root, packmgr.NewGitHubClient(), owner, name, constraint)
+		} else if sourceErr != nil {
+			return true, sourceErr
 		} else {
 			record, err = packmgr.Install(ctx, *root, source)
 		}
@@ -423,12 +426,6 @@ func splitRegistryRef(source string) (owner, repo, constraint string, ok bool) {
 		return "", "", "", false
 	}
 	return match[1], match[2], match[3], true
-}
-
-// localPathExists 判断源是否为已存在的本地文件或目录。
-func localPathExists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
 }
 
 // resolveSource 解析源包目录：优先 ailuo.toml（显式声明，含宿主函数/存储），

@@ -64,38 +64,13 @@ func buildGoWasm(ctx context.Context, sourceDir string, manifest packmgr.Manifes
 	if runtime.GOARCH == "wasm" {
 		return fmt.Errorf("%w: 当前平台自身是 wasm，无法交叉编译", ErrBuildFailed)
 	}
-	absoluteSourceDir, err := filepath.Abs(sourceDir)
-	if err != nil {
-		return fmt.Errorf("%w: 解析包目录: %v", ErrBuildFailed, err)
-	}
-	source := spec.Source
-	if source == "" {
-		source = "."
-	}
-	if !packmgr.IsPackagePath(source) {
-		return fmt.Errorf("%w: 源码目录非法 %q", ErrBuildFailed, source)
-	}
-	workDir := filepath.Join(absoluteSourceDir, source)
-	for _, component := range manifest.Components {
-		if component.Mode != packmgr.ModeHosted {
-			continue
-		}
-		if component.Entrypoint == "" || !packmgr.IsPackagePath(component.Entrypoint) {
-			return fmt.Errorf("%w: 组件 %s entrypoint 非法 %q", ErrBuildFailed, component.ID, component.Entrypoint)
-		}
-		output := filepath.Join(absoluteSourceDir, component.Entrypoint)
-		if err := os.MkdirAll(filepath.Dir(output), 0o750); err != nil {
-			return fmt.Errorf("%w: 创建输出目录: %v", ErrBuildFailed, err)
-		}
-		command := exec.CommandContext(ctx, "go", "build", "-trimpath", "-o", output, ".")
-		command.Dir = workDir
-		command.Env = append(os.Environ(), "GOOS=wasip1", "GOARCH=wasm")
-		outputBytes, err := command.CombinedOutput()
-		if err != nil {
-			return fmt.Errorf("%w: 编译组件 %s: %v\n%s", ErrBuildFailed, component.ID, err, outputBytes)
-		}
-	}
-	return nil
+	return buildHostedComponents(ctx, sourceDir, manifest, spec,
+		func(ctx context.Context, workDir string, _ packmgr.Component, output string) ([]byte, error) {
+			command := exec.CommandContext(ctx, "go", "build", "-trimpath", "-o", output, ".")
+			command.Dir = workDir
+			command.Env = append(os.Environ(), "GOOS=wasip1", "GOARCH=wasm")
+			return command.CombinedOutput()
+		})
 }
 
 // buildAssemblyScript 用 AssemblyScript 编译器编译每个 hosted 组件：
@@ -103,6 +78,24 @@ func buildGoWasm(ctx context.Context, sourceDir string, manifest packmgr.Manifes
 // 在源码目录内执行（需 node/npx 环境）。入口约定：entrypoint 声明为
 // <名>.wasm，对应源码 <名>.ts（与 schemaextract 的 main.ts 约定一致）。
 func buildAssemblyScript(ctx context.Context, sourceDir string, manifest packmgr.Manifest, spec BuildSpec) error {
+	return buildHostedComponents(ctx, sourceDir, manifest, spec,
+		func(ctx context.Context, workDir string, component packmgr.Component, output string) ([]byte, error) {
+			// 源码名 = entrypoint 去 .wasm 后缀 + .ts（main.wasm → main.ts）。
+			input := filepath.Join(workDir, strings.TrimSuffix(filepath.Base(component.Entrypoint), ".wasm")+".ts")
+			command := exec.CommandContext(ctx, "npx", "--yes", "--package", assemblyScriptPackage, "asc", input, "-o", output)
+			command.Dir = workDir
+			return command.CombinedOutput()
+		})
+}
+
+// buildHostedComponents 统一校验包路径、输出目录并逐个构建 hosted 组件。
+func buildHostedComponents(
+	ctx context.Context,
+	sourceDir string,
+	manifest packmgr.Manifest,
+	spec BuildSpec,
+	build func(context.Context, string, packmgr.Component, string) ([]byte, error),
+) error {
 	absoluteSourceDir, err := filepath.Abs(sourceDir)
 	if err != nil {
 		return fmt.Errorf("%w: 解析包目录: %v", ErrBuildFailed, err)
@@ -126,11 +119,7 @@ func buildAssemblyScript(ctx context.Context, sourceDir string, manifest packmgr
 		if err := os.MkdirAll(filepath.Dir(output), 0o750); err != nil {
 			return fmt.Errorf("%w: 创建输出目录: %v", ErrBuildFailed, err)
 		}
-		// 源码名 = entrypoint 去 .wasm 后缀 + .ts（main.wasm → main.ts）。
-		input := filepath.Join(workDir, strings.TrimSuffix(filepath.Base(component.Entrypoint), ".wasm")+".ts")
-		command := exec.CommandContext(ctx, "npx", "--yes", "--package", assemblyScriptPackage, "asc", input, "-o", output)
-		command.Dir = workDir
-		outputBytes, err := command.CombinedOutput()
+		outputBytes, err := build(ctx, workDir, component, output)
 		if err != nil {
 			return fmt.Errorf("%w: 编译组件 %s: %v\n%s", ErrBuildFailed, component.ID, err, outputBytes)
 		}

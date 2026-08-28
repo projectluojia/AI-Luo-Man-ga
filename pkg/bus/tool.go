@@ -33,7 +33,7 @@ func ToolHandlers(store Store) map[string]Handler {
 
 // governedStatus 治理一次校巴快照读取：快照元数据未通过权威/新鲜度校验时
 // 返回稳定数据治理错误（拒绝原因在错误链中，不写日志——本包中立无日志依赖）。
-func governedStatus(ctx context.Context, kind string, metadata SnapshotMetadata, now time.Time) (DataStatus, error) {
+func governedStatus(kind string, metadata SnapshotMetadata, now time.Time) (DataStatus, error) {
 	dataStatus, err := metadata.Govern(now)
 	if err != nil {
 		return DataStatus{}, fmt.Errorf("govern %s snapshot: %w", kind, err)
@@ -54,7 +54,7 @@ func stopSearchHandler(store Store) Handler {
 		if err != nil {
 			return nil, fmt.Errorf("search bus stops: %w", err)
 		}
-		dataStatus, err := governedStatus(ctx, "stops", snapshot.Metadata, time.Now())
+		dataStatus, err := governedStatus("stops", snapshot.Metadata, time.Now())
 		if err != nil {
 			return nil, err
 		}
@@ -86,7 +86,7 @@ func routeListHandler(store Store) Handler {
 		if err != nil {
 			return nil, fmt.Errorf("list bus routes: %w", err)
 		}
-		dataStatus, err := governedStatus(ctx, "routes", snapshot.Metadata, time.Now())
+		dataStatus, err := governedStatus("routes", snapshot.Metadata, time.Now())
 		if err != nil {
 			return nil, err
 		}
@@ -116,7 +116,7 @@ func journeySearchHandler(store Store, now func() time.Time) Handler {
 		if err != nil {
 			return nil, fmt.Errorf("search bus journeys: %w", err)
 		}
-		dataStatus, err := governedStatus(ctx, "journeys", snapshot.Metadata, now())
+		dataStatus, err := governedStatus("journeys", snapshot.Metadata, now())
 		if err != nil {
 			return nil, err
 		}
