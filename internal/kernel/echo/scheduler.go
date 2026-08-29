@@ -30,6 +30,7 @@ type SchedulerRunner interface {
 	RunQueued(context.Context, RunWork, EventEmitter) error
 	Recoverable(context.Context) ([]RunWork, error)
 	Runnable(context.Context, int) ([]RunWork, error)
+	CancelQueuedRuns(context.Context) error
 	Canceller
 }
 
@@ -189,6 +190,7 @@ func (s *Scheduler) Cancel(ctx context.Context, echoID string) (bool, error) {
 		return false, err
 	}
 	s.activeMu.Lock()
+	delete(s.pending, echoID)
 	cancellations := make([]context.CancelFunc, 0, 2)
 	for key, cancel := range s.active {
 		if key.echoID == echoID {
@@ -316,27 +318,23 @@ func (s *Scheduler) Shutdown(ctx context.Context) error {
 func (s *Scheduler) shutdown(ctx context.Context) error {
 	s.stop()
 	s.activeMu.Lock()
-	echoIDs := make(map[string]struct{}, len(s.active)+len(s.pending))
+	activeEchoIDs := make(map[string]struct{}, len(s.active))
 	for key := range s.active {
-		echoIDs[key.echoID] = struct{}{}
-	}
-	for echoID := range s.pending {
-		echoIDs[echoID] = struct{}{}
+		activeEchoIDs[key.echoID] = struct{}{}
 	}
 	s.activeMu.Unlock()
-	if queued, err := s.runner.Runnable(ctx, 1000); err != nil {
-		return fmt.Errorf("读取关闭时排队 Run：%w", err)
-	} else {
-		for _, item := range queued {
-			echoIDs[item.Run.EchoID] = struct{}{}
-		}
-	}
 	var cancellationErrors []error
-	for echoID := range echoIDs {
+	if err := s.runner.CancelQueuedRuns(ctx); err != nil {
+		cancellationErrors = append(cancellationErrors, fmt.Errorf("持久化取消排队 Echo：%w", err))
+	}
+	for echoID := range activeEchoIDs {
 		if _, err := s.Cancel(ctx, echoID); err != nil && !errors.Is(err, ErrInvalidTransition) {
 			cancellationErrors = append(cancellationErrors, fmt.Errorf("持久化取消 Echo %s：%w", echoID, err))
 		}
 	}
+	s.activeMu.Lock()
+	clear(s.pending)
+	s.activeMu.Unlock()
 	done := make(chan struct{})
 	go func() {
 		s.activeWG.Wait()

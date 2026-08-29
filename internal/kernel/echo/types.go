@@ -194,6 +194,7 @@ type OrchestratorStore interface {
 	// SetRunContext 固化 Run 的上下文摘要与来源版本（每次执行只可设置一次）。
 	SetRunContext(ctx context.Context, run RunRecord, digest string, sources json.RawMessage) error
 	CancelQueuedRun(ctx context.Context, appID, echoID string, completedAt time.Time) (bool, error)
+	CancelQueuedRuns(ctx context.Context, appID string, completedAt time.Time) error
 	RetryRun(ctx context.Context, current, next RunRecord, failure publicerror.Error, completedAt time.Time) error
 	CompleteRun(ctx context.Context, run RunRecord, runStatus, echoStatus, finalMessage string, failure publicerror.Error, completedAt time.Time) error
 	CompleteChildRun(ctx context.Context, run RunRecord, runStatus, resultMessage string, failure publicerror.Error, completedAt time.Time) error

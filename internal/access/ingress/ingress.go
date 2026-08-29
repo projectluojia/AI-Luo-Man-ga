@@ -35,6 +35,7 @@ type Event struct {
 
 // Server 是平台事件入口：POST /api/v1/ingress/{platform}。
 type Server struct {
+	*access.AdmissionGate
 	appID     string
 	hub       *access.Hub
 	echoes    kernelecho.Creator
@@ -46,7 +47,7 @@ func NewServer(appID string, hub *access.Hub, echoes kernelecho.Creator, schedul
 	if scheduler == nil {
 		panic("platform ingress requires a Run scheduler")
 	}
-	return &Server{appID: appID, hub: hub, echoes: echoes, scheduler: scheduler}
+	return &Server{AdmissionGate: access.NewAdmissionGate(), appID: appID, hub: hub, echoes: echoes, scheduler: scheduler}
 }
 
 // Handler 返回平台事件 HTTP 处理器。
@@ -59,6 +60,11 @@ func (s *Server) Handler() http.Handler {
 // ingest 处理一条平台事件：严格解码 → 标准消息校验（Hub）→ 身份解析 → 会话/消息入库 →
 // Echo 创建。重复投递（相同幂等键）返回既有 Echo 且 created 为 false。
 func (s *Server) ingest(writer http.ResponseWriter, request *http.Request) {
+	if !s.Begin() {
+		access.WriteJSON(writer, http.StatusServiceUnavailable, map[string]string{"code": "shutting_down", "message": "服务正在关闭"})
+		return
+	}
+	defer s.Done()
 	platform := request.PathValue("platform")
 	if err := identity.ValidatePlatform(platform); err != nil {
 		observe.Warn(request.Context(), "平台事件路径标识非法", observe.StringAttr("reason", platform))

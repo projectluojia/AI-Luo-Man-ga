@@ -164,7 +164,17 @@ func (f *fakeOrchestrator) Runnable(ctx context.Context, limit int) ([]kernelech
 }
 
 func (f *fakeOrchestrator) Cancel(ctx context.Context, echoID string) (bool, error) {
+	if f.store == nil {
+		return false, nil
+	}
 	return f.store.CancelQueuedRun(ctx, "campus-services", echoID, time.Now().UTC())
+}
+
+func (f *fakeOrchestrator) CancelQueuedRuns(ctx context.Context) error {
+	if f.store == nil {
+		return nil
+	}
+	return f.store.CancelQueuedRuns(ctx, "campus-services", time.Now().UTC())
 }
 
 type failingReader struct {

@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -37,6 +36,7 @@ type HealthChecker interface {
 }
 
 type Server struct {
+	*access.AdmissionGate
 	orchestrator     kernelecho.Creator
 	scheduler        kernelecho.Controller
 	reader           EchoReader
@@ -50,9 +50,6 @@ type Server struct {
 	webAuthenticator WebAuthenticator
 	qqAccessAdmin    QQAccessAdmin
 	hub              *access.EventHub
-	admissionMu      sync.Mutex
-	admissionWG      sync.WaitGroup
-	accepting        bool
 }
 
 func NewServer(
@@ -71,16 +68,16 @@ func NewServer(
 		panic("web access dependencies are incomplete")
 	}
 	server := &Server{
-		orchestrator: orchestrator,
-		scheduler:    scheduler,
-		reader:       reader,
-		health:       health,
-		registry:     reg,
-		policy:       policy,
-		appID:        appID,
-		platformHub:  platformHub,
-		hub:          events,
-		accepting:    true,
+		AdmissionGate: access.NewAdmissionGate(),
+		orchestrator:  orchestrator,
+		scheduler:     scheduler,
+		reader:        reader,
+		health:        health,
+		registry:      reg,
+		policy:        policy,
+		appID:         appID,
+		platformHub:   platformHub,
+		hub:           events,
 	}
 	if platformHub != nil {
 		server.identityResolver = platformHub
@@ -120,10 +117,7 @@ func (s *Server) healthz(writer http.ResponseWriter, request *http.Request) {
 }
 
 func (s *Server) readyz(writer http.ResponseWriter, request *http.Request) {
-	s.admissionMu.Lock()
-	accepting := s.accepting
-	s.admissionMu.Unlock()
-	if !accepting {
+	if !s.Accepting() {
 		access.WriteJSON(writer, http.StatusServiceUnavailable, map[string]string{"code": "shutting_down", "message": "服务正在关闭"})
 		return
 	}
@@ -177,11 +171,11 @@ func (s *Server) capabilities(writer http.ResponseWriter, request *http.Request)
 }
 
 func (s *Server) createEcho(writer http.ResponseWriter, request *http.Request) {
-	if !s.beginAdmission() {
+	if !s.Begin() {
 		access.WriteJSON(writer, http.StatusServiceUnavailable, map[string]string{"code": "shutting_down", "message": "服务正在关闭"})
 		return
 	}
-	defer s.admissionWG.Done()
+	defer s.Done()
 	webIdentity, authenticated := s.authenticateWeb(writer, request)
 	if !authenticated {
 		return
@@ -257,37 +251,6 @@ func (s *Server) createEcho(writer http.ResponseWriter, request *http.Request) {
 		"status_url": "/api/v1/echoes/" + echoID,
 		"events_url": "/api/v1/echoes/" + echoID + "/events",
 	})
-}
-
-func (s *Server) StopAccepting() {
-	s.admissionMu.Lock()
-	s.accepting = false
-	s.admissionMu.Unlock()
-}
-
-// WaitAdmissions 等待已经进入 Web 的 Echo/聊天接纳事务完成。
-func (s *Server) WaitAdmissions(ctx context.Context) error {
-	done := make(chan struct{})
-	go func() {
-		s.admissionWG.Wait()
-		close(done)
-	}()
-	select {
-	case <-done:
-		return nil
-	case <-ctx.Done():
-		return fmt.Errorf("等待 Web 接纳事务完成：%w", ctx.Err())
-	}
-}
-
-func (s *Server) beginAdmission() bool {
-	s.admissionMu.Lock()
-	defer s.admissionMu.Unlock()
-	if !s.accepting {
-		return false
-	}
-	s.admissionWG.Add(1)
-	return true
 }
 
 func (s *Server) getEcho(writer http.ResponseWriter, request *http.Request) {
