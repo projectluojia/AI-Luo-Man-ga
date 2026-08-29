@@ -9,36 +9,20 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/capability"
 	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
 )
-
-// capabilitySpec 是生成 SDK 所需的 capability 契约视图，JSON 形状与内核
-// CapabilitySpec 一致（严格解码拒绝未知字段）。
-type capabilitySpec struct {
-	ID                   string   `json:"id"`
-	Version              string   `json:"version"`
-	Name                 string   `json:"name"`
-	Description          string   `json:"description"`
-	ServiceID            string   `json:"service_id"`
-	SideEffect           string   `json:"side_effect"`
-	RequiresConfirmation bool     `json:"requires_confirmation"`
-	RequiredPermissions  []string `json:"required_permissions,omitempty"`
-	ToolID               string   `json:"tool_id,omitempty"`
-	// InputSchema 是 capability 输入 JSON Schema 的文本（与内核
-	// CapabilitySpec.InputSchemaJSON 同形）。
-	InputSchema string `json:"input_schema_json"`
-}
 
 // extensions 是 Manifest.Extensions 的严格形状：tools 与 service 由内核
 // 解释（SDK 消费方只调用 capability），capabilities 驱动 SDK 生成。
 type extensions struct {
-	Tools        json.RawMessage  `json:"tools"`
-	Service      json.RawMessage  `json:"service"`
-	Capabilities []capabilitySpec `json:"capabilities"`
+	Tools        json.RawMessage             `json:"tools"`
+	Service      json.RawMessage             `json:"service"`
+	Capabilities []capability.CapabilitySpec `json:"capabilities"`
 }
 
 // decodeCapabilities 严格解码 extensions 段并校验生成所需的最小契约。
-func decodeCapabilities(source json.RawMessage) ([]capabilitySpec, error) {
+func decodeCapabilities(source json.RawMessage) ([]capability.CapabilitySpec, error) {
 	var ext extensions
 	if err := packmgr.DecodeStrictJSON(source, &ext); err != nil {
 		return nil, fmt.Errorf("sdkgen: 解码契约失败: %w", err)
@@ -52,7 +36,7 @@ func decodeCapabilities(source json.RawMessage) ([]capabilitySpec, error) {
 		if capability.ID == "" {
 			return nil, fmt.Errorf("sdkgen: capabilities[%d] 缺少 id", index)
 		}
-		if len(capability.InputSchema) == 0 {
+		if len(capability.InputSchemaJSON) == 0 {
 			return nil, fmt.Errorf("sdkgen: capability %q 缺少 input_schema_json", capability.ID)
 		}
 		// ID 唯一：重复 ID 会生成重复的方法名与输入类型名，产物编译不过。

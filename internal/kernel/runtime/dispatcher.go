@@ -16,6 +16,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/idempotency"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/capability"
 )
 
 var (
@@ -290,7 +291,7 @@ func (d *Dispatcher) authorize(
 	if err != nil {
 		return nil, fmt.Errorf("%w: target=%q", registry.ErrPermissionDenied, targetID)
 	}
-	if sideEffect == registry.SideEffectWrite || sideEffect == registry.SideEffectExternal {
+	if sideEffect == capability.SideEffectWrite || sideEffect == capability.SideEffectExternal {
 		if request.IdempotencyKey == "" {
 			return nil, fmt.Errorf("%w: target=%q", ErrIdempotencyKeyRequired, targetID)
 		}
@@ -326,7 +327,7 @@ func (d *Dispatcher) invokeHandler(
 	fingerprint string,
 	handler func(context.Context) (json.RawMessage, error),
 ) (json.RawMessage, bool, error) {
-	if sideEffect != registry.SideEffectWrite && sideEffect != registry.SideEffectExternal {
+	if sideEffect != capability.SideEffectWrite && sideEffect != capability.SideEffectExternal {
 		result, err := handler(ctx)
 		return result, false, err
 	}

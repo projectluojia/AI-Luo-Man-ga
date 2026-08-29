@@ -9,9 +9,8 @@ import (
 	"path/filepath"
 	"sort"
 
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/id"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/packagefmt/schemaextract"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/capability"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packagefmt/schemaextract"
 	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
 )
 
@@ -43,7 +42,7 @@ func AutoExtract(ctx context.Context, sourceDir string) ([]schemaextract.Capabil
 }
 
 func capabilitiesSource(packageID, version string, capabilities []schemaextract.Capability) (sourceManifest, []string, error) {
-	if !id.StableLower.MatchString(packageID) {
+	if !capability.IsStableID(packageID) {
 		return sourceManifest{}, nil, fmt.Errorf("packagefmt: 包 id %q 不合法", packageID)
 	}
 	if len(capabilities) == 0 {
@@ -54,17 +53,17 @@ func capabilitiesSource(packageID, version string, capabilities []schemaextract.
 		Tools:   make(map[string]sourceTool, len(capabilities)),
 	}
 	exportIDs := make([]string, 0, len(capabilities))
-	for _, capability := range capabilities {
-		source.Tools[capability.ID] = sourceTool{
-			Description: capability.Description,
-			Schema:      string(capability.InputSchema),
-			SideEffect:  registry.SideEffectRead,
+	for _, spec := range capabilities {
+		source.Tools[spec.ID] = sourceTool{
+			Description: spec.Description,
+			Schema:      string(spec.InputSchema),
+			SideEffect:  capability.SideEffectRead,
 		}
 		source.Capabilities = append(source.Capabilities, sourceCapability{
-			ID: capability.ID, Tool: capability.ID,
-			Description: capability.Description,
+			ID: spec.ID, Tool: spec.ID,
+			Description: spec.Description,
 		})
-		exportIDs = append(exportIDs, capability.ID)
+		exportIDs = append(exportIDs, spec.ID)
 	}
 	sort.Strings(exportIDs)
 	return source, exportIDs, nil

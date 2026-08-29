@@ -20,7 +20,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/capability"
 	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
 )
 
@@ -204,17 +204,17 @@ func (s sourceManifest) buildExtensions() (json.RawMessage, error) {
 		toolIDs = append(toolIDs, id)
 	}
 	sort.Strings(toolIDs)
-	tools := make([]registry.ToolSpec, 0, len(toolIDs))
+	tools := make([]capability.ToolSpec, 0, len(toolIDs))
 	for _, id := range toolIDs {
 		tool := s.Tools[id]
-		tools = append(tools, registry.ToolSpec{
+		tools = append(tools, capability.ToolSpec{
 			ID: id, Version: s.Package.Version, Description: tool.Description,
 			InputSchemaJSON: tool.Schema, SideEffect: tool.SideEffect,
 			RequiresConfirmation: tool.RequiresConfirmation,
 			RequiredPermissions:  tool.RequiredPermissions,
 		})
 	}
-	service := registry.ServiceSpec{
+	service := capability.ServiceSpec{
 		ID: s.Package.ID, Version: s.Package.Version, Description: s.Package.Description,
 	}
 	if s.Service != nil {
@@ -224,33 +224,33 @@ func (s sourceManifest) buildExtensions() (json.RawMessage, error) {
 	if len(service.ToolDependencies) == 0 {
 		service.ToolDependencies = append([]string(nil), toolIDs...)
 	}
-	capabilities := make([]registry.CapabilitySpec, 0, len(s.Capabilities))
-	for _, capability := range s.Capabilities {
-		tool, ok := s.Tools[capability.Tool]
+	capabilities := make([]capability.CapabilitySpec, 0, len(s.Capabilities))
+	for _, declaration := range s.Capabilities {
+		tool, ok := s.Tools[declaration.Tool]
 		if !ok {
-			return nil, fmt.Errorf("%w: capability %s 引用不存在的 tool %s", ErrSourceInvalid, capability.ID, capability.Tool)
+			return nil, fmt.Errorf("%w: capability %s 引用不存在的 tool %s", ErrSourceInvalid, declaration.ID, declaration.Tool)
 		}
-		name := capability.Name
+		name := declaration.Name
 		if name == "" {
 			name = tool.Description
 		}
-		description := capability.Description
+		description := declaration.Description
 		if description == "" {
 			description = tool.Description
 		}
-		capabilities = append(capabilities, registry.CapabilitySpec{
-			ID: capability.ID, Version: s.Package.Version, Name: name,
+		capabilities = append(capabilities, capability.CapabilitySpec{
+			ID: declaration.ID, Version: s.Package.Version, Name: name,
 			Description: description, ServiceID: s.Package.ID,
 			InputSchemaJSON: tool.Schema, SideEffect: tool.SideEffect,
 			RequiresConfirmation: tool.RequiresConfirmation,
 			RequiredPermissions:  tool.RequiredPermissions,
-			ToolID:               capability.Tool,
+			ToolID:               declaration.Tool,
 		})
 	}
 	extensions := struct {
-		Tools        []registry.ToolSpec       `json:"tools,omitempty"`
-		Service      registry.ServiceSpec      `json:"service,omitempty"`
-		Capabilities []registry.CapabilitySpec `json:"capabilities,omitempty"`
+		Tools        []capability.ToolSpec       `json:"tools,omitempty"`
+		Service      capability.ServiceSpec      `json:"service,omitempty"`
+		Capabilities []capability.CapabilitySpec `json:"capabilities,omitempty"`
 	}{Tools: tools, Service: service, Capabilities: capabilities}
 	data, err := json.Marshal(extensions)
 	if err != nil {

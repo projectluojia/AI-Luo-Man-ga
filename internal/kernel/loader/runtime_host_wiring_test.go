@@ -13,6 +13,7 @@ import (
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/capability"
 	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
 )
 
@@ -33,20 +34,20 @@ func TestRuntimeHostProductionWiring(t *testing.T) {
 		t.Fatal(err)
 	}
 	extensions, err := json.Marshal(map[string]any{
-		"tools": []registry.ToolSpec{{
+		"tools": []capability.ToolSpec{{
 			ID: "strings.len", Version: "1.0.0", Description: "字符串长度",
 			InputSchemaJSON: `{"type":"object","properties":{"value":{"type":"string"}},"required":["value"],"additionalProperties":false}`,
-			SideEffect:      registry.SideEffectRead,
+			SideEffect:      capability.SideEffectRead,
 		}},
-		"service": registry.ServiceSpec{
+		"service": capability.ServiceSpec{
 			ID: "strings.tool", Version: "1.0.0", Description: "字符串工具",
 			ToolDependencies: []string{"strings.len"},
 		},
-		"capabilities": []registry.CapabilitySpec{{
+		"capabilities": []capability.CapabilitySpec{{
 			ID: "strings.len.cap", Version: "1.0.0", Name: "字符串长度",
 			Description: "字符串长度", ServiceID: "strings.tool",
 			InputSchemaJSON: `{"type":"object","properties":{"value":{"type":"string"}},"required":["value"],"additionalProperties":false}`,
-			SideEffect:      registry.SideEffectRead,
+			SideEffect:      capability.SideEffectRead,
 		}},
 	})
 	if err != nil {

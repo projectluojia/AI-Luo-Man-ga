@@ -10,6 +10,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/capability"
 )
 
 // inputSchemaJSON 是 agent.run 的严格输入 Schema：任务正文与可选的 Capability
@@ -101,36 +102,36 @@ func Register(reg *registry.Registry, runner Runner) error {
 		return encoded, nil
 	}
 	return reg.RegisterService(registry.ServiceRegistration{
-		Spec: registry.ServiceSpec{
+		Spec: capability.ServiceSpec{
 			ID:          ServiceID,
 			Version:     "1.0.0",
 			Description: "Governed one-level child Agent Runs.",
 		},
 		Capabilities: map[string]struct {
-			Spec    registry.CapabilitySpec
+			Spec    capability.CapabilitySpec
 			Handler registry.Handler
 		}{
 			CapabilityID: {
-				Spec: registry.CapabilitySpec{
+				Spec: capability.CapabilitySpec{
 					ID:              CapabilityID,
 					Version:         "1.0.0",
 					Name:            "委派受治理的子任务",
 					Description:     "Create one durable queued child Run with narrower Capabilities and an independent budget, then immediately return its Run identity and status.",
 					ServiceID:       ServiceID,
 					InputSchemaJSON: inputSchemaJSON,
-					SideEffect:      registry.SideEffectExternal,
+					SideEffect:      capability.SideEffectExternal,
 				},
 				Handler: runHandler,
 			},
 			StatusCapabilityID: {
-				Spec: registry.CapabilitySpec{
+				Spec: capability.CapabilitySpec{
 					ID:              StatusCapabilityID,
 					Version:         "1.0.0",
 					Name:            "查询子任务状态",
 					Description:     "Read the durable status and completed result of a direct child Run created by the current root Run.",
 					ServiceID:       ServiceID,
 					InputSchemaJSON: statusInputSchemaJSON,
-					SideEffect:      registry.SideEffectNone,
+					SideEffect:      capability.SideEffectNone,
 				},
 				Handler: statusHandler,
 			},

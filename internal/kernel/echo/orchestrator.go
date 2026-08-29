@@ -24,6 +24,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/capability"
 )
 
 var (
@@ -968,7 +969,7 @@ func (o *Orchestrator) executeClaimedRun(ctx context.Context, request RunRequest
 			)
 		case *executor.Frame_CapabilityCall:
 			if spec, _, resolveErr := o.registry.ResolveCapability(body.CapabilityCall.CapabilityId); resolveErr == nil &&
-				(spec.SideEffect == registry.SideEffectWrite || spec.SideEffect == registry.SideEffectExternal) {
+				(spec.SideEffect == capability.SideEffectWrite || spec.SideEffect == capability.SideEffectExternal) {
 				automaticRetrySafe = false
 			}
 			observe.Info(ctx, "模型请求调用 Capability",

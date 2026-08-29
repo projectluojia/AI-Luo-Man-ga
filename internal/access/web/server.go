@@ -20,6 +20,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/capability"
 )
 
 //go:embed static/*
@@ -157,7 +158,7 @@ func (s *Server) capabilities(writer http.ResponseWriter, request *http.Request)
 		})
 		return
 	}
-	items := make([]registry.CapabilitySpec, 0)
+	items := make([]capability.CapabilitySpec, 0)
 	for _, capability := range s.registry.Capabilities() {
 		if snapshot.CapabilityEnabled(capability.ID) {
 			items = append(items, capability)
