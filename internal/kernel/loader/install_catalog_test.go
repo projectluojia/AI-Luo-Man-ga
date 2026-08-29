@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/adapters/packagesource"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
@@ -22,7 +23,7 @@ import (
 func TestInstalledCatalogDiscoversVerifiesAndRegistersHostedRuntime(t *testing.T) {
 	root := t.TempDir()
 	artifact := writeInstalledFixture(t, root, "extension.test", loader.ModeHosted, false)
-	catalog, err := loader.NewCatalog(root)
+	catalog, err := packagesource.NewCatalog(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +68,7 @@ func TestInstalledCatalogDiscoversVerifiesAndRegistersHostedRuntime(t *testing.T
 func TestInstalledCatalogResolvesIsolatedProcessAndRejectsCatalogTampering(t *testing.T) {
 	root := t.TempDir()
 	writeInstalledFixture(t, root, "isolated.test", loader.ModeIsolated, false)
-	catalog, err := loader.NewCatalog(root)
+	catalog, err := packagesource.NewCatalog(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +104,7 @@ func TestInstalledCatalogResolvesIsolatedProcessAndRejectsCatalogTampering(t *te
 func TestInstalledRegistrationRollsBackLoaderOnRegistryConflict(t *testing.T) {
 	root := t.TempDir()
 	writeInstalledFixture(t, root, "extension.test", loader.ModeHosted, false)
-	catalog, _ := loader.NewCatalog(root)
+	catalog, _ := packagesource.NewCatalog(root)
 	records, err := catalog.Discover(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -143,7 +144,7 @@ func TestInstalledCatalogRejectsDuplicateJSONAndWritableDirectory(t *testing.T) 
 		t.Fatal(err)
 	}
 	rewriteManifestDigest(t, directory, duplicate)
-	catalog, _ := loader.NewCatalog(root)
+	catalog, _ := packagesource.NewCatalog(root)
 	if _, err := catalog.Discover(t.Context()); !errors.Is(err, loader.ErrInstallCatalogInvalid) {
 		t.Fatalf("重复 JSON 键错误=%v", err)
 	}
@@ -153,7 +154,7 @@ func TestInstalledCatalogRejectsDuplicateJSONAndWritableDirectory(t *testing.T) 
 	if err := os.Chmod(filepath.Join(root, "extension.test"), 0o770); err != nil {
 		t.Fatal(err)
 	}
-	catalog, _ = loader.NewCatalog(root)
+	catalog, _ = packagesource.NewCatalog(root)
 	if _, err := catalog.Discover(t.Context()); !errors.Is(err, loader.ErrInstallCatalogInvalid) {
 		t.Fatalf("可写安装目录错误=%v", err)
 	}
@@ -328,7 +329,7 @@ func writeDeclaredFixture(t *testing.T, root, runtimeID string, decls []packmgr.
 	if err := os.WriteFile(filepath.Join(directory, "lock.json"), lockBytes, 0o640); err != nil {
 		t.Fatal(err)
 	}
-	catalog, err := loader.NewCatalog(root)
+	catalog, err := packagesource.NewCatalog(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -357,7 +358,7 @@ func TestInstalledCatalogAcceptsHostFunctionAndStorageDeclarations(t *testing.T)
 	if record.Storage == nil || record.Storage.Namespace != "ext/data" || record.Storage.SchemaVersion != 1 {
 		t.Fatalf("record storage = %+v, want ext/data v1", record.Storage)
 	}
-	catalog, err := loader.NewCatalog(root)
+	catalog, err := packagesource.NewCatalog(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -402,7 +403,7 @@ func TestInstalledCatalogRejectsInvalidDeclarations(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
-			if _, err := loader.NewCatalog(root); err != nil {
+			if _, err := packagesource.NewCatalog(root); err != nil {
 				t.Fatal(err)
 			}
 			if tc.hostedOK {
@@ -463,7 +464,7 @@ func TestInstalledCatalogRejectsInvalidDeclarations(t *testing.T) {
 				if err := os.WriteFile(filepath.Join(directory, "lock.json"), lockBytes, 0o640); err != nil {
 					t.Fatal(err)
 				}
-				catalog, err := loader.NewCatalog(root)
+				catalog, err := packagesource.NewCatalog(root)
 				if err != nil {
 					t.Fatal(err)
 				}

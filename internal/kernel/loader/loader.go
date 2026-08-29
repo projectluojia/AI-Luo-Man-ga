@@ -67,6 +67,18 @@ type Manifest struct {
 	HostFunctions []packmgr.HostedFunctionDecl
 }
 
+// Equal 比较运行时清单的完整身份与装载声明。
+func (m Manifest) Equal(other Manifest) bool {
+	return m.ID == other.ID && m.Version == other.Version && m.Mode == other.Mode &&
+		m.Role == other.Role && m.LockedDigest == other.LockedDigest && m.Pin == other.Pin &&
+		m.IdleTTL == other.IdleTTL && packmgr.EqualHostedFunctions(m.HostFunctions, other.HostFunctions)
+}
+
+// SameIdentity 只比较装载工件所需的运行时身份字段。
+func (m Manifest) SameIdentity(other Manifest) bool {
+	return m.ID == other.ID && m.Version == other.Version && m.Mode == other.Mode
+}
+
 type Description struct {
 	ID      string
 	Version string
@@ -254,7 +266,7 @@ func (m *Manager) RegisterBatch(ctx context.Context, manifests []Manifest) error
 	bound := make(map[string]Host, len(manifests))
 	seen := make(map[string]struct{}, len(manifests))
 	for _, manifest := range manifests {
-		if err := validateManifest(manifest); err != nil {
+		if err := ValidateManifest(manifest); err != nil {
 			return err
 		}
 		host, err := m.selectHost(ctx, manifest)
@@ -310,7 +322,7 @@ func (m *Manager) rollbackRegistered(manifests []Manifest) error {
 		}
 		item.mu.Lock()
 		safe := item.state == StateRegistered && item.runtime == nil && item.inFlight == 0 &&
-			sameRuntimeManifest(item.manifest, manifest)
+			item.manifest.Equal(manifest)
 		item.mu.Unlock()
 		if !safe {
 			return ErrUnavailable
@@ -845,7 +857,7 @@ func (m *Manager) resolve(id string) (*entry, error) {
 	return item, nil
 }
 
-func validateManifest(manifest Manifest) error {
+func ValidateManifest(manifest Manifest) error {
 	if !stableIDPattern.MatchString(manifest.ID) ||
 		(manifest.Mode != ModeHosted && manifest.Mode != ModeIsolated) ||
 		(manifest.Role != RoleCapability && manifest.Role != RoleExecutor) ||

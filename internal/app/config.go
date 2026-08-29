@@ -16,6 +16,7 @@ import (
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access/configui"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access/qq"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/adapters/packagesource"
 	controlconfig "github.com/projectluojia/AI-Luo-Man-ga/internal/controlplane/config"
 	kernelecho "github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
@@ -205,21 +206,21 @@ func defaultPythonPath(projectRoot string) string {
 
 // configureInstalledRuntimes 发现安装目录中的 Runtime 包，按声明的运行模式
 // 选择宿主。Loader 只接收已校验的安装记录和通用 Host。
-func configureInstalledRuntimes(ctx context.Context, cfg config, hostFunctions []loader.HostedFunction) (hosts []loader.Host, records []loader.InstalledRecord, catalog *loader.Catalog, err error) {
+func configureInstalledRuntimes(ctx context.Context, cfg config, hostFunctions []loader.HostedFunction) (hosts []loader.Host, records []loader.InstalledRecord, err error) {
 	if cfg.runtimeInstallRoot == "" {
-		return nil, nil, nil, nil
+		return nil, nil, nil
 	}
-	catalog, err = loader.NewCatalog(cfg.runtimeInstallRoot)
+	catalog, err := packagesource.NewCatalog(cfg.runtimeInstallRoot)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("create installed runtime catalog: %w", err)
+		return nil, nil, fmt.Errorf("create installed runtime catalog: %w", err)
 	}
 	records, err = catalog.Discover(ctx)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("discover installed runtimes: %w", err)
+		return nil, nil, fmt.Errorf("discover installed runtimes: %w", err)
 	}
 	if len(records) == 0 {
 		observe.Info(ctx, "运行时安装目录校验完成", observe.IntAttr("runtime_count", 0))
-		return nil, nil, catalog, nil
+		return nil, nil, nil
 	}
 	hostedWithFunctions := 0
 	hostedWithoutFunctions := 0
@@ -236,7 +237,7 @@ func configureInstalledRuntimes(ctx context.Context, cfg config, hostFunctions [
 		case loader.ModeIsolated:
 			isolatedCount++
 		default:
-			return nil, nil, nil, loader.ErrUnsupportedMode
+			return nil, nil, loader.ErrUnsupportedMode
 		}
 		if record.Runtime.Pin {
 			pinnedCount++
@@ -248,20 +249,20 @@ func configureInstalledRuntimes(ctx context.Context, cfg config, hostFunctions [
 			ReadArtifact: catalog.ReadArtifact, HostFunctions: hostFunctions, RequireHostFunctions: true,
 		})
 		if hostErr != nil {
-			return nil, nil, nil, fmt.Errorf("configure in-kernel hosted runtime boundary: %w", hostErr)
+			return nil, nil, fmt.Errorf("configure in-kernel hosted runtime boundary: %w", hostErr)
 		}
 		hosts = append(hosts, host)
 	}
 	if hostedWithoutFunctions > 0 {
 		if cfg.runtimeHostAddress == "" {
-			return nil, nil, nil, fmt.Errorf("configuration error: AILUO_RUNTIME_HOST_ADDRESS is required for installed hosted runtimes without host functions")
+			return nil, nil, fmt.Errorf("configuration error: AILUO_RUNTIME_HOST_ADDRESS is required for installed hosted runtimes without host functions")
 		}
 		host, hostErr := loader.NewGRPCHost(loader.GRPCHostConfig{
 			Mode: loader.ModeHosted, Address: cfg.runtimeHostAddress, VerifyInstalled: catalog.VerifyRuntime,
 			DialTimeout: 10 * time.Second, MaxRuntimes: hostedWithoutFunctions, MaxConcurrent: 64,
 		})
 		if hostErr != nil {
-			return nil, nil, nil, fmt.Errorf("configure hosted runtime boundary: %w", hostErr)
+			return nil, nil, fmt.Errorf("configure hosted runtime boundary: %w", hostErr)
 		}
 		hosts = append(hosts, host)
 	}
@@ -271,7 +272,7 @@ func configureInstalledRuntimes(ctx context.Context, cfg config, hostFunctions [
 			DialTimeout: 10 * time.Second, StopGrace: 5 * time.Second, TerminateGrace: 2 * time.Second,
 		})
 		if hostErr != nil {
-			return nil, nil, nil, fmt.Errorf("configure isolated runtime boundary: %w", hostErr)
+			return nil, nil, fmt.Errorf("configure isolated runtime boundary: %w", hostErr)
 		}
 		hosts = append(hosts, host)
 	}
@@ -282,7 +283,7 @@ func configureInstalledRuntimes(ctx context.Context, cfg config, hostFunctions [
 		observe.IntAttr("isolated_count", isolatedCount),
 		observe.IntAttr("pinned_count", pinnedCount),
 	)
-	return hosts, records, catalog, nil
+	return hosts, records, nil
 }
 
 type promptServiceRenderer struct {

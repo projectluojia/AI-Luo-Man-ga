@@ -45,7 +45,7 @@ func NewExecutorHost(config ExecutorHostConfig) (*ExecutorHost, error) {
 	if config.Manifest.Mode != ModeHosted && config.Manifest.Mode != ModeIsolated {
 		return nil, ErrUnsupportedMode
 	}
-	if err := validateManifest(config.Manifest); err != nil {
+	if err := ValidateManifest(config.Manifest); err != nil {
 		return nil, err
 	}
 	if config.DialTimeout == 0 {
@@ -72,7 +72,7 @@ func (h *ExecutorHost) Manifest() Manifest { return h.config.Manifest }
 
 // Verify 要求运行时身份与宿主绑定的完整清单一致。
 func (h *ExecutorHost) Verify(_ context.Context, manifest Manifest) error {
-	if !sameRuntimeManifest(manifest, h.config.Manifest) {
+	if !manifest.Equal(h.config.Manifest) {
 		return ErrDescribeMismatch
 	}
 	return nil
