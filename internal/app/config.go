@@ -297,32 +297,6 @@ func (r promptServiceRenderer) RenderSystemPrompt(ctx context.Context, request k
 	})
 }
 
-func migrateEnabledCapabilities(existing []string) []string {
-	result := make([]string, 0, len(existing)+5)
-	for _, capabilityID := range existing {
-		switch capabilityID {
-		case "agent.run":
-			capabilityID = kernelecho.CreateChildRunCapabilityID
-		case "agent.status":
-			capabilityID = kernelecho.GetChildStatusCapabilityID
-		}
-		if !slices.Contains(result, capabilityID) {
-			result = append(result, capabilityID)
-		}
-	}
-	for _, capabilityID := range []string{
-		kernelecho.GetChildStatusCapabilityID,
-		promptservice.PreferenceGetID,
-		promptservice.PreferenceSetID,
-		promptservice.PreferenceResetID,
-	} {
-		if !slices.Contains(result, capabilityID) {
-			result = append(result, capabilityID)
-		}
-	}
-	return result
-}
-
 func envOr(name, fallback string) string {
 	if value := os.Getenv(name); value != "" {
 		return value

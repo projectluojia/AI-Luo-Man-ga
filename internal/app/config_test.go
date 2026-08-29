@@ -13,10 +13,8 @@ import (
 	"time"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access/configui"
-	kernelecho "github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus"
 	"github.com/projectluojia/AI-Luo-Man-ga/pkg/capability"
 	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packagecontract"
 )
@@ -70,26 +68,6 @@ func TestDefaultInstallRootIsAbsoluteOrEmpty(t *testing.T) {
 	}
 	if !filepath.IsAbs(root) || !strings.HasSuffix(root, "ailuo"+string(filepath.Separator)+"runtime") {
 		t.Fatalf("DefaultInstallRoot()=%q 应为绝对路径并结尾为 ailuo/runtime", root)
-	}
-}
-
-func TestMigrateEnabledCapabilitiesRenamesChildControl(t *testing.T) {
-	got := migrateEnabledCapabilities([]string{"agent.run", "agent.status", "agent.run", "campus.bus.routes.list"})
-	want := map[string]bool{
-		kernelecho.CreateChildRunCapabilityID: true,
-		kernelecho.GetChildStatusCapabilityID: true,
-		campus.BusRouteListCapabilityID:       true,
-		"prompt.preference.get":               true,
-		"prompt.preference.set":               true,
-		"prompt.preference.reset":             true,
-	}
-	if len(got) != len(want) {
-		t.Fatalf("capabilities=%v, want %d unique entries", got, len(want))
-	}
-	for _, capabilityID := range got {
-		if !want[capabilityID] {
-			t.Fatalf("unexpected capability %q in %v", capabilityID, got)
-		}
 	}
 }
 
