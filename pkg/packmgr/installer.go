@@ -48,7 +48,7 @@ func Install(ctx context.Context, root, sourcePath string) (InstalledRecord, err
 	if cleanup != nil {
 		defer cleanup()
 	}
-	source, err := readSourceManifest(sourceDir)
+	source, err := readManifest(sourceDir)
 	if err != nil {
 		return InstalledRecord{}, err
 	}
@@ -222,7 +222,7 @@ func Upgrade(ctx context.Context, root, id, sourceDir string) (InstalledRecord, 
 	if err != nil {
 		return InstalledRecord{}, fmt.Errorf("包 %q 未安装", id)
 	}
-	source, err := readSourceManifest(sourceDir)
+	source, err := readManifest(sourceDir)
 	if err != nil {
 		return InstalledRecord{}, err
 	}
@@ -278,8 +278,8 @@ func Uninstall(ctx context.Context, root, id string) error {
 	return os.RemoveAll(target)
 }
 
-// sourcePackage 是源包目录读取结果：清单字节原样保留以锁定 digest。
-type sourcePackage struct {
+// manifestFile 是包目录读取结果：清单字节原样保留以锁定 digest。
+type manifestFile struct {
 	Manifest      Manifest
 	manifestBytes []byte
 }
@@ -290,20 +290,20 @@ type sourceArtifact struct {
 	path        string
 }
 
-// readSourceManifest 读取源包目录的 manifest.json 并校验。
-func readSourceManifest(sourceDir string) (sourcePackage, error) {
-	manifestBytes, err := ReadFileLimited(filepath.Join(sourceDir, "manifest.json"), MaxManifestBytes)
+// readManifest 读取包目录的 manifest.json 并校验。
+func readManifest(directory string) (manifestFile, error) {
+	manifestBytes, err := ReadFileLimited(filepath.Join(directory, "manifest.json"), MaxManifestBytes)
 	if err != nil {
-		return sourcePackage{}, err
+		return manifestFile{}, err
 	}
 	var manifest Manifest
 	if err := DecodeStrictJSON(manifestBytes, &manifest); err != nil {
-		return sourcePackage{}, err
+		return manifestFile{}, err
 	}
 	if err := ValidateManifest(manifest); err != nil {
-		return sourcePackage{}, err
+		return manifestFile{}, err
 	}
-	return sourcePackage{Manifest: manifest, manifestBytes: manifestBytes}, nil
+	return manifestFile{Manifest: manifest, manifestBytes: manifestBytes}, nil
 }
 
 // readSourceArtifacts 校验并收集清单声明的每组件 entrypoint 工件。安装与打包

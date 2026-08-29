@@ -7,16 +7,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/id"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/packagefmt/schemaextract"
 	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
 )
-
-// packageIDPattern 与内核 id.StableLower 一致：自动生成清单的包 id 闭式格式。
-var packageIDPattern = regexp.MustCompile(`^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$`)
 
 // AutoExtract 从包目录源码自动提取 capabilities，并返回对应的构建器：
 // main.go 使用 Go wasm，main.ts 使用 AssemblyScript。包 id 取目录名。
@@ -46,7 +43,7 @@ func AutoExtract(ctx context.Context, sourceDir string) ([]schemaextract.Capabil
 }
 
 func capabilitiesSource(packageID, version string, capabilities []schemaextract.Capability) (sourceManifest, []string, error) {
-	if !packageIDPattern.MatchString(packageID) {
+	if !id.StableLower.MatchString(packageID) {
 		return sourceManifest{}, nil, fmt.Errorf("packagefmt: 包 id %q 不合法", packageID)
 	}
 	if len(capabilities) == 0 {

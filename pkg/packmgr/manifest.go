@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"path"
 	"path/filepath"
 	"strings"
 )
@@ -295,11 +296,17 @@ func ValidateProcessSpec(spec ProcessSpec) error {
 func IsLocalRuntimeAddress(address string) bool {
 	if strings.HasPrefix(address, "unix:") {
 		socketPath := strings.TrimPrefix(address, "unix:")
+		if strings.HasPrefix(socketPath, "/") {
+			return path.Clean(socketPath) == socketPath
+		}
 		return filepath.IsAbs(socketPath) && filepath.Clean(socketPath) == socketPath
 	}
 	host, _, err := net.SplitHostPort(address)
 	if err != nil {
 		return false
+	}
+	if strings.EqualFold(host, "localhost") {
+		return true
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
