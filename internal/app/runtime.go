@@ -268,7 +268,7 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 		return fmt.Errorf("create executor runtime host: %w", err)
 	}
 	hostFunctions := campus.HostedFunctions(store)
-	installedHosts, installedRecords, _, err := configureInstalledRuntimes(ctx, config, hostFunctions)
+	installedHosts, installedRecords, err := configureInstalledRuntimes(ctx, config, hostFunctions)
 	if err != nil {
 		return err
 	}

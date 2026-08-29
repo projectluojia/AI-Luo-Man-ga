@@ -7,7 +7,7 @@
 // 与生产装配一致（campus 不再是内置包）。
 //
 // 安装目录属主校验仅 Unix 支持（非 Unix 平台 fail-closed，见
-// loader/install_owner_other.go）：非 Unix 平台用 campustest_other.go 的内存
+// packagesource/owner_other.go）：非 Unix 平台用 campustest_other.go 的内存
 // 构造版本（wasm 执行与宿主函数投影跨平台可用，部署属主校验是 Unix 边界）。
 package campustest
 
@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/adapters/packagesource"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus"
@@ -35,7 +36,7 @@ func RegisterHosted(t testing.TB, target *registry.Registry, store bus.Store) {
 	t.Helper()
 	root := t.TempDir()
 	writeCampusBusPackage(t, root)
-	catalog, err := loader.NewCatalog(root)
+	catalog, err := packagesource.NewCatalog(root)
 	if err != nil {
 		t.Fatalf("NewCatalog: %v", err)
 	}

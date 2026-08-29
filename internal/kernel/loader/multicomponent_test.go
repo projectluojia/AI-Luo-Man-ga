@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/adapters/packagesource"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
@@ -135,7 +136,7 @@ func TestCampusBusMultiComponentRoutesCapabilitiesAndUpgradesGroup(t *testing.T)
 	root := t.TempDir()
 	writeMultiComponentFixture(t, root, "1.0.0")
 
-	catalog, err := loader.NewCatalog(root)
+	catalog, err := packagesource.NewCatalog(root)
 	if err != nil {
 		t.Fatal(err)
 	}
