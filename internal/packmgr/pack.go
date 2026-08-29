@@ -76,6 +76,11 @@ func unpackTarball(tarball, dest string) error {
 		return ErrInvalidFormat
 	}
 	defer gzipReader.Close()
+	destination, err := os.OpenRoot(dest)
+	if err != nil {
+		return err
+	}
+	defer destination.Close()
 	tarReader := tar.NewReader(gzipReader)
 	var total int64
 	entries := 0
@@ -98,17 +103,16 @@ func unpackTarball(tarball, dest string) error {
 		if total > MaxArtifactBytes {
 			return ErrInvalidFormat // 解压总量上限，防解压炸弹
 		}
-		target := filepath.Join(dest, header.Name)
 		switch header.Typeflag {
 		case tar.TypeDir:
-			if err := os.MkdirAll(target, 0o750); err != nil {
+			if err := destination.MkdirAll(header.Name, 0o750); err != nil {
 				return err
 			}
 		case tar.TypeReg:
-			if err := os.MkdirAll(filepath.Dir(target), 0o750); err != nil {
+			if err := destination.MkdirAll(filepath.Dir(header.Name), 0o750); err != nil {
 				return err
 			}
-			file, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o640)
+			file, err := destination.OpenFile(header.Name, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o640)
 			if err != nil {
 				return err
 			}
