@@ -65,6 +65,25 @@ func TestInstalledCatalogDiscoversVerifiesAndRegistersHostedRuntime(t *testing.T
 	}
 }
 
+func TestInstalledCatalogReverificationRejectsUnexpectedRootEntry(t *testing.T) {
+	root := t.TempDir()
+	writeInstalledFixture(t, root, "extension.test", loader.ModeHosted, false)
+	catalog, err := packagesource.NewCatalog(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	records, err := catalog.Discover(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "unexpected"), []byte("invalid"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.VerifyRuntime(t.Context(), records[0].Runtime); !errors.Is(err, packagesource.ErrInvalidCatalog) {
+		t.Fatalf("VerifyRuntime with unexpected root entry = %v, want ErrInvalidCatalog", err)
+	}
+}
+
 func TestInstalledCatalogResolvesIsolatedProcessAndRejectsCatalogTampering(t *testing.T) {
 	root := t.TempDir()
 	writeInstalledFixture(t, root, "isolated.test", loader.ModeIsolated, false)
