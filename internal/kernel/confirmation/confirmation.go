@@ -147,6 +147,12 @@ type Store interface {
 	// ListActiveBySession 返回指定 App、会话下仍未失效（waiting/approved 且
 	// 有效期未过）的确认记录，按创建时间升序，供跨 Echo 续跑投影使用。
 	ListActiveBySession(ctx context.Context, appID, sessionID string, now time.Time) ([]Confirmation, error)
+
+	// FindApproved 按（目标类型、目标标识、参数摘要、会话归属）解析唯一可用的
+	// 已批准确认：归属匹配同 Echo 或同会话，有效期未过，取最新一条；不存在
+	// 返回 ErrNotFound。供内核在调用边界按参数自选正确批准，不依赖执行者
+	// 附带的 confirmation_id。
+	FindApproved(ctx context.Context, appID, echoID, sessionID, targetType, targetID, digest string, now time.Time) (Confirmation, error)
 }
 
 // Digest 计算确认参数的规范化摘要：把参数反序列化后重新序列化（JSON 键有序），

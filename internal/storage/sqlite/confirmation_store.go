@@ -141,6 +141,33 @@ WHERE app_id=? AND echo_id=? AND status IN (?,?) AND julianday(expires_at)>julia
 	return affected, nil
 }
 
+func (s *Store) FindApproved(ctx context.Context, appID, echoID, sessionID, targetType, targetID, digest string, now time.Time) (_ confirmation.Confirmation, resultErr error) {
+	started := time.Now()
+	defer func() { observeStorageOperation(ctx, "find_approved_confirmation", started, resultErr) }()
+	if appID == "" || (echoID == "" && sessionID == "") || now.IsZero() {
+		return confirmation.Confirmation{}, confirmation.ErrInvalidRequest
+	}
+	record, err := scanConfirmation(s.db.QueryRowContext(ctx, `
+SELECT `+confirmationColumns+`
+FROM confirmations
+WHERE app_id=? AND status=? AND target_type=? AND target_id=? AND argument_digest=?
+  AND julianday(expires_at)>julianday(?)
+  AND ((?<>'' AND echo_id=?) OR (?<>'' AND session_id=? AND session_id<>''))
+ORDER BY created_at DESC, confirmation_id DESC
+LIMIT 1`,
+		appID, confirmation.StatusApproved, targetType, targetID, digest,
+		now.UTC().Format(time.RFC3339Nano),
+		echoID, echoID, sessionID, sessionID,
+	).Scan)
+	if errors.Is(err, sql.ErrNoRows) {
+		return confirmation.Confirmation{}, confirmation.ErrNotFound
+	}
+	if err != nil {
+		return confirmation.Confirmation{}, fmt.Errorf("find approved confirmation: %w", err)
+	}
+	return record, nil
+}
+
 // confirmationColumns 是确认查询的统一列清单，供单行与列表查询复用。
 const confirmationColumns = `app_id,confirmation_id,echo_id,coalesce(session_id,''),run_id,call_id,
 coalesce(capability_id,''),target_type,target_id,

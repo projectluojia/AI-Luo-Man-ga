@@ -279,6 +279,18 @@ func (s *Service) ActiveBySession(ctx context.Context, appID, sessionID string) 
 	return s.store.ListActiveBySession(ctx, appID, sessionID, s.now().UTC())
 }
 
+// ApprovedForCall 按（目标、参数摘要、会话归属）解析可用的已批准确认，
+// 供内核在调用边界按当前参数自选正确批准；同一 Capability 存在多个不同参数
+// 的批准时，参数摘要保证只会命中与本次调用参数一致的那条。不存在返回
+// ErrNotFound。
+func (s *Service) ApprovedForCall(ctx context.Context, appID, echoID, sessionID, targetType, targetID, digest string) (Confirmation, error) {
+	if appID == "" || (echoID == "" && sessionID == "") || ValidateTargetType(targetType) != nil ||
+		targetID == "" || ValidateArgumentDigest(digest) != nil {
+		return Confirmation{}, ErrInvalidRequest
+	}
+	return s.store.FindApproved(ctx, appID, echoID, sessionID, targetType, targetID, digest, s.now().UTC())
+}
+
 // Resolve 读取确认记录用于状态展示。有效期已过（含状态机已显式标记为 expired
 // 以及尚未显式标记但已超期的 waiting/approved 记录）一律返回 ErrExpired，
 // 便于界面呈现"已失效"；记录本身仍随错误返回。

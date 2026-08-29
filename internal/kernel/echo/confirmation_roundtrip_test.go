@@ -32,8 +32,10 @@ const confirmationTestCapabilityID = "test.confirm"
 type confirmationAgent struct {
 	executorv1.UnimplementedExecutorRuntimeServer
 	// forcedConfirmationID 非空时强制作为 CapabilityCall 的 confirmation_id，
-	// 用于模拟执行者携带过期/无效确认的场景。
+	// 用于模拟执行者携带过期/无效/张冠李戴确认的场景。
 	forcedConfirmationID atomic.Value
+	// forcedArguments 非空时替换调用参数，用于模拟参数变化的调用。
+	forcedArguments atomic.Value
 }
 
 func (a *confirmationAgent) Run(stream executorv1.ExecutorRuntime_RunServer) error {
@@ -51,6 +53,10 @@ func (a *confirmationAgent) Run(stream executorv1.ExecutorRuntime_RunServer) err
 			}
 		}
 	}
+	payload := []byte(`{"value":1}`)
+	if override, ok := a.forcedArguments.Load().(string); ok && override != "" {
+		payload = []byte(override)
+	}
 	for _, frame := range []*executorv1.ExecutorFrame{
 		acceptedFrame(start, 1),
 		usageFrame(start, 2, 3, 2),
@@ -59,7 +65,7 @@ func (a *confirmationAgent) Run(stream executorv1.ExecutorRuntime_RunServer) err
 			Body: &executorv1.ExecutorFrame_CapabilityCall{CapabilityCall: &executorv1.CapabilityCall{
 				CallId:         "confirm-call-" + start.RunId,
 				CapabilityId:   confirmationTestCapabilityID,
-				PayloadJson:    []byte(`{"value":1}`),
+				PayloadJson:    payload,
 				ConfirmationId: approved,
 			}},
 		},
@@ -193,28 +199,94 @@ func TestOrchestratorConfirmationRoundTrip(t *testing.T) {
 		t.Fatalf("Capability handler 执行 %d 次，want 1", executions.Load())
 	}
 
-	// 自愈：执行者携带无效 confirmation_id（过期/被撤销）重试时，内核自动创建
-	// 新的 waiting 确认并继续携带投影，副作用仍不执行。
+	// 参数摘要自选：执行者携带无效 confirmation_id 但参数与既有批准一致时，
+	// 内核按（目标、参数摘要、会话归属）自选正确批准并执行，不新建确认。
 	agent.forcedConfirmationID.Store("bogus-confirmation-1")
-	recoveryID, err := runOrchestrator(orchestrator, ctx, kernelecho.RunRequest{
-		Message: "确认过期了再试一次", IdempotencyKey: "confirmation-3", SessionID: "session-1",
+	selectionID, err := runOrchestrator(orchestrator, ctx, kernelecho.RunRequest{
+		Message: "携带无效确认重试", IdempotencyKey: "confirmation-3", SessionID: "session-1",
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	recovered, _, err := store.GetEcho(ctx, campus.AppID, recoveryID)
+	selection, _, err := store.GetEcho(ctx, campus.AppID, selectionID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if recovered.Status != kernelecho.StatusSucceeded || recovered.FinalMessage != "等待确认" {
-		t.Fatalf("自愈 Echo 终态=%s final=%q", recovered.Status, recovered.FinalMessage)
+	if selection.Status != kernelecho.StatusSucceeded || selection.FinalMessage != "执行完成" {
+		t.Fatalf("摘要自选 Echo 终态=%s final=%q", selection.Status, selection.FinalMessage)
 	}
-	if executions.Load() != 1 {
-		t.Fatalf("自愈阶段副作用执行 %d 次，want 1", executions.Load())
+	if executions.Load() != 2 {
+		t.Fatalf("摘要自选后副作用执行 %d 次，want 2", executions.Load())
 	}
-	afterRecovery, err := confirmations.ActiveBySession(ctx, campus.AppID, "session-1")
-	if err != nil || len(afterRecovery) != 2 {
-		t.Fatalf("自愈后会话内确认记录=%d err=%v，want 2（approved + 新 waiting）", len(afterRecovery), err)
+	afterSelection, err := confirmations.ActiveBySession(ctx, campus.AppID, "session-1")
+	if err != nil || len(afterSelection) != 1 {
+		t.Fatalf("摘要自选后会话内确认记录=%d err=%v，want 1", len(afterSelection), err)
+	}
+
+	// 自愈：参数变化且无对应批准时，内核创建新的 waiting 确认并携带投影，
+	// 副作用仍不执行。
+	agent.forcedArguments.Store(`{"value":3}`)
+	selfHealID, err := runOrchestrator(orchestrator, ctx, kernelecho.RunRequest{
+		Message: "用新参数调用", IdempotencyKey: "confirmation-4", SessionID: "session-1",
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selfHealed, _, err := store.GetEcho(ctx, campus.AppID, selfHealID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selfHealed.Status != kernelecho.StatusSucceeded || selfHealed.FinalMessage != "等待确认" {
+		t.Fatalf("自愈 Echo 终态=%s final=%q", selfHealed.Status, selfHealed.FinalMessage)
+	}
+	if executions.Load() != 2 {
+		t.Fatalf("自愈阶段副作用执行 %d 次，want 2", executions.Load())
+	}
+	afterHeal, err := confirmations.ActiveBySession(ctx, campus.AppID, "session-1")
+	if err != nil || len(afterHeal) != 2 {
+		t.Fatalf("自愈后会话内确认记录=%d err=%v，want 2（approved args1 + waiting args3）", len(afterHeal), err)
+	}
+
+	// 多批准按参数选择：为不同参数铸造第二个已批准确认；执行者携带"张冠李戴"
+	// 的 confirmation_id 调用原参数时，内核按摘要自选正确批准执行，不产生新确认。
+	runs, err := store.ListRuns(ctx, campus.AppID, continuationID)
+	if err != nil || len(runs) == 0 {
+		t.Fatalf("list runs err=%v", err)
+	}
+	secondSpec := confirmation.RequestSpec{
+		CapabilityID: confirmationTestCapabilityID, TargetType: confirmation.TargetTypeCapability,
+		TargetID: confirmationTestCapabilityID, SideEffect: confirmation.SideEffectExternal,
+		IdempotencyKey: "operation-args-2", SessionID: "session-1",
+	}
+	second, err := confirmations.Request(ctx, campus.AppID, continuationID, runs[0].ID, "call-args-2",
+		secondSpec, []byte(`{"value":2}`), time.Now().UTC().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := confirmations.Decide(ctx, campus.AppID, second.ConfirmationID,
+		confirmation.StatusApproved, "user-1", time.Now().UTC()); err != nil {
+		t.Fatalf("decide second approval: %v", err)
+	}
+	agent.forcedArguments.Store(`{"value":1}`)
+	multiApprovalID, err := runOrchestrator(orchestrator, ctx, kernelecho.RunRequest{
+		Message: "调用原参数", IdempotencyKey: "confirmation-5", SessionID: "session-1",
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	multiApproval, _, err := store.GetEcho(ctx, campus.AppID, multiApprovalID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if multiApproval.Status != kernelecho.StatusSucceeded || multiApproval.FinalMessage != "执行完成" {
+		t.Fatalf("多批准选择 Echo 终态=%s final=%q", multiApproval.Status, multiApproval.FinalMessage)
+	}
+	if executions.Load() != 3 {
+		t.Fatalf("多批准选择后副作用执行 %d 次，want 3", executions.Load())
+	}
+	afterMulti, err := confirmations.ActiveBySession(ctx, campus.AppID, "session-1")
+	if err != nil || len(afterMulti) != 3 {
+		t.Fatalf("多批准选择后会话内确认记录=%d err=%v，want 3", len(afterMulti), err)
 	}
 }
 

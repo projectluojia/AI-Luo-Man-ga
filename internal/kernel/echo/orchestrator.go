@@ -51,6 +51,7 @@ type ConfirmationGateway interface {
 	Request(ctx context.Context, appID, echoID, runID, callID string, spec confirmation.RequestSpec, arguments []byte, expiresAt time.Time) (confirmation.Confirmation, error)
 	ActiveByEcho(ctx context.Context, appID, echoID string) ([]confirmation.Confirmation, error)
 	ActiveBySession(ctx context.Context, appID, sessionID string) ([]confirmation.Confirmation, error)
+	ApprovedForCall(ctx context.Context, appID, echoID, sessionID, targetType, targetID, digest string) (confirmation.Confirmation, error)
 	RevokeEcho(ctx context.Context, appID, echoID string, now time.Time) (int64, error)
 	RevokeRun(ctx context.Context, appID, runID string, now time.Time) (int64, error)
 }
@@ -1306,6 +1307,20 @@ func (o *Orchestrator) invokeCapabilityOnce(ctx context.Context, run RunRecord, 
 		ConfirmationID:  call.ConfirmationId,
 		ProtocolVersion: executor.Version,
 		PermissionScope: permissionScope,
+	}
+	// 公共确认往返：需要确认的目标由内核按（目标、参数摘要、Echo/会话归属）
+	// 自选正确的已批准确认——同一 Capability 存在多个不同参数的批准时，参数
+	// 摘要保证只命中与本次调用一致的一条；执行者附带的 confirmation_id 仅为
+	// 提示，与参数不符的批准不会被采用。
+	if o.confirmations != nil {
+		if spec, _, specErr := o.registry.ResolveCapability(call.CapabilityId); specErr == nil && spec.RequiresConfirmation {
+			if digest, digestErr := confirmation.Digest(call.PayloadJson); digestErr == nil {
+				if resolved, resolveErr := o.confirmations.ApprovedForCall(ctx, o.config.AppID, echoID, run.SessionID,
+					confirmation.TargetTypeCapability, call.CapabilityId, digest); resolveErr == nil {
+					request.ConfirmationID = resolved.ConfirmationID
+				}
+			}
+		}
 	}
 	payload, err := o.dispatcher.InvokeCapability(ctx, request, call.CapabilityId, call.PayloadJson)
 	result := &executor.CapabilityResult{
