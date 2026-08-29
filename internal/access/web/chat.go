@@ -37,14 +37,14 @@ func (s *Server) chatStream(writer http.ResponseWriter, request *http.Request) {
 		access.WriteJSON(writer, http.StatusInternalServerError, map[string]string{"code": "streaming_unavailable"})
 		return
 	}
-	if !s.beginAdmission() {
+	if !s.Begin() {
 		access.WriteJSON(writer, http.StatusServiceUnavailable, map[string]string{"code": "shutting_down", "message": "服务正在关闭"})
 		return
 	}
 	admissionReleased := false
 	defer func() {
 		if !admissionReleased {
-			s.admissionWG.Done()
+			s.Done()
 		}
 	}()
 	webIdentity, authenticated := s.authenticateWeb(writer, request)
@@ -68,7 +68,7 @@ func (s *Server) chatStream(writer http.ResponseWriter, request *http.Request) {
 	if created {
 		s.scheduler.Enqueue(request.Context(), echoID)
 	}
-	s.admissionWG.Done()
+	s.Done()
 	admissionReleased = true
 	started := time.Now()
 	heartbeat := time.NewTicker(15 * time.Second)

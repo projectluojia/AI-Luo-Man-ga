@@ -396,6 +396,10 @@ func (o *Orchestrator) Cancel(ctx context.Context, echoID string) (bool, error) 
 	return cancelled, err
 }
 
+func (o *Orchestrator) CancelQueuedRuns(ctx context.Context) error {
+	return o.store.CancelQueuedRuns(ctx, o.config.AppID, o.now().UTC())
+}
+
 func (o *Orchestrator) CreateIdempotent(ctx context.Context, request RunRequest) (string, bool, error) {
 	if request.Message == "" {
 		return "", false, ErrEmptyMessage
