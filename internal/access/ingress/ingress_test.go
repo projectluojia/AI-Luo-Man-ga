@@ -78,7 +78,7 @@ func newHarness(t *testing.T) *harness {
 		t.Fatal(err)
 	}
 	echoes := &fakeEchoCreator{}
-	return &harness{store: store, ids: ids, echoes: echoes, server: ingress.NewServer(testAppID, hub, echoes, testScheduler{})}
+	return &harness{store: store, ids: ids, echoes: echoes, server: ingress.NewServer(testAppID, hub, kernelecho.NewAdmission(echoes, testScheduler{}))}
 }
 
 // openIdentity 开通一个平台用户：内部用户 + 平台绑定 + App 成员关系。

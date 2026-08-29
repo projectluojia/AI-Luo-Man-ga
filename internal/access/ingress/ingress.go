@@ -38,16 +38,15 @@ type Server struct {
 	*access.AdmissionGate
 	appID     string
 	hub       *access.Hub
-	echoes    kernelecho.Creator
-	scheduler kernelecho.Enqueuer
+	admission kernelecho.Admission
 }
 
 // NewServer 构造平台事件入口。
-func NewServer(appID string, hub *access.Hub, echoes kernelecho.Creator, scheduler kernelecho.Enqueuer) *Server {
-	if scheduler == nil {
-		panic("platform ingress requires a Run scheduler")
+func NewServer(appID string, hub *access.Hub, admission kernelecho.Admission) *Server {
+	if admission == nil {
+		panic("platform ingress requires Echo admission")
 	}
-	return &Server{AdmissionGate: access.NewAdmissionGate(), appID: appID, hub: hub, echoes: echoes, scheduler: scheduler}
+	return &Server{AdmissionGate: access.NewAdmissionGate(), appID: appID, hub: hub, admission: admission}
 }
 
 // Handler 返回平台事件 HTTP 处理器。
@@ -80,16 +79,13 @@ func (s *Server) ingest(writer http.ResponseWriter, request *http.Request) {
 		access.WriteIntakeError(writer, request, err)
 		return
 	}
-	echoID, created, err := s.echoes.CreateIdempotent(request.Context(), kernelecho.RunRequest{
+	echoID, created, err := s.admission.Create(request.Context(), kernelecho.RunRequest{
 		Message: intake.Text, IdempotencyKey: event.IdempotencyKey,
 		SessionID: intake.SessionID, UserID: intake.UserID, MessageID: intake.MessageID,
 	})
 	if err != nil {
 		access.WriteEchoError(writer, request, err)
 		return
-	}
-	if created {
-		s.scheduler.Enqueue(request.Context(), echoID)
 	}
 	observe.Info(request.Context(), "平台事件已完成 Echo 创建",
 		observe.StringAttr("app_id", s.appID),
