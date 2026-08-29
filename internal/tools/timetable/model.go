@@ -40,6 +40,9 @@ var (
 	ErrNoCourses     = errors.New("timetable import contains no courses")
 	ErrUnsupported   = errors.New("unsupported timetable import format")
 	ErrMalformedData = errors.New("malformed timetable import data")
+	// ErrTooLarge 表示导入内容超出 MaxImportBytes 字节预算；与格式错误的
+	// ErrMalformedData 区分，避免把"内容过大"误报为"数据格式错误"。
+	ErrTooLarge = errors.New("timetable import content exceeds size limit")
 )
 
 // Timetable 是用户在指定 App 内的一份课表。

@@ -66,6 +66,16 @@ func (s *Service) Register(reg *registry.Registry) error {
 	}
 	read := registry.SideEffectRead
 	write := registry.SideEffectWrite
+	// capabilityConfirm 与 capability 复用同一装配，仅为删除类 Capability
+	// 打开 RequiresConfirmation，使其与对应 Tool 的确认语义保持一致。
+	capabilityConfirm := func(id, toolID, name, description, schema string) struct {
+		Spec    registry.CapabilitySpec
+		Handler registry.Handler
+	} {
+		entry := capability(id, toolID, name, description, schema, write)
+		entry.Spec.RequiresConfirmation = true
+		return entry
+	}
 	return reg.RegisterBatch(timetabletool.ToolRegistrations(s.store), []registry.ServiceRegistration{{
 		Spec: ServiceSpec(),
 		Capabilities: map[string]struct {
@@ -76,13 +86,13 @@ func (s *Service) Register(reg *registry.Registry) error {
 			GetCapabilityID:          capability(GetCapabilityID, timetabletool.TimetableGetToolID, "查看一份课表", "Get a timetable owned by the current user.", timetabletool.TimetableIDInputSchemaJSONExport, read),
 			CreateCapabilityID:       capability(CreateCapabilityID, timetabletool.TimetableCreateToolID, "创建本地课表", "Create a local timetable.", timetabletool.TimetableCreateInputSchemaJSONExport, write),
 			UpdateCapabilityID:       capability(UpdateCapabilityID, timetabletool.TimetableUpdateToolID, "编辑课表", "Rename or activate a timetable.", timetabletool.TimetableUpdateInputSchemaJSONExport, write),
-			DeleteCapabilityID:       capability(DeleteCapabilityID, timetabletool.TimetableDeleteToolID, "删除课表", "Delete a timetable and all its courses.", timetabletool.TimetableIDInputSchemaJSONExport, write),
+			DeleteCapabilityID:       capabilityConfirm(DeleteCapabilityID, timetabletool.TimetableDeleteToolID, "删除课表", "Delete a timetable and all its courses.", timetabletool.TimetableIDInputSchemaJSONExport),
 			ActivateCapabilityID:     capability(ActivateCapabilityID, timetabletool.TimetableActivateToolID, "切换当前课表", "Make one timetable active for the current user.", timetabletool.TimetableIDInputSchemaJSONExport, write),
 			CourseListCapabilityID:   capability(CourseListCapabilityID, timetabletool.CourseListToolID, "查看课程", "List courses in a timetable.", timetabletool.TimetableIDInputSchemaJSONExport, read),
 			CourseGetCapabilityID:    capability(CourseGetCapabilityID, timetabletool.CourseGetToolID, "查看一门课程", "Get one course.", timetabletool.CourseGetInputSchemaJSONExport, read),
 			CourseCreateCapabilityID: capability(CourseCreateCapabilityID, timetabletool.CourseCreateToolID, "新增课程", "Create a locally edited course.", timetabletool.CourseInputSchemaJSONExport, write),
 			CourseUpdateCapabilityID: capability(CourseUpdateCapabilityID, timetabletool.CourseUpdateToolID, "编辑课程", "Replace a course.", timetabletool.CourseUpdateInputSchemaJSONExport, write),
-			CourseDeleteCapabilityID: capability(CourseDeleteCapabilityID, timetabletool.CourseDeleteToolID, "删除课程", "Delete a course.", timetabletool.CourseGetInputSchemaJSONExport, write),
+			CourseDeleteCapabilityID: capabilityConfirm(CourseDeleteCapabilityID, timetabletool.CourseDeleteToolID, "删除课程", "Delete a course.", timetabletool.CourseGetInputSchemaJSONExport),
 			ImportCapabilityID:       capability(ImportCapabilityID, timetabletool.TimetableImportToolID, "导入课表", "Import WuDa academic or WakeUp timetable content supplied by the user.", timetabletool.ImportInputSchemaJSONExport, write),
 		},
 	}})

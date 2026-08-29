@@ -141,7 +141,9 @@ func (s *Store) UpdateTimetable(ctx context.Context, value timetable.Timetable) 
 	}
 	defer s.finishTx(tx, &resultErr, "update timetable")
 	if value.Active {
-		if _, err := tx.ExecContext(ctx, `UPDATE timetables SET active=0,updated_at=? WHERE app_id=? AND user_id=?`, now.Format(time.RFC3339Nano), value.AppID, value.UserID); err != nil {
+		// 只清除其他仍处于激活态的行：避免把未变化课表的 updated_at 推到
+		// 当前时间，导致 ListTimetables 按 updated_at 排序的顺序失真。
+		if _, err := tx.ExecContext(ctx, `UPDATE timetables SET active=0,updated_at=? WHERE app_id=? AND user_id=? AND active=1 AND timetable_id<>?`, now.Format(time.RFC3339Nano), value.AppID, value.UserID, value.ID); err != nil {
 			return timetable.Timetable{}, err
 		}
 	}

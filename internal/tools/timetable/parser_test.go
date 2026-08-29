@@ -69,6 +69,28 @@ header-1
 	}
 }
 
+func TestParseAcademicRejectsMalformedRow(t *testing.T) {
+	raw := []byte(`{"kbList":[{"kcmc":"高数","zcd":"1-4周"}]}`)
+	if _, err := ParseAcademic(raw); !errors.Is(err, ErrMalformedData) {
+		t.Fatalf("academic missing weekday err=%v", err)
+	}
+}
+
+func TestImportSizeErrorsAreDistinctFromMalformedData(t *testing.T) {
+	huge := strings.Repeat("a", MaxImportBytes+1)
+	if _, err := ParseAcademic([]byte(huge)); !errors.Is(err, ErrTooLarge) {
+		t.Fatalf("academic size err=%v", err)
+	}
+	envelope := []byte(`{"format":"csv","content":"` + huge + `"}`)
+	if _, err := ParseWakeUpEnvelope(envelope); !errors.Is(err, ErrTooLarge) {
+		t.Fatalf("envelope size err=%v", err)
+	}
+	data, err := parseCapabilityImport(importInput{Format: "csv", Content: huge})
+	if !errors.Is(err, ErrTooLarge) || len(data.Courses) != 0 {
+		t.Fatalf("capability size data=%#v err=%v", data, err)
+	}
+}
+
 func TestParseWakeUpLegacyRejectsInvalidDetailRow(t *testing.T) {
 	legacy := `header-0
 header-1

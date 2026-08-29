@@ -22,8 +22,11 @@ var digitsPattern = regexp.MustCompile(`\d+`)
 // xqjmc、jcs/jc/jcsm、zcd/zcmc/zc 等字段。未知的来源字段被忽略，来源字段
 // 仍在 Go 信任边界经过课程模型校验。
 func ParseAcademic(raw []byte) ([]Course, error) {
-	if len(raw) == 0 || len(raw) > MaxImportBytes {
+	if len(raw) == 0 {
 		return nil, ErrMalformedData
+	}
+	if len(raw) > MaxImportBytes {
+		return nil, ErrTooLarge
 	}
 	var envelope struct {
 		KBList []map[string]json.RawMessage `json:"kbList"`
@@ -43,7 +46,9 @@ func ParseAcademic(raw []byte) ([]Course, error) {
 		weekMeta := strings.TrimSpace(rawString(item["zcd"]))
 		weeks := parseWeeks(firstRawString(item, "zcd", "zcmc", "zc"))
 		if weekday < 1 || period == nil || len(weeks) == 0 {
-			continue
+			// 与 legacy/CSV 分支保持全有或全无：有课程名却缺关键定位信息的
+			// 行属于畸形数据，整包拒绝而非静默丢行。
+			return nil, ErrMalformedData
 		}
 		course := Course{
 			Title: title, TitleRaw: titleRaw, Weekday: weekday,
@@ -66,8 +71,11 @@ func ParseWuDa(raw []byte) ([]Course, error) { return ParseAcademic(raw) }
 // ParseWakeUpEnvelope 解析 {format,content,fileName} envelope。format 为
 // legacy 时使用旧版 JSON 行布局，其余取值按公开脚本兼容为 CSV。
 func ParseWakeUpEnvelope(raw []byte) (ImportData, error) {
-	if len(raw) == 0 || len(raw) > MaxImportBytes {
+	if len(raw) == 0 {
 		return ImportData{}, ErrMalformedData
+	}
+	if len(raw) > MaxImportBytes {
+		return ImportData{}, ErrTooLarge
 	}
 	var input struct {
 		Format   string `json:"format"`
@@ -78,7 +86,7 @@ func ParseWakeUpEnvelope(raw []byte) (ImportData, error) {
 		return ImportData{}, errors.Join(ErrMalformedData, err)
 	}
 	if len(input.Content) > MaxImportBytes {
-		return ImportData{}, ErrMalformedData
+		return ImportData{}, ErrTooLarge
 	}
 	if input.Format == "legacy" {
 		return parseWakeUpLegacy(input.Content)

@@ -53,7 +53,7 @@ const (
 )
 
 // ToolSpecs 返回课表原子 Tool 规格。Tool 与 Capability 的 JSON Schema 保持一致，
-// Dispatcher 在两个边界分别复验参数。
+// Dispatcher 在两个边界分别复验参数。删除类 Tool 要求显式确认后才执行。
 func ToolSpecs() []registry.ToolSpec {
 	read := func(id, description, schema string) registry.ToolSpec {
 		return registry.ToolSpec{ID: id, Version: "1.0.0", Description: description, InputSchemaJSON: schema, SideEffect: registry.SideEffectRead}
@@ -61,18 +61,21 @@ func ToolSpecs() []registry.ToolSpec {
 	write := func(id, description, schema string) registry.ToolSpec {
 		return registry.ToolSpec{ID: id, Version: "1.0.0", Description: description, InputSchemaJSON: schema, SideEffect: registry.SideEffectWrite}
 	}
+	writeConfirm := func(id, description, schema string) registry.ToolSpec {
+		return registry.ToolSpec{ID: id, Version: "1.0.0", Description: description, InputSchemaJSON: schema, SideEffect: registry.SideEffectWrite, RequiresConfirmation: true}
+	}
 	return []registry.ToolSpec{
 		read(TimetableListToolID, "List the current user's timetables.", TimetableListInputSchemaJSON),
 		read(TimetableGetToolID, "Get one timetable owned by the current user.", TimetableIDInputSchemaJSON),
 		write(TimetableCreateToolID, "Create a local timetable for the current user.", TimetableCreateInputSchemaJSON),
 		write(TimetableUpdateToolID, "Rename or activate a timetable owned by the current user.", TimetableUpdateInputSchemaJSON),
-		write(TimetableDeleteToolID, "Delete a timetable and its courses.", TimetableIDInputSchemaJSON),
+		writeConfirm(TimetableDeleteToolID, "Delete a timetable and its courses.", TimetableIDInputSchemaJSON),
 		write(TimetableActivateToolID, "Make one timetable active for the current user.", TimetableIDInputSchemaJSON),
 		read(CourseListToolID, "List courses in one owned timetable.", TimetableIDInputSchemaJSON),
 		read(CourseGetToolID, "Get one course in an owned timetable.", CourseGetInputSchemaJSON),
 		write(CourseCreateToolID, "Create a course in an owned timetable.", CourseInputSchemaJSON),
 		write(CourseUpdateToolID, "Replace one course in an owned timetable.", CourseUpdateInputSchemaJSON),
-		write(CourseDeleteToolID, "Delete one course from an owned timetable.", CourseGetInputSchemaJSON),
+		writeConfirm(CourseDeleteToolID, "Delete one course from an owned timetable.", CourseGetInputSchemaJSON),
 		write(TimetableImportToolID, "Import a WuDa academic or WakeUp timetable.", ImportInputSchemaJSON),
 	}
 }
@@ -463,26 +466,22 @@ func importTimetableHandler(store Store) registry.Handler {
 
 // parseCapabilityImport 是导入格式的唯一分发入口，别名集合必须与
 // ImportInputSchemaJSON 的 enum 保持一致，避免出现第二套漂移的实现。
+// 内容按 UTF-8 字节预算先行校验，超限返回 ErrTooLarge 而不是格式错误；
+// 分发直达具体解析器，不经 envelope 重编码，避免转义开销使大小判断失真。
 func parseCapabilityImport(input importInput) (ImportData, error) {
+	if len(input.Content) > MaxImportBytes {
+		return ImportData{}, ErrTooLarge
+	}
 	format := strings.ToLower(strings.TrimSpace(input.Format))
 	switch format {
 	case "wuda", "academic", "whu":
 		courses, err := ParseAcademic([]byte(input.Content))
 		return ImportData{Name: fileBase(input.FileName), Source: SourceWUDA, Courses: courses}, err
 	case "legacy":
-		return ParseWakeUpEnvelope(marshalEnvelope("legacy", input.Content, input.FileName))
+		return parseWakeUpLegacy(input.Content)
 	case "wakeup", "csv":
-		return ParseWakeUpEnvelope(marshalEnvelope("csv", input.Content, input.FileName))
+		return parseWakeUpCSV(input.Content, input.FileName)
 	default:
 		return ImportData{}, fmt.Errorf("%w: %s", ErrUnsupported, format)
 	}
-}
-
-func marshalEnvelope(format, content, fileName string) []byte {
-	encoded, _ := json.Marshal(struct {
-		Format   string `json:"format"`
-		Content  string `json:"content"`
-		FileName string `json:"fileName"`
-	}{format, content, fileName})
-	return encoded
 }
