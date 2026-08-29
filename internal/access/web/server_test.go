@@ -64,6 +64,22 @@ func (testWebAuthenticator) Authenticate(*http.Request) (web.AuthenticatedWebIde
 	}, nil
 }
 
+type testController struct{}
+
+func (testController) Enqueue(context.Context, string) {}
+
+func (testController) Cancel(context.Context, string) (bool, error) { return false, nil }
+
+type testOrchestrator interface {
+	kernelecho.SchedulerRunner
+	kernelecho.Creator
+}
+
+type testWebServer struct {
+	*web.Server
+	scheduler *kernelecho.Scheduler
+}
+
 // newTestHub 为 Web 测试构造需要受治理身份的接入入口。
 func newTestHub(store *sqlite.Store, appID string) *access.Hub {
 	hub, err := access.NewHub(appID, store, testWebResolver{})
@@ -74,16 +90,33 @@ func newTestHub(store *sqlite.Store, appID string) *access.Hub {
 }
 
 func newAuthenticatedServer(
+	t *testing.T,
 	ctx context.Context,
-	orchestrator web.EchoOrchestrator,
+	orchestrator testOrchestrator,
 	reader web.EchoReader,
 	health web.HealthChecker,
 	reg *registry.Registry,
 	policy runtime.AppPolicy,
 	appID string,
 	platformHub *access.Hub,
-) *web.Server {
-	return web.NewServer(ctx, orchestrator, reader, health, reg, policy, appID, platformHub, web.WithWebAuthenticator(testWebAuthenticator{}))
+) *testWebServer {
+	events := access.NewEventHub()
+	scheduler := kernelecho.NewScheduler(ctx, orchestrator, reader, events, appID)
+	if _, err := scheduler.Recover(ctx); err != nil {
+		t.Fatalf("recover scheduler: %v", err)
+	}
+	t.Cleanup(func() {
+		shutdownContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := scheduler.Shutdown(shutdownContext); err != nil {
+			t.Errorf("shutdown scheduler: %v", err)
+		}
+	})
+	return &testWebServer{
+		Server: web.NewServer(orchestrator, reader, health, reg, policy, appID, platformHub, scheduler, events,
+			web.WithWebAuthenticator(testWebAuthenticator{})),
+		scheduler: scheduler,
+	}
 }
 
 type observedContext struct {
@@ -124,6 +157,9 @@ func (f *fakeOrchestrator) Recoverable(context.Context) ([]kernelecho.RunWork, e
 }
 
 func (f *fakeOrchestrator) Runnable(ctx context.Context, limit int) ([]kernelecho.RunWork, error) {
+	if f.store == nil {
+		return nil, nil
+	}
 	return f.store.ListRunnableRuns(ctx, "campus-services", time.Now().UTC(), limit)
 }
 
@@ -275,10 +311,10 @@ func TestWebAccessRejectsUnauthenticatedEchoBeforePersistence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	t.Cleanup(func() { _ = store.Close() })
 	server := web.NewServer(
-		context.Background(), &fakeOrchestrator{store: store}, store, store,
-		registry.New(), runtimetest.NewStaticAppPolicy(), "campus-services", newTestHub(store, "campus-services"),
+		&fakeOrchestrator{store: store}, store, store,
+		registry.New(), runtimetest.NewStaticAppPolicy(), "campus-services", newTestHub(store, "campus-services"), testController{}, access.NewEventHub(),
 	)
 	response := createEchoRequest(t, server.Handler(), "不应写入", "unauthenticated")
 	if response.Code != http.StatusUnauthorized || !strings.Contains(response.Body.String(), `"code":"authentication_required"`) {
@@ -330,12 +366,12 @@ func TestWebAccessCopiesRequestContextIntoBackgroundRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	t.Cleanup(func() { _ = store.Close() })
 	reg := registry.New()
 	policy := runtimetest.NewStaticAppPolicy()
 	observed := make(chan observedContext, 1)
 	backend := &fakeOrchestrator{store: store, observed: observed}
-	handler := newAuthenticatedServer(context.Background(), backend, store, store, reg, policy, "campus-services", newTestHub(store, "campus-services")).Handler()
+	handler := newAuthenticatedServer(t, context.Background(), backend, store, store, reg, policy, "campus-services", newTestHub(store, "campus-services")).Handler()
 	payload := strings.NewReader(`{"message":"查询校巴"}`)
 	request := httptest.NewRequest(http.MethodPost, "/api/v2/echoes", payload)
 	request.Header.Set("Content-Type", "application/json")
@@ -364,7 +400,7 @@ func TestWebAccessRecoversPersistedQueuedRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	t.Cleanup(func() { _ = store.Close() })
 	reg := registry.New()
 	policy := runtimetest.NewStaticAppPolicy()
 	backend := &fakeOrchestrator{store: store}
@@ -377,11 +413,7 @@ func TestWebAccessRecoversPersistedQueuedRun(t *testing.T) {
 		t.Fatalf("runs=%#v err=%v", runs, err)
 	}
 	backend.recovery = []kernelecho.RunWork{{Run: runs[0], InputMessage: "recover"}}
-	server := newAuthenticatedServer(context.Background(), backend, store, store, reg, policy, "campus-services", newTestHub(store, "campus-services"))
-	count, err := server.Recover(context.Background())
-	if err != nil || count != 1 {
-		t.Fatalf("count=%d err=%v", count, err)
-	}
+	_ = newAuthenticatedServer(t, context.Background(), backend, store, store, reg, policy, "campus-services", newTestHub(store, "campus-services"))
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		record, _, err := store.GetEcho(context.Background(), "campus-services", echoID)
@@ -400,7 +432,7 @@ func TestWebAccessDoesNotExposeCrossAppEcho(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	t.Cleanup(func() { _ = store.Close() })
 	now := time.Now().UTC()
 	if _, created, err := store.CreateEchoRunIdempotentLimited(context.Background(), "other-app-echo", idempotency.Fingerprint([]byte("secret")), kernelecho.Record{
 		ID: "other-app-echo", AppID: "app-b", InputMessage: "secret",
@@ -418,7 +450,7 @@ func TestWebAccessDoesNotExposeCrossAppEcho(t *testing.T) {
 	reg := registry.New()
 	policy := runtimetest.NewStaticAppPolicy()
 	backend := &fakeOrchestrator{store: store}
-	handler := newAuthenticatedServer(context.Background(), backend, store, store, reg, policy, "app-a", newTestHub(store, "app-a")).Handler()
+	handler := newAuthenticatedServer(t, context.Background(), backend, store, store, reg, policy, "app-a", newTestHub(store, "app-a")).Handler()
 	for _, methodAndPath := range [][2]string{
 		{http.MethodGet, "/api/v1/echoes/other-app-echo"},
 		{http.MethodDelete, "/api/v1/echoes/other-app-echo"},
@@ -441,11 +473,12 @@ func TestWebAccessPublicErrorsDoNotDiscloseInternalDetails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	t.Cleanup(func() { _ = store.Close() })
 	reg := registry.New()
 	policy := runtimetest.NewStaticAppPolicy()
 
 	createHandler := newAuthenticatedServer(
+		t,
 		context.Background(),
 		&fakeOrchestrator{store: store, createErr: errors.New(secret)},
 		store,
@@ -464,6 +497,7 @@ func TestWebAccessPublicErrorsDoNotDiscloseInternalDetails(t *testing.T) {
 	}
 
 	readHandler := newAuthenticatedServer(
+		t,
 		context.Background(),
 		&fakeOrchestrator{store: store},
 		failingReader{err: errors.New(secret)},
@@ -480,6 +514,7 @@ func TestWebAccessPublicErrorsDoNotDiscloseInternalDetails(t *testing.T) {
 	}
 
 	healthHandler := newAuthenticatedServer(
+		t,
 		context.Background(),
 		&fakeOrchestrator{store: store},
 		store,
@@ -531,6 +566,7 @@ func TestCapabilitiesFailClosedForUnavailableOrDisabledAppPolicy(t *testing.T) {
 			}
 			t.Cleanup(func() { _ = store.Close() })
 			handler := newAuthenticatedServer(
+				t,
 				t.Context(),
 				&fakeOrchestrator{},
 				failingReader{err: errors.New("unused")},
@@ -565,6 +601,7 @@ func TestEchoCreationMapsAppConfigurationFailuresToSafeErrors(t *testing.T) {
 			}
 			t.Cleanup(func() { _ = store.Close() })
 			handler := newAuthenticatedServer(
+				t,
 				t.Context(),
 				&fakeOrchestrator{store: store, createErr: createErr},
 				store,
@@ -591,11 +628,11 @@ func TestEchoCreationPersistsStandardMessageToSessionStore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	t.Cleanup(func() { _ = store.Close() })
 	reg := registry.New()
 	policy := runtimetest.NewStaticAppPolicy()
 	backend := &fakeOrchestrator{store: store}
-	handler := newAuthenticatedServer(context.Background(), backend, store, store, reg, policy, "campus-services", newTestHub(store, "campus-services")).Handler()
+	handler := newAuthenticatedServer(t, context.Background(), backend, store, store, reg, policy, "campus-services", newTestHub(store, "campus-services")).Handler()
 	first := createEchoRequest(t, handler, "有哪些校巴线路？", "persist-message")
 	if first.Code != http.StatusAccepted {
 		t.Fatalf("首次创建 status=%d body=%s", first.Code, first.Body.String())
@@ -633,8 +670,9 @@ func TestHealthzIsProcessLivenessAndReadyzChecksDependencies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	t.Cleanup(func() { _ = store.Close() })
 	handler := newAuthenticatedServer(
+		t,
 		context.Background(),
 		&fakeOrchestrator{},
 		failingReader{err: errors.New("unused")},
@@ -662,8 +700,9 @@ func TestWebAccessReturnsStableBackpressureResponse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	t.Cleanup(func() { _ = store.Close() })
 	server := newAuthenticatedServer(
+		t,
 		context.Background(),
 		&fakeOrchestrator{store: store, createErr: kernelecho.ErrQueueFull},
 		store,
@@ -688,8 +727,9 @@ func TestMetricsEndpointUsesPrometheusFormatWithoutBusinessIdentifiers(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	t.Cleanup(func() { _ = store.Close() })
 	handler := newAuthenticatedServer(
+		t,
 		context.Background(),
 		&fakeOrchestrator{},
 		failingReader{err: errors.New("unused")},
@@ -719,6 +759,7 @@ func TestWebAccessShutdownStopsAdmissionAndDrainsActiveRuns(t *testing.T) {
 	defer sqlitetest.CloseAndWait(t, store, tempDir)
 	backend := &fakeOrchestrator{store: store, block: true}
 	server := newAuthenticatedServer(
+		t,
 		context.Background(),
 		backend,
 		store,
@@ -733,7 +774,8 @@ func TestWebAccessShutdownStopsAdmissionAndDrainsActiveRuns(t *testing.T) {
 	// 排空含持久化与运行取消，CI 并行负载下 1 秒墙钟预算不足，放宽到 10 秒（断言语义不变）。
 	shutdownContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := server.Shutdown(shutdownContext); err != nil {
+	server.StopAccepting()
+	if err := server.scheduler.Shutdown(shutdownContext); err != nil {
 		t.Fatalf("shutdown: %v", err)
 	}
 	record, _, err := store.GetEcho(context.Background(), "campus-services", echoID)
@@ -759,10 +801,11 @@ func TestPersistentSchedulerBoundsConcurrentRuns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	t.Cleanup(func() { _ = store.Close() })
 	gate := make(chan struct{})
 	backend := &fakeOrchestrator{store: store, runGate: gate}
 	server := newAuthenticatedServer(
+		t,
 		context.Background(), backend, store, store, registry.New(),
 		runtimetest.NewStaticAppPolicy(), "campus-services", newTestHub(store, "campus-services"),
 	)
@@ -808,7 +851,7 @@ func TestPersistentSchedulerBoundsConcurrentRuns(t *testing.T) {
 	// 排空含运行取消与持久化，CI 并行负载下 1 秒墙钟预算不足，放宽到 10 秒（断言语义不变）。
 	shutdownContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := server.Shutdown(shutdownContext); err != nil {
+	if err := server.scheduler.Shutdown(shutdownContext); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -827,6 +870,7 @@ func TestShutdownWaitsForAdmittedCreationBeforeCancellingRun(t *testing.T) {
 		releaseCreate: make(chan struct{}),
 	}
 	server := newAuthenticatedServer(
+		t,
 		context.Background(),
 		backend,
 		store,
@@ -836,14 +880,23 @@ func TestShutdownWaitsForAdmittedCreationBeforeCancellingRun(t *testing.T) {
 		"campus-services",
 		newTestHub(store, "campus-services"),
 	)
-	responseDone := make(chan *httptest.ResponseRecorder, 1)
+	httpServer := httptest.NewUnstartedServer(server.Handler())
+	httpServer.Start()
+	defer httpServer.Close()
+	request, err := http.NewRequest(http.MethodPost, httpServer.URL+"/api/v2/echoes", bytes.NewBufferString(`{"message":"admitted"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Idempotency-Key", "admitted-before-shutdown")
+	type responseResult struct {
+		response *http.Response
+		err      error
+	}
+	responseDone := make(chan responseResult, 1)
 	go func() {
-		response := httptest.NewRecorder()
-		request := httptest.NewRequest(http.MethodPost, "/api/v2/echoes", bytes.NewBufferString(`{"message":"admitted"}`))
-		request.Header.Set("Content-Type", "application/json")
-		request.Header.Set("Idempotency-Key", "admitted-before-shutdown")
-		server.Handler().ServeHTTP(response, request)
-		responseDone <- response
+		response, requestErr := httpServer.Client().Do(request)
+		responseDone <- responseResult{response: response, err: requestErr}
 	}()
 	<-backend.createEntered
 	server.StopAccepting()
@@ -852,7 +905,7 @@ func TestShutdownWaitsForAdmittedCreationBeforeCancellingRun(t *testing.T) {
 	shutdownContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	go func() {
-		shutdownDone <- server.Shutdown(shutdownContext)
+		shutdownDone <- server.WaitAdmissions(shutdownContext)
 	}()
 	select {
 	case err := <-shutdownDone:
@@ -860,22 +913,36 @@ func TestShutdownWaitsForAdmittedCreationBeforeCancellingRun(t *testing.T) {
 	default:
 	}
 	close(backend.releaseCreate)
-	response := <-responseDone
-	if response.Code != http.StatusAccepted {
-		t.Fatalf("已接入请求状态=%d body=%s", response.Code, response.Body.String())
+	result := <-responseDone
+	if result.err != nil {
+		t.Fatal(result.err)
+	}
+	defer result.response.Body.Close()
+	if result.response.StatusCode != http.StatusAccepted {
+		body, _ := io.ReadAll(result.response.Body)
+		t.Fatalf("已接入请求状态=%d body=%s", result.response.StatusCode, body)
 	}
 	if err := <-shutdownDone; err != nil {
 		t.Fatalf("shutdown: %v", err)
 	}
+	if err := httpServer.Config.Shutdown(shutdownContext); err != nil {
+		t.Fatalf("http shutdown: %v", err)
+	}
+	if err := server.scheduler.Shutdown(shutdownContext); err != nil {
+		t.Fatalf("scheduler shutdown: %v", err)
+	}
 	var accepted map[string]string
-	if err := json.Unmarshal(response.Body.Bytes(), &accepted); err != nil {
+	body, err := io.ReadAll(result.response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(body, &accepted); err != nil {
 		t.Fatal(err)
 	}
 	record, _, err := store.GetEcho(context.Background(), "campus-services", accepted["echo_id"])
 	if err != nil || record.Status != kernelecho.StatusCancelled {
 		t.Fatalf("record=%#v err=%v", record, err)
 	}
-	sqlitetest.CloseAndWait(t, store, tempDir)
 }
 
 func newTestServer(t *testing.T, block bool) (http.Handler, *sqlite.Store) {
@@ -888,7 +955,7 @@ func newTestServer(t *testing.T, block bool) (http.Handler, *sqlite.Store) {
 	reg := registry.New()
 	policy := runtimetest.NewStaticAppPolicy()
 	backend := &fakeOrchestrator{store: store, block: block}
-	return newAuthenticatedServer(context.Background(), backend, store, store, reg, policy, "campus-services", newTestHub(store, "campus-services")).Handler(), store
+	return newAuthenticatedServer(t, context.Background(), backend, store, store, reg, policy, "campus-services", newTestHub(store, "campus-services")).Handler(), store
 }
 
 func createEcho(t *testing.T, handler http.Handler, message string) (string, string) {

@@ -83,7 +83,7 @@ type Orchestrator struct {
 	registry    *registry.Registry
 	dispatcher  *runtime.Dispatcher
 	policy      runtime.AppPolicy
-	store       Store
+	store       OrchestratorStore
 	idempotency *idempotency.Manager
 	context     *contextasm.Assembler
 	config      Config
@@ -95,7 +95,7 @@ func NewOrchestrator(
 	reg *registry.Registry,
 	dispatcher *runtime.Dispatcher,
 	policy runtime.AppPolicy,
-	store Store,
+	store OrchestratorStore,
 	config Config,
 ) *Orchestrator {
 	if config.RunTimeout == 0 {

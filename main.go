@@ -977,6 +977,17 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 		observe.StringAttr("sweep_type", confirmationSweepType),
 		observe.Int64Attr("sweep_interval_ms", confirmationSweepInterval.Milliseconds()),
 	)
+	echoEvents := access.NewEventHub()
+	runScheduler := kernelecho.NewScheduler(ctx, orchestrator, store, echoEvents, campus.AppID,
+		kernelecho.WithScheduler(config.scheduler.Workers, time.Duration(config.scheduler.PollMs)*time.Millisecond, config.scheduler.BatchSize))
+	defer func() {
+		shutdownContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		resultErr = errors.Join(resultErr, runScheduler.Shutdown(shutdownContext))
+	}()
+	if _, err := runScheduler.Recover(ctx); err != nil {
+		return fmt.Errorf("recover durable runs: %w", err)
+	}
 	readiness := health.Combined{store, health.ExecutorAppChecker{Client: executorClient, Source: store, AppID: campus.AppID}}
 	// 平台接入统一入口：标准消息 → 身份解析 → 会话/消息入库 → Echo。
 	// Web 登录边界尚未接入时聊天创建入口返回 401，不降级为匿名用户。
@@ -989,31 +1000,25 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 	if err != nil {
 		return fmt.Errorf("configure QQ identity provisioner: %w", err)
 	}
-	qqEvents := access.NewEventHub()
 	qqManager, err := qq.NewManager(store, func(settings qqsettings.Settings, connectionChange func(bool)) (qq.Runner, error) {
 		return qq.New(qq.Config{
 			AppID: settings.AppID, WSURL: settings.WSURL, Token: config.qqToken, BotQQID: settings.BotQQID,
 			AllowedGroupIDs: settings.AllowedGroupIDs, AllowedPrivateUserIDs: settings.AllowedPrivateUserIDs,
 			QuickReplies: config.qqQuickReplies, PokeReplies: config.qqPokeReplies,
-			Provisioner: qqProvisioner, OnConnectionChange: connectionChange,
+			Provisioner: qqProvisioner, Scheduler: runScheduler, OnConnectionChange: connectionChange,
 			DialTimeout:    secondsDuration(config.qqConnection.DialTimeoutSeconds),
 			ReconnectDelay: secondsDuration(config.qqConnection.ReconnectDelaySeconds),
 			RunTimeout:     secondsDuration(config.qqConnection.RunTimeoutSeconds),
-		}, platformHub, qqEvents, orchestrator, store)
+		}, platformHub, echoEvents, orchestrator, store)
 	}, secondsDuration(config.qqConnection.ManagerStopTimeoutSeconds))
 	if err != nil {
 		return fmt.Errorf("configure QQ access manager: %w", err)
 	}
-	webAccess := web.NewServer(ctx, orchestrator, store, readiness, reg, policy, campus.AppID, platformHub,
-		web.WithEventHub(qqEvents),
-		web.WithDispatcher(dispatcher),
-		web.WithScheduler(config.scheduler.Workers, time.Duration(config.scheduler.PollMs)*time.Millisecond, config.scheduler.BatchSize))
+	webAccess := web.NewServer(orchestrator, store, readiness, reg, policy, campus.AppID, platformHub, runScheduler, echoEvents,
+		web.WithDispatcher(dispatcher))
 	// 平台事件入口独立挂载：/api/v1/ingress/{platform} 由平台适配器规范化事件驱动，
 	// 其余路径全部交给 Web Access（健康检查、Echo/SSE、演示页面）。
-	ingressServer := ingress.NewServer(campus.AppID, platformHub, orchestrator)
-	if _, err := webAccess.Recover(ctx); err != nil {
-		return fmt.Errorf("recover durable runs: %w", err)
-	}
+	ingressServer := ingress.NewServer(campus.AppID, platformHub, orchestrator, runScheduler)
 	if err := qqManager.Start(ctx, qqsettings.Settings{
 		AppID: campus.AppID, Enabled: config.qqEnabled, WSURL: config.qqWSURL, BotQQID: config.qqBotID,
 		AllowedGroupIDs: config.qqAllowedGroupIDs, AllowedPrivateUserIDs: config.qqAllowedPrivateIDs,
@@ -1070,9 +1075,9 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 		shutdownContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		webAccess.StopAccepting()
+		admissionErr := webAccess.WaitAdmissions(shutdownContext)
 		httpErr := server.Shutdown(shutdownContext)
-		runErr := webAccess.Shutdown(shutdownContext)
-		if err := errors.Join(httpErr, runErr); err != nil {
+		if err := errors.Join(admissionErr, httpErr); err != nil {
 			return fmt.Errorf("graceful shutdown: %w", err)
 		}
 		observe.Info(context.Background(), "AI珞（爱珞）服务已经安全关闭")

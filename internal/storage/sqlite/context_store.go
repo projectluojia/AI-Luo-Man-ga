@@ -10,8 +10,8 @@ import (
 	kernelecho "github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
 )
 
-// 编译期断言：sqlite.Store 必须完整实现 echo.Store 端口（含上下文固化）。
-var _ kernelecho.Store = (*Store)(nil)
+// 编译期断言：sqlite.Store 必须完整实现 Echo 编排持久化端口（含上下文固化）。
+var _ kernelecho.OrchestratorStore = (*Store)(nil)
 
 func init() {
 	// 迁移 19：上下文装配列。Run 持久化会话上下文（session_id/user_id/message_id）

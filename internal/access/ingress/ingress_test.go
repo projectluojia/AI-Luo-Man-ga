@@ -22,6 +22,10 @@ import (
 
 const testAppID = "campus-services"
 
+type testScheduler struct{}
+
+func (testScheduler) Enqueue(context.Context, string) {}
+
 // fakeEchoCreator 按幂等键模拟真实 orchestrator 的幂等创建。
 type fakeEchoCreator struct {
 	calls     int
@@ -68,7 +72,7 @@ func newHarness(t *testing.T) *harness {
 		t.Fatal(err)
 	}
 	echoes := &fakeEchoCreator{}
-	return &harness{store: store, ids: ids, echoes: echoes, server: ingress.NewServer(testAppID, hub, echoes)}
+	return &harness{store: store, ids: ids, echoes: echoes, server: ingress.NewServer(testAppID, hub, echoes, testScheduler{})}
 }
 
 // openIdentity 开通一个平台用户：内部用户 + 平台绑定 + App 成员关系。
