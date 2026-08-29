@@ -213,7 +213,9 @@ func TestDelayedRunAndLeaseRenewalAreGovernedByPersistentState(t *testing.T) {
 	echo, run := echoRunRecords("app", "delayed", "delayed-run", "input", now)
 	run.AvailableAt = now.Add(time.Minute)
 	run.Deadline = run.AvailableAt.Add(time.Minute)
-	if err := store.CreateEchoRun(context.Background(), echo, run); err != nil {
+	if stored, created, err := store.CreateEchoRunIdempotentLimited(
+		context.Background(), "delayed-echo", idempotency.Fingerprint([]byte("input")), echo, run, 0,
+	); err != nil || !created || stored != echo.ID {
 		t.Fatal(err)
 	}
 	if queued, err := store.ListQueuedRuns(context.Background(), "app", 10); err != nil || len(queued) != 1 {
@@ -258,7 +260,9 @@ func TestOrphanedQueuedRunIsDeterministicallyFailed(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC().Truncate(time.Second)
 	echo, run := echoRunRecords("app", "orphan", "orphan-run", "input", now)
-	if err := store.CreateEchoRun(ctx, echo, run); err != nil {
+	if stored, created, err := store.CreateEchoRunIdempotentLimited(
+		ctx, "orphan-echo", idempotency.Fingerprint([]byte("input")), echo, run, 0,
+	); err != nil || !created || stored != echo.ID {
 		t.Fatal(err)
 	}
 	// 模拟崩溃窗口：Echo 已进入终态而 Run 仍排队（绕过 CancelQueuedRun 的正常路径）。
@@ -529,10 +533,10 @@ func TestEchoAndRunCreationRollsBackAtomically(t *testing.T) {
 		MaxOutputBytes: 4096, ProviderTimeoutMS: 5000, Deadline: now.Add(time.Minute), AvailableAt: now,
 		RecoverableState: []byte(`{}`), CreatedAt: now,
 	}
-	err = store.CreateEchoRun(context.Background(), kernelecho.Record{
+	_, _, err = store.CreateEchoRunIdempotentLimited(context.Background(), "atomic-second", idempotency.Fingerprint([]byte("two")), kernelecho.Record{
 		ID: "second", AppID: "app", InputMessage: "two",
 		Status: kernelecho.StatusRunning, CreatedAt: now,
-	}, run)
+	}, run, 0)
 	if err == nil {
 		t.Fatal("duplicate Run identity unexpectedly succeeded")
 	}
@@ -942,7 +946,9 @@ func TestConcurrentBusSnapshotReadersNeverObserveMixedRevision(t *testing.T) {
 func createTestEchoRun(t *testing.T, store *sqlite.Store, appID, echoID, input string, createdAt time.Time) kernelecho.RunRecord {
 	t.Helper()
 	echo, run := echoRunRecords(appID, echoID, "run-"+appID+"-"+echoID, input, createdAt)
-	if err := store.CreateEchoRun(context.Background(), echo, run); err != nil {
+	if stored, created, err := store.CreateEchoRunIdempotentLimited(
+		context.Background(), "test-"+echo.ID, idempotency.Fingerprint([]byte(echo.InputMessage)), echo, run, 0,
+	); err != nil || !created || stored != echo.ID {
 		t.Fatalf("create Echo/Run: %v", err)
 	}
 	return run

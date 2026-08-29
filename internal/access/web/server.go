@@ -16,7 +16,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/jsonutil"
 	kernelecho "github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/idempotency"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
@@ -267,22 +266,8 @@ func (s *Server) createEcho(writer http.ResponseWriter, request *http.Request) {
 		access.WriteJSON(writer, http.StatusBadRequest, map[string]string{"code": "invalid_idempotency_key", "message": "Idempotency-Key 必须是 1 至 128 位安全字符"})
 		return
 	}
-	request.Body = http.MaxBytesReader(writer, request.Body, 64<<10)
-	decoder := json.NewDecoder(request.Body)
-	decoder.DisallowUnknownFields()
 	var input kernelecho.RunRequest
-	if err := decoder.Decode(&input); err != nil {
-		observe.Warn(request.Context(), "创建 Echo 的请求体解析失败",
-			observe.StringAttr("reason", err.Error()),
-		)
-		access.WriteJSON(writer, http.StatusBadRequest, map[string]string{"code": "invalid_request", "message": "请求体不是有效的 JSON 对象"})
-		return
-	}
-	if err := jsonutil.EnsureEOF(decoder); err != nil {
-		observe.Warn(request.Context(), "创建 Echo 的请求体包含多余内容",
-			observe.StringAttr("reason", err.Error()),
-		)
-		access.WriteJSON(writer, http.StatusBadRequest, map[string]string{"code": "invalid_request", "message": "请求体只能包含一个 JSON 对象"})
+	if !access.DecodeJSONBody(writer, request, &input, 64<<10) {
 		return
 	}
 	input.Message = strings.TrimSpace(input.Message)

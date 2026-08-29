@@ -104,7 +104,7 @@ func (s *Server) decodeChatRequest(writer http.ResponseWriter, request *http.Req
 	}
 	defer s.admissionWG.Done()
 	var input chatRequest
-	if !decodeJSONBody(writer, request, &input) {
+	if !access.DecodeJSONBody(writer, request, &input, 64<<10) {
 		return nil, false
 	}
 	input.Text = strings.TrimSpace(input.Text)

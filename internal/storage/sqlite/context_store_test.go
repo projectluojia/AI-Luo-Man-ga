@@ -10,6 +10,7 @@ import (
 	"time"
 
 	kernelecho "github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/idempotency"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/publicerror"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite"
 )
@@ -129,10 +130,10 @@ func TestRetryRunCarriesSessionContextAndResetsDigest(t *testing.T) {
 	run.SessionID = "session-1"
 	run.UserID = "user-1"
 	run.MessageID = "message-1"
-	if err := store.CreateEchoRun(context.Background(), kernelecho.Record{
+	if stored, created, err := store.CreateEchoRunIdempotentLimited(context.Background(), "context-echo", idempotency.Fingerprint([]byte("input")), kernelecho.Record{
 		ID: "echo", AppID: "app", InputMessage: "input",
 		Status: kernelecho.StatusRunning, CreatedAt: now,
-	}, run); err != nil {
+	}, run, 0); err != nil || !created || stored != "echo" {
 		t.Fatal(err)
 	}
 	claimed, err := store.ClaimRun(context.Background(), "app", "echo", "lease", now, now.Add(time.Minute))

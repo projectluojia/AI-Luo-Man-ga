@@ -10,6 +10,7 @@ import (
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/confirmation"
 	kernelecho "github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/idempotency"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/task"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite"
@@ -24,7 +25,7 @@ func openSweepFixture(t *testing.T) (*sqlite.Store, *confirmation.Service, *task
 	t.Cleanup(func() { store.Close() })
 	ctx := context.Background()
 	now := time.Now().UTC()
-	if err := store.CreateEchoRun(ctx, kernelecho.Record{
+	if _, created, err := store.CreateEchoRunIdempotentLimited(ctx, "governance-echo", idempotency.Fingerprint([]byte("test-input")), kernelecho.Record{
 		ID: "echo-1", AppID: campus.AppID, InputMessage: "test-input",
 		Status: kernelecho.StatusRunning, CreatedAt: now,
 	}, kernelecho.RunRecord{
@@ -38,7 +39,7 @@ func openSweepFixture(t *testing.T) (*sqlite.Store, *confirmation.Service, *task
 		AvailableAt:       now,
 		CreatedAt:         now,
 		RecoverableState:  json.RawMessage(`{}`),
-	}); err != nil {
+	}, 0); err != nil || !created {
 		t.Fatal(err)
 	}
 	confirmations := confirmation.NewService(store, confirmation.Config{})
