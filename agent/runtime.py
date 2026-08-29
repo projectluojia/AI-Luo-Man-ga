@@ -72,7 +72,7 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
     async def Health(self, request, context):
         logger.debug("收到 Agent 健康检查", provider=self._provider_name)
         accepted = set(request.accepted_protocol_versions)
-        compatible = not accepted or PROTOCOL_VERSION in accepted
+        compatible = PROTOCOL_VERSION in accepted
         provider_ready = False
         status_code = ""
         if compatible and request.model:
