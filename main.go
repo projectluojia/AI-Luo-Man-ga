@@ -44,6 +44,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus/demo"
 	promptservice "github.com/projectluojia/AI-Luo-Man-ga/internal/services/prompt"
+	timetableservice "github.com/projectluojia/AI-Luo-Man-ga/internal/services/timetable"
 	weatherservice "github.com/projectluojia/AI-Luo-Man-ga/internal/services/weather"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/blob"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite"
@@ -492,6 +493,18 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 			weatherservice.HourlyCapabilityID,
 			weatherservice.AQICapabilityID,
 			weatherservice.AlertsCapabilityID,
+			timetableservice.ListCapabilityID,
+			timetableservice.GetCapabilityID,
+			timetableservice.CreateCapabilityID,
+			timetableservice.UpdateCapabilityID,
+			timetableservice.DeleteCapabilityID,
+			timetableservice.ActivateCapabilityID,
+			timetableservice.CourseListCapabilityID,
+			timetableservice.CourseGetCapabilityID,
+			timetableservice.CourseCreateCapabilityID,
+			timetableservice.CourseUpdateCapabilityID,
+			timetableservice.CourseDeleteCapabilityID,
+			timetableservice.ImportCapabilityID,
 		},
 	})
 	if err != nil {
@@ -512,7 +525,7 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 		replacement.MaxOutputBytes = config.agentRun.MaxOutputBytes
 		replacement.SystemPrompt = baseSystemPrompt
 		replacement.ChannelPrompts = channelPrompts
-		replacement.EnabledCapabilities = ensureAppCapabilities(app.EnabledCapabilities)
+		replacement.EnabledCapabilities = ensureProductCapabilities(ensureAppCapabilities(app.EnabledCapabilities))
 		app, err = store.CompareAndSwap(ctx, app.Generation, replacement)
 		if err != nil {
 			return fmt.Errorf("migrate campus App prompt configuration: %w", err)
@@ -549,6 +562,10 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 	})
 	if err := weather.RegisterTools(reg, weatherClient); err != nil {
 		return fmt.Errorf("register weather tools: %w", err)
+	}
+	timetableService := timetableservice.NewService(store)
+	if err := timetableservice.Register(reg, timetableService); err != nil {
+		return fmt.Errorf("register timetable Service: %w", err)
 	}
 	// 确认与副作用治理：持久确认服务注入 Dispatcher，凡声明 write/external 副作用
 	// 的 Capability 在未获批准前 fail-closed（缺确认标识或验证失败一律拒绝执行）。
@@ -1316,6 +1333,29 @@ func ensureAppCapabilities(existing []string) []string {
 		weatherservice.HourlyCapabilityID,
 		weatherservice.AQICapabilityID,
 		weatherservice.AlertsCapabilityID,
+	} {
+		if !slices.Contains(result, capabilityID) {
+			result = append(result, capabilityID)
+		}
+	}
+	return result
+}
+
+func ensureProductCapabilities(existing []string) []string {
+	result := ensurePromptCapabilities(existing)
+	for _, capabilityID := range []string{
+		timetableservice.ListCapabilityID,
+		timetableservice.GetCapabilityID,
+		timetableservice.CreateCapabilityID,
+		timetableservice.UpdateCapabilityID,
+		timetableservice.DeleteCapabilityID,
+		timetableservice.ActivateCapabilityID,
+		timetableservice.CourseListCapabilityID,
+		timetableservice.CourseGetCapabilityID,
+		timetableservice.CourseCreateCapabilityID,
+		timetableservice.CourseUpdateCapabilityID,
+		timetableservice.CourseDeleteCapabilityID,
+		timetableservice.ImportCapabilityID,
 	} {
 		if !slices.Contains(result, capabilityID) {
 			result = append(result, capabilityID)
