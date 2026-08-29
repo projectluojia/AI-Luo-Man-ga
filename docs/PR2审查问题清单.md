@@ -43,7 +43,7 @@
 - 批量创建持久消息和 Run，消耗 App 队列、模型额度与存储容量；
 - 猜测或复用平台消息标识，触发幂等冲突或错误重放。
 
-### 修复方向
+### 修复结果
 
 - 为每个平台适配器建立可轮换的机器身份，不允许匿名调用平台 ingress；
 - 使用经过认证的适配器配置确定 `platform`，不能把 URL 路径当作可信身份；
@@ -327,6 +327,7 @@ QQ 处理器忽略 `CreateIdempotent` 返回的 `created`。平台重复投递�
 - 优先级：P1
 - 类型：优雅关闭、持久队列状态
 - 位置：`internal/access/web/chat.go`、`internal/access/web/server.go`
+- 当前状态：已解决。持久 Run 调度已移入 `internal/kernel/echo.Scheduler`，HTTP Server 负责 admission 排空，Web/QQ/ingress 通过统一 `Enqueue` 通知内核调度器。
 
 ### 问题
 
@@ -336,16 +337,15 @@ QQ 处理器忽略 `CreateIdempotent` 返回的 `created`。平台重复投递�
 
 1. chat 请求完成解码，提前退出 admission；
 2. `Shutdown` 看到 admission 已清空，停止调度器；
-3. chat 请求随后创建新的 queued Run 并调用 `queueEcho`；
+3. chat 请求随后创建新的 queued Run 并调用 `Scheduler.Enqueue`；
 4. 关闭流程此前收集的 pending/queued 集合可能不包含该 Run；
 5. Run 留在 queued 状态，直到下次启动恢复。
 
 ### 修复方向
 
-- admission 必须覆盖“校验、持久接纳、注册调度”完整临界区；
-- 不要在解码辅助函数内部拥有跨函数生命周期的 WaitGroup 令牌；
-- 更稳妥的方向是把持久 Run 调度器移出 `web.Server`，由内核生命周期统一管理；
-- 关闭时应在停止接纳后重新以存储为权威读取全部 queued/running Run，并执行有界取消或恢复策略。
+- admission 覆盖“校验、持久接纳、注册调度”完整临界区，token 在 `chatStream` 完成入队通知后释放；
+- 持久 Run 调度器已移出 `web.Server`，由 `internal/kernel/echo.Scheduler` 统一管理；
+- 关闭时 main 先停止接纳并等待 Web admission，再关闭 HTTP 与 Scheduler；Scheduler 以 SQLite 重新读取 queued Run 并执行有界取消。
 
 ### 验收标准
 

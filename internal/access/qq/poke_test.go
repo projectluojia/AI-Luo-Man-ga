@@ -16,7 +16,7 @@ func newPokeAdapter(t *testing.T, bot *fakeOneBot) *Adapter {
 	hub := newQQTestHub(t, store, stubResolver{user: "user-1"})
 	adapter, err := New(Config{
 		AppID: "campus-services", WSURL: bot.wsURL(), BotQQID: "2647414417",
-		AllowedGroupIDs: []string{"12345"}, AllowedPrivateUserIDs: []string{"67890"}, Provisioner: testProvisioner{},
+		AllowedGroupIDs: []string{"12345"}, AllowedPrivateUserIDs: []string{"67890"}, Provisioner: testProvisioner{}, Scheduler: testScheduler{},
 		PokeReplies: DefaultPokeReplies(),
 		DialTimeout: 2 * time.Second, ReconnectDelay: 50 * time.Millisecond, RunTimeout: 5 * time.Second,
 	}, hub, access.NewEventHub(), &qqFakeOrchestrator{store: store, created: make(chan struct{})}, store)
@@ -106,7 +106,7 @@ func TestQQAdapterCanDisablePokeTextWithoutDisablingGroupPoke(t *testing.T) {
 	hub := newQQTestHub(t, store, stubResolver{user: "user-1"})
 	adapter, err := New(Config{
 		AppID: "campus-services", WSURL: bot.wsURL(), BotQQID: "2647414417",
-		AllowedGroupIDs: []string{"12345"}, PokeReplies: []string{}, Provisioner: testProvisioner{},
+		AllowedGroupIDs: []string{"12345"}, PokeReplies: []string{}, Provisioner: testProvisioner{}, Scheduler: testScheduler{},
 		DialTimeout: 2 * time.Second, ReconnectDelay: 50 * time.Millisecond, RunTimeout: 5 * time.Second,
 	}, hub, access.NewEventHub(), &qqFakeOrchestrator{store: store, created: make(chan struct{})}, store)
 	if err != nil {
@@ -161,7 +161,7 @@ func TestQQAdapterIgnoresGroupMessageWithoutMention(t *testing.T) {
 	orchestrator := &qqFakeOrchestrator{store: store, created: make(chan struct{})}
 	adapter, err := New(Config{
 		AppID: "campus-services", WSURL: bot.wsURL(), BotQQID: "2647414417",
-		AllowedGroupIDs: []string{"12345"}, AllowedPrivateUserIDs: []string{"67890"}, Provisioner: testProvisioner{},
+		AllowedGroupIDs: []string{"12345"}, AllowedPrivateUserIDs: []string{"67890"}, Provisioner: testProvisioner{}, Scheduler: testScheduler{},
 		DialTimeout: 2 * time.Second, ReconnectDelay: 50 * time.Millisecond, RunTimeout: 5 * time.Second,
 	}, hub, access.NewEventHub(), orchestrator, store)
 	if err != nil {
@@ -194,7 +194,7 @@ func TestQQAdapterIgnoresMentionOfAnotherUser(t *testing.T) {
 	orchestrator := &qqFakeOrchestrator{store: store, created: make(chan struct{})}
 	adapter, err := New(Config{
 		AppID: "campus-services", WSURL: bot.wsURL(), BotQQID: testBotQQID,
-		AllowedGroupIDs: []string{"12345"}, AllowedPrivateUserIDs: []string{"67890"}, Provisioner: testProvisioner{},
+		AllowedGroupIDs: []string{"12345"}, AllowedPrivateUserIDs: []string{"67890"}, Provisioner: testProvisioner{}, Scheduler: testScheduler{},
 		DialTimeout: 2 * time.Second, ReconnectDelay: 50 * time.Millisecond, RunTimeout: 5 * time.Second,
 	}, hub, access.NewEventHub(), orchestrator, store)
 	if err != nil {
@@ -227,7 +227,7 @@ func TestQQAdapterHandlesGroupMessageWithMention(t *testing.T) {
 	echoReader := completedEchoReader{}
 	adapter, err := New(Config{
 		AppID: "campus-services", WSURL: bot.wsURL(), BotQQID: "2647414417",
-		AllowedGroupIDs: []string{"12345"}, AllowedPrivateUserIDs: []string{"67890"}, Provisioner: testProvisioner{},
+		AllowedGroupIDs: []string{"12345"}, AllowedPrivateUserIDs: []string{"67890"}, Provisioner: testProvisioner{}, Scheduler: testScheduler{},
 		DialTimeout: 2 * time.Second, ReconnectDelay: 50 * time.Millisecond, RunTimeout: 5 * time.Second,
 	}, hub, access.NewEventHub(), orchestrator, echoReader)
 	if err != nil {

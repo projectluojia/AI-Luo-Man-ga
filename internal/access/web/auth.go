@@ -57,15 +57,6 @@ func WithQQAccessAdmin(admin QQAccessAdmin) ServerOption {
 	return func(server *Server) { server.qqAccessAdmin = admin }
 }
 
-// WithEventHub 注入跨平台共享的 Echo 事件中心。
-func WithEventHub(hub *access.EventHub) ServerOption {
-	return func(server *Server) {
-		if hub != nil {
-			server.hub = hub
-		}
-	}
-}
-
 // WithDispatcher 注入 Capability 调用分发器（invokeCapability 端点必需）。
 func WithDispatcher(dispatcher *runtime.Dispatcher) ServerOption {
 	return func(server *Server) {

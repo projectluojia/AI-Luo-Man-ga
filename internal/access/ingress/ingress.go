@@ -4,7 +4,6 @@
 package ingress
 
 import (
-	"context"
 	"net/http"
 	"time"
 
@@ -34,21 +33,20 @@ type Event struct {
 	IdempotencyKey    string    `json:"idempotency_key"`
 }
 
-// EchoCreator 是 Echo 创建的窄端口（由 orchestrator 实现）。
-type EchoCreator interface {
-	CreateIdempotent(context.Context, kernelecho.RunRequest) (string, bool, error)
-}
-
 // Server 是平台事件入口：POST /api/v1/ingress/{platform}。
 type Server struct {
-	appID  string
-	hub    *access.Hub
-	echoes EchoCreator
+	appID     string
+	hub       *access.Hub
+	echoes    kernelecho.Creator
+	scheduler kernelecho.Enqueuer
 }
 
 // NewServer 构造平台事件入口。
-func NewServer(appID string, hub *access.Hub, echoes EchoCreator) *Server {
-	return &Server{appID: appID, hub: hub, echoes: echoes}
+func NewServer(appID string, hub *access.Hub, echoes kernelecho.Creator, scheduler kernelecho.Enqueuer) *Server {
+	if scheduler == nil {
+		panic("platform ingress requires a Run scheduler")
+	}
+	return &Server{appID: appID, hub: hub, echoes: echoes, scheduler: scheduler}
 }
 
 // Handler 返回平台事件 HTTP 处理器。
@@ -83,6 +81,9 @@ func (s *Server) ingest(writer http.ResponseWriter, request *http.Request) {
 	if err != nil {
 		access.WriteEchoError(writer, request, err)
 		return
+	}
+	if created {
+		s.scheduler.Enqueue(request.Context(), echoID)
 	}
 	observe.Info(request.Context(), "平台事件已完成 Echo 创建",
 		observe.StringAttr("app_id", s.appID),

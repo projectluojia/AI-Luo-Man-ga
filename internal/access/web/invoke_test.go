@@ -33,8 +33,8 @@ func newInvokeServerWithResolver(t *testing.T, resolver access.IdentityResolver)
 	policy := runtimetest.NewStaticAppPolicy()
 	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{})
 	handler := web.NewServer(
-		context.Background(), &fakeOrchestrator{}, nil, nil,
-		reg, policy, "campus-services", nil,
+		&fakeOrchestrator{}, nil, nil,
+		reg, policy, "campus-services", nil, testController{}, access.NewEventHub(),
 		web.WithWebAuthenticator(testWebAuthenticator{}),
 		web.WithIdentityResolver(resolver),
 		web.WithDispatcher(dispatcher),
@@ -163,8 +163,8 @@ func TestInvokeCapabilityRequiresAuthentication(t *testing.T) {
 	policy := runtimetest.NewStaticAppPolicy()
 	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{})
 	server := web.NewServer(
-		context.Background(), &fakeOrchestrator{}, nil, nil,
-		reg, policy, "campus-services", nil,
+		&fakeOrchestrator{}, nil, nil,
+		reg, policy, "campus-services", nil, testController{}, access.NewEventHub(),
 		web.WithDispatcher(dispatcher),
 	).Handler()
 	response := invokeRequest(t, server, "echo.ping", `{"input":{"text":"x"}}`)
@@ -273,7 +273,7 @@ func newGovernedWriteServer(t *testing.T, resolver access.IdentityResolver, stor
 	policy.Grant(appID, "echo.write")
 	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{IdempotencyStore: store, ConfirmationVerifier: verifier})
 	return web.NewServer(
-		context.Background(), &fakeOrchestrator{}, nil, nil, reg, policy, appID, nil,
+		&fakeOrchestrator{}, nil, nil, reg, policy, appID, nil, testController{}, access.NewEventHub(),
 		web.WithWebAuthenticator(testWebAuthenticator{}),
 		web.WithIdentityResolver(resolver),
 		web.WithDispatcher(dispatcher),
