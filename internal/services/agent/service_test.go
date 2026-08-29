@@ -25,6 +25,10 @@ func (r *captureRunner) RunChild(_ context.Context, request echo.ChildRunRequest
 	return echo.ChildRunResult{RunID: "child", Result: "done"}, nil
 }
 
+func (*captureRunner) GetChild(context.Context, echo.ChildStatusRequest) (echo.ChildStatusResult, error) {
+	return echo.ChildStatusResult{RunID: "child", Status: echo.RunStatusSucceeded}, nil
+}
+
 func TestRegisterRoutesGovernedParentIdentityAndStrictInput(t *testing.T) {
 	reg := registry.New()
 	runner := &captureRunner{}

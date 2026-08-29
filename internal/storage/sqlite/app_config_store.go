@@ -194,11 +194,7 @@ ON CONFLICT(app_id,revision) DO NOTHING`,
 	return nil
 }
 
-type configScanner interface {
-	Scan(...any) error
-}
-
-func scanAppConfig(scanner configScanner) (appconfig.Config, error) {
+func scanAppConfig(scanner rowScanner) (appconfig.Config, error) {
 	var config appconfig.Config
 	var enabled bool
 	var providerTimeoutMS int64

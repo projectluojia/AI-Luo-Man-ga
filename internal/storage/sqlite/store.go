@@ -25,6 +25,10 @@ type Store struct {
 	txMu sync.Mutex
 }
 
+type rowScanner interface {
+	Scan(...any) error
+}
+
 // beginTx 领取事务并持有串行化互斥，直到 finishTx 提交/回滚后释放。
 func (s *Store) beginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error) {
 	s.txMu.Lock()

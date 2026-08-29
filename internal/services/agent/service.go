@@ -43,9 +43,6 @@ const statusInputSchemaJSON = `{
 // Runner 是 Agent Service 的 child Run 执行方（由内核 Orchestrator 实现）。
 type Runner interface {
 	RunChild(context.Context, echo.ChildRunRequest) (echo.ChildRunResult, error)
-}
-
-type StatusRunner interface {
 	GetChild(context.Context, echo.ChildStatusRequest) (echo.ChildStatusResult, error)
 }
 
@@ -86,15 +83,11 @@ func Register(reg *registry.Registry, runner Runner) error {
 		return encoded, nil
 	}
 	statusHandler := func(ctx context.Context, request contracts.RequestContext, payload json.RawMessage) (json.RawMessage, error) {
-		statusRunner, ok := runner.(StatusRunner)
-		if !ok {
-			return nil, echo.ErrChildRunUnavailable
-		}
 		var value statusInput
 		if err := jsonutil.DecodeStrict(payload, &value); err != nil {
 			return nil, errors.Join(registry.ErrSchemaValidation, err)
 		}
-		result, err := statusRunner.GetChild(ctx, echo.ChildStatusRequest{
+		result, err := runner.GetChild(ctx, echo.ChildStatusRequest{
 			ParentRunID: request.RunID,
 			RunID:       value.RunID,
 		})

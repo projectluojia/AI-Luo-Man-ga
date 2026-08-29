@@ -698,6 +698,3 @@ func onebotInt(value string) int64 {
 	number, _ := strconv.ParseInt(value, 10, 64)
 	return number
 }
-func normalizeQQID(value string) (string, bool) {
-	return qqsettings.NormalizeQQID(value)
-}

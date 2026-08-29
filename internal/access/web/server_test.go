@@ -402,7 +402,7 @@ func TestWebAccessDoesNotExposeCrossAppEcho(t *testing.T) {
 	}
 	defer store.Close()
 	now := time.Now().UTC()
-	if err := store.CreateEchoRun(context.Background(), kernelecho.Record{
+	if _, created, err := store.CreateEchoRunIdempotentLimited(context.Background(), "other-app-echo", idempotency.Fingerprint([]byte("secret")), kernelecho.Record{
 		ID: "other-app-echo", AppID: "app-b", InputMessage: "secret",
 		Status: kernelecho.StatusRunning, CreatedAt: now,
 	}, kernelecho.RunRecord{
@@ -412,7 +412,7 @@ func TestWebAccessDoesNotExposeCrossAppEcho(t *testing.T) {
 		MaxInputTokens: 1000, MaxOutputTokens: 1000, MaxTotalTokens: 2000,
 		MaxOutputBytes: 4096, ProviderTimeoutMS: 5000, Deadline: now.Add(time.Minute), AvailableAt: now,
 		RecoverableState: []byte(`{}`), CreatedAt: now,
-	}); err != nil {
+	}, 0); err != nil || !created {
 		t.Fatal(err)
 	}
 	reg := registry.New()

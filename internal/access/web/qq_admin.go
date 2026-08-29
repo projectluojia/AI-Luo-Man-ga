@@ -26,10 +26,10 @@ func (s *Server) getQQAccess(writer http.ResponseWriter, request *http.Request) 
 	settings, runtimeStatus, err := s.qqAccessAdmin.Snapshot(request.Context())
 	if err != nil {
 		observe.Error(request.Context(), "读取 QQ Access 配置失败", err)
-		writeQQAdminError(writer, http.StatusServiceUnavailable, "qq_access_unavailable", "QQ 接入配置暂时不可用")
+		access.WriteJSON(writer, http.StatusServiceUnavailable, map[string]string{"code": "qq_access_unavailable", "message": "QQ 接入配置暂时不可用"})
 		return
 	}
-	writeQQAdminSnapshot(writer, settings, runtimeStatus)
+	access.WriteJSON(writer, http.StatusOK, map[string]any{"settings": settings, "runtime": runtimeStatus})
 }
 
 func (s *Server) updateQQAccess(writer http.ResponseWriter, request *http.Request) {
@@ -37,11 +37,11 @@ func (s *Server) updateQQAccess(writer http.ResponseWriter, request *http.Reques
 		return
 	}
 	var input qqSettingsInput
-	if !decodeJSONBody(writer, request, &input) {
+	if !access.DecodeJSONBody(writer, request, &input, 64<<10) {
 		return
 	}
 	if input.Generation == 0 {
-		writeQQAdminError(writer, http.StatusBadRequest, "invalid_generation", "配置代数必须大于 0")
+		access.WriteJSON(writer, http.StatusBadRequest, map[string]string{"code": "invalid_generation", "message": "配置代数必须大于 0"})
 		return
 	}
 	replacement := qqsettings.Settings{
@@ -52,12 +52,12 @@ func (s *Server) updateQQAccess(writer http.ResponseWriter, request *http.Reques
 	if err != nil {
 		switch {
 		case errors.Is(err, qqsettings.ErrInvalid):
-			writeQQAdminError(writer, http.StatusBadRequest, "invalid_qq_access_settings", "QQ 接入配置不合法")
+			access.WriteJSON(writer, http.StatusBadRequest, map[string]string{"code": "invalid_qq_access_settings", "message": "QQ 接入配置不合法"})
 		case errors.Is(err, qqsettings.ErrConflict):
-			writeQQAdminError(writer, http.StatusConflict, "qq_access_conflict", "配置已被其他操作更新，请刷新后重试")
+			access.WriteJSON(writer, http.StatusConflict, map[string]string{"code": "qq_access_conflict", "message": "配置已被其他操作更新，请刷新后重试"})
 		default:
 			observe.Error(request.Context(), "更新 QQ Access 配置失败", err)
-			writeQQAdminError(writer, http.StatusServiceUnavailable, "qq_access_unavailable", "QQ 接入配置暂时不可用")
+			access.WriteJSON(writer, http.StatusServiceUnavailable, map[string]string{"code": "qq_access_unavailable", "message": "QQ 接入配置暂时不可用"})
 		}
 		return
 	}
@@ -67,7 +67,7 @@ func (s *Server) updateQQAccess(writer http.ResponseWriter, request *http.Reques
 		observe.IntAttr("allowed_group_count", len(updated.AllowedGroupIDs)),
 		observe.IntAttr("allowed_private_user_count", len(updated.AllowedPrivateUserIDs)),
 	)
-	writeQQAdminSnapshot(writer, updated, runtimeStatus)
+	access.WriteJSON(writer, http.StatusOK, map[string]any{"settings": updated, "runtime": runtimeStatus})
 }
 
 func (s *Server) authorizeQQAdmin(writer http.ResponseWriter, request *http.Request) bool {
@@ -76,16 +76,8 @@ func (s *Server) authorizeQQAdmin(writer http.ResponseWriter, request *http.Requ
 		return false
 	}
 	if !loopbackAdminRequest(request) {
-		writeQQAdminError(writer, http.StatusForbidden, "local_admin_required", "QQ 接入配置只允许在本机管理")
+		access.WriteJSON(writer, http.StatusForbidden, map[string]string{"code": "local_admin_required", "message": "QQ 接入配置只允许在本机管理"})
 		return false
 	}
 	return true
-}
-
-func writeQQAdminSnapshot(writer http.ResponseWriter, settings qqsettings.Settings, runtimeStatus any) {
-	access.WriteJSON(writer, http.StatusOK, map[string]any{"settings": settings, "runtime": runtimeStatus})
-}
-
-func writeQQAdminError(writer http.ResponseWriter, status int, code, message string) {
-	access.WriteJSON(writer, status, map[string]string{"code": code, "message": message})
 }
