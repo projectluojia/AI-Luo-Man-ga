@@ -35,7 +35,7 @@ func ReadInstalled(ctx context.Context, directory string) (InstalledRecord, erro
 	if err != nil {
 		return InstalledRecord{}, err
 	}
-	manifestBytes, err := ReadFileLimited(filepath.Join(directory, "manifest.json"), MaxManifestBytes)
+	source, err := readManifest(directory)
 	if err != nil {
 		return InstalledRecord{}, err
 	}
@@ -43,13 +43,7 @@ func ReadInstalled(ctx context.Context, directory string) (InstalledRecord, erro
 	if err != nil {
 		return InstalledRecord{}, err
 	}
-	var manifest Manifest
-	if err := DecodeStrictJSON(manifestBytes, &manifest); err != nil {
-		return InstalledRecord{}, err
-	}
-	if err := ValidateManifest(manifest); err != nil {
-		return InstalledRecord{}, err
-	}
+	manifest := source.Manifest
 	var lock Lock
 	if err := DecodeStrictJSON(lockBytes, &lock); err != nil {
 		return InstalledRecord{}, err
@@ -57,7 +51,7 @@ func ReadInstalled(ctx context.Context, directory string) (InstalledRecord, erro
 	if err := ValidateLock(lock, manifest); err != nil {
 		return InstalledRecord{}, err
 	}
-	manifestDigest := sha256.Sum256(manifestBytes)
+	manifestDigest := sha256.Sum256(source.manifestBytes)
 	if lock.ManifestSHA256 != hex.EncodeToString(manifestDigest[:]) {
 		return InstalledRecord{}, ErrInvalidFormat
 	}
@@ -107,7 +101,7 @@ func RecoverInstallRoot(ctx context.Context, root string) error {
 
 func recoverInstallBackup(ctx context.Context, root, name string) error {
 	backup := filepath.Join(root, name)
-	source, err := readSourceManifest(backup)
+	source, err := readManifest(backup)
 	if err != nil {
 		children, readErr := os.ReadDir(backup)
 		if readErr == nil && len(children) == 0 {

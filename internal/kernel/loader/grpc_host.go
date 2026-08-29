@@ -15,6 +15,7 @@ import (
 	runtimev1 "github.com/projectluojia/AI-Luo-Man-ga/gen/runtimev1"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/backoff"
@@ -69,7 +70,7 @@ type GRPCHost struct {
 
 func NewGRPCHost(config GRPCHostConfig) (*GRPCHost, error) {
 	if (config.Mode != ModeHosted && config.Mode != ModeIsolated) ||
-		!IsLocalRuntimeAddress(config.Address) || config.VerifyInstalled == nil {
+		!packmgr.IsLocalRuntimeAddress(config.Address) || config.VerifyInstalled == nil {
 		return nil, ErrInvalidManifest
 	}
 	if config.DialTimeout == 0 {
@@ -450,22 +451,4 @@ func normalizeRuntimeRPCError(err error) error {
 
 func hasUnknown(message proto.Message) bool {
 	return message == nil || len(message.ProtoReflect().GetUnknown()) != 0
-}
-
-// IsLocalRuntimeAddress 校验运行时宿主地址只能是 loopback 或绝对 Unix socket：
-// 明文 gRPC 只允许同 Deployment 本机边界，非本机地址一律拒绝。
-func IsLocalRuntimeAddress(address string) bool {
-	if strings.HasPrefix(address, "unix:") {
-		socketPath := strings.TrimPrefix(address, "unix:")
-		return strings.HasPrefix(socketPath, "/")
-	}
-	host, _, err := net.SplitHostPort(address)
-	if err != nil {
-		return false
-	}
-	if strings.EqualFold(host, "localhost") {
-		return true
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
 }

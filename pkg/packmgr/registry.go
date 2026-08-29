@@ -98,7 +98,7 @@ func validateTarball(ctx context.Context, tarballPath string) (Manifest, error) 
 	if cleanup != nil {
 		defer cleanup()
 	}
-	source, err := readSourceManifest(sourceDir)
+	source, err := readManifest(sourceDir)
 	if err != nil {
 		return Manifest{}, err
 	}
@@ -379,7 +379,7 @@ func InstallFromRelease(ctx context.Context, root string, client *GitHubClient, 
 		return InstalledRecord{}, err
 	}
 	defer cleanup()
-	source, err := readSourceManifest(sourceDir)
+	source, err := readManifest(sourceDir)
 	if err != nil {
 		return InstalledRecord{}, err
 	}

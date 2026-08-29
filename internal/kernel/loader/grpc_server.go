@@ -9,6 +9,7 @@ import (
 
 	runtimev1 "github.com/projectluojia/AI-Luo-Man-ga/gen/runtimev1"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -321,7 +322,10 @@ func decodeLifecycleRequest(request *runtimev1.LifecycleRequest) (BackendIdentit
 
 func decodeRuntimeIdentity(identity *runtimev1.RuntimeIdentity) (BackendIdentity, error) {
 	if identity == nil || hasUnknown(identity) || !stableIDPattern.MatchString(identity.RuntimeId) ||
-		!versionPattern.MatchString(identity.Version) || identity.ProtocolVersion != RuntimeHostProtocolVersion {
+		identity.ProtocolVersion != RuntimeHostProtocolVersion {
+		return BackendIdentity{}, ErrRuntimeProtocol
+	}
+	if _, err := packmgr.ParseVersion(identity.Version); err != nil {
 		return BackendIdentity{}, ErrRuntimeProtocol
 	}
 	return BackendIdentity{ID: identity.RuntimeId, Version: identity.Version}, nil
