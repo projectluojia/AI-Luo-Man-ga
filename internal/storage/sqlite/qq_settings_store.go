@@ -120,9 +120,7 @@ WHERE app_id=? AND generation=?`, normalized.Enabled, normalized.WSURL, normaliz
 	return normalized, nil
 }
 
-func readQQSettings(ctx context.Context, queryer interface {
-	QueryRowContext(context.Context, string, ...any) *sql.Row
-}, appID string) (qqsettings.Settings, error) {
+func readQQSettings(ctx context.Context, queryer rowQueryer, appID string) (qqsettings.Settings, error) {
 	seed, err := qqsettings.Normalize(qqsettings.Settings{AppID: appID})
 	if err != nil {
 		return qqsettings.Settings{}, err

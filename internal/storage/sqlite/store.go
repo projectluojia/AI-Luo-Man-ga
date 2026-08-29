@@ -29,6 +29,15 @@ type rowScanner interface {
 	Scan(...any) error
 }
 
+type rowQueryer interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+type queryer interface {
+	rowQueryer
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}
+
 // beginTx 领取事务并持有串行化互斥，直到 finishTx 提交/回滚后释放。
 func (s *Store) beginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error) {
 	s.txMu.Lock()
