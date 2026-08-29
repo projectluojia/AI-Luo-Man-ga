@@ -71,6 +71,16 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
         self._provider_name = type(self._provider).__name__
 
     async def Health(self, request, context):
+        """
+        Check protocol compatibility and model-provider readiness for the requested model.
+        
+        Parameters:
+            request: Health-check request containing accepted protocol versions and model identifier.
+        
+        Returns:
+            A health response indicating readiness, provider name, supported protocol versions,
+            and a status code when the check cannot succeed.
+        """
         logger.debug("收到 Agent 健康检查", provider=self._provider_name)
         accepted = set(request.accepted_protocol_versions)
         compatible = not accepted or PROTOCOL_VERSION in accepted
@@ -100,13 +110,17 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
         Execute an Agent run over a bidirectional gRPC stream.
         
         Parameters:
-            request_iterator: Incoming protocol frames containing the run request,
-                capability results, or cancellation.
+            request_iterator: Incoming frames containing the start request, capability
+                results, or cancellation.
             context: gRPC request context.
         
-        Returns:
-            executor_pb2.ExecutorFrame: Outbound frames reporting run acceptance,
-                capability calls, replies, usage, or failures.
+        Yields:
+            Outbound frames reporting run acceptance, capability calls, replies, usage,
+            or failures.
+        
+        Raises:
+            asyncio.CancelledError: If the run is cancelled while awaiting input or
+                execution.
         """
         started = time.monotonic()
         try:
@@ -420,7 +434,17 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
 
     @staticmethod
     def _validate_inbound_frame(frame, first_frame, expected_sequence: int) -> None:
-        """Validates an inbound frame's identity, sequence, body, size, and cancellation reason."""
+        """
+        Validate an inbound frame's identity, sequence, body, size, and cancellation reason.
+        
+        Parameters:
+            frame: The inbound protocol frame to validate.
+            first_frame: The initial frame whose run and echo identifiers must match.
+            expected_sequence (int): The sequence number required for the frame.
+        
+        Raises:
+            ProtocolViolation: If the frame violates protocol constraints.
+        """
         if (
             frame.ByteSize() > MAX_FRAME_BYTES
             or ExecutorRuntime._has_unknown_fields(frame)

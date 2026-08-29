@@ -112,7 +112,8 @@ type Orchestrator struct {
 
 // NewOrchestrator creates an Echo orchestrator with the supplied dependencies and configuration.
 // It applies default values for omitted settings and panics if the application configuration
-// source, context configuration, or child Run limit is invalid.
+// NewOrchestrator creates an Echo orchestrator with the supplied dependencies and configuration defaults.
+// It panics if the application configuration source, context assembly configuration, or child Run limit is invalid.
 func NewOrchestrator(
 	agent executor.Client,
 	reg *registry.Registry,

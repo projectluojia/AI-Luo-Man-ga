@@ -243,6 +243,7 @@ class RuntimeTest(unittest.IsolatedAsyncioTestCase):
 
     @staticmethod
     def _start_frame():
+        """Build a valid start-run frame for executor runtime tests."""
         return executor_pb2.ExecutorFrame(
             echo_id="echo",
             run_id="run",

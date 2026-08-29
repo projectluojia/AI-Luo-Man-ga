@@ -44,7 +44,7 @@ func WithWebAuthenticator(authenticator WebAuthenticator) ServerOption {
 	}
 }
 
-// WithQQAccessAdmin 注入 QQ Access 本地管理面。NapCat 登录与 OneBot 配置不在此 API 内。
+// WithQQAccessAdmin configures the server with a local QQ Access management interface. NapCat login and OneBot configuration are outside this API.
 func WithQQAccessAdmin(admin QQAccessAdmin) ServerOption {
 	return func(server *Server) { server.qqAccessAdmin = admin }
 }
@@ -59,7 +59,7 @@ func WithEventHub(hub *access.EventHub) ServerOption {
 }
 
 // WithConfirmations 注入确认治理端口。未注入时确认查询与决策端点返回 503，
-// WithConfirmations configures the server to use the provided confirmation governance interface when it is available.
+// WithConfirmations configures the server with a confirmation governance interface. A nil interface is ignored.
 func WithConfirmations(confirmations ConfirmationGateway) ServerOption {
 	return func(server *Server) {
 		if confirmations != nil {
@@ -69,7 +69,8 @@ func WithConfirmations(confirmations ConfirmationGateway) ServerOption {
 }
 
 // loopbackAdminRequest reports whether a request originates from a loopback address,
-// targets localhost or a loopback host, and has a matching HTTP(S) Origin when provided.
+// loopbackAdminRequest reports whether the request comes from a loopback address,
+// uses localhost or a loopback host, and has a matching HTTP or HTTPS Origin when provided.
 func loopbackAdminRequest(request *http.Request) bool {
 	remoteHost, _, err := net.SplitHostPort(request.RemoteAddr)
 	if err != nil {

@@ -686,6 +686,7 @@ func (s *Server) cancelEcho(writer http.ResponseWriter, request *http.Request) {
 
 // publicConfirmation 是确认记录的公共响应视图：只暴露呈现与决策所需字段，
 // publicConfirmation converts a confirmation record into its public response fields,
+// publicConfirmation converts a confirmation record to its public response representation,
 // including decision metadata when available.
 func publicConfirmation(record confirmation.Confirmation, effectiveStatus string) map[string]any {
 	view := map[string]any{

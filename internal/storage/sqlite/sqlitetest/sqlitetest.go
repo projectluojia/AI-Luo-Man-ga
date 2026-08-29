@@ -17,7 +17,7 @@ import (
 
 // NewStore 创建测试存储：使用自管临时目录（不经 t.TempDir，避免框架清理对
 // NewStore creates and opens a SQLite store in a dedicated temporary directory.
-// It registers cleanup to close the store and remove the directory when the test ends.
+// NewStore creates a SQLite store in a dedicated temporary directory and registers cleanup for the test.
 func NewStore(t *testing.T, name string) *sqlite.Store {
 	t.Helper()
 	dir, err := os.MkdirTemp("", "ailuo-sqlite-test-")
