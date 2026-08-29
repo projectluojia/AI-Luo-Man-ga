@@ -265,7 +265,10 @@ func isSensitiveKey(key string) bool {
 			return true
 		}
 	}
-	for _, marker := range []string{"password", "passwd", "secret", "token", "api_key", "authorization", "cookie", "credential"} {
+	if normalized == "sign" || normalized == "appkey" || normalized == "app_key" || normalized == "apikey" {
+		return true
+	}
+	for _, marker := range []string{"password", "passwd", "secret", "token", "api_key", "authorization", "cookie", "credential", "apikey", "appkey"} {
 		if strings.Contains(normalized, marker) {
 			return true
 		}

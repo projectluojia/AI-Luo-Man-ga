@@ -14,9 +14,9 @@ Web Access API
   → Python AI Agent（gRPC 双向流）
   → OpenAI-compatible 模型原生 ToolCall
   → Capability 鉴权与路由（Go）
-  → campus Service
-  → 校巴 Tool
-  → Go 托管统一数据库
+  → campus / weather / prompt Service
+  → 校巴或天气 Tool
+  → Go 托管统一数据库（含天气缓存）
   → SSE 流式回复
 ```
 
@@ -80,6 +80,10 @@ Go 内核和 Python Agent 统一输出中文结构化日志。控制台格式优
 - `AILUO_LOG_FORMAT`：`console` 或 `json`。
 - `AILUO_LOG_SOURCE`：必须保持 `false`；源码绝对路径禁止进入日志，启用时拒绝启动。
 - `AILUO_LOG_MAX_VALUE_LENGTH`：单个字符串字段最大字符数，默认 `4096`。
+- `AILUO_WEATHER_TIMEOUT_SECONDS`：天气 HTTP 超时，默认 `8`。
+- `AILUO_WEATHER_MAX_RETRIES`：天气可重试失败的最大重试次数，默认 `2`。
+- `AILUO_WEATHER_REQUESTS_PER_MINUTE`：每个天气数据源的每分钟请求上限，默认 `30`。
+- `AILUO_ACCUWEATHER_API_KEY` / `AILUO_ACCUWEATHER_API_KEY_FILE`：AccuWeather 密钥；未配置时该源不可用。
 
 Web 请求会验证并继承 W3C `traceparent`（兼容合法的 32 位十六进制 `X-Trace-ID`），为 HTTP 与 Agent Run 创建 Span，再通过 Protobuf 把追踪上下文传给 Python。日志只记录标识、数量、长度、状态、稳定错误类别和耗时，不记录原始错误正文、用户或模型消息、Tool 参数、请求体、密钥或凭据。完整规范见 `docs/日志与可观测性设计.md`。
 
@@ -97,3 +101,4 @@ Web 请求会验证并继承 W3C `traceparent`（兼容合法的 32 位十六进
 - 演示数据带 `authoritative=false` 和独立 `source_revision`，不得被描述为真实班次。
 - 成功校巴结果携带权威修订、完整性、导入时间和有效截止时间；缺失、不完整、非权威或过期快照不返回业务行。
 - 真实数据接入前必须完成 `docs/数据需求与授权清单.md` 中的校方审批项。
+- 天气直连 Open-Meteo / 小米天气 / AccuWeather。未指定地点时默认武汉大学珞珈山。AccuWeather 使用 `AILUO_ACCUWEATHER_API_KEY` 或 `AILUO_ACCUWEATHER_API_KEY_FILE`；未配置时该源不可用，不阻止其他源。查询结果带来源、修订和有效期，过期缓存不会被当作当前事实。
