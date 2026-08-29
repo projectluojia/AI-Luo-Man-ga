@@ -145,9 +145,7 @@ WHERE app_id=? AND generation=?`,
 	return normalized, nil
 }
 
-func readCurrentAppConfig(ctx context.Context, queryer interface {
-	QueryRowContext(context.Context, string, ...any) *sql.Row
-}, appID string) (appconfig.Config, error) {
+func readCurrentAppConfig(ctx context.Context, queryer rowQueryer, appID string) (appconfig.Config, error) {
 	row := queryer.QueryRowContext(ctx, `
 SELECT r.app_id,r.revision,h.generation,r.enabled,r.model,r.system_prompt,r.channel_prompts,r.timezone,
        r.max_steps,r.max_tool_calls,r.max_input_tokens,r.max_output_tokens,r.max_total_tokens,

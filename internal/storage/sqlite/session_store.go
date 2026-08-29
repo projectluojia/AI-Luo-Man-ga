@@ -568,10 +568,7 @@ func (s *Store) GetAttachment(ctx context.Context, appID, sessionID, attachmentI
 }
 
 // readSession 读取会话及其成员与平台绑定。querier 可以是数据库或事务。
-func readSession(ctx context.Context, querier interface {
-	QueryRowContext(context.Context, string, ...any) *sql.Row
-	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
-}, appID, sessionID string) (session.Session, error) {
+func readSession(ctx context.Context, querier queryer, appID, sessionID string) (session.Session, error) {
 	var sess session.Session
 	var sessionType, createdAt, updatedAt string
 	err := querier.QueryRowContext(ctx, `SELECT app_id,session_id,type,created_at,updated_at FROM sessions WHERE app_id=? AND session_id=?`,
@@ -676,20 +673,16 @@ func sessionIdentityKey(member session.Member) string {
 }
 
 // readMessage 读取消息元数据与正文（含已删除行，供去重回放与冲突判定）。
-func readMessage(ctx context.Context, querier interface {
-	QueryRowContext(context.Context, string, ...any) *sql.Row
-}, appID, messageID string) (session.Message, []byte, error) {
+func readMessage(ctx context.Context, querier rowQueryer, appID, messageID string) (session.Message, []byte, error) {
 	return scanMessageRow(querier.QueryRowContext(ctx, messageSelect+`WHERE app_id=? AND message_id=?`, appID, messageID))
 }
 
 // readMessageByPlatform 按平台去重键读取既有消息（含已删除行）。
-func readMessageByPlatform(ctx context.Context, querier interface {
-	QueryRowContext(context.Context, string, ...any) *sql.Row
-}, appID, platformMessageID string) (session.Message, []byte, error) {
+func readMessageByPlatform(ctx context.Context, querier rowQueryer, appID, platformMessageID string) (session.Message, []byte, error) {
 	return scanMessageRow(querier.QueryRowContext(ctx, messageSelect+`WHERE app_id=? AND platform_message_id=?`, appID, platformMessageID))
 }
 
-func scanMessageRow(scanner interface{ Scan(...any) error }) (session.Message, []byte, error) {
+func scanMessageRow(scanner rowScanner) (session.Message, []byte, error) {
 	var message session.Message
 	var mode, blobID string
 	var size int64
@@ -717,7 +710,7 @@ func scanMessageRow(scanner interface{ Scan(...any) error }) (session.Message, [
 	return message, content, nil
 }
 
-func scanMessageMetadata(scanner interface{ Scan(...any) error }) (session.Message, error) {
+func scanMessageMetadata(scanner rowScanner) (session.Message, error) {
 	var message session.Message
 	var mode, blobID string
 	var size int64
