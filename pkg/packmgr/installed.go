@@ -12,6 +12,16 @@ import (
 	"strings"
 )
 
+// DefaultInstallRoot 返回用户级默认安装根目录（用户配置目录下 ailuo/runtime）。
+// 包管理器和 Core 共享同一默认位置，避免各自推导不同路径。
+func DefaultInstallRoot() string {
+	base, err := os.UserConfigDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(base, "ailuo", "runtime")
+}
+
 // 安装目录格式的容量上限（与宿主发现校验一致）。
 const (
 	MaxManifestBytes = int64(256 << 10)
