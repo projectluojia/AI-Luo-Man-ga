@@ -184,6 +184,22 @@ func TestInstallRejectsInvalidSource(t *testing.T) {
 	}
 }
 
+func TestInstallRejectsCorruptExistingPackage(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "demo.pkg")
+	if err := os.Mkdir(target, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "manifest.json"), []byte("broken"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	source := t.TempDir()
+	writeSourcePackage(t, source, "demo.pkg", "1.0.0", packagecontract.ModeHosted, "app.wasm", nil)
+	if _, err := packmgr.Install(context.Background(), root, source); err == nil || !strings.Contains(err.Error(), "校验失败") {
+		t.Fatalf("Install corrupt existing package error = %v, want validation failure", err)
+	}
+}
+
 func TestReadInstalledRejectsArtifactOutsidePackage(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
