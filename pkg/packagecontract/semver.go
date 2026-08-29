@@ -22,15 +22,6 @@ func ParseVersion(text string) (Version, error) {
 	return Version{v: v}, nil
 }
 
-// MustParseVersion 与 ParseVersion 相同，解析失败时 panic（测试辅助）。
-func MustParseVersion(text string) Version {
-	v, err := ParseVersion(text)
-	if err != nil {
-		panic(err)
-	}
-	return v
-}
-
 // String 返回版本字符串（如 "1.2.3"）。
 func (v Version) String() string {
 	return v.v.String()
@@ -55,15 +46,6 @@ func ParseConstraint(text string) (Constraint, error) {
 		return Constraint{}, fmt.Errorf("packagecontract: 约束 %q 不合法: %w", text, err)
 	}
 	return Constraint{c: c, raw: text}, nil
-}
-
-// MustParseConstraint 解析约束，失败时 panic（测试辅助）。
-func MustParseConstraint(text string) Constraint {
-	c, err := ParseConstraint(text)
-	if err != nil {
-		panic(err)
-	}
-	return c
 }
 
 // String 返回约束原始文本。
