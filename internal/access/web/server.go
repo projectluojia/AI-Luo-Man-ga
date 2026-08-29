@@ -30,9 +30,6 @@ var staticFiles embed.FS
 type EchoReader interface {
 	GetEcho(context.Context, string, string) (kernelecho.Record, []kernelecho.Event, error)
 	ListRuns(context.Context, string, string) ([]kernelecho.RunRecord, error)
-}
-
-type runReader interface {
 	GetRun(context.Context, string, string) (kernelecho.RunRecord, error)
 }
 
@@ -42,14 +39,10 @@ type HealthChecker interface {
 
 type EchoOrchestrator interface {
 	CreateIdempotent(context.Context, kernelecho.RunRequest) (string, bool, error)
-	RunExisting(context.Context, string, kernelecho.RunRequest, kernelecho.EventEmitter) error
+	RunQueued(context.Context, kernelecho.RunWork, kernelecho.EventEmitter) error
 	Recoverable(context.Context) ([]kernelecho.RunWork, error)
 	Runnable(context.Context, int) ([]kernelecho.RunWork, error)
 	Cancel(context.Context, string) (bool, error)
-}
-
-type queuedRunOrchestrator interface {
-	RunQueued(context.Context, kernelecho.RunWork, kernelecho.EventEmitter) error
 }
 
 type Server struct {
@@ -450,12 +443,7 @@ func (s *Server) runNext() bool {
 		s.hub.Publish(event)
 		return nil
 	}
-	var runErr error
-	if queued, ok := s.orchestrator.(queuedRunOrchestrator); ok {
-		runErr = queued.RunQueued(runContext, *selected, emit)
-	} else {
-		runErr = s.orchestrator.RunExisting(runContext, key.echoID, kernelecho.RunRequest{Message: selected.InputMessage}, emit)
-	}
+	runErr := s.orchestrator.RunQueued(runContext, *selected, emit)
 	s.activeMu.Lock()
 	delete(s.active, key)
 	s.activeMu.Unlock()
@@ -604,13 +592,8 @@ func (s *Server) getEcho(writer http.ResponseWriter, request *http.Request) {
 }
 
 func (s *Server) getRun(writer http.ResponseWriter, request *http.Request) {
-	reader, ok := s.reader.(runReader)
-	if !ok {
-		access.WriteJSON(writer, http.StatusServiceUnavailable, map[string]string{"code": "run_status_unavailable", "message": "Run 状态查询暂不可用"})
-		return
-	}
 	runID := request.PathValue("run_id")
-	run, err := reader.GetRun(request.Context(), s.appID, runID)
+	run, err := s.reader.GetRun(request.Context(), s.appID, runID)
 	if err != nil {
 		if errors.Is(err, kernelecho.ErrRunNotFound) {
 			access.WriteJSON(writer, http.StatusNotFound, map[string]string{"code": "run_not_found", "message": "Run 不存在"})

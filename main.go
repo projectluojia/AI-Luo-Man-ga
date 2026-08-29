@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	"os"
@@ -52,12 +53,10 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
 	"github.com/projectluojia/AI-Luo-Man-ga/pkg/sdkgen"
 
-	"github.com/joho/godotenv"
 	"google.golang.org/grpc"
 )
 
 func main() {
-	loadDotEnv()
 	handled, err := runMaintenanceCommand(os.Args[1:], os.Stdout)
 	if handled {
 		if err != nil {
@@ -72,18 +71,6 @@ func main() {
 	}
 	if err != nil {
 		observe.Error(context.Background(), "AI珞（爱珞）服务异常退出", err)
-		os.Exit(1)
-	}
-}
-
-// loadDotEnv 从工作目录读取 .env 并载入进程环境：已存在的环境变量优先，
-// 缺失项才由 .env 补足；.env 不存在时静默跳过（显式环境变量仍然可用）。
-func loadDotEnv() {
-	if err := godotenv.Load(); err != nil {
-		if os.IsNotExist(err) {
-			return
-		}
-		observe.Error(context.Background(), "读取 .env 失败", err)
 		os.Exit(1)
 	}
 }
@@ -652,9 +639,6 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("open deployment configuration: %w", err)
 	}
-	if err := seedLocalConfigFromEnvironment(manager, baseConfig); err != nil {
-		return err
-	}
 	select {
 	case <-manager.Changes():
 	default:
@@ -697,7 +681,7 @@ func run() error {
 			manager.SetRuntime("restarting", "正在重启内核以应用新配置", manager.Snapshot().Settings.Revision)
 			cancelCore()
 			if err := <-coreErrors; err != nil && !errors.Is(err, context.Canceled) {
-				observe.Error(ctx, "旧配置内核关闭时发生错误", err)
+				observe.Error(ctx, "上一配置内核关闭时发生错误", err)
 			}
 		case err := <-coreErrors:
 			if ctx.Err() != nil {
@@ -765,19 +749,11 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 		)
 	}
 
-	baseSystemPrompt := config.baseSystemPrompt
-	if strings.TrimSpace(baseSystemPrompt) == "" {
-		baseSystemPrompt = promptcatalog.DefaultBaseSystemPrompt
-	}
-	channelPrompts := config.channelPrompts
-	if len(channelPrompts) == 0 {
-		channelPrompts = promptcatalog.DefaultChannelPrompts()
-	}
 	reg := registry.New()
 	app, created, err := store.Ensure(ctx, appconfig.Config{
 		AppID: campus.AppID, Enabled: true, Model: config.model,
-		SystemPrompt:    baseSystemPrompt,
-		ChannelPrompts:  channelPrompts,
+		SystemPrompt:    config.baseSystemPrompt,
+		ChannelPrompts:  config.channelPrompts,
 		Timezone:        config.agentRun.Timezone,
 		MaxSteps:        config.agentRun.MaxSteps,
 		MaxToolCalls:    config.agentRun.MaxToolCalls,
@@ -813,8 +789,8 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 		replacement.MaxOutputTokens = config.agentRun.MaxOutputTokens
 		replacement.MaxTotalTokens = config.agentRun.MaxTotalTokens
 		replacement.MaxOutputBytes = config.agentRun.MaxOutputBytes
-		replacement.SystemPrompt = baseSystemPrompt
-		replacement.ChannelPrompts = channelPrompts
+		replacement.SystemPrompt = config.baseSystemPrompt
+		replacement.ChannelPrompts = config.channelPrompts
 		replacement.EnabledCapabilities = ensurePromptCapabilities(app.EnabledCapabilities)
 		app, err = store.CompareAndSwap(ctx, app.Generation, replacement)
 		if err != nil {
@@ -831,11 +807,7 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 	if err != nil {
 		return err
 	}
-	promptCatalog := config.promptCatalog
-	if promptCatalog.IsZero() {
-		promptCatalog = promptcatalog.Default()
-	}
-	promptService := promptservice.NewService(promptCatalog, store)
+	promptService := promptservice.NewService(config.promptCatalog, store)
 	if err := promptservice.Register(reg, promptService); err != nil {
 		return fmt.Errorf("register prompt Service: %w", err)
 	}
@@ -1121,7 +1093,6 @@ type config struct {
 	databasePath        string
 	model               string
 	modelBaseURL        string
-	modelAPIKey         string
 	modelAPIKeyFile     string
 	modelRequestTimeout time.Duration
 	modelReadyTimeout   time.Duration
@@ -1183,34 +1154,6 @@ func loadConfig() (config, error) {
 	if err != nil {
 		return config{}, err
 	}
-	requestTimeout, err := envFloat("AILUO_MODEL_TIMEOUT_SECONDS", 30)
-	if err != nil {
-		return config{}, err
-	}
-	readinessTimeout, err := envFloat("AILUO_MODEL_READINESS_TIMEOUT_SECONDS", 3)
-	if err != nil {
-		return config{}, err
-	}
-	retryBase, err := envFloat("AILUO_MODEL_RETRY_BASE_SECONDS", 0.25)
-	if err != nil {
-		return config{}, err
-	}
-	retryMax, err := envFloat("AILUO_MODEL_RETRY_MAX_SECONDS", 2)
-	if err != nil {
-		return config{}, err
-	}
-	maxRetries, err := envIntRange("AILUO_MODEL_MAX_RETRIES", 2, 0, 5)
-	if err != nil {
-		return config{}, err
-	}
-	requestsMinute, err := envIntRange("AILUO_MODEL_REQUESTS_PER_MINUTE", 60, 1, 10_000)
-	if err != nil {
-		return config{}, err
-	}
-	maxConcurrency, err := envIntRange("AILUO_MODEL_MAX_CONCURRENCY", 4, 1, 64)
-	if err != nil {
-		return config{}, err
-	}
 	// 安装根目录：显式 AILUO_RUNTIME_INSTALL_ROOT 优先；未设置时回退用户级
 	// 默认目录（ailuo install 与内核共享同一默认位置）。默认目录尚未创建
 	// （未安装任何包）时视为未配置：内核跳过安装目录装载，由 campus 核心
@@ -1224,38 +1167,21 @@ func loadConfig() (config, error) {
 		}
 	}
 	result := config{
-		httpAddress:         envOr("AILUO_HTTP_ADDRESS", "127.0.0.1:8080"),
-		configUIAddress:     envOr("AILUO_CONFIG_UI_ADDRESS", configui.DefaultAddress),
-		localConfigRoot:     envOr("AILUO_CONFIG_DIR", "var"),
-		agentAddress:        envOr("AILUO_AGENT_ADDRESS", "127.0.0.1:50051"),
-		pythonPath:          envOr("AILUO_PYTHON", agent.DefaultPythonPath(".")),
-		databasePath:        envOr("AILUO_DATABASE_PATH", "var/ailuo.db"),
-		model:               os.Getenv("AILUO_MODEL"),
-		modelBaseURL:        os.Getenv("AILUO_MODEL_BASE_URL"),
-		modelAPIKey:         envOr("AILUO_MODEL_API_KEY", os.Getenv("OPENAI_API_KEY")),
-		modelAPIKeyFile:     os.Getenv("AILUO_MODEL_API_KEY_FILE"),
-		modelRequestTimeout: time.Duration(requestTimeout * float64(time.Second)),
-		modelReadyTimeout:   time.Duration(readinessTimeout * float64(time.Second)),
-		modelMaxRetries:     maxRetries,
-		modelRetryBase:      time.Duration(retryBase * float64(time.Second)),
-		modelRetryMax:       time.Duration(retryMax * float64(time.Second)),
-		modelRequestsMinute: requestsMinute,
-		modelMaxConcurrency: maxConcurrency,
-		manageAgent:         manageAgent,
-		loadDemoData:        loadDemoData,
-		environment:         envOr("AILUO_ENVIRONMENT", "development"),
-		logLevel:            logLevel,
-		logFormat:           envOr("AILUO_LOG_FORMAT", "console"),
-		logSource:           logSource,
-		logMaxValueLength:   logMaxValueLength,
-		runtimeInstallRoot:  runtimeInstallRoot,
-		runtimeHostAddress:  os.Getenv("AILUO_RUNTIME_HOST_ADDRESS"),
-		qqWSURL:             os.Getenv("AILUO_QQ_WS_URL"),
-		qqEnabled:           os.Getenv("AILUO_QQ_WS_URL") != "",
-		qqToken:             os.Getenv("AILUO_QQ_WS_TOKEN"),
-		qqBotID:             os.Getenv("AILUO_QQ_BOT_ID"),
-		qqAllowedGroupIDs:   envCSV("AILUO_QQ_ALLOWED_GROUP_IDS"),
-		qqAllowedPrivateIDs: envCSV("AILUO_QQ_ALLOWED_PRIVATE_USER_IDS"),
+		httpAddress:        envOr("AILUO_HTTP_ADDRESS", "127.0.0.1:8080"),
+		configUIAddress:    envOr("AILUO_CONFIG_UI_ADDRESS", configui.DefaultAddress),
+		localConfigRoot:    envOr("AILUO_CONFIG_DIR", "var"),
+		agentAddress:       envOr("AILUO_AGENT_ADDRESS", "127.0.0.1:50051"),
+		pythonPath:         envOr("AILUO_PYTHON", agent.DefaultPythonPath(".")),
+		databasePath:       envOr("AILUO_DATABASE_PATH", "var/ailuo.db"),
+		manageAgent:        manageAgent,
+		loadDemoData:       loadDemoData,
+		environment:        envOr("AILUO_ENVIRONMENT", "development"),
+		logLevel:           logLevel,
+		logFormat:          envOr("AILUO_LOG_FORMAT", "console"),
+		logSource:          logSource,
+		logMaxValueLength:  logMaxValueLength,
+		runtimeInstallRoot: runtimeInstallRoot,
+		runtimeHostAddress: os.Getenv("AILUO_RUNTIME_HOST_ADDRESS"),
 	}
 	// Agent 进程规格要求绝对 Python 路径（Spawn 模式校验）；默认值与用户配置
 	// 都可能为相对路径，统一在装配前解析为绝对路径。
@@ -1274,62 +1200,7 @@ func loadConfig() (config, error) {
 		(!filepath.IsAbs(result.runtimeInstallRoot) || filepath.Clean(result.runtimeInstallRoot) != result.runtimeInstallRoot) {
 		return config{}, fmt.Errorf("configuration error: AILUO_RUNTIME_INSTALL_ROOT must be a clean absolute path")
 	}
-	if result.qqWSURL != "" && !strings.HasPrefix(result.qqWSURL, "ws://") && !strings.HasPrefix(result.qqWSURL, "wss://") {
-		return config{}, fmt.Errorf("configuration error: AILUO_QQ_WS_URL must be a ws:// or wss:// address")
-	}
-	if result.manageAgent {
-		secretFile := result.modelAPIKeyFile
-		rawSecretConfigured := result.modelAPIKey != ""
-		production := strings.EqualFold(result.environment, "production") || strings.EqualFold(result.environment, "prod")
-		if production && rawSecretConfigured {
-			return config{}, fmt.Errorf("configuration error: production model credentials must use AILUO_MODEL_API_KEY_FILE")
-		}
-		if secretFile != "" {
-			if err := validateSecretFile(secretFile); err != nil {
-				return config{}, err
-			}
-		}
-	}
 	return result, nil
-}
-
-func seedLocalConfigFromEnvironment(manager *controlconfig.Service, base config) error {
-	if _, ready := manager.CurrentResolved(); ready || base.model == "" {
-		return nil
-	}
-	modelKey := base.modelAPIKey
-	if modelKey == "" && base.modelAPIKeyFile != "" {
-		content, err := os.ReadFile(base.modelAPIKeyFile)
-		if err != nil {
-			return fmt.Errorf("read model secret for configuration migration: %w", err)
-		}
-		modelKey = strings.TrimSpace(string(content))
-	}
-	if modelKey == "" {
-		return nil
-	}
-	_, err := manager.Save(controlconfig.SaveInput{
-		Model:                        base.model,
-		ModelBaseURL:                 base.modelBaseURL,
-		ModelAPIKey:                  modelKey,
-		ModelRequestTimeoutSeconds:   base.modelRequestTimeout.Seconds(),
-		ModelReadinessTimeoutSeconds: base.modelReadyTimeout.Seconds(),
-		ModelMaxRetries:              base.modelMaxRetries,
-		ModelRetryBaseSeconds:        base.modelRetryBase.Seconds(),
-		ModelRetryMaxSeconds:         base.modelRetryMax.Seconds(),
-		ModelRequestsPerMinute:       base.modelRequestsMinute,
-		ModelMaxConcurrency:          base.modelMaxConcurrency,
-		QQEnabled:                    base.qqEnabled,
-		QQWSURL:                      base.qqWSURL,
-		QQWSToken:                    base.qqToken,
-		QQBotID:                      base.qqBotID,
-		QQAllowedGroupIDs:            base.qqAllowedGroupIDs,
-		QQAllowedPrivateUserIDs:      base.qqAllowedPrivateIDs,
-	})
-	if err != nil {
-		return fmt.Errorf("migrate environment configuration into control plane: %w", err)
-	}
-	return nil
 }
 
 func applyLocalConfig(base config, resolved controlconfig.Resolved) (config, error) {
@@ -1347,16 +1218,16 @@ func applyLocalConfig(base config, resolved controlconfig.Resolved) (config, err
 	base.qqWSURL = settings.QQWSURL
 	base.qqEnabled = settings.QQEnabled
 	base.qqBotID = settings.QQBotID
-	base.qqAllowedGroupIDs = append([]string(nil), settings.QQAllowedGroupIDs...)
-	base.qqAllowedPrivateIDs = append([]string(nil), settings.QQAllowedPrivateUserIDs...)
+	base.qqAllowedGroupIDs = slices.Clone(settings.QQAllowedGroupIDs)
+	base.qqAllowedPrivateIDs = slices.Clone(settings.QQAllowedPrivateUserIDs)
 	base.qqQuickReplies = make([]qq.QuickReply, 0, len(settings.QQQuickReplies))
 	for _, rule := range settings.QQQuickReplies {
 		base.qqQuickReplies = append(base.qqQuickReplies, qq.QuickReply{Trigger: rule.Trigger, Reply: rule.Reply})
 	}
-	base.qqPokeReplies = append([]string(nil), settings.QQPokeReplies...)
+	base.qqPokeReplies = append([]string{}, settings.QQPokeReplies...)
 	base.promptCatalog = settings.PromptCatalog.Clone()
 	base.baseSystemPrompt = settings.BaseSystemPrompt
-	base.channelPrompts = cloneStringMap(settings.ChannelPrompts)
+	base.channelPrompts = maps.Clone(settings.ChannelPrompts)
 	base.agentRun = settings.AgentRun
 	base.orchestration = settings.Orchestration
 	base.contextAssembly = settings.ContextAssembly
@@ -1518,44 +1389,6 @@ func envInt(name string, fallback int) (int, error) {
 	return parsed, nil
 }
 
-func envIntRange(name string, fallback, minimum, maximum int) (int, error) {
-	value := os.Getenv(name)
-	if value == "" {
-		return fallback, nil
-	}
-	parsed, err := strconv.Atoi(value)
-	if err != nil || parsed < minimum || parsed > maximum {
-		return 0, fmt.Errorf("配置错误：%s 超出允许范围", name)
-	}
-	return parsed, nil
-}
-
-func envFloat(name string, fallback float64) (float64, error) {
-	value := os.Getenv(name)
-	if value == "" {
-		return fallback, nil
-	}
-	parsed, err := strconv.ParseFloat(value, 64)
-	if err != nil || parsed <= 0 {
-		return 0, fmt.Errorf("配置错误：%s 必须是正数", name)
-	}
-	return parsed, nil
-}
-
-func envCSV(name string) []string {
-	raw := strings.TrimSpace(os.Getenv(name))
-	if raw == "" {
-		return nil
-	}
-	values := make([]string, 0)
-	for _, value := range strings.Split(raw, ",") {
-		if trimmed := strings.TrimSpace(value); trimmed != "" {
-			values = append(values, trimmed)
-		}
-	}
-	return values
-}
-
 type promptServiceRenderer struct {
 	service *promptservice.Service
 }
@@ -1570,19 +1403,8 @@ func (r promptServiceRenderer) RenderSystemPrompt(ctx context.Context, request k
 	})
 }
 
-func cloneStringMap(values map[string]string) map[string]string {
-	if values == nil {
-		return nil
-	}
-	result := make(map[string]string, len(values))
-	for key, value := range values {
-		result[key] = value
-	}
-	return result
-}
-
 func ensurePromptCapabilities(existing []string) []string {
-	result := append([]string(nil), existing...)
+	result := slices.Clone(existing)
 	for _, capabilityID := range []string{
 		agent.StatusCapabilityID,
 		promptservice.PreferenceGetID,

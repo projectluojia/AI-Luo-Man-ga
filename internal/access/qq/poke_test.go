@@ -17,6 +17,7 @@ func newPokeAdapter(t *testing.T, bot *fakeOneBot) *Adapter {
 	adapter, err := New(Config{
 		AppID: "campus-services", WSURL: bot.wsURL(), BotQQID: "2647414417",
 		AllowedGroupIDs: []string{"12345"}, AllowedPrivateUserIDs: []string{"67890"}, Provisioner: testProvisioner{},
+		PokeReplies: DefaultPokeReplies(),
 		DialTimeout: 2 * time.Second, ReconnectDelay: 50 * time.Millisecond, RunTimeout: 5 * time.Second,
 	}, hub, access.NewEventHub(), &qqFakeOrchestrator{store: store, created: make(chan struct{})}, store)
 	if err != nil {

@@ -58,8 +58,8 @@ type Config struct {
 	AppConfigSource appconfig.Source
 	Context         contextasm.HistorySource
 	ContextBudget   contextasm.Budget
-	// Prompts 是可选的内核系统端口：由 L3 prompt Service 渲染基础提示、渠道提示
-	// 与用户个性化片段。nil 时保留旧的内联拼装路径，仅供存量测试使用。
+	// Prompts 是由 L3 prompt Service 提供的内核系统端口，负责渲染基础提示、渠道
+	// 提示与用户个性化片段。
 	Prompts PromptRenderer
 }
 
@@ -125,6 +125,9 @@ func NewOrchestrator(
 	if config.AppConfigSource == nil {
 		// 装配期编程错误：持久配置来源缺失时显式终止，不做合成配置回退。
 		panic("orchestrator requires an app config source")
+	}
+	if config.Prompts == nil {
+		panic("orchestrator requires a prompt renderer")
 	}
 	assembler, err := contextasm.New(config.Context, config.ContextBudget)
 	if err != nil {
@@ -638,23 +641,18 @@ func (o *Orchestrator) executeClaimedRun(ctx context.Context, request RunRequest
 	// 上下文装配：由 Go 决定模型本次看到的内容（配置系统提示 + 渠道提示 +
 	// 当前标准消息 + 受限会话历史 + 当前 Capability 投影），Python 只接收
 	// 装配完成的系统提示。
-	basePrompt := app.SystemPrompt
-	if o.config.Prompts != nil {
-		rendered, err := o.config.Prompts.RenderSystemPrompt(runContext, PromptRenderRequest{
-			AppID:            o.config.AppID,
-			UserID:           run.UserID,
-			BaseSystemPrompt: app.SystemPrompt,
-			Channel:          run.Channel,
-			ChannelPrompts:   app.ChannelPrompts,
-		})
-		if err != nil {
-			observe.Error(ctx, "提示词 Service 渲染失败", err)
-			return errors.Join(err, o.fail(ctx, run, "context_unavailable", true))
-		}
-		basePrompt = rendered
-	} else if channelPrompt := app.ChannelPrompts[run.Channel]; channelPrompt != "" {
-		basePrompt += "\n" + channelPrompt
+	renderedPrompt, err := o.config.Prompts.RenderSystemPrompt(runContext, PromptRenderRequest{
+		AppID:            o.config.AppID,
+		UserID:           run.UserID,
+		BaseSystemPrompt: app.SystemPrompt,
+		Channel:          run.Channel,
+		ChannelPrompts:   app.ChannelPrompts,
+	})
+	if err != nil {
+		observe.Error(ctx, "提示词 Service 渲染失败", err)
+		return errors.Join(err, o.fail(ctx, run, "context_unavailable", true))
 	}
+	basePrompt := renderedPrompt
 	basePrompt += "\n只能根据 Capability 返回的数据回答，不得编造班次、站点或线路。"
 	if run.ParentRunID != "" {
 		basePrompt += "\n这是受治理的子 Run。只完成父 Run 指定任务；最终结果仅返回父 Run，不直接面向用户。"

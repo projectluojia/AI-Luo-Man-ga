@@ -1,6 +1,5 @@
 .env
 .env.*
-!.env.example
 .agents/
 .co?ex/
 agent/.venv/

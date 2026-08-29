@@ -20,8 +20,10 @@ func TestConfigAPIStoresSecretsWithoutReturningThem(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defaults := controlconfig.DefaultSettings()
 	payload := controlconfig.SaveInput{
 		Model: "test-model", ModelAPIKey: "never-return-this", ModelRequestTimeoutSeconds: 30,
+		PromptCatalog:                defaults.PromptCatalog,
 		BaseSystemPrompt:             "自定义基础系统提示",
 		ChannelPrompts:               map[string]string{"web": "自定义 web", "qq_group": "自定义群", "qq_private": "自定义私聊"},
 		ModelReadinessTimeoutSeconds: 3, ModelMaxRetries: 2, ModelRetryBaseSeconds: 0.25,
@@ -30,6 +32,10 @@ func TestConfigAPIStoresSecretsWithoutReturningThem(t *testing.T) {
 		QQBotID: "2647414417", QQAllowedGroupIDs: []string{"123456"},
 		QQQuickReplies: []controlconfig.QQQuickReply{{Trigger: "ping", Reply: "pong"}},
 		QQPokeReplies:  []string{"在呢"},
+		AgentRun:       defaults.AgentRun, Orchestration: defaults.Orchestration,
+		ContextAssembly: defaults.ContextAssembly, Scheduler: defaults.Scheduler,
+		QQConnection: defaults.QQConnection, AgentProcess: defaults.AgentProcess,
+		Governance: defaults.Governance,
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {

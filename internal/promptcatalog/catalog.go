@@ -38,11 +38,6 @@ type Catalog struct {
 	ExtraTraits []ExtraTrait `json:"extra_traits"`
 }
 
-// IsZero 判断目录是否为空（旧配置迁移时用默认目录补齐）。
-func (c Catalog) IsZero() bool {
-	return len(c.BasicStyles) == 0 && len(c.ExtraTraits) == 0
-}
-
 // Clone 返回深拷贝，调用方可以安全修改。
 func (c Catalog) Clone() Catalog {
 	result := Catalog{
@@ -54,12 +49,9 @@ func (c Catalog) Clone() Catalog {
 	return result
 }
 
-// Normalize 校验并规范化目录。零目录返回 V2 默认目录，用于旧配置自动补齐。
-// 非零目录必须是完整目录：键集合与默认目录完全一致且顺序一致，只允许修改名称与正文。
+// Normalize 校验并规范化目录。目录必须完整：键集合与默认目录完全一致且顺序
+// 一致，只允许修改名称与正文。
 func Normalize(catalog Catalog) (Catalog, error) {
-	if catalog.IsZero() {
-		return Default(), nil
-	}
 	canonical := Default()
 	result := Catalog{
 		BasicStyles: make([]BasicStyle, 0, len(canonical.BasicStyles)),

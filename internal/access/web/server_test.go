@@ -143,6 +143,10 @@ func (f failingReader) ListRuns(context.Context, string, string) ([]kernelecho.R
 	return nil, f.err
 }
 
+func (f failingReader) GetRun(context.Context, string, string) (kernelecho.RunRecord, error) {
+	return kernelecho.RunRecord{}, f.err
+}
+
 type staticHealth struct {
 	err error
 }
@@ -157,7 +161,7 @@ func (f webPolicyFunc) Snapshot(ctx context.Context, appID string) (appconfig.Po
 	return f(ctx, appID)
 }
 
-func (f *fakeOrchestrator) RunExisting(ctx context.Context, echoID string, _ kernelecho.RunRequest, emit kernelecho.EventEmitter) error {
+func (f *fakeOrchestrator) run(ctx context.Context, echoID string, emit kernelecho.EventEmitter) error {
 	if f.observed != nil {
 		f.observed <- observedContext{
 			requestID: observe.String(ctx, "request_id"),
@@ -202,6 +206,10 @@ func (f *fakeOrchestrator) RunExisting(ctx context.Context, echoID string, _ ker
 		}
 	}
 	return f.store.CompleteRun(ctx, run, kernelecho.RunStatusSucceeded, kernelecho.StatusSucceeded, "你好", publicerror.Error{}, time.Now().UTC())
+}
+
+func (f *fakeOrchestrator) RunQueued(ctx context.Context, work kernelecho.RunWork, emit kernelecho.EventEmitter) error {
+	return f.run(ctx, work.Run.EchoID, emit)
 }
 
 func TestWebAccessEchoSSEAndStatus(t *testing.T) {

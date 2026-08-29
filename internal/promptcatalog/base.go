@@ -3,6 +3,7 @@ package promptcatalog
 
 import (
 	"errors"
+	"maps"
 	"strings"
 	"unicode/utf8"
 )
@@ -84,11 +85,7 @@ var defaultChannelPrompts = map[string]string{
 
 // DefaultChannelPrompts 返回默认渠道提示映射的副本。
 func DefaultChannelPrompts() map[string]string {
-	result := make(map[string]string, len(defaultChannelPrompts))
-	for channel, prompt := range defaultChannelPrompts {
-		result[channel] = prompt
-	}
-	return result
+	return maps.Clone(defaultChannelPrompts)
 }
 
 // MaxBasePromptBytes 与 appconfig.Config.SystemPrompt 的持久化上限保持一致。
@@ -97,12 +94,11 @@ const MaxBasePromptBytes = 16 << 10
 // MaxChannelPromptBytes 与 appconfig.Config.ChannelPrompts 的持久化上限保持一致。
 const MaxChannelPromptBytes = 8 << 10
 
-// NormalizeBaseSystemPrompt 校验并规范化基础系统提示；空值返回 V2 默认值，
-// 用于旧配置自动补齐。
+// NormalizeBaseSystemPrompt 校验并规范化基础系统提示。
 func NormalizeBaseSystemPrompt(value string) (string, error) {
 	value = strings.TrimSpace(value)
 	if value == "" {
-		return DefaultBaseSystemPrompt, nil
+		return "", ErrInvalidBasePrompt
 	}
 	if len(value) > MaxBasePromptBytes || !utf8.ValidString(value) || strings.ContainsRune(value, '\x00') {
 		return "", ErrInvalidBasePrompt
@@ -113,11 +109,11 @@ func NormalizeBaseSystemPrompt(value string) (string, error) {
 // ErrInvalidChannelPrompts 表示渠道提示不合法。
 var ErrInvalidChannelPrompts = errors.New("invalid channel prompts")
 
-// NormalizeChannelPrompts 校验并规范化渠道提示映射。零映射返回 V2 默认值，
-// 用于旧配置自动补齐；非零映射必须覆盖 web、qq_group、qq_private 三个渠道。
+// NormalizeChannelPrompts 校验并规范化渠道提示映射；必须覆盖 web、qq_group、
+// qq_private 三个渠道。
 func NormalizeChannelPrompts(prompts map[string]string) (map[string]string, error) {
 	if len(prompts) == 0 {
-		return DefaultChannelPrompts(), nil
+		return nil, ErrInvalidChannelPrompts
 	}
 	defaults := DefaultChannelPrompts()
 	result := make(map[string]string, len(defaults))

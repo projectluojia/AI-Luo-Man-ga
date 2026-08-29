@@ -32,8 +32,7 @@ func DefaultPokeReplies() []string {
 	return append([]string(nil), defaultPokeReplies...)
 }
 
-// NormalizeBehavior 规范化平台快速行为配置。pokeReplies 为 nil 表示使用默认文案；
-// 非 nil 空切片表示禁用戳一戳文本回复。
+// NormalizeBehavior 规范化平台快速行为配置。空切片表示禁用戳一戳文本回复。
 func NormalizeBehavior(quickReplies []QuickReply, pokeReplies []string) ([]QuickReply, []string, error) {
 	if len(quickReplies) > MaxQuickReplies || len(pokeReplies) > MaxPokeReplies {
 		return nil, nil, ErrInvalidBehavior
@@ -54,9 +53,6 @@ func NormalizeBehavior(quickReplies []QuickReply, pokeReplies []string) ([]Quick
 		quick = append(quick, rule)
 	}
 	sort.Slice(quick, func(left, right int) bool { return quick[left].Trigger < quick[right].Trigger })
-	if pokeReplies == nil {
-		pokeReplies = DefaultPokeReplies()
-	}
 	poke := make([]string, 0, len(pokeReplies))
 	for _, reply := range pokeReplies {
 		reply = strings.TrimSpace(reply)

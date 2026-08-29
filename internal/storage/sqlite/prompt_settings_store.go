@@ -60,7 +60,7 @@ FROM user_prompt_settings WHERE app_id=? AND user_id=?`, appID, userID,
 	settings := promptservice.Settings{
 		UserID: userID, BasicStyle: basicStyle, ExtraTraitLevels: levels,
 	}
-	return promptservice.NormalizeSettings(settings), nil
+	return promptservice.NormalizeSettings(settings)
 }
 
 func (s *Store) SavePromptSettings(ctx context.Context, appID string, settings promptservice.Settings) (resultErr error) {
@@ -72,7 +72,10 @@ func (s *Store) SavePromptSettings(ctx context.Context, appID string, settings p
 	if err := identity.ValidateUserID(settings.UserID); err != nil {
 		return err
 	}
-	settings = promptservice.NormalizeSettings(settings)
+	settings, err := promptservice.NormalizeSettings(settings)
+	if err != nil {
+		return err
+	}
 	levelsJSON, err := json.Marshal(settings.ExtraTraitLevels)
 	if err != nil {
 		return errors.Join(promptservice.ErrInvalid, err)

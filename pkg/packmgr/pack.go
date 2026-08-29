@@ -68,11 +68,12 @@ func PackFromSource(ctx context.Context, sourceDir, outputDir string, manifest M
 			_ = file.Close()
 			return "", err
 		}
-		digest, err := hashReader(file)
-		if err != nil {
+		digestHash := sha256.New()
+		if _, err := io.Copy(digestHash, file); err != nil {
 			_ = file.Close()
 			return "", err
 		}
+		digest := hex.EncodeToString(digestHash.Sum(nil))
 		if _, err := file.Seek(0, io.SeekStart); err != nil {
 			_ = file.Close()
 			return "", err
@@ -116,15 +117,6 @@ func PackFromSource(ctx context.Context, sourceDir, outputDir string, manifest M
 		return "", err
 	}
 	return tarballPath, nil
-}
-
-// hashReader 计算流式 SHA-256（与 HashFile 相同的摘要算法，避免双读文件）。
-func hashReader(reader io.Reader) (string, error) {
-	hash := sha256.New()
-	if _, err := io.Copy(hash, reader); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
 // unpackTarball 严格解压 tarball 到目标目录：拒绝绝对路径、路径穿越、

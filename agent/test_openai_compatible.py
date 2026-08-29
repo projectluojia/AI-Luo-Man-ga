@@ -77,11 +77,10 @@ def partial(index, *, call_id=None, name=None, arguments=None):
 
 
 class OpenAICompatibleProviderTest(unittest.IsolatedAsyncioTestCase):
-    def test_production_secret_file_is_restricted_and_raw_secret_is_rejected(self):
+    def test_secret_file_is_required_and_restricted(self):
         with patch.dict(os.environ, {
-            "AILUO_ENVIRONMENT": "production",
             "AILUO_MODEL_API_KEY": "raw-secret",
-            "OPENAI_API_KEY": "",
+            "OPENAI_API_KEY": "raw-secret",
             "AILUO_MODEL_API_KEY_FILE": "",
         }):
             with self.assertRaises(ValueError):
@@ -89,9 +88,6 @@ class OpenAICompatibleProviderTest(unittest.IsolatedAsyncioTestCase):
 
         if os.name != "posix":
             with patch.dict(os.environ, {
-                "AILUO_ENVIRONMENT": "production",
-                "AILUO_MODEL_API_KEY": "",
-                "OPENAI_API_KEY": "",
                 "AILUO_MODEL_API_KEY_FILE": "model-key",
             }):
                 with self.assertRaises(ValueError):
@@ -104,9 +100,6 @@ class OpenAICompatibleProviderTest(unittest.IsolatedAsyncioTestCase):
                 secret.write("file-secret\n")
             os.chmod(path, 0o600)
             with patch.dict(os.environ, {
-                "AILUO_ENVIRONMENT": "production",
-                "AILUO_MODEL_API_KEY": "",
-                "OPENAI_API_KEY": "",
                 "AILUO_MODEL_API_KEY_FILE": path,
             }):
                 self.assertEqual(_model_api_key(), "file-secret")
@@ -117,9 +110,6 @@ class OpenAICompatibleProviderTest(unittest.IsolatedAsyncioTestCase):
             link = os.path.join(directory, "model-key-link")
             os.symlink(path, link)
             with patch.dict(os.environ, {
-                "AILUO_ENVIRONMENT": "production",
-                "AILUO_MODEL_API_KEY": "",
-                "OPENAI_API_KEY": "",
                 "AILUO_MODEL_API_KEY_FILE": link,
             }):
                 with self.assertRaises(ValueError):

@@ -25,13 +25,9 @@ func TestDefaultCatalogMatchesV2Shape(t *testing.T) {
 	}
 }
 
-func TestNormalizeZeroCatalogReturnsDefaults(t *testing.T) {
-	normalized, err := Normalize(Catalog{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(normalized.BasicStyles) != len(Default().BasicStyles) {
-		t.Fatalf("normalized=%#v", normalized)
+func TestNormalizeRejectsZeroCatalog(t *testing.T) {
+	if _, err := Normalize(Catalog{}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("zero catalog error=%v", err)
 	}
 }
 
@@ -85,8 +81,8 @@ func TestNormalizeBaseSystemPrompt(t *testing.T) {
 	if normalized != "自定义基础提示" {
 		t.Fatalf("normalized=%q", normalized)
 	}
-	if normalized, err = NormalizeBaseSystemPrompt(""); err != nil || normalized != DefaultBaseSystemPrompt {
-		t.Fatalf("empty base normalized=%q err=%v", normalized, err)
+	if _, err = NormalizeBaseSystemPrompt(""); !errors.Is(err, ErrInvalidBasePrompt) {
+		t.Fatalf("empty base error=%v", err)
 	}
 	if _, err := NormalizeBaseSystemPrompt("bad\x00prompt"); !errors.Is(err, ErrInvalidBasePrompt) {
 		t.Fatalf("nul base error=%v", err)
@@ -105,8 +101,8 @@ func TestNormalizeChannelPrompts(t *testing.T) {
 	if prompts["web"] != "自定义 web" || prompts["qq_group"] != "自定义群" || prompts["qq_private"] != "自定义私聊" {
 		t.Fatalf("prompts=%#v", prompts)
 	}
-	if prompts, err = NormalizeChannelPrompts(nil); err != nil || len(prompts) != len(DefaultChannelPrompts()) {
-		t.Fatalf("empty prompts=%#v err=%v", prompts, err)
+	if _, err = NormalizeChannelPrompts(nil); !errors.Is(err, ErrInvalidChannelPrompts) {
+		t.Fatalf("empty prompts error=%v", err)
 	}
 	if _, err := NormalizeChannelPrompts(map[string]string{"web": "x", "unknown": "y"}); !errors.Is(err, ErrInvalidChannelPrompts) {
 		t.Fatalf("unknown channel error=%v", err)

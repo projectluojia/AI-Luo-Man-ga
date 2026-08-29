@@ -32,19 +32,17 @@ const setInputSchema = `{
     "basic_style":{
       "type":"string",
       "enum":[
-        "default","默认","professional","专业可靠","friendly","亲和友善",
-        "direct","直言不讳","imaginative","天马行空","pragmatic","高效务实",
-        "roast","吐槽达人"
+        "default","professional","friendly","direct","imaginative","pragmatic","roast"
       ]
     },
     "extra_trait_levels":{
       "type":"object",
       "additionalProperties":false,
       "properties":{
-        "considerate":{"type":"string","enum":["enhanced","default","reduced","strong","increase","normal","增强","默认","减弱"]},
-        "enthusiastic":{"type":"string","enum":["enhanced","default","reduced","strong","increase","normal","增强","默认","减弱"]},
-        "emoji":{"type":"string","enum":["enhanced","default","reduced","strong","increase","normal","增强","默认","减弱"]},
-        "headings_lists":{"type":"string","enum":["enhanced","default","reduced","strong","increase","normal","增强","默认","减弱"]}
+        "considerate":{"type":"string","enum":["enhanced","default","reduced"]},
+        "enthusiastic":{"type":"string","enum":["enhanced","default","reduced"]},
+        "emoji":{"type":"string","enum":["enhanced","default","reduced"]},
+        "headings_lists":{"type":"string","enum":["enhanced","default","reduced"]}
       }
     }
   }
@@ -89,7 +87,7 @@ func Register(reg *registry.Registry, service *Service) error {
 					ID:              PreferenceSetID,
 					Version:         "1.0.0",
 					Name:            "设置我的提示词偏好",
-					Description:     "Set the current user's prompt style preference. basic_style accepts the style key or Chinese name; extra_trait_levels accepts trait key/Chinese name to enhanced/default/reduced level.",
+					Description:     "Set the current user's prompt style preference using stable keys and enhanced/default/reduced levels.",
 					ServiceID:       ServiceID,
 					InputSchemaJSON: setInputSchema,
 					SideEffect:      registry.SideEffectWrite,
@@ -101,7 +99,7 @@ func Register(reg *registry.Registry, service *Service) error {
 					ID:              PreferenceResetID,
 					Version:         "1.0.0",
 					Name:            "重置我的提示词偏好",
-					Description:     "Reset the current user's prompt style preference back to V2 defaults.",
+					Description:     "Reset the current user's prompt style preference to defaults.",
 					ServiceID:       ServiceID,
 					InputSchemaJSON: emptyInputSchema,
 					SideEffect:      registry.SideEffectWrite,

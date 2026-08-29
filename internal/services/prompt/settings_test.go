@@ -1,24 +1,35 @@
 package prompt
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
-func TestNormalizeSettingsKeepsKnownValuesAndFallsBackUnknown(t *testing.T) {
-	settings := NormalizeSettings(Settings{
+func TestNormalizeSettingsKeepsKnownValues(t *testing.T) {
+	settings, err := NormalizeSettings(Settings{
 		UserID:     "user-1",
-		BasicStyle: "吐槽达人",
+		BasicStyle: "roast",
 		ExtraTraitLevels: map[string]string{
-			"emoji":       "减弱",
-			"unknown":     "增强",
-			"considerate": "减弱",
+			"emoji":       "reduced",
+			"considerate": "reduced",
 		},
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if settings.BasicStyle != "roast" {
 		t.Fatalf("basic style=%s", settings.BasicStyle)
 	}
 	if settings.ExtraTraitLevels["emoji"] != "reduced" || settings.ExtraTraitLevels["considerate"] != "reduced" {
 		t.Fatalf("levels=%#v", settings.ExtraTraitLevels)
 	}
-	if _, ok := settings.ExtraTraitLevels["unknown"]; ok {
-		t.Fatalf("unknown trait kept: %#v", settings.ExtraTraitLevels)
+}
+
+func TestNormalizeSettingsRejectsUnknownValues(t *testing.T) {
+	if _, err := NormalizeSettings(Settings{
+		BasicStyle:       "unknown",
+		ExtraTraitLevels: map[string]string{"emoji": "unknown"},
+	}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("unknown settings error=%v", err)
 	}
 }
