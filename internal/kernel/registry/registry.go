@@ -10,12 +10,12 @@ import (
 	"sync"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
-	"golang.org/x/mod/semver"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/id"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
 	"github.com/projectluojia/AI-Luo-Man-ga/pkg/capability"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packagecontract"
 )
 
 var (
@@ -284,7 +284,8 @@ func validStableID(value string) bool {
 }
 
 func validVersion(value string) bool {
-	return semver.IsValid("v" + value)
+	_, err := packagecontract.ParseVersion(value)
+	return err == nil
 }
 
 func validSideEffect(value string) bool {
