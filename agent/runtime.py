@@ -96,6 +96,18 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
         )
 
     async def Run(self, request_iterator, context) -> AsyncIterator[executor_pb2.ExecutorFrame]:
+        """
+        Execute an Agent run over a bidirectional gRPC stream.
+        
+        Parameters:
+            request_iterator: Incoming protocol frames containing the run request,
+                capability results, or cancellation.
+            context: gRPC request context.
+        
+        Returns:
+            executor_pb2.ExecutorFrame: Outbound frames reporting run acceptance,
+                capability calls, replies, usage, or failures.
+        """
         started = time.monotonic()
         try:
             first_frame = await anext(request_iterator)
@@ -156,6 +168,16 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
                 expected_kernel_sequence = 2
 
                 async def execute(call: ToolCall) -> str:
+                    """
+                    Waits for the result of a capability call and converts it to model-readable JSON.
+                    
+                    Returns:
+                        str: The capability result encoded as JSON.
+                    
+                    Raises:
+                        asyncio.CancelledError: If the run is cancelled while waiting.
+                        ProtocolViolation: If the inbound frames or capability result are invalid.
+                    """
                     nonlocal expected_kernel_sequence
                     expected_capability_id = expected_capabilities.pop(call.id, "")
                     if not expected_capability_id:
@@ -398,6 +420,7 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
 
     @staticmethod
     def _validate_inbound_frame(frame, first_frame, expected_sequence: int) -> None:
+        """Validates an inbound frame's identity, sequence, body, size, and cancellation reason."""
         if (
             frame.ByteSize() > MAX_FRAME_BYTES
             or ExecutorRuntime._has_unknown_fields(frame)
@@ -412,12 +435,18 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
 
     @staticmethod
     def _parse_pending_confirmations(specifications) -> dict[str, str]:
-        """解析 StartRun 的活跃确认投影，返回按 capability_id 索引的已批准确认。
-
-        waiting 投影只做格式校验、不参与本地决策：确认判定与去重由 Go 内核在
-        调用失败时权威返回（confirmation_required + 投影），Python 不替代内核
-        做确认状态机决策。同目标多条投影取最新 approved；畸形投影按协议违例
-        拒绝，fail-closed。
+        """
+        Validate pending confirmation projections and collect approved confirmations by capability.
+        
+        Parameters:
+        	specifications: Confirmation projections associated with a run.
+        
+        Returns:
+        	dict[str, str]: A mapping from capability IDs to approved confirmation IDs.
+        
+        Raises:
+        	ProtocolViolation: If a projection exceeds protocol limits or contains invalid
+        	identifiers, types, status, expiration, or duplicate confirmation IDs.
         """
         if len(specifications) > MAX_CAPABILITIES:
             raise ProtocolViolation("确认投影数量超过协议限制")
@@ -448,6 +477,15 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
 
     @staticmethod
     def _validate_capability_result(result) -> None:
+        """
+        Validate a capability result and its optional confirmation projection.
+        
+        Parameters:
+        	result: The capability result to validate.
+        
+        Raises:
+        	ProtocolViolation: If the result fields, payload, error details, or confirmation projection are invalid.
+        """
         ExecutorRuntime._valid_token(result.call_id)
         ExecutorRuntime._valid_token(result.capability_id)
         if result.success:
@@ -496,6 +534,14 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
 
     @staticmethod
     def _validate_model_call(call_id: str, capability_id: str, arguments: str) -> None:
+        """
+        Validate a model capability call's identifiers and argument payload.
+        
+        Parameters:
+        	call_id (str): Identifier of the model call.
+        	capability_id (str): Identifier of the requested capability.
+        	arguments (str): JSON argument payload for the capability.
+        """
         ExecutorRuntime._valid_token(call_id)
         ExecutorRuntime._valid_token(capability_id)
         ExecutorRuntime._validate_text(arguments, 2, MAX_CAPABILITY_PAYLOAD_BYTES, "Capability 参数")
@@ -528,6 +574,15 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
 
     @staticmethod
     def _model_result(result) -> str:
+        """
+        Convert a capability result into model-readable JSON.
+        
+        Parameters:
+        	result: A capability result containing either a JSON payload or structured error details.
+        
+        Returns:
+        	str: The decoded payload JSON for a successful result, or a JSON object containing the error and optional confirmation details.
+        """
         if result.success:
             return result.payload_json.decode("utf-8")
         error = {
@@ -549,6 +604,15 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
 
 
 async def serve(address: str) -> None:
+    """
+    Start the Agent gRPC server, wait for termination, and perform graceful shutdown.
+    
+    Parameters:
+        address (str): Loopback or Unix-socket address on which to listen.
+    
+    Raises:
+        RuntimeError: If the address is not loopback or the server cannot bind to it.
+    """
     if not _is_loopback_address(address):
         raise RuntimeError("Agent gRPC 非回环监听必须配置认证传输")
     server = grpc.aio.server(options=[

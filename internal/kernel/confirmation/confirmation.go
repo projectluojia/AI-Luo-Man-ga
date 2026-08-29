@@ -199,7 +199,7 @@ func ValidateSideEffect(value string) error {
 	}
 }
 
-// ValidateArgumentDigest 校验参数摘要格式（64 位十六进制）。
+// ValidateArgumentDigest validates that an argument digest is a 64-character hexadecimal string.
 func ValidateArgumentDigest(value string) error {
 	if len(value) != digestHexLength || !digestPattern.MatchString(value) {
 		return fmt.Errorf("%w: invalid argument digest", ErrInvalidRequest)
@@ -208,7 +208,8 @@ func ValidateArgumentDigest(value string) error {
 }
 
 // ValidateRequest 校验 Dispatcher 注入的确认验证请求字段。
-// ArgumentDigest 由 Dispatcher 边界按与 Digest 相同的算法计算，必填。
+// ValidateRequest validates the required fields and constraints of a confirmation request.
+// It returns ErrInvalidRequest when validation fails.
 func ValidateRequest(request runtime.ConfirmationRequest) error {
 	switch {
 	case request.AppID == "" || request.EchoID == "" || request.RunID == "" || request.ConfirmationID == "":
@@ -228,7 +229,8 @@ func ValidateRequest(request runtime.ConfirmationRequest) error {
 	}
 }
 
-// ValidateConfirmation 校验一条完整确认记录的字段、状态一致性与时间约束。
+// ValidateConfirmation validates a complete confirmation record, including its fields, status consistency, and time constraints.
+// It returns ErrInvalidRequest when the record is invalid.
 func ValidateConfirmation(record Confirmation) error {
 	if !validID(record.AppID) || !validID(record.ConfirmationID) || !validID(record.EchoID) ||
 		!validID(record.RunID) || !validID(record.CallID) {

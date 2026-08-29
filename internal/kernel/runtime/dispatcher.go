@@ -330,7 +330,8 @@ func (d *Dispatcher) authorize(
 	return narrowedPermissions, nil
 }
 
-// argumentDigest 计算确认验证所需的参数摘要，算法与 confirmation.Digest 一致。
+// argumentDigest computes the canonical JSON SHA-256 digest of an invocation payload.
+// It returns the digest as hexadecimal text.
 func argumentDigest(payload json.RawMessage) (string, error) {
 	sum, err := jsonutil.CanonicalDigest(payload)
 	if err != nil {

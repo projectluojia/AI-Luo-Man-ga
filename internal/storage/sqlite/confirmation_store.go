@@ -11,7 +11,7 @@ import (
 )
 
 // 迁移 17：确认与副作用治理表。所有读写按 (app_id, confirmation_id) 作用域执行，
-// 并通过外键把确认绑定到已存在的 Echo 与 Run。
+// init registers the migration that creates the confirmations table and its indexes.
 func init() {
 	registerMigration(17, `
 CREATE TABLE confirmations (
@@ -42,6 +42,7 @@ CREATE INDEX confirmations_status_expiry_idx ON confirmations(app_id, status, ex
 `)
 }
 
+// init registers database migrations for confirmation lookup indexes and session ownership.
 func init() {
 	registerMigration(25, `
 CREATE INDEX IF NOT EXISTS confirmations_echo_idx ON confirmations(app_id, echo_id, status, expires_at);
@@ -174,7 +175,7 @@ coalesce(capability_id,''),target_type,target_id,
 side_effect,idempotency_key,argument_digest,status,expires_at,coalesce(confirmed_by,''),decided_at,created_at`
 
 // scanConfirmation 把一行确认查询结果映射为记录；scan 由调用方提供
-// （单行 QueryRow 与多行 rows 复用同一映射）。
+// scanConfirmation maps a database row to a confirmation record, parsing required and optional timestamps.
 func scanConfirmation(scan func(dest ...any) error) (confirmation.Confirmation, error) {
 	var record confirmation.Confirmation
 	var expiresAt, createdAt string

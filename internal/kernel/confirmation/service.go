@@ -354,7 +354,10 @@ func (s *Service) verify(ctx context.Context, request runtime.ConfirmationReques
 // 同属一个已记录会话（支持决策后在同一会话的新 Echo 中续跑）。Run、Call 与
 // 幂等键仅是创建时的审计溯源，不参与验证绑定——决策后的重试调用使用新的
 // call_id。参数摘要保证批准只对确认时的精确参数生效，参数改变后旧确认必然
-// 失效；Run/Echo 取消时的批量撤销仍然 fail-closed。
+// verifyRecord validates that a confirmation matches the request, remains within its
+// validity period, and has been approved.
+// It returns a scope mismatch, expiration, revocation, or approval error when the
+// record cannot authorize the request.
 func verifyRecord(record Confirmation, request runtime.ConfirmationRequest, now time.Time) error {
 	sessionMatch := record.SessionID != "" && request.SessionID != "" &&
 		record.SessionID == request.SessionID

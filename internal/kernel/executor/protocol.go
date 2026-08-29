@@ -63,6 +63,9 @@ func Supports(versions []string) bool {
 	return false
 }
 
+// ValidateStartFrame validates a start frame, including its protocol envelope, run
+// configuration, capability declarations, and pending confirmation metadata.
+// It returns an error when the frame is invalid.
 func ValidateStartFrame(frame *Frame) error {
 	if err := validateEnvelope(frame, frame.GetEchoId(), frame.GetRunId(), 1); err != nil {
 		return err
@@ -125,7 +128,8 @@ func ValidateStartFrame(frame *Frame) error {
 }
 
 // ValidConfirmationInfo 校验确认公共投影的字段格式：标识为稳定 token，
-// 状态取闭式值，有效期必须是可解析的 UTC RFC3339 时间。
+// ValidConfirmationInfo validates confirmation metadata and its expiration timestamp.
+// It returns true when all required fields and allowed values are valid.
 func ValidConfirmationInfo(info *ConfirmationInfo) bool {
 	if info == nil ||
 		!validToken(info.ConfirmationId, MaxIdentifierBytes) ||
@@ -154,6 +158,8 @@ func ValidConfirmationInfo(info *ConfirmationInfo) bool {
 	return err == nil && !expiresAt.IsZero()
 }
 
+// ValidateRunUsage validates cumulative token, cost, and provider-retry usage against protocol and configured limits.
+// It returns ErrInvalidFrame when usage is missing, inconsistent, exceeds a limit, or decreases from previously reported usage.
 func ValidateRunUsage(
 	usage *RunUsage,
 	previousInput uint64,
@@ -203,6 +209,7 @@ func ValidateRunAccepted(frame *Frame) error {
 	return nil
 }
 
+// ValidateCapabilityCall validates a capability call's identifiers, JSON payload, and optional confirmation identifier.
 func ValidateCapabilityCall(call *CapabilityCall) error {
 	if call == nil ||
 		!validToken(call.CallId, MaxIdentifierBytes) ||
@@ -242,6 +249,9 @@ func ValidateRunFailure(failure *RunFailure) error {
 	return nil
 }
 
+// ValidateCapabilityResultFrame validates a capability result frame and its result data.
+// Successful results require a valid JSON payload, while failed results require an error
+// code and message; confirmation metadata is allowed only for confirmation_required errors.
 func ValidateCapabilityResultFrame(frame *Frame, echoID, runID string, expectedSequence uint64) error {
 	if err := validateEnvelope(frame, echoID, runID, expectedSequence); err != nil {
 		return err
