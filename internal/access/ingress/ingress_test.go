@@ -28,13 +28,19 @@ func (testScheduler) Enqueue(context.Context, string) {}
 
 // fakeEchoCreator 按幂等键模拟真实 orchestrator 的幂等创建。
 type fakeEchoCreator struct {
-	calls     int
-	last      kernelecho.RunRequest
-	byKey     map[string]string // 幂等键 -> echo 标识
-	createErr error
+	calls         int
+	last          kernelecho.RunRequest
+	byKey         map[string]string // 幂等键 -> echo 标识
+	createErr     error
+	createEntered chan struct{}
+	releaseCreate chan struct{}
 }
 
 func (f *fakeEchoCreator) CreateIdempotent(_ context.Context, request kernelecho.RunRequest) (string, bool, error) {
+	if f.createEntered != nil {
+		close(f.createEntered)
+		<-f.releaseCreate
+	}
 	f.calls++
 	f.last = request
 	if f.createErr != nil {
@@ -318,5 +324,43 @@ func TestIngressMapsEchoCreationErrors(t *testing.T) {
 	}
 	if h.echoes.createErr = errors.New("boom"); h.post(t, "qq", sampleEvent(nil)).Code != http.StatusInternalServerError {
 		t.Fatal("internal echo error should map to 500")
+	}
+}
+
+func TestIngressShutdownWaitsForAdmittedCreation(t *testing.T) {
+	h := newHarness(t)
+	h.echoes.createEntered = make(chan struct{})
+	h.echoes.releaseCreate = make(chan struct{})
+	h.openIdentity(t, "user-qq-1", "qq", "qq-group-1", "qq-user-1")
+
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/ingress/qq", strings.NewReader(sampleEvent(nil)))
+	responseDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		response := httptest.NewRecorder()
+		h.server.Handler().ServeHTTP(response, request)
+		responseDone <- response
+	}()
+	<-h.echoes.createEntered
+	h.server.StopAccepting()
+	shutdownDone := make(chan error, 1)
+	shutdownContext, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	go func() { shutdownDone <- h.server.WaitAdmissions(shutdownContext) }()
+	select {
+	case err := <-shutdownDone:
+		t.Fatalf("shutdown did not wait for admitted ingress: %v", err)
+	default:
+	}
+	close(h.echoes.releaseCreate)
+	response := <-responseDone
+	if response.Code != http.StatusOK {
+		t.Fatalf("admitted ingress status=%d body=%s", response.Code, response.Body.String())
+	}
+	if err := <-shutdownDone; err != nil {
+		t.Fatal(err)
+	}
+	late := h.post(t, "qq", sampleEvent(map[string]string{"platform_message_id": "late", "idempotency_key": "late"}))
+	if late.Code != http.StatusServiceUnavailable || decodeResponse(t, late)["code"] != "shutting_down" {
+		t.Fatalf("late ingress status=%d body=%s", late.Code, late.Body.String())
 	}
 }

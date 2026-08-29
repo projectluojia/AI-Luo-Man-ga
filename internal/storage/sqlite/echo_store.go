@@ -453,6 +453,44 @@ func (s *Store) CancelQueuedRun(ctx context.Context, appID, echoID string, compl
 	return true, nil
 }
 
+func (s *Store) CancelQueuedRuns(ctx context.Context, appID string, completedAt time.Time) (resultErr error) {
+	started := time.Now()
+	defer func() { observeStorageOperation(ctx, "cancel_queued_runs", started, resultErr) }()
+	if appID == "" || completedAt.IsZero() {
+		return kernelecho.ErrInvalidRunRecord
+	}
+	tx, err := s.beginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin queued Runs cancellation: %w", err)
+	}
+	defer s.finishTx(tx, &resultErr, "cancel queued Runs")
+	public := publicerror.Echo("cancelled")
+	if _, err := tx.ExecContext(ctx, `
+UPDATE echoes
+SET status=?,final_message='',error_code=?,error_message=?,completed_at=?
+WHERE app_id=? AND status=?
+  AND EXISTS (
+    SELECT 1 FROM runs
+    WHERE runs.app_id=echoes.app_id AND runs.echo_id=echoes.echo_id AND runs.status=?
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM runs
+    WHERE runs.app_id=echoes.app_id AND runs.echo_id=echoes.echo_id AND runs.status=?
+  )`,
+		kernelecho.StatusCancelled, public.Code, public.Message, completedAt.UTC().Format(time.RFC3339Nano),
+		appID, kernelecho.StatusRunning, kernelecho.RunStatusQueued, kernelecho.RunStatusRunning); err != nil {
+		return fmt.Errorf("cancel queued Echoes: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+UPDATE runs SET status=?,error_code=?,error_message=?,completed_at=?
+WHERE app_id=? AND status=?`,
+		kernelecho.RunStatusCancelled, public.Code, public.Message, completedAt.UTC().Format(time.RFC3339Nano),
+		appID, kernelecho.RunStatusQueued); err != nil {
+		return fmt.Errorf("cancel queued Runs: %w", err)
+	}
+	return tx.Commit()
+}
+
 func (s *Store) RetryRun(ctx context.Context, current, next kernelecho.RunRecord, failure publicerror.Error, completedAt time.Time) (resultErr error) {
 	started := time.Now()
 	defer func() { observeStorageOperation(ctx, "retry_run", started, resultErr) }()

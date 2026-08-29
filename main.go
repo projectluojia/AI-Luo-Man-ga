@@ -1075,7 +1075,11 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 		shutdownContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		webAccess.StopAccepting()
-		admissionErr := webAccess.WaitAdmissions(shutdownContext)
+		ingressServer.StopAccepting()
+		admissionDone := make(chan error, 2)
+		go func() { admissionDone <- webAccess.WaitAdmissions(shutdownContext) }()
+		go func() { admissionDone <- ingressServer.WaitAdmissions(shutdownContext) }()
+		admissionErr := errors.Join(<-admissionDone, <-admissionDone)
 		httpErr := server.Shutdown(shutdownContext)
 		if err := errors.Join(admissionErr, httpErr); err != nil {
 			return fmt.Errorf("graceful shutdown: %w", err)
