@@ -37,7 +37,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/memory"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite"
 	"github.com/projectluojia/AI-Luo-Man-ga/pkg/bus"
-	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packagecontract"
 )
 
 type integrationWebAuthenticator struct{}
@@ -157,8 +157,8 @@ func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 	}
 	executorHost, err := loader.NewExecutorHost(loader.ExecutorHostConfig{
 		Manifest: executorManifest,
-		Resolve: func(context.Context) (packmgr.ProcessSpec, error) {
-			return packmgr.ProcessSpec{
+		Resolve: func(context.Context) (packagecontract.ProcessSpec, error) {
+			return packagecontract.ProcessSpec{
 				Path: filepath.Join(root, "agent", ".venv", "bin", "python"),
 				Args: []string{"-m", "agent.runtime", "--listen", address},
 				Env: append(os.Environ(),

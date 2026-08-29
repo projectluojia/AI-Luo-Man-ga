@@ -23,7 +23,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/promptcatalog"
 	promptservice "github.com/projectluojia/AI-Luo-Man-ga/internal/services/prompt"
-	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packagecontract"
 )
 
 type config struct {
@@ -98,7 +98,7 @@ func loadConfig() (config, error) {
 	}
 	runtimeInstallRoot := os.Getenv("AILUO_RUNTIME_INSTALL_ROOT")
 	if runtimeInstallRoot == "" {
-		if def := packmgr.DefaultInstallRoot(); def != "" {
+		if def := packagecontract.DefaultInstallRoot(); def != "" {
 			if _, err := os.Stat(def); err == nil {
 				runtimeInstallRoot = def
 			}
@@ -126,7 +126,7 @@ func loadConfig() (config, error) {
 		return config{}, fmt.Errorf("configuration error: resolve python path: %w", err)
 	}
 	result.pythonPath = absolutePython
-	if !packmgr.IsLocalRuntimeAddress(result.configUIAddress) {
+	if !packagecontract.IsLocalRuntimeAddress(result.configUIAddress) {
 		return config{}, fmt.Errorf("configuration error: AILUO_CONFIG_UI_ADDRESS must be loopback")
 	}
 	if result.loadDemoData && (strings.EqualFold(result.environment, "production") || strings.EqualFold(result.environment, "prod")) {

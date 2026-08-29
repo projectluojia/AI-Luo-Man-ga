@@ -13,6 +13,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packagecontract"
 )
 
 const maxTarEntries = 4096
@@ -20,8 +22,8 @@ const maxTarEntries = 4096
 // PackFromSource 用调用方提供的清单（如从 ailuo.toml 源清单或 schemaextract
 // 自动提取）打包：校验清单与源目录工件，生成 tarball 并附带按工件 SHA-256
 // 锁定的 lock.json。清单来源由调用方决定，本函数不读取 manifest.json。
-func PackFromSource(ctx context.Context, sourceDir, outputDir string, manifest Manifest, manifestBytes []byte) (string, error) {
-	if err := ValidateManifest(manifest); err != nil {
+func PackFromSource(ctx context.Context, sourceDir, outputDir string, manifest packagecontract.Manifest, manifestBytes []byte) (string, error) {
+	if err := packagecontract.ValidateManifest(manifest); err != nil {
 		return "", err
 	}
 	artifacts, err := readSourceArtifacts(sourceDir, manifest)
@@ -57,7 +59,7 @@ func PackFromSource(ctx context.Context, sourceDir, outputDir string, manifest M
 		return "", err
 	}
 	// 生成发布物 lock：按组件记录工件 SHA-256（相对路径，供安装校验发布物完整性）。
-	lockEntries := make([]LockedArtifact, 0, len(artifacts))
+	lockEntries := make([]packagecontract.LockedArtifact, 0, len(artifacts))
 	for _, artifact := range artifacts {
 		file, err := os.Open(artifact.path)
 		if err != nil {
@@ -83,15 +85,15 @@ func PackFromSource(ctx context.Context, sourceDir, outputDir string, manifest M
 			return "", err
 		}
 		_ = file.Close()
-		lockEntries = append(lockEntries, LockedArtifact{
+		lockEntries = append(lockEntries, packagecontract.LockedArtifact{
 			ComponentID: artifact.componentID,
 			Path:        filepath.Base(artifact.path),
 			SHA256:      digest,
 		})
 	}
 	manifestDigest := sha256.Sum256(manifestBytes)
-	lockBytes, err := json.Marshal(Lock{
-		SchemaVersion: SchemaVersion, PackageID: manifest.ID,
+	lockBytes, err := json.Marshal(packagecontract.Lock{
+		SchemaVersion: packagecontract.SchemaVersion, PackageID: manifest.ID,
 		PackageVersion: manifest.Version,
 		ManifestSHA256: hex.EncodeToString(manifestDigest[:]),
 		Artifacts:      lockEntries,
@@ -129,7 +131,7 @@ func unpackTarball(tarball, dest string) error {
 	defer func() { _ = file.Close() }()
 	gzipReader, err := gzip.NewReader(file)
 	if err != nil {
-		return ErrInvalidFormat
+		return packagecontract.ErrInvalidFormat
 	}
 	defer func() { _ = gzipReader.Close() }()
 	destination, err := os.OpenRoot(dest)
@@ -146,21 +148,21 @@ func unpackTarball(tarball, dest string) error {
 			return nil
 		}
 		if err != nil {
-			return ErrInvalidFormat
+			return packagecontract.ErrInvalidFormat
 		}
 		entries++
 		if entries > maxTarEntries {
-			return fmt.Errorf("%w: tarball 条目数超过上限 %d", ErrInvalidFormat, maxTarEntries)
+			return fmt.Errorf("%w: tarball 条目数超过上限 %d", packagecontract.ErrInvalidFormat, maxTarEntries)
 		}
-		if !isPackageEntrypoint(header.Name) {
-			return fmt.Errorf("%w: tarball 条目路径非法 %q", ErrInvalidFormat, header.Name)
+		if !packagecontract.IsPackageEntrypoint(header.Name) {
+			return fmt.Errorf("%w: tarball 条目路径非法 %q", packagecontract.ErrInvalidFormat, header.Name)
 		}
-		if header.Size < 0 || header.Size > MaxArtifactBytes {
-			return ErrInvalidFormat
+		if header.Size < 0 || header.Size > packagecontract.MaxArtifactBytes {
+			return packagecontract.ErrInvalidFormat
 		}
 		total += header.Size
-		if total > MaxArtifactBytes {
-			return ErrInvalidFormat // 解压总量上限，防解压炸弹
+		if total > packagecontract.MaxArtifactBytes {
+			return packagecontract.ErrInvalidFormat // 解压总量上限，防解压炸弹
 		}
 		switch header.Typeflag {
 		case tar.TypeDir:
@@ -178,13 +180,13 @@ func unpackTarball(tarball, dest string) error {
 			// tar.Reader 按条目边界供给，超量读不到；不足声明大小（截断）报错。
 			if _, err := io.CopyN(file, tarReader, header.Size); err != nil {
 				_ = file.Close()
-				return ErrInvalidFormat
+				return packagecontract.ErrInvalidFormat
 			}
 			if err := file.Close(); err != nil {
 				return err
 			}
 		default:
-			return fmt.Errorf("%w: tarball 包含不支持条目 %q", ErrInvalidFormat, header.Name)
+			return fmt.Errorf("%w: tarball 包含不支持条目 %q", packagecontract.ErrInvalidFormat, header.Name)
 		}
 	}
 }

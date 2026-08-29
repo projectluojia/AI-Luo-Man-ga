@@ -1,7 +1,6 @@
 // Package packagefmt 是 AI珞 包管理器的作者侧源格式层：把 ailuo.toml（Cargo.toml
-// 风格源清单）转换为中性包清单 packmgr.Manifest。与 packmgr（仅标准库 +
-// Masterminds/semver 的中立格式层）分离：TOML 解析依赖只存在于本包，packmgr
-// 保持可整体迁移。
+// 风格源清单）转换为中性包清单 packagecontract.Manifest。包管理器的文件发布
+// 与安装实现位于 packmgr，本包只负责作者侧源格式。
 //
 // ailuo.toml 采用继承式精简：tool 以 `[tool.<id>]` 表声明（id 即键，不重复）；
 // capability 只声明 id 与引用的 tool，其余字段（schema、side_effect、name、
@@ -21,7 +20,7 @@ import (
 	"github.com/BurntSushi/toml"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/pkg/capability"
-	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packagecontract"
 )
 
 // 源清单文件名的唯一约定（作者侧包定义）。
@@ -104,29 +103,29 @@ type sourceCapability struct {
 // 中性包清单并校验。返回的 manifestBytes 是序列化后的清单字节（供 pack 时
 // 原样写入与 digest 锁定，与 packmgr 安装路径一致）；build 为 `[build]` 声明
 // （nil 表示源清单未声明构建，工件由作者预置）。
-func Parse(path string) (manifest packmgr.Manifest, manifestBytes []byte, build *BuildSpec, err error) {
+func Parse(path string) (manifest packagecontract.Manifest, manifestBytes []byte, build *BuildSpec, err error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return packmgr.Manifest{}, nil, nil, fmt.Errorf("%w: %v", ErrSourceInvalid, err)
+		return packagecontract.Manifest{}, nil, nil, fmt.Errorf("%w: %v", ErrSourceInvalid, err)
 	}
-	if int64(len(data)) > packmgr.MaxManifestBytes {
-		return packmgr.Manifest{}, nil, nil, fmt.Errorf("%w: 源清单超过大小上限", ErrSourceInvalid)
+	if int64(len(data)) > packagecontract.MaxManifestBytes {
+		return packagecontract.Manifest{}, nil, nil, fmt.Errorf("%w: 源清单超过大小上限", ErrSourceInvalid)
 	}
 	var source sourceManifest
 	meta, err := toml.NewDecoder(bytes.NewReader(data)).Decode(&source)
 	if err != nil {
-		return packmgr.Manifest{}, nil, nil, fmt.Errorf("%w: %v", ErrSourceInvalid, err)
+		return packagecontract.Manifest{}, nil, nil, fmt.Errorf("%w: %v", ErrSourceInvalid, err)
 	}
 	if undecoded := meta.Undecoded(); len(undecoded) > 0 {
-		return packmgr.Manifest{}, nil, nil, fmt.Errorf("%w: 未知字段 %s", ErrSourceInvalid, undecoded[0])
+		return packagecontract.Manifest{}, nil, nil, fmt.Errorf("%w: 未知字段 %s", ErrSourceInvalid, undecoded[0])
 	}
 	manifest, err = source.convert()
 	if err != nil {
-		return packmgr.Manifest{}, nil, nil, err
+		return packagecontract.Manifest{}, nil, nil, err
 	}
 	manifestBytes, err = json.Marshal(manifest)
 	if err != nil {
-		return packmgr.Manifest{}, nil, nil, fmt.Errorf("%w: 清单序列化失败: %v", ErrSourceInvalid, err)
+		return packagecontract.Manifest{}, nil, nil, fmt.Errorf("%w: 清单序列化失败: %v", ErrSourceInvalid, err)
 	}
 	if source.Build != nil {
 		build = &BuildSpec{Tool: source.Build.Tool, Source: source.Build.Source}
@@ -139,18 +138,17 @@ func SourcePath(sourceDir string) string {
 	return filepath.Join(sourceDir, SourceFileName)
 }
 
-// convert 把 TOML 源结构转换为中性包清单，并执行与 packmgr.ValidateManifest
-// 一致的严格校验。
-func (s sourceManifest) convert() (packmgr.Manifest, error) {
-	manifest := packmgr.Manifest{
-		SchemaVersion: packmgr.SchemaVersion,
+// convert 把 TOML 源结构转换为中性包清单，并执行契约校验。
+func (s sourceManifest) convert() (packagecontract.Manifest, error) {
+	manifest := packagecontract.Manifest{
+		SchemaVersion: packagecontract.SchemaVersion,
 		ID:            s.Package.ID,
 		Version:       s.Package.Version,
 		Pin:           s.Package.Pin,
 		IdleTTLMS:     s.Package.IdleTTLMS,
 	}
 	if s.Storage != nil {
-		manifest.Storage = &packmgr.Storage{
+		manifest.Storage = &packagecontract.Storage{
 			Namespace:     s.Storage.Namespace,
 			SchemaVersion: s.Storage.SchemaVersion,
 			Sensitivity:   s.Storage.Sensitivity,
@@ -158,21 +156,21 @@ func (s sourceManifest) convert() (packmgr.Manifest, error) {
 		}
 	}
 	for _, dep := range s.Dependencies {
-		manifest.Dependencies = append(manifest.Dependencies, packmgr.Dependency{
+		manifest.Dependencies = append(manifest.Dependencies, packagecontract.Dependency{
 			ID: dep.ID, Constraint: dep.Constraint,
 		})
 	}
 	if len(s.Components) == 0 {
-		return packmgr.Manifest{}, fmt.Errorf("%w: 未声明任何 component", ErrSourceInvalid)
+		return packagecontract.Manifest{}, fmt.Errorf("%w: 未声明任何 component", ErrSourceInvalid)
 	}
 	for _, component := range s.Components {
-		decls := make([]packmgr.HostedFunctionDecl, 0, len(component.HostFunctions))
+		decls := make([]packagecontract.HostedFunctionDecl, 0, len(component.HostFunctions))
 		for _, decl := range component.HostFunctions {
-			decls = append(decls, packmgr.HostedFunctionDecl{
+			decls = append(decls, packagecontract.HostedFunctionDecl{
 				Module: decl.Module, Name: decl.Name, Purpose: decl.Purpose,
 			})
 		}
-		manifest.Components = append(manifest.Components, packmgr.Component{
+		manifest.Components = append(manifest.Components, packagecontract.Component{
 			ID:            component.ID,
 			Mode:          component.Mode,
 			Entrypoint:    component.Entrypoint,
@@ -183,11 +181,11 @@ func (s sourceManifest) convert() (packmgr.Manifest, error) {
 	}
 	extensions, err := s.buildExtensions()
 	if err != nil {
-		return packmgr.Manifest{}, err
+		return packagecontract.Manifest{}, err
 	}
 	manifest.Extensions = extensions
-	if err := packmgr.ValidateManifest(manifest); err != nil {
-		return packmgr.Manifest{}, fmt.Errorf("%w: %v", ErrSourceInvalid, err)
+	if err := packagecontract.ValidateManifest(manifest); err != nil {
+		return packagecontract.Manifest{}, fmt.Errorf("%w: %v", ErrSourceInvalid, err)
 	}
 	return manifest, nil
 }

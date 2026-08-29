@@ -1,4 +1,4 @@
-package packmgr
+package packagecontract
 
 import (
 	"fmt"
@@ -17,7 +17,7 @@ type Version struct {
 func ParseVersion(text string) (Version, error) {
 	v, err := semver.StrictNewVersion(text)
 	if err != nil {
-		return Version{}, fmt.Errorf("packmgr: 版本 %q 不合法: %w", text, err)
+		return Version{}, fmt.Errorf("packagecontract: 版本 %q 不合法: %w", text, err)
 	}
 	return Version{v: v}, nil
 }
@@ -52,7 +52,7 @@ type Constraint struct {
 func ParseConstraint(text string) (Constraint, error) {
 	c, err := semver.NewConstraint(text)
 	if err != nil {
-		return Constraint{}, fmt.Errorf("packmgr: 约束 %q 不合法: %w", text, err)
+		return Constraint{}, fmt.Errorf("packagecontract: 约束 %q 不合法: %w", text, err)
 	}
 	return Constraint{c: c, raw: text}, nil
 }

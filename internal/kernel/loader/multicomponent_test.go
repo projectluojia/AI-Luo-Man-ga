@@ -16,7 +16,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/pkg/capability"
-	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packagecontract"
 )
 
 const (
@@ -81,10 +81,10 @@ func writeMultiComponentFixture(t *testing.T, root, version string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	installed := packmgr.Manifest{
-		SchemaVersion: packmgr.SchemaVersion, ID: "campus.bus", Version: version,
+	installed := packagecontract.Manifest{
+		SchemaVersion: packagecontract.SchemaVersion, ID: "campus.bus", Version: version,
 		Extensions: extensions,
-		Components: []packmgr.Component{
+		Components: []packagecontract.Component{
 			{ID: "bus.core", Mode: loader.ModeHosted, Entrypoint: "bus-core.wasm",
 				Exports: []string{"campus.bus.query"}, Imports: []string{"campus.bus.transport"}},
 			{ID: "bus.adapter", Mode: loader.ModeIsolated, Entrypoint: "bus-adapter",
@@ -99,7 +99,7 @@ func writeMultiComponentFixture(t *testing.T, root, version string) string {
 		t.Fatal(err)
 	}
 	manifestDigest := sha256.Sum256(manifest)
-	locked := make([]packmgr.LockedArtifact, 0, 2)
+	locked := make([]packagecontract.LockedArtifact, 0, 2)
 	for name, body := range artifacts {
 		componentID := "bus.core"
 		if name == "bus-adapter" {
@@ -107,18 +107,18 @@ func writeMultiComponentFixture(t *testing.T, root, version string) string {
 		}
 		path := filepath.Join(directory, name)
 		digest := sha256.Sum256(body)
-		artifact := packmgr.LockedArtifact{
+		artifact := packagecontract.LockedArtifact{
 			ComponentID: componentID, Path: path, SHA256: hex.EncodeToString(digest[:]),
 		}
 		if componentID == "bus.adapter" {
-			artifact.Process = &packmgr.ProcessSpec{
+			artifact.Process = &packagecontract.ProcessSpec{
 				Path: path, WorkDir: directory, Address: "unix:" + filepath.Join(directory, "adapter.sock"),
 			}
 		}
 		locked = append(locked, artifact)
 	}
-	lock, err := json.Marshal(packmgr.Lock{
-		SchemaVersion: packmgr.SchemaVersion, PackageID: "campus.bus",
+	lock, err := json.Marshal(packagecontract.Lock{
+		SchemaVersion: packagecontract.SchemaVersion, PackageID: "campus.bus",
 		PackageVersion: version, ManifestSHA256: hex.EncodeToString(manifestDigest[:]),
 		Artifacts: locked,
 	})

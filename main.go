@@ -25,6 +25,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packagecontract"
 	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packagefmt"
 	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
 	"github.com/projectluojia/AI-Luo-Man-ga/pkg/sdkgen"
@@ -182,7 +183,7 @@ func runPackageCommand(parent context.Context, arguments []string, output io.Wri
 		*root = os.Getenv("AILUO_RUNTIME_INSTALL_ROOT")
 	}
 	if *root == "" {
-		*root = packmgr.DefaultInstallRoot()
+		*root = packagecontract.DefaultInstallRoot()
 	}
 	if *root == "" && command != "pack" && command != "publish" && command != "sdk-go" && command != "sdk-py" && command != "sdk-ts" {
 		return true, fmt.Errorf("configuration error: %s requires --root 或 AILUO_RUNTIME_INSTALL_ROOT", command)
@@ -349,7 +350,7 @@ func runPackageCommand(parent context.Context, arguments []string, output io.Wri
 // componentModes 汇总包内组件的运行形态：单组件直接给出 mode，多组件按形态计数。
 // 包不是"一种模式"（每个组件各有 mode），打印 Components[0].Mode 会把混合包说成
 // 单一形态。
-func componentModes(manifest packmgr.Manifest) string {
+func componentModes(manifest packagecontract.Manifest) string {
 	if len(manifest.Components) == 1 {
 		return manifest.Components[0].Mode
 	}
@@ -358,7 +359,7 @@ func componentModes(manifest packmgr.Manifest) string {
 		counts[component.Mode]++
 	}
 	parts := make([]string, 0, len(counts))
-	for _, mode := range []string{packmgr.ModeHosted, packmgr.ModeIsolated} {
+	for _, mode := range []string{packagecontract.ModeHosted, packagecontract.ModeIsolated} {
 		if counts[mode] > 0 {
 			parts = append(parts, fmt.Sprintf("%s×%d", mode, counts[mode]))
 		}
@@ -382,44 +383,44 @@ func splitRegistryRef(source string) (owner, repo, constraint string, ok bool) {
 // resolveSource 解析源包目录：优先 ailuo.toml（显式声明，含宿主函数/存储），
 // 无则从源码自动提取清单并构建（作者零声明，纯计算包）。清单声明 [build] 时
 // 先执行构建再返回（pack/publish 共用，构建失败即报错，不打包残缺工件）。
-func resolveSource(ctx context.Context, sourceDir, version string) (manifest packmgr.Manifest, manifestBytes []byte, err error) {
+func resolveSource(ctx context.Context, sourceDir, version string) (manifest packagecontract.Manifest, manifestBytes []byte, err error) {
 	path := packagefmt.SourcePath(sourceDir)
 	_, statErr := os.Stat(path)
 	if errors.Is(statErr, fs.ErrNotExist) {
 		if version == "" {
-			return packmgr.Manifest{}, nil, fmt.Errorf("配置错误：零声明包必须通过 --version 提供版本")
+			return packagecontract.Manifest{}, nil, fmt.Errorf("配置错误：零声明包必须通过 --version 提供版本")
 		}
 		// 无 ailuo.toml：从源码自动提取并构建（作者零声明）。
 		capabilities, buildTool, extractErr := packagefmt.AutoExtract(ctx, sourceDir)
 		if extractErr != nil {
-			return packmgr.Manifest{}, nil, extractErr
+			return packagecontract.Manifest{}, nil, extractErr
 		}
 		absolute, absErr := filepath.Abs(sourceDir)
 		if absErr != nil {
-			return packmgr.Manifest{}, nil, absErr
+			return packagecontract.Manifest{}, nil, absErr
 		}
 		manifest, manifestBytes, err = packagefmt.ManifestFromCapabilities(filepath.Base(absolute), version, capabilities)
 		if err != nil {
-			return packmgr.Manifest{}, nil, err
+			return packagecontract.Manifest{}, nil, err
 		}
 		if err := packagefmt.Build(ctx, sourceDir, manifest, packagefmt.BuildSpec{Tool: buildTool}); err != nil {
-			return packmgr.Manifest{}, nil, err
+			return packagecontract.Manifest{}, nil, err
 		}
-		if err := loader.VerifyHostedProtocol(ctx, sourceDir, manifest); err != nil {
-			return packmgr.Manifest{}, nil, err
+		if err := packagesource.VerifyHostedProtocol(ctx, sourceDir, manifest); err != nil {
+			return packagecontract.Manifest{}, nil, err
 		}
 		return manifest, manifestBytes, nil
 	}
 	if statErr != nil {
-		return packmgr.Manifest{}, nil, fmt.Errorf("读取源清单失败: %w", statErr)
+		return packagecontract.Manifest{}, nil, fmt.Errorf("读取源清单失败: %w", statErr)
 	}
 	manifest, manifestBytes, build, err := packagefmt.Parse(path)
 	if err != nil {
-		return packmgr.Manifest{}, nil, err
+		return packagecontract.Manifest{}, nil, err
 	}
 	if build != nil {
 		if err := packagefmt.Build(ctx, sourceDir, manifest, *build); err != nil {
-			return packmgr.Manifest{}, nil, err
+			return packagecontract.Manifest{}, nil, err
 		}
 	}
 	return manifest, manifestBytes, nil
@@ -500,7 +501,7 @@ func runRuntimeHostCommand(arguments []string, output io.Writer) (bool, error) {
 	if !filepath.IsAbs(*installRoot) || filepath.Clean(*installRoot) != *installRoot {
 		return true, fmt.Errorf("configuration error: --install-root must be a clean absolute path")
 	}
-	if !packmgr.IsLocalRuntimeAddress(*address) {
+	if !packagecontract.IsLocalRuntimeAddress(*address) {
 		return true, fmt.Errorf("configuration error: --address must be loopback or an absolute unix socket")
 	}
 	return true, serveRuntimeHost(*installRoot, *address, output)

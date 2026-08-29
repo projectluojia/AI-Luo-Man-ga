@@ -18,7 +18,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus"
 	"github.com/projectluojia/AI-Luo-Man-ga/pkg/capability"
-	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packagecontract"
 )
 
 func TestLoadConfigUsesControlPlaneDefaults(t *testing.T) {
@@ -64,7 +64,7 @@ func TestLoadConfigRejectsRelativeRuntimeInstallRoot(t *testing.T) {
 }
 
 func TestDefaultInstallRootIsAbsoluteOrEmpty(t *testing.T) {
-	root := packmgr.DefaultInstallRoot()
+	root := packagecontract.DefaultInstallRoot()
 	if root == "" {
 		return
 	}
@@ -176,10 +176,10 @@ func writeInstalledFixture(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manifestBytes, err := json.Marshal(packmgr.Manifest{
-		SchemaVersion: packmgr.SchemaVersion, ID: "main.extension", Version: "1.0.0", Pin: true,
+	manifestBytes, err := json.Marshal(packagecontract.Manifest{
+		SchemaVersion: packagecontract.SchemaVersion, ID: "main.extension", Version: "1.0.0", Pin: true,
 		Extensions: extensions,
-		Components: []packmgr.Component{{ID: "main.extension", Mode: loader.ModeHosted, Entrypoint: "runtime-artifact", Exports: []string{"main.extension.query"}}},
+		Components: []packagecontract.Component{{ID: "main.extension", Mode: loader.ModeHosted, Entrypoint: "runtime-artifact", Exports: []string{"main.extension.query"}}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -189,10 +189,10 @@ func writeInstalledFixture(t *testing.T) string {
 	}
 	manifestDigest := sha256.Sum256(manifestBytes)
 	artifactDigest := sha256.Sum256(artifactBody)
-	lockBytes, err := json.Marshal(packmgr.Lock{
-		SchemaVersion: packmgr.SchemaVersion, PackageID: "main.extension", PackageVersion: "1.0.0",
+	lockBytes, err := json.Marshal(packagecontract.Lock{
+		SchemaVersion: packagecontract.SchemaVersion, PackageID: "main.extension", PackageVersion: "1.0.0",
 		ManifestSHA256: hex.EncodeToString(manifestDigest[:]),
-		Artifacts:      []packmgr.LockedArtifact{{ComponentID: "main.extension", Path: artifact, SHA256: hex.EncodeToString(artifactDigest[:])}},
+		Artifacts:      []packagecontract.LockedArtifact{{ComponentID: "main.extension", Path: artifact, SHA256: hex.EncodeToString(artifactDigest[:])}},
 	})
 	if err != nil {
 		t.Fatal(err)

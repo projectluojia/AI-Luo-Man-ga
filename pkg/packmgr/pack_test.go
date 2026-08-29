@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packagecontract"
 	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
 )
 
@@ -62,13 +63,13 @@ func TestInstallRejectsNonPackageSource(t *testing.T) {
 func TestPackFromSourceRoundTripsThroughInstall(t *testing.T) {
 	ctx := context.Background()
 	source := filepath.Join(t.TempDir(), "pkg")
-	writeSourcePackage(t, source, "demo.pkg", "1.4.2", packmgr.ModeHosted, "app.wasm", nil)
+	writeSourcePackage(t, source, "demo.pkg", "1.4.2", packagecontract.ModeHosted, "app.wasm", nil)
 	manifestBytes, err := os.ReadFile(filepath.Join(source, "manifest.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	var manifest packmgr.Manifest
-	if err := packmgr.DecodeStrictJSON(manifestBytes, &manifest); err != nil {
+	var manifest packagecontract.Manifest
+	if err := packagecontract.DecodeStrictJSON(manifestBytes, &manifest); err != nil {
 		t.Fatal(err)
 	}
 	outputDir := t.TempDir()

@@ -10,8 +10,8 @@ import (
 	"sort"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/pkg/capability"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packagecontract"
 	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packagefmt/schemaextract"
-	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
 )
 
 // AutoExtract 从包目录源码自动提取 capabilities，并返回对应的构建器：
@@ -84,33 +84,33 @@ func ExtensionsFromCapabilities(packageID string, capabilities []schemaextract.C
 // capability 全部自动推导。工具 schema 来自提取器，side_effect 统一 read
 // （纯计算无副作用；需要写/宿主能力的包仍用 ailuo.toml 显式声明）。
 
-func ManifestFromCapabilities(packageID, version string, capabilities []schemaextract.Capability) (packmgr.Manifest, []byte, error) {
-	if _, err := packmgr.ParseVersion(version); err != nil {
-		return packmgr.Manifest{}, nil, fmt.Errorf("packagefmt: 包版本 %q 不合法", version)
+func ManifestFromCapabilities(packageID, version string, capabilities []schemaextract.Capability) (packagecontract.Manifest, []byte, error) {
+	if _, err := packagecontract.ParseVersion(version); err != nil {
+		return packagecontract.Manifest{}, nil, fmt.Errorf("packagefmt: 包版本 %q 不合法", version)
 	}
 	source, exportIDs, err := capabilitiesSource(packageID, version, capabilities)
 	if err != nil {
-		return packmgr.Manifest{}, nil, err
+		return packagecontract.Manifest{}, nil, err
 	}
 	extensions, err := source.buildExtensions()
 	if err != nil {
-		return packmgr.Manifest{}, nil, err
+		return packagecontract.Manifest{}, nil, err
 	}
-	manifest := packmgr.Manifest{
-		SchemaVersion: packmgr.SchemaVersion,
+	manifest := packagecontract.Manifest{
+		SchemaVersion: packagecontract.SchemaVersion,
 		ID:            packageID,
 		Version:       version,
-		Components: []packmgr.Component{{
+		Components: []packagecontract.Component{{
 			ID: "main", Mode: "hosted", Entrypoint: "main.wasm", Exports: exportIDs,
 		}},
 		Extensions: extensions,
 	}
-	if err := packmgr.ValidateManifest(manifest); err != nil {
-		return packmgr.Manifest{}, nil, fmt.Errorf("packagefmt: 自动生成清单校验失败: %w", err)
+	if err := packagecontract.ValidateManifest(manifest); err != nil {
+		return packagecontract.Manifest{}, nil, fmt.Errorf("packagefmt: 自动生成清单校验失败: %w", err)
 	}
 	manifestBytes, err := json.Marshal(manifest)
 	if err != nil {
-		return packmgr.Manifest{}, nil, err
+		return packagecontract.Manifest{}, nil, err
 	}
 	return manifest, manifestBytes, nil
 }

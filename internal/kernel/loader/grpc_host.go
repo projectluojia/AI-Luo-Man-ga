@@ -15,7 +15,7 @@ import (
 	runtimev1 "github.com/projectluojia/AI-Luo-Man-ga/gen/runtimev1"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
-	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packagecontract"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/backoff"
@@ -70,7 +70,7 @@ type GRPCHost struct {
 
 func NewGRPCHost(config GRPCHostConfig) (*GRPCHost, error) {
 	if (config.Mode != ModeHosted && config.Mode != ModeIsolated) ||
-		!packmgr.IsLocalRuntimeAddress(config.Address) || config.VerifyInstalled == nil {
+		!packagecontract.IsLocalRuntimeAddress(config.Address) || config.VerifyInstalled == nil {
 		return nil, ErrInvalidManifest
 	}
 	if config.DialTimeout == 0 {
