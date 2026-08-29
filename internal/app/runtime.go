@@ -81,7 +81,10 @@ func Run() error {
 	for {
 		resolved, err := manager.WaitReady(ctx)
 		if err != nil {
-			return nil
+			if errors.Is(err, context.Canceled) {
+				return nil
+			}
+			return err
 		}
 		current, err := applyLocalConfig(baseConfig, resolved)
 		if err != nil {
@@ -152,6 +155,16 @@ func builtInExecutorManifest() loader.Manifest {
 }
 
 func runCore(ctx context.Context, stop context.CancelFunc, config config, localConfig *controlconfig.Service) (resultErr error) {
+	lifecycle := coreLifecycle{}
+	cleaned := false
+	defer func() {
+		if cleaned {
+			return
+		}
+		cleanupContext, cancel := context.WithTimeout(context.WithoutCancel(context.Background()), 10*time.Second)
+		defer cancel()
+		resultErr = errors.Join(resultErr, lifecycle.Shutdown(cleanupContext))
+	}()
 	observe.Info(ctx, "正在启动AI珞（爱珞）内核",
 		observe.StringAttr("http_address", config.httpAddress),
 		observe.StringAttr("agent_address", config.agentAddress),
@@ -166,17 +179,13 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 	if err != nil {
 		return err
 	}
-	defer func() {
-		resultErr = errors.Join(resultErr, store.Close())
-	}()
+	lifecycle.store = store
 	observe.Info(ctx, "统一数据库已经就绪")
 	blobStore, err := blob.Open(filepath.Join(filepath.Dir(config.databasePath), "blobs"), session.MaxMessageContentBytes)
 	if err != nil {
 		return fmt.Errorf("open blob storage: %w", err)
 	}
-	defer func() {
-		resultErr = errors.Join(resultErr, blobStore.Close())
-	}()
+	lifecycle.blobStore = blobStore
 	sessionService, err := session.NewService(store, blobStore)
 	if err != nil {
 		return fmt.Errorf("create session service: %w", err)
@@ -222,10 +231,9 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 		replacement.MaxOutputBytes = config.agentRun.MaxOutputBytes
 		replacement.SystemPrompt = config.baseSystemPrompt
 		replacement.ChannelPrompts = config.channelPrompts
-		replacement.EnabledCapabilities = migrateEnabledCapabilities(app.EnabledCapabilities)
 		app, err = store.CompareAndSwap(ctx, app.Generation, replacement)
 		if err != nil {
-			return fmt.Errorf("migrate campus App prompt configuration: %w", err)
+			return fmt.Errorf("update campus App configuration: %w", err)
 		}
 	}
 	observe.Info(ctx, "校园 App 持久配置已经就绪",
@@ -279,11 +287,7 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 	if err != nil {
 		return fmt.Errorf("create runtime loader: %w", err)
 	}
-	defer func() {
-		shutdownContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		resultErr = errors.Join(resultErr, runtimeLoader.Shutdown(shutdownContext))
-	}()
+	lifecycle.runtimeLoader = runtimeLoader
 	if err := runtimeLoader.Register(ctx, executorManifest); err != nil {
 		return fmt.Errorf("register executor runtime: %w", err)
 	}
@@ -310,7 +314,7 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 	if err != nil {
 		return fmt.Errorf("resolve AI executor runtime: %w", err)
 	}
-	defer executorLease.Release()
+	lifecycle.executorLease = executorLease
 	executorRuntime := executorLease.Runtime()
 	clientProvider, ok := executorRuntime.(executor.ClientProvider)
 	if !ok {
@@ -356,6 +360,7 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 	)
 	taskTypes := task.NewTypeRegistry()
 	taskScheduler := task.NewScheduler(store, taskTypes, task.Config{})
+	lifecycle.taskScheduler = taskScheduler
 	confirmationSweepInterval := secondsDuration(config.governance.ConfirmationSweepSeconds)
 	if err := registerGovernanceTaskTypes(taskTypes, confirmations, taskScheduler, confirmationSweepInterval); err != nil {
 		return fmt.Errorf("register governance task types: %w", err)
@@ -363,11 +368,6 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 	if err := taskScheduler.Start(ctx); err != nil {
 		return fmt.Errorf("start background task scheduler: %w", err)
 	}
-	defer func() {
-		shutdownContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		resultErr = errors.Join(resultErr, taskScheduler.Shutdown(shutdownContext))
-	}()
 	if err := seedConfirmationSweep(ctx, taskScheduler, campus.AppID, confirmationSweepInterval); err != nil {
 		return fmt.Errorf("seed confirmation sweep: %w", err)
 	}
@@ -378,11 +378,7 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 	echoEvents := access.NewEventHub()
 	runScheduler := kernelecho.NewScheduler(ctx, orchestrator, store, echoEvents, campus.AppID,
 		kernelecho.WithScheduler(config.scheduler.Workers, time.Duration(config.scheduler.PollMs)*time.Millisecond, config.scheduler.BatchSize))
-	defer func() {
-		shutdownContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		resultErr = errors.Join(resultErr, runScheduler.Shutdown(shutdownContext))
-	}()
+	lifecycle.runScheduler = runScheduler
 	if _, err := runScheduler.Recover(ctx); err != nil {
 		return fmt.Errorf("recover durable runs: %w", err)
 	}
@@ -411,9 +407,12 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 	if err != nil {
 		return fmt.Errorf("configure QQ access manager: %w", err)
 	}
+	lifecycle.qqManager = qqManager
 	webAccess := web.NewServer(echoAdmission, store, readiness, reg, policy, campus.AppID, platformHub, runScheduler, echoEvents,
 		web.WithDispatcher(dispatcher))
 	ingressServer := ingress.NewServer(campus.AppID, platformHub, echoAdmission)
+	lifecycle.webAccess = webAccess
+	lifecycle.ingressServer = ingressServer
 	if err := qqManager.Start(ctx, qqsettings.Settings{
 		AppID: campus.AppID, Enabled: config.qqEnabled, WSURL: config.qqWSURL, BotQQID: config.qqBotID,
 		AllowedGroupIDs: config.qqAllowedGroupIDs, AllowedPrivateUserIDs: config.qqAllowedPrivateIDs,
@@ -424,21 +423,16 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 		AppID: campus.AppID, Enabled: config.qqEnabled, WSURL: config.qqWSURL, BotQQID: config.qqBotID,
 		AllowedGroupIDs: config.qqAllowedGroupIDs, AllowedPrivateUserIDs: config.qqAllowedPrivateIDs,
 	}
-	qqCurrent, _, err := qqManager.Snapshot(ctx)
+	qqCurrent, qqStatus, err := qqManager.Snapshot(ctx)
 	if err != nil {
 		return fmt.Errorf("read QQ access configuration: %w", err)
 	}
 	if !qqsettings.EqualContent(qqCurrent, qqDesired) {
-		if _, _, err := qqManager.Update(ctx, qqCurrent.Generation, qqDesired); err != nil {
+		qqCurrent, qqStatus, err = qqManager.Update(ctx, qqCurrent.Generation, qqDesired)
+		if err != nil {
 			return fmt.Errorf("apply QQ access configuration: %w", err)
 		}
 	}
-	defer func() {
-		shutdownContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		resultErr = errors.Join(resultErr, qqManager.Shutdown(shutdownContext))
-	}()
-	qqCurrent, qqStatus, _ := qqManager.Snapshot(ctx)
 	observe.Info(ctx, "QQ Access 管理器已就绪",
 		observe.BoolAttr("enabled", qqCurrent.Enabled), observe.BoolAttr("running", qqStatus.Running),
 		observe.IntAttr("allowed_group_count", len(qqCurrent.AllowedGroupIDs)),
@@ -451,6 +445,7 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 		Addr: config.httpAddress, Handler: outer, ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 1 << 20,
 	}
+	lifecycle.server = server
 	serverErrors := make(chan error, 1)
 	go func() {
 		observe.Info(ctx, "Web Access 开始监听", observe.StringAttr("address", config.httpAddress))
@@ -461,16 +456,11 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 	case <-ctx.Done():
 		observe.Info(ctx, "收到停止信号，正在关闭服务")
 		shutdownContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		webAccess.StopAccepting()
-		ingressServer.StopAccepting()
-		admissionDone := make(chan error, 2)
-		go func() { admissionDone <- webAccess.WaitAdmissions(shutdownContext) }()
-		go func() { admissionDone <- ingressServer.WaitAdmissions(shutdownContext) }()
-		admissionErr := errors.Join(<-admissionDone, <-admissionDone)
-		httpErr := server.Shutdown(shutdownContext)
-		if err := errors.Join(admissionErr, httpErr); err != nil {
-			return fmt.Errorf("graceful shutdown: %w", err)
+		shutdownErr := lifecycle.Shutdown(shutdownContext)
+		cancel()
+		cleaned = true
+		if shutdownErr != nil {
+			return fmt.Errorf("graceful shutdown: %w", shutdownErr)
 		}
 		observe.Info(context.Background(), "AI珞（爱珞）服务已经安全关闭")
 		return nil
