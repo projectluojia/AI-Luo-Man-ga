@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/id"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/capability"
 )
 
 var (
@@ -23,9 +24,7 @@ var (
 
 var (
 	stableIDPattern   = id.AppID
-	capabilityPattern = id.StableLower
 	permissionPattern = id.Permission
-	channelPattern    = id.StableLower
 	modelPattern      = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$`)
 )
 
@@ -75,8 +74,8 @@ func (s PolicySnapshot) Verify(expectedAppID string) error {
 	if s.AppID != expectedAppID || !stableIDPattern.MatchString(s.AppID) ||
 		!stableIDPattern.MatchString(s.Revision) || s.Generation == 0 ||
 		len(s.EnabledCapabilities) > 256 || len(s.PermissionScope) > 256 ||
-		!validValues(s.EnabledCapabilities, capabilityPattern) ||
-		!validValues(s.PermissionScope, permissionPattern) {
+		!validValues(s.EnabledCapabilities, capability.IsStableID) ||
+		!validValues(s.PermissionScope, permissionPattern.MatchString) {
 		return ErrInvalid
 	}
 	return nil
@@ -173,12 +172,12 @@ func Validate(config Config) error {
 		config.MaxCostMicrousd > 1_000_000_000_000 ||
 		config.ProviderTimeout < 100*time.Millisecond || config.ProviderTimeout > 5*time.Minute ||
 		len(config.EnabledCapabilities) > 256 || len(config.PermissionScope) > 256 ||
-		!validValues(config.EnabledCapabilities, capabilityPattern) ||
-		!validValues(config.PermissionScope, permissionPattern) {
+		!validValues(config.EnabledCapabilities, capability.IsStableID) ||
+		!validValues(config.PermissionScope, permissionPattern.MatchString) {
 		return ErrInvalid
 	}
 	for channel, prompt := range config.ChannelPrompts {
-		if !channelPattern.MatchString(channel) || len(channel) > 64 ||
+		if !capability.IsStableID(channel) || len(channel) > 64 ||
 			strings.TrimSpace(prompt) == "" || len(prompt) > 8<<10 || !utf8.ValidString(prompt) ||
 			strings.ContainsRune(prompt, '\x00') {
 			return ErrInvalid
@@ -250,9 +249,9 @@ func canonicalChannelPrompts(prompts map[string]string) map[string]string {
 	return result
 }
 
-func validValues(values []string, pattern *regexp.Regexp) bool {
+func validValues(values []string, valid func(string) bool) bool {
 	for index, value := range values {
-		if !pattern.MatchString(value) || len(value) > 128 || (index > 0 && values[index-1] >= value) {
+		if !valid(value) || (index > 0 && values[index-1] >= value) {
 			return false
 		}
 	}
