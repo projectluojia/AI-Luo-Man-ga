@@ -258,7 +258,7 @@ func writeMainInstalledFixture(t *testing.T) string {
 	}
 	installed := packmgr.Manifest{
 		SchemaVersion: packmgr.SchemaVersion, ID: "main.extension", Version: "1.0.0",
-		Mode: loader.ModeHosted, Pin: true, Extensions: extensions,
+		Mode: loader.ModeHosted, Entrypoint: "runtime-artifact", Pin: true, Extensions: extensions,
 	}
 	manifest, err := json.Marshal(installed)
 	if err != nil {

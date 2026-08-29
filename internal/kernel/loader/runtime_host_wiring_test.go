@@ -54,7 +54,7 @@ func TestRuntimeHostProductionWiring(t *testing.T) {
 	}
 	installed := packmgr.Manifest{
 		SchemaVersion: packmgr.SchemaVersion, ID: "strings.tool", Version: "1.0.0",
-		Mode: loader.ModeHosted, Pin: true, Extensions: extensions,
+		Mode: loader.ModeHosted, Entrypoint: "strings.tool.wasm", Pin: true, Extensions: extensions,
 	}
 	manifest, err := json.Marshal(installed)
 	if err != nil {

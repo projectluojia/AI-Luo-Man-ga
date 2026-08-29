@@ -196,7 +196,7 @@ func writeInstalledFixture(t *testing.T, root, runtimeID, mode string, unknown b
 	}
 	installed := packmgr.Manifest{
 		SchemaVersion: packmgr.SchemaVersion, ID: runtimeID, Version: "1.0.0",
-		Mode: mode, IdleTTLMS: 1000, Extensions: extensions,
+		Mode: mode, Entrypoint: "runtime-artifact", IdleTTLMS: 1000, Extensions: extensions,
 	}
 	manifest, err := json.Marshal(installed)
 	if err != nil {
@@ -290,7 +290,7 @@ func writeDeclaredFixture(t *testing.T, root, runtimeID string, decls []packmgr.
 	}
 	installed := packmgr.Manifest{
 		SchemaVersion: packmgr.SchemaVersion, ID: runtimeID, Version: "1.0.0",
-		Mode: loader.ModeHosted, IdleTTLMS: 1000,
+		Mode: loader.ModeHosted, Entrypoint: "runtime-artifact", IdleTTLMS: 1000,
 		HostFunctions: decls, Storage: storage, Extensions: extensions,
 	}
 	manifest, err := json.Marshal(installed)
