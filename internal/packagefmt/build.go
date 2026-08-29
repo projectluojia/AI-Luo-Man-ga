@@ -1,5 +1,5 @@
 // Package packagefmt 的构建层：ailuo.toml 的 `[build]` 段声明构建方式，
-// ailuo pack 统一驱动，不依赖每包手写 build.sh/build.ps1。
+// ailuo pack 统一驱动，不依赖每包手写 shell 脚本。
 package packagefmt
 
 import (

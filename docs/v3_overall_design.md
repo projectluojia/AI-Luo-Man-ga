@@ -1159,7 +1159,7 @@ Service 的 `requested_permissions` 是该 Service 及其依赖 Tool 的权限�
 
 ### 持久化幂等实现基线（2026-07-26）
 
-客户端创建 Echo 使用 App 范围的 `Idempotency-Key`。Web v2 创建入口强制该请求头；v1 创建入口仅作为兼容路由保留，但执行相同的强制契约。SQLite 在一个事务内写入创建幂等映射、Echo 和 attempt 1 的 queued Run。同键同请求返回原 `echo_id` 且不再次调度；同键异请求返回 `idempotency_conflict`。Run attempt 继续由 `(app_id, echo_id, attempt)` 唯一约束和事务状态机去重。
+客户端创建 Echo 使用 App 范围的 `Idempotency-Key`。Web v2 创建入口强制该请求头。SQLite 在一个事务内写入创建幂等映射、Echo 和 attempt 1 的 queued Run。同键同请求返回原 `echo_id` 且不再次调度；同键异请求返回 `idempotency_conflict`。Run attempt 继续由 `(app_id, echo_id, attempt)` 唯一约束和事务状态机去重。
 
 写入或外部 Capability/Tool 使用 `(app_id, scope, idempotency_key)` 持久化执行记录。请求指纹不保存原始参数；成功结果保存在受治理的幂等结果字段中以支持重放，且限制为 256 KiB。相同请求已完成时直接复用结果；仍在有效 lease 内时调用方合并等待；前次失败或 lease 已过期但没有可信终态时不会自动重做副作用，而分别返回稳定的 previous-failure 或 outcome-unknown 结果，等待业务对账或人工决策。当前记录写入七天保留截止时间；清理调度和容量治理归入后续运维工作，在实现安全清理前不会因截止时间自动删除去重依据。
 

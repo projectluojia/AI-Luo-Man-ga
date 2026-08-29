@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -146,7 +147,7 @@ func (c *Catalog) VerifyProcess(ctx context.Context, manifest Manifest, process 
 		return err
 	}
 	if !sameRuntimeManifest(record.Runtime, manifest) || record.Process == nil ||
-		!reflect.DeepEqual(cloneProcessSpec(*record.Process), cloneProcessSpec(process)) {
+		!reflect.DeepEqual(*record.Process, process) {
 		return ErrInstallChanged
 	}
 	return nil
@@ -262,7 +263,7 @@ func (c *Catalog) readPackage(ctx context.Context, directory string) ([]Installe
 			ID: runtimeID, Version: neutral.Manifest.Version, Mode: component.Mode,
 			Role: RoleCapability, LockedDigest: artifact.SHA256,
 			Pin: neutral.Manifest.Pin, IdleTTL: time.Duration(neutral.Manifest.IdleTTLMS) * time.Millisecond,
-			HostFunctions: packmgr.CloneHostedFunctions(component.HostFunctions),
+			HostFunctions: slices.Clone(component.HostFunctions),
 		}
 		if err := validateManifest(runtimeManifest); err != nil {
 			return nil, err
@@ -488,27 +489,27 @@ func sameRuntimeIdentity(left, right Manifest) bool {
 }
 
 func cloneProcessSpec(spec packmgr.ProcessSpec) packmgr.ProcessSpec {
-	spec.Args = append([]string(nil), spec.Args...)
-	spec.Env = append([]string(nil), spec.Env...)
+	spec.Args = slices.Clone(spec.Args)
+	spec.Env = slices.Clone(spec.Env)
 	return spec
 }
 
 func cloneToolSpecs(specs []registry.ToolSpec) []registry.ToolSpec {
-	cloned := append([]registry.ToolSpec(nil), specs...)
+	cloned := slices.Clone(specs)
 	for index := range cloned {
-		cloned[index].RequiredPermissions = append([]string(nil), cloned[index].RequiredPermissions...)
+		cloned[index].RequiredPermissions = slices.Clone(cloned[index].RequiredPermissions)
 	}
 	return cloned
 }
 
 func cloneCapabilitySpec(spec registry.CapabilitySpec) registry.CapabilitySpec {
-	spec.RequiredPermissions = append([]string(nil), spec.RequiredPermissions...)
+	spec.RequiredPermissions = slices.Clone(spec.RequiredPermissions)
 	return spec
 }
 
 func cloneInstalledService(spec registry.ServiceSpec) registry.ServiceSpec {
-	spec.ToolDependencies = append([]string(nil), spec.ToolDependencies...)
-	spec.RequestedPermissions = append([]string(nil), spec.RequestedPermissions...)
+	spec.ToolDependencies = slices.Clone(spec.ToolDependencies)
+	spec.RequestedPermissions = slices.Clone(spec.RequestedPermissions)
 	return spec
 }
 

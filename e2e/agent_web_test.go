@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	goruntime "runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -41,6 +42,12 @@ import (
 
 type integrationWebAuthenticator struct{}
 
+type integrationPromptRenderer struct{}
+
+func (integrationPromptRenderer) RenderSystemPrompt(_ context.Context, request kernelecho.PromptRenderRequest) (string, error) {
+	return request.BaseSystemPrompt, nil
+}
+
 func (integrationWebAuthenticator) Authenticate(*http.Request) (web.AuthenticatedWebIdentity, error) {
 	return web.AuthenticatedWebIdentity{
 		PlatformSpaceID: "web", PlatformUserID: "integration-user", PlatformSessionID: "integration-session",
@@ -48,6 +55,9 @@ func (integrationWebAuthenticator) Authenticate(*http.Request) (web.Authenticate
 }
 
 func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
+	if goruntime.GOOS != "linux" && goruntime.GOOS != "darwin" {
+		t.Skip("Python Agent 的受限模型密钥文件校验仅支持 Unix")
+	}
 	var modelTurns atomic.Int32
 	modelHandler := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.URL.Path == "/v1/models" {
@@ -134,6 +144,10 @@ func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 	// 取消必须先于关库，避免调度轮询打到已关闭的存储。
 	defer store.Close()
 	defer cancel()
+	secretPath := filepath.Join(t.TempDir(), "model-key")
+	if err := os.WriteFile(secretPath, []byte("test-key\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	// 内置 AI 执行者经 agent 包以 isolated Runtime 纳管：进程启动、健康、停止与内核同构。
 	logs := &strings.Builder{}
 	agentHost, err := agent.NewHost(agent.Config{
@@ -143,7 +157,7 @@ func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 				WorkDir:    root,
 				Address:    address,
 				Env: append(os.Environ(),
-					"AILUO_MODEL_API_KEY=test-key",
+					"AILUO_MODEL_API_KEY_FILE="+secretPath,
 					"AILUO_MODEL_BASE_URL="+modelServer.URL+"/v1",
 				),
 			}, nil
@@ -221,6 +235,7 @@ func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 		AppID:           campus.AppID,
 		AppConfigSource: store,
 		Context:         sessionService,
+		Prompts:         integrationPromptRenderer{},
 	})
 	if err := agent.Register(reg, orchestrator); err != nil {
 		t.Fatal(err)

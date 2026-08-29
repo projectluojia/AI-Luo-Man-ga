@@ -39,10 +39,14 @@ type Service struct {
 }
 
 func NewService(catalog promptcatalog.Catalog, settings SettingsStore) *Service {
-	if catalog.IsZero() {
-		catalog = promptcatalog.Default()
+	if settings == nil {
+		panic("prompt service requires a settings store")
 	}
-	return &Service{catalog: catalog, settings: settings}
+	normalizedCatalog, err := promptcatalog.Normalize(catalog)
+	if err != nil {
+		panic("prompt service requires a valid catalog")
+	}
+	return &Service{catalog: normalizedCatalog, settings: settings}
 }
 
 // RenderSystemPrompt 按用户偏好渲染基础提示 + 个性化片段 + 渠道提示。
@@ -54,11 +58,14 @@ func (s *Service) RenderSystemPrompt(ctx context.Context, request RenderRequest)
 		return "", ErrInvalid
 	}
 	settings := DefaultSettings(request.UserID)
-	if request.UserID != "" && s.settings != nil {
+	if request.UserID != "" {
 		stored, err := s.settings.GetPromptSettings(ctx, request.AppID, request.UserID)
 		switch {
 		case err == nil:
-			settings = NormalizeSettings(stored)
+			settings, err = NormalizeSettings(stored)
+			if err != nil {
+				return "", err
+			}
 		case errors.Is(err, ErrNotFound):
 		// 未设置过：继续使用默认偏好。
 		default:
@@ -81,11 +88,7 @@ func (s *Service) RenderSystemPrompt(ctx context.Context, request RenderRequest)
 }
 
 func (s *Service) renderBasicStyle(settings Settings) string {
-	key, err := NormalizeBasicStyle(settings.BasicStyle)
-	if err != nil {
-		key = "default"
-	}
-	style, ok := s.basicStyle(key)
+	style, ok := s.basicStyle(settings.BasicStyle)
 	if !ok {
 		return ""
 	}
@@ -126,8 +129,10 @@ func traitText(trait promptcatalog.ExtraTrait, level string) (string, bool) {
 		return trait.Enhanced, trait.Enhanced != ""
 	case "reduced":
 		return trait.Reduced, trait.Reduced != ""
-	default:
+	case "default":
 		return trait.Default, trait.Default != ""
+	default:
+		return "", false
 	}
 }
 
@@ -136,9 +141,6 @@ func (s *Service) Settings(ctx context.Context, appID, userID string) (Settings,
 	if userID == "" {
 		return Settings{}, fmt.Errorf("%w: user is required", ErrInvalid)
 	}
-	if s.settings == nil {
-		return DefaultSettings(userID), nil
-	}
 	stored, err := s.settings.GetPromptSettings(ctx, appID, userID)
 	if errors.Is(err, ErrNotFound) {
 		return DefaultSettings(userID), nil
@@ -146,32 +148,25 @@ func (s *Service) Settings(ctx context.Context, appID, userID string) (Settings,
 	if err != nil {
 		return Settings{}, err
 	}
-	return NormalizeSettings(stored), nil
+	return NormalizeSettings(stored)
 }
 
-// SetSettings 保存用户偏好。输入先归一化，未知键回退默认。
+// SetSettings 保存用户偏好。输入先校验并归一化为稳定键。
 func (s *Service) SetSettings(ctx context.Context, appID, userID string, basicStyle string, extraTraitLevels map[string]string) (Settings, error) {
-	if s.settings == nil || userID == "" {
+	if userID == "" {
 		return Settings{}, fmt.Errorf("%w: user is required", ErrInvalid)
 	}
-	if basicStyle != "" {
-		if _, err := NormalizeBasicStyle(basicStyle); err != nil {
-			return Settings{}, err
-		}
+	if basicStyle == "" {
+		basicStyle = "default"
 	}
-	for rawTrait, rawLevel := range extraTraitLevels {
-		if _, err := NormalizeTraitKey(rawTrait); err != nil {
-			return Settings{}, err
-		}
-		if _, err := NormalizeLevel(rawLevel); err != nil {
-			return Settings{}, err
-		}
-	}
-	settings := NormalizeSettings(Settings{
+	settings, err := NormalizeSettings(Settings{
 		UserID:           userID,
 		BasicStyle:       basicStyle,
 		ExtraTraitLevels: extraTraitLevels,
 	})
+	if err != nil {
+		return Settings{}, err
+	}
 	if err := s.settings.SavePromptSettings(ctx, appID, settings); err != nil {
 		return Settings{}, err
 	}
@@ -180,7 +175,7 @@ func (s *Service) SetSettings(ctx context.Context, appID, userID string, basicSt
 
 // ResetSettings 清除用户偏好，之后恢复默认。
 func (s *Service) ResetSettings(ctx context.Context, appID, userID string) error {
-	if s.settings == nil || userID == "" {
+	if userID == "" {
 		return fmt.Errorf("%w: user is required", ErrInvalid)
 	}
 	if err := s.settings.DeletePromptSettings(ctx, appID, userID); err != nil && !errors.Is(err, ErrNotFound) {

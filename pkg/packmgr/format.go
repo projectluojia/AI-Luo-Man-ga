@@ -140,8 +140,3 @@ func EqualHostedFunctions(left, right []HostedFunctionDecl) bool {
 	}
 	return true
 }
-
-// CloneHostedFunctions 返回声明的副本。
-func CloneHostedFunctions(decls []HostedFunctionDecl) []HostedFunctionDecl {
-	return append([]HostedFunctionDecl(nil), decls...)
-}

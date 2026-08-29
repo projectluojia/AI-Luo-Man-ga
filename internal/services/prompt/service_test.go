@@ -29,7 +29,10 @@ func (m *memorySettingsStore) GetPromptSettings(_ context.Context, appID, userID
 }
 
 func (m *memorySettingsStore) SavePromptSettings(_ context.Context, appID string, settings Settings) error {
-	settings = NormalizeSettings(settings)
+	settings, err := NormalizeSettings(settings)
+	if err != nil {
+		return err
+	}
 	m.values[m.key(appID, settings.UserID)] = settings
 	return nil
 }
@@ -72,10 +75,10 @@ func TestRenderAppliesStoredUserPreferences(t *testing.T) {
 	service := NewService(promptcatalog.Default(), store)
 	if err := store.SavePromptSettings(t.Context(), "campus-services", Settings{
 		UserID:     "user-1",
-		BasicStyle: "专业可靠",
+		BasicStyle: "professional",
 		ExtraTraitLevels: map[string]string{
-			"表情符号":  "增强",
-			"标题和列表": "减弱",
+			"emoji":          "enhanced",
+			"headings_lists": "reduced",
 		},
 	}); err != nil {
 		t.Fatal(err)
