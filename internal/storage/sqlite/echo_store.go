@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -20,11 +19,11 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/publicerror"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/session"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/capability"
 )
 
 var (
 	runIdentifierPattern = id.StableMixed
-	capabilityIDPattern  = id.StableLower
 	permissionIDPattern  = id.Permission
 )
 
@@ -1182,8 +1181,8 @@ func queryRun(scanner rowScanner) (kernelecho.RunRecord, error) {
 	if len(capabilityScope) > 65536 || len(permissionScope) > 65536 ||
 		json.Unmarshal([]byte(capabilityScope), &run.CapabilityScope) != nil ||
 		json.Unmarshal([]byte(permissionScope), &run.PermissionScope) != nil ||
-		!validCanonicalScope(run.CapabilityScope, executor.MaxCapabilities, capabilityIDPattern) ||
-		!validCanonicalScope(run.PermissionScope, 256, permissionIDPattern) {
+		!validCanonicalScope(run.CapabilityScope, executor.MaxCapabilities, capability.IsStableID) ||
+		!validCanonicalScope(run.PermissionScope, 256, permissionIDPattern.MatchString) {
 		return kernelecho.RunRecord{}, kernelecho.ErrInvalidRunRecord
 	}
 	var err error
@@ -1251,8 +1250,8 @@ func validateNewRun(echo kernelecho.Record, run kernelecho.RunRecord) error {
 		(run.MessageID != "" && !session.ValidStableID(run.MessageID)) ||
 		run.ContextDigest != "" || // 上下文在执行开始时由 SetRunContext 一次性固化
 		(len(run.ContextSources) != 0 && !json.Valid(run.ContextSources)) ||
-		!validCanonicalScope(run.CapabilityScope, executor.MaxCapabilities, capabilityIDPattern) ||
-		!validCanonicalScope(run.PermissionScope, 256, permissionIDPattern) {
+		!validCanonicalScope(run.CapabilityScope, executor.MaxCapabilities, capability.IsStableID) ||
+		!validCanonicalScope(run.PermissionScope, 256, permissionIDPattern.MatchString) {
 		return kernelecho.ErrInvalidRunRecord
 	}
 	if root {
@@ -1276,12 +1275,12 @@ func nonNilStrings(values []string) []string {
 	return values
 }
 
-func validCanonicalScope(values []string, maximum int, pattern *regexp.Regexp) bool {
+func validCanonicalScope(values []string, maximum int, valid func(string) bool) bool {
 	if len(values) > maximum || !sort.StringsAreSorted(values) {
 		return false
 	}
 	for index, value := range values {
-		if !pattern.MatchString(value) || (index > 0 && values[index-1] == value) {
+		if !valid(value) || (index > 0 && values[index-1] == value) {
 			return false
 		}
 	}

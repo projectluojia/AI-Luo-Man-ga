@@ -45,12 +45,6 @@ type Enqueuer interface {
 	Enqueue(context.Context, string)
 }
 
-// Controller 是访问层通知和取消 Echo 所需的调度端口。
-type Controller interface {
-	Enqueuer
-	Canceller
-}
-
 // SchedulerOption 配置持久 Run 调度器。
 type SchedulerOption func(*Scheduler)
 

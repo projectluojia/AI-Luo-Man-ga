@@ -17,7 +17,7 @@ var reservedKeywords = stringSet(
 	"False None True and as assert async await break class continue def del elif else except finally for from global if import in is lambda nonlocal not or pass raise return try while with yield " +
 		"case catch const debugger default delete do enum export extends false function instanceof new null super switch this throw true typeof var void implements interface let package private protected public static")
 
-// validateCapabilityID 校验 capability ID 符合内核 StableLower 格式。
+// validateCapabilityID 校验 capability ID 符合公共契约格式。
 func validateCapabilityID(id string) error {
 	if !capability.IsStableID(id) {
 		return fmt.Errorf("sdkgen: capability id %q 不合法（需小写字母/数字，点/下划线/连字符分段）", id)
