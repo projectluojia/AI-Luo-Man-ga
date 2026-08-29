@@ -172,12 +172,10 @@ func (s *Store) SetTimetableActive(ctx context.Context, appID, userID, timetable
 		return timetable.Timetable{}, err
 	}
 	defer s.finishTx(tx, &resultErr, "activate timetable")
-	res, err := tx.ExecContext(ctx, `UPDATE timetables SET active=0,updated_at=? WHERE app_id=? AND user_id=? AND active=1`, now.Format(time.RFC3339Nano), appID, userID)
-	if err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE timetables SET active=0,updated_at=? WHERE app_id=? AND user_id=? AND active=1`, now.Format(time.RFC3339Nano), appID, userID); err != nil {
 		return timetable.Timetable{}, err
 	}
-	_ = res
-	res, err = tx.ExecContext(ctx, `UPDATE timetables SET active=1,updated_at=? WHERE app_id=? AND user_id=? AND timetable_id=?`, now.Format(time.RFC3339Nano), appID, userID, timetableID)
+	res, err := tx.ExecContext(ctx, `UPDATE timetables SET active=1,updated_at=? WHERE app_id=? AND user_id=? AND timetable_id=?`, now.Format(time.RFC3339Nano), appID, userID, timetableID)
 	if err != nil {
 		return timetable.Timetable{}, err
 	}

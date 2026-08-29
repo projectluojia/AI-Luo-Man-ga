@@ -21,7 +21,7 @@ const (
 	TimetableUpdateToolID   = "timetable.update"
 	TimetableDeleteToolID   = "timetable.delete"
 	TimetableActivateToolID = "timetable.activate"
-	CourseListToolID        = "timetable.courses.list"
+	CourseListToolID        = "timetable.course.list"
 	CourseGetToolID         = "timetable.course.get"
 	CourseCreateToolID      = "timetable.course.create"
 	CourseUpdateToolID      = "timetable.course.update"

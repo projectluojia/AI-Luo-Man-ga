@@ -15,7 +15,7 @@ const (
 	UpdateCapabilityID       = "timetable.update"
 	DeleteCapabilityID       = "timetable.delete"
 	ActivateCapabilityID     = "timetable.activate"
-	CourseListCapabilityID   = "timetable.courses.list"
+	CourseListCapabilityID   = "timetable.course.list"
 	CourseGetCapabilityID    = "timetable.course.get"
 	CourseCreateCapabilityID = "timetable.course.create"
 	CourseUpdateCapabilityID = "timetable.course.update"

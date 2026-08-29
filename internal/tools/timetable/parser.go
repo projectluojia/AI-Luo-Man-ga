@@ -190,9 +190,10 @@ func parseWakeUpLegacy(content string) (ImportData, error) {
 		}
 		typeValue, _ := integerRaw(detail.Type)
 		suffix := ""
-		if typeValue == 1 {
+		switch typeValue {
+		case 1:
 			suffix = "单"
-		} else if typeValue == 2 {
+		case 2:
 			suffix = "双"
 		}
 		startWeek := 1
