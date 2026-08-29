@@ -15,6 +15,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/capability"
 	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
 )
 
@@ -175,20 +176,20 @@ func writeInstalledFixture(t *testing.T, root, pkgID, mode string, unknown bool)
 		t.Fatal(err)
 	}
 	extensions, err := json.Marshal(map[string]any{
-		"tools": []registry.ToolSpec{{
+		"tools": []capability.ToolSpec{{
 			ID: "extension.read", Version: "1.0.0", Description: "读取扩展数据",
 			InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
-			SideEffect:      registry.SideEffectRead,
+			SideEffect:      capability.SideEffectRead,
 		}},
-		"service": registry.ServiceSpec{
+		"service": capability.ServiceSpec{
 			ID: "extension", Version: "1.0.0", Description: "测试扩展",
 			ToolDependencies: []string{"extension.read"},
 		},
-		"capabilities": []registry.CapabilitySpec{{
+		"capabilities": []capability.CapabilitySpec{{
 			ID: "extension.query", Version: "1.0.0", Name: "扩展查询",
 			Description: "查询扩展", ServiceID: "extension",
 			InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
-			SideEffect:      registry.SideEffectRead,
+			SideEffect:      capability.SideEffectRead,
 		}},
 	})
 	if err != nil {
@@ -276,20 +277,20 @@ func writeDeclaredFixture(t *testing.T, root, runtimeID string, decls []packmgr.
 		t.Fatal(err)
 	}
 	extensions, err := json.Marshal(map[string]any{
-		"tools": []registry.ToolSpec{{
+		"tools": []capability.ToolSpec{{
 			ID: "extension.read", Version: "1.0.0", Description: "读取扩展数据",
 			InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
-			SideEffect:      registry.SideEffectRead,
+			SideEffect:      capability.SideEffectRead,
 		}},
-		"service": registry.ServiceSpec{
+		"service": capability.ServiceSpec{
 			ID: "extension", Version: "1.0.0", Description: "测试扩展",
 			ToolDependencies: []string{"extension.read"},
 		},
-		"capabilities": []registry.CapabilitySpec{{
+		"capabilities": []capability.CapabilitySpec{{
 			ID: "extension.query", Version: "1.0.0", Name: "扩展查询",
 			Description: "查询扩展", ServiceID: "extension",
 			InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
-			SideEffect:      registry.SideEffectRead,
+			SideEffect:      capability.SideEffectRead,
 		}},
 	})
 	if err != nil {
@@ -414,17 +415,17 @@ func TestInstalledCatalogRejectsInvalidDeclarations(t *testing.T) {
 					t.Fatal(err)
 				}
 				extensions, err := json.Marshal(map[string]any{
-					"tools": []registry.ToolSpec{{
+					"tools": []capability.ToolSpec{{
 						ID: "extension.read", Version: "1.0.0", Description: "读取扩展数据",
 						InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
-						SideEffect:      registry.SideEffectRead,
+						SideEffect:      capability.SideEffectRead,
 					}},
-					"service": registry.ServiceSpec{ID: "extension", Version: "1.0.0", Description: "测试扩展"},
-					"capabilities": []registry.CapabilitySpec{{
+					"service": capability.ServiceSpec{ID: "extension", Version: "1.0.0", Description: "测试扩展"},
+					"capabilities": []capability.CapabilitySpec{{
 						ID: "extension.query", Version: "1.0.0", Name: "扩展查询",
 						Description: "查询扩展", ServiceID: "extension",
 						InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
-						SideEffect:      registry.SideEffectRead,
+						SideEffect:      capability.SideEffectRead,
 					}},
 				})
 				if err != nil {
@@ -483,17 +484,17 @@ func TestInstalledCatalogRejectsInvalidDeclarations(t *testing.T) {
 					Role: loader.RoleCapability, LockedDigest: digest,
 					HostFunctions: tc.decls,
 				},
-				Tools: []registry.ToolSpec{{
+				Tools: []capability.ToolSpec{{
 					ID: "extension.read", Version: "1.0.0", Description: "读取扩展数据",
 					InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
-					SideEffect:      registry.SideEffectRead,
+					SideEffect:      capability.SideEffectRead,
 				}},
-				Service: registry.ServiceSpec{ID: "extension", Version: "1.0.0", Description: "测试扩展"},
-				Capabilities: []registry.CapabilitySpec{{
+				Service: capability.ServiceSpec{ID: "extension", Version: "1.0.0", Description: "测试扩展"},
+				Capabilities: []capability.CapabilitySpec{{
 					ID: "extension.query", Version: "1.0.0", Name: "扩展查询",
 					Description: "查询扩展", ServiceID: "extension",
 					InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
-					SideEffect:      registry.SideEffectRead,
+					SideEffect:      capability.SideEffectRead,
 				}},
 				Storage: tc.storage,
 			}

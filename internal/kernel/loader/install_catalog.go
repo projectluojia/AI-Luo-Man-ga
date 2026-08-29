@@ -14,6 +14,7 @@ import (
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/capability"
 	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
 )
 
@@ -33,9 +34,9 @@ var (
 // 中性包清单只保留语言/宿主无关的核心字段，Tool/Service/Capability 语义由
 // 内核解释并严格解码，未知字段与重复键一律拒绝。
 type aiLuoExtensions struct {
-	Tools        []registry.ToolSpec       `json:"tools"`
-	Service      registry.ServiceSpec      `json:"service"`
-	Capabilities []registry.CapabilitySpec `json:"capabilities"`
+	Tools        []capability.ToolSpec       `json:"tools"`
+	Service      capability.ServiceSpec      `json:"service"`
+	Capabilities []capability.CapabilitySpec `json:"capabilities"`
 }
 
 // InstalledRecord 是安装目录中单个组件（运行单元）的内核记录。
@@ -48,9 +49,9 @@ type InstalledRecord struct {
 	ComponentID  string
 	// ComponentOrder 是该组件在包内的依赖拓扑序号（Provider 小号在前）。
 	ComponentOrder int
-	Tools          []registry.ToolSpec
-	Service        registry.ServiceSpec
-	Capabilities   []registry.CapabilitySpec
+	Tools          []capability.ToolSpec
+	Service        capability.ServiceSpec
+	Capabilities   []capability.CapabilitySpec
 	Process        *packmgr.ProcessSpec
 	Storage        *packmgr.Storage
 }
@@ -276,7 +277,7 @@ func (c *Catalog) readPackage(ctx context.Context, directory string) ([]Installe
 		for _, capabilityID := range component.Exports {
 			exported[capabilityID] = struct{}{}
 		}
-		capabilities := make([]registry.CapabilitySpec, 0, len(component.Exports))
+		capabilities := make([]capability.CapabilitySpec, 0, len(component.Exports))
 		for _, spec := range extensions.Capabilities {
 			if _, isExport := exported[spec.ID]; isExport {
 				capabilities = append(capabilities, cloneCapabilitySpec(spec))
@@ -324,7 +325,7 @@ func RegisterInstalled(ctx context.Context, manager *Manager, target *registry.R
 		entry := serviceByPackage[record.PackageID]
 		if entry.Capabilities == nil {
 			entry.Capabilities = make(map[string]struct {
-				Spec    registry.CapabilitySpec
+				Spec    capability.CapabilitySpec
 				Handler registry.Handler
 			})
 		}
@@ -333,7 +334,7 @@ func RegisterInstalled(ctx context.Context, manager *Manager, target *registry.R
 		}
 		for _, spec := range record.Capabilities {
 			entry.Capabilities[spec.ID] = struct {
-				Spec    registry.CapabilitySpec
+				Spec    capability.CapabilitySpec
 				Handler registry.Handler
 			}{Spec: spec, Handler: handler}
 		}
@@ -406,12 +407,12 @@ func validateInstalledRecords(records []InstalledRecord) error {
 			tools = append(tools, registry.ToolRegistration{Spec: spec, Handler: noopInstalledHandler})
 		}
 		capabilities := make(map[string]struct {
-			Spec    registry.CapabilitySpec
+			Spec    capability.CapabilitySpec
 			Handler registry.Handler
 		}, len(record.Capabilities))
 		for _, spec := range record.Capabilities {
 			capabilities[spec.ID] = struct {
-				Spec    registry.CapabilitySpec
+				Spec    capability.CapabilitySpec
 				Handler registry.Handler
 			}{Spec: spec, Handler: noopInstalledHandler}
 		}
@@ -498,7 +499,7 @@ func cloneProcessSpec(spec packmgr.ProcessSpec) packmgr.ProcessSpec {
 	return spec
 }
 
-func cloneToolSpecs(specs []registry.ToolSpec) []registry.ToolSpec {
+func cloneToolSpecs(specs []capability.ToolSpec) []capability.ToolSpec {
 	cloned := slices.Clone(specs)
 	for index := range cloned {
 		cloned[index].RequiredPermissions = slices.Clone(cloned[index].RequiredPermissions)
@@ -506,12 +507,12 @@ func cloneToolSpecs(specs []registry.ToolSpec) []registry.ToolSpec {
 	return cloned
 }
 
-func cloneCapabilitySpec(spec registry.CapabilitySpec) registry.CapabilitySpec {
+func cloneCapabilitySpec(spec capability.CapabilitySpec) capability.CapabilitySpec {
 	spec.RequiredPermissions = slices.Clone(spec.RequiredPermissions)
 	return spec
 }
 
-func cloneInstalledService(spec registry.ServiceSpec) registry.ServiceSpec {
+func cloneInstalledService(spec capability.ServiceSpec) capability.ServiceSpec {
 	spec.ToolDependencies = slices.Clone(spec.ToolDependencies)
 	spec.RequestedPermissions = slices.Clone(spec.RequestedPermissions)
 	return spec

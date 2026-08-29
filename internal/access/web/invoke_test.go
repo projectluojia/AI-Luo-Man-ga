@@ -17,6 +17,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime/runtimetest"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/capability"
 )
 
 const pingSchema = `{"type":"object","properties":{"text":{"type":"string","minLength":1}},"required":["text"],"additionalProperties":false}`
@@ -46,24 +47,24 @@ func newInvokeServerWithResolver(t *testing.T, resolver access.IdentityResolver)
 func registerPing(t *testing.T, reg *registry.Registry, policy *runtimetest.StaticAppPolicy) {
 	t.Helper()
 	err := reg.RegisterService(registry.ServiceRegistration{
-		Spec: registry.ServiceSpec{ID: "echo", Version: "1.0.0", Description: "echo service"},
+		Spec: capability.ServiceSpec{ID: "echo", Version: "1.0.0", Description: "echo service"},
 		Capabilities: map[string]struct {
-			Spec    registry.CapabilitySpec
+			Spec    capability.CapabilitySpec
 			Handler registry.Handler
 		}{
 			"echo.ping": {
-				Spec: registry.CapabilitySpec{
+				Spec: capability.CapabilitySpec{
 					ID: "echo.ping", Version: "1.0.0", ServiceID: "echo",
-					Name: "echo", InputSchemaJSON: pingSchema, SideEffect: registry.SideEffectRead,
+					Name: "echo", InputSchemaJSON: pingSchema, SideEffect: capability.SideEffectRead,
 				},
 				Handler: func(_ context.Context, _ contracts.RequestContext, payload json.RawMessage) (json.RawMessage, error) {
 					return json.RawMessage(`{"echo":` + string(payload) + `}`), nil
 				},
 			},
 			"echo.hidden": {
-				Spec: registry.CapabilitySpec{
+				Spec: capability.CapabilitySpec{
 					ID: "echo.hidden", Version: "1.0.0", ServiceID: "echo",
-					Name: "hidden", InputSchemaJSON: pingSchema, SideEffect: registry.SideEffectRead,
+					Name: "hidden", InputSchemaJSON: pingSchema, SideEffect: capability.SideEffectRead,
 				},
 				Handler: func(_ context.Context, _ contracts.RequestContext, _ json.RawMessage) (json.RawMessage, error) {
 					return json.RawMessage(`{"ok":true}`), nil
@@ -252,15 +253,15 @@ func newGovernedWriteServer(t *testing.T, resolver access.IdentityResolver, stor
 	reg := registry.New()
 	policy := runtimetest.NewStaticAppPolicy()
 	if err := reg.RegisterService(registry.ServiceRegistration{
-		Spec: registry.ServiceSpec{ID: "echo", Version: "1.0.0", Description: "echo service", RequestedPermissions: []string{"echo.write"}},
+		Spec: capability.ServiceSpec{ID: "echo", Version: "1.0.0", Description: "echo service", RequestedPermissions: []string{"echo.write"}},
 		Capabilities: map[string]struct {
-			Spec    registry.CapabilitySpec
+			Spec    capability.CapabilitySpec
 			Handler registry.Handler
 		}{
 			"echo.write": {
-				Spec: registry.CapabilitySpec{
+				Spec: capability.CapabilitySpec{
 					ID: "echo.write", Version: "1.0.0", ServiceID: "echo",
-					InputSchemaJSON: pingSchema, SideEffect: registry.SideEffectWrite,
+					InputSchemaJSON: pingSchema, SideEffect: capability.SideEffectWrite,
 					RequiresConfirmation: true, RequiredPermissions: []string{"echo.write"},
 				},
 				Handler: handler,

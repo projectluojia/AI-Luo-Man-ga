@@ -9,6 +9,8 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/capability"
 )
 
 // Package 是分发、版本与升级单位；Component 是运行单元，每个组件恰好一种
@@ -87,8 +89,7 @@ type InstalledRecord struct {
 // ValidateManifest 校验包清单：组件唯一性、mode/entrypoint 闭合、imports/exports
 // 标识合法、依赖拓扑无环。宿主扩展段在宿主解析时严格解码。
 func ValidateManifest(manifest Manifest) error {
-	if manifest.SchemaVersion != SchemaVersion || !stableLowerPattern.MatchString(manifest.ID) ||
-		len(manifest.ID) > 128 {
+	if manifest.SchemaVersion != SchemaVersion || !capability.IsStableID(manifest.ID) {
 		return ErrInvalidFormat
 	}
 	if _, err := ParseVersion(manifest.Version); err != nil {
@@ -115,7 +116,7 @@ func ValidateManifest(manifest Manifest) error {
 	}
 	seenComponents := make(map[string]struct{}, len(manifest.Components))
 	for _, component := range manifest.Components {
-		if !stableLowerPattern.MatchString(component.ID) || len(component.ID) > 128 {
+		if !capability.IsStableID(component.ID) {
 			return ErrInvalidFormat
 		}
 		if _, duplicate := seenComponents[component.ID]; duplicate {
@@ -130,7 +131,7 @@ func ValidateManifest(manifest Manifest) error {
 			return ErrInvalidFormat
 		}
 		for _, id := range append(append([]string(nil), component.Exports...), component.Imports...) {
-			if !stableLowerPattern.MatchString(id) || len(id) > 128 {
+			if !capability.IsStableID(id) {
 				return ErrInvalidFormat
 			}
 		}
@@ -205,8 +206,7 @@ func ComponentOrder(components []Component) ([]string, error) {
 // 进程规格闭合。
 func ValidateLock(lock Lock, manifest Manifest) error {
 	if lock.SchemaVersion != SchemaVersion || lock.PackageID != manifest.ID ||
-		lock.PackageVersion != manifest.Version || !stableLowerPattern.MatchString(lock.PackageID) ||
-		len(lock.PackageID) > 128 {
+		lock.PackageVersion != manifest.Version || !capability.IsStableID(lock.PackageID) {
 		return ErrInvalidFormat
 	}
 	if _, err := ParseVersion(lock.PackageVersion); err != nil {

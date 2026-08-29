@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/capability"
 )
 
 // 安装根内的内部工作目录前缀：Install 的阶段目录与旧版本备份目录都建在安装根
@@ -208,7 +210,7 @@ func defaultProcessSpec(componentID, artifactPath, workDir string) *ProcessSpec 
 
 // Upgrade 要求包已安装且源目录版本号不同，然后安装。
 func Upgrade(ctx context.Context, root, id, sourceDir string) (InstalledRecord, error) {
-	if root == "" || !stableLowerPattern.MatchString(id) {
+	if root == "" || !capability.IsStableID(id) {
 		return InstalledRecord{}, fmt.Errorf("包 %q 标识非法", id)
 	}
 	absoluteRoot, err := filepath.Abs(root)
@@ -237,7 +239,7 @@ func Upgrade(ctx context.Context, root, id, sourceDir string) (InstalledRecord, 
 
 // Uninstall 删除已安装包目录。仅当目录包含 manifest.json 时删除（安全防护）。
 func Uninstall(ctx context.Context, root, id string) error {
-	if root == "" || !stableLowerPattern.MatchString(id) {
+	if root == "" || !capability.IsStableID(id) {
 		return fmt.Errorf("包 %q 标识非法", id)
 	}
 	absoluteRoot, err := filepath.Abs(root)

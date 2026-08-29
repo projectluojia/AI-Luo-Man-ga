@@ -19,6 +19,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/capability"
 	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
 )
 
@@ -183,14 +184,14 @@ func writeMainInstalledFixture(t *testing.T) string {
 		t.Fatal(err)
 	}
 	extensions, err := json.Marshal(map[string]any{
-		"service": registry.ServiceSpec{
+		"service": capability.ServiceSpec{
 			ID: "main.extension", Version: "1.0.0", Description: "主程序扩展接线测试",
 		},
-		"capabilities": []registry.CapabilitySpec{{
+		"capabilities": []capability.CapabilitySpec{{
 			ID: "main.extension.query", Version: "1.0.0", Name: "扩展查询",
 			Description: "查询测试扩展", ServiceID: "main.extension",
 			InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
-			SideEffect:      registry.SideEffectRead,
+			SideEffect:      capability.SideEffectRead,
 		}},
 	})
 	if err != nil {

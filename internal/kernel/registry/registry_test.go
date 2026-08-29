@@ -10,6 +10,7 @@ import (
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/capability"
 )
 
 func TestRegisterServiceRequiresDeclaredTools(t *testing.T) {
@@ -47,9 +48,9 @@ func TestRegisterBatchPublishesAllOrNothing(t *testing.T) {
 
 	reg := registry.New()
 	tool := registry.ToolRegistration{
-		Spec: registry.ToolSpec{
+		Spec: capability.ToolSpec{
 			ID: "tool-a", Version: "1.0.0",
-			InputSchemaJSON: strictEmptySchema, SideEffect: registry.SideEffectRead,
+			InputSchemaJSON: strictEmptySchema, SideEffect: capability.SideEffectRead,
 		},
 		Handler: noopHandler,
 	}
@@ -139,51 +140,51 @@ func TestRegisterToolRejectsInvalidContracts(t *testing.T) {
 	}
 	tests := []struct {
 		name string
-		spec registry.ToolSpec
+		spec capability.ToolSpec
 	}{
 		{
 			name: "invalid id",
-			spec: registry.ToolSpec{ID: "Tool A", Version: "1.0.0", InputSchemaJSON: strictEmptySchema, SideEffect: registry.SideEffectRead},
+			spec: capability.ToolSpec{ID: "Tool A", Version: "1.0.0", InputSchemaJSON: strictEmptySchema, SideEffect: capability.SideEffectRead},
 		},
 		{
 			name: "invalid semantic version",
-			spec: registry.ToolSpec{ID: "tool-a", Version: "1.0.0-01", InputSchemaJSON: strictEmptySchema, SideEffect: registry.SideEffectRead},
+			spec: capability.ToolSpec{ID: "tool-a", Version: "1.0.0-01", InputSchemaJSON: strictEmptySchema, SideEffect: capability.SideEffectRead},
 		},
 		{
 			name: "unknown side effect",
-			spec: registry.ToolSpec{ID: "tool-a", Version: "1.0.0", InputSchemaJSON: strictEmptySchema, SideEffect: "maybe"},
+			spec: capability.ToolSpec{ID: "tool-a", Version: "1.0.0", InputSchemaJSON: strictEmptySchema, SideEffect: "maybe"},
 		},
 		{
 			name: "read confirmation",
-			spec: registry.ToolSpec{ID: "tool-a", Version: "1.0.0", InputSchemaJSON: strictEmptySchema, SideEffect: registry.SideEffectRead, RequiresConfirmation: true},
+			spec: capability.ToolSpec{ID: "tool-a", Version: "1.0.0", InputSchemaJSON: strictEmptySchema, SideEffect: capability.SideEffectRead, RequiresConfirmation: true},
 		},
 		{
 			name: "missing schema",
-			spec: registry.ToolSpec{ID: "tool-a", Version: "1.0.0", SideEffect: registry.SideEffectRead},
+			spec: capability.ToolSpec{ID: "tool-a", Version: "1.0.0", SideEffect: capability.SideEffectRead},
 		},
 		{
 			name: "permissive root object",
-			spec: registry.ToolSpec{ID: "tool-a", Version: "1.0.0", InputSchemaJSON: `{"type":"object"}`, SideEffect: registry.SideEffectRead},
+			spec: capability.ToolSpec{ID: "tool-a", Version: "1.0.0", InputSchemaJSON: `{"type":"object"}`, SideEffect: capability.SideEffectRead},
 		},
 		{
 			name: "permissive nested object",
-			spec: registry.ToolSpec{ID: "tool-a", Version: "1.0.0", InputSchemaJSON: `{"type":"object","properties":{"nested":{"type":"object"}},"additionalProperties":false}`, SideEffect: registry.SideEffectRead},
+			spec: capability.ToolSpec{ID: "tool-a", Version: "1.0.0", InputSchemaJSON: `{"type":"object","properties":{"nested":{"type":"object"}},"additionalProperties":false}`, SideEffect: capability.SideEffectRead},
 		},
 		{
 			name: "implicit object type",
-			spec: registry.ToolSpec{ID: "tool-a", Version: "1.0.0", InputSchemaJSON: `{"type":"object","properties":{"nested":{"properties":{"value":{"type":"string"}},"additionalProperties":false}},"additionalProperties":false}`, SideEffect: registry.SideEffectRead},
+			spec: capability.ToolSpec{ID: "tool-a", Version: "1.0.0", InputSchemaJSON: `{"type":"object","properties":{"nested":{"properties":{"value":{"type":"string"}},"additionalProperties":false}},"additionalProperties":false}`, SideEffect: capability.SideEffectRead},
 		},
 		{
 			name: "external reference",
-			spec: registry.ToolSpec{ID: "tool-a", Version: "1.0.0", InputSchemaJSON: `{"type":"object","properties":{"value":{"$ref":"https://example.invalid/schema"}},"additionalProperties":false}`, SideEffect: registry.SideEffectRead},
+			spec: capability.ToolSpec{ID: "tool-a", Version: "1.0.0", InputSchemaJSON: `{"type":"object","properties":{"value":{"$ref":"https://example.invalid/schema"}},"additionalProperties":false}`, SideEffect: capability.SideEffectRead},
 		},
 		{
 			name: "duplicate schema key",
-			spec: registry.ToolSpec{ID: "tool-a", Version: "1.0.0", InputSchemaJSON: `{"type":"object","type":"object","additionalProperties":false}`, SideEffect: registry.SideEffectRead},
+			spec: capability.ToolSpec{ID: "tool-a", Version: "1.0.0", InputSchemaJSON: `{"type":"object","type":"object","additionalProperties":false}`, SideEffect: capability.SideEffectRead},
 		},
 		{
 			name: "duplicate permission",
-			spec: registry.ToolSpec{ID: "tool-a", Version: "1.0.0", InputSchemaJSON: strictEmptySchema, SideEffect: registry.SideEffectRead, RequiredPermissions: []string{"bus.read", "bus.read"}},
+			spec: capability.ToolSpec{ID: "tool-a", Version: "1.0.0", InputSchemaJSON: strictEmptySchema, SideEffect: capability.SideEffectRead, RequiredPermissions: []string{"bus.read", "bus.read"}},
 		},
 	}
 	for _, test := range tests {
@@ -208,15 +209,15 @@ func TestRegisterServiceCompilesAllSchemasBeforeAtomicCommit(t *testing.T) {
 	registerTool(t, reg, "tool-a")
 	registration := serviceRegistration("service-a", "capability-a", "tool-a")
 	registration.Capabilities["capability-b"] = struct {
-		Spec    registry.CapabilitySpec
+		Spec    capability.CapabilitySpec
 		Handler registry.Handler
 	}{
-		Spec: registry.CapabilitySpec{
+		Spec: capability.CapabilitySpec{
 			ID:              "capability-b",
 			Version:         "1.0.0",
 			ServiceID:       "service-a",
 			InputSchemaJSON: `{"type":"object"}`,
-			SideEffect:      registry.SideEffectRead,
+			SideEffect:      capability.SideEffectRead,
 		},
 		Handler: registration.Capabilities["capability-a"].Handler,
 	}
@@ -265,11 +266,11 @@ func TestRegisterServiceEnforcesPermissionEnvelope(t *testing.T) {
 
 	reg := registry.New()
 	if err := reg.RegisterTool(registry.ToolRegistration{
-		Spec: registry.ToolSpec{
+		Spec: capability.ToolSpec{
 			ID:                  "tool-a",
 			Version:             "1.0.0",
 			InputSchemaJSON:     strictEmptySchema,
-			SideEffect:          registry.SideEffectRead,
+			SideEffect:          capability.SideEffectRead,
 			RequiredPermissions: []string{"bus.read"},
 		},
 		Handler: noopHandler,
@@ -336,11 +337,11 @@ var noopHandler registry.Handler = func(context.Context, contracts.RequestContex
 func registerTool(t *testing.T, reg *registry.Registry, id string) {
 	t.Helper()
 	if err := reg.RegisterTool(registry.ToolRegistration{
-		Spec: registry.ToolSpec{
+		Spec: capability.ToolSpec{
 			ID:              id,
 			Version:         "1.0.0",
 			InputSchemaJSON: strictEmptySchema,
-			SideEffect:      registry.SideEffectRead,
+			SideEffect:      capability.SideEffectRead,
 		},
 		Handler: func(context.Context, contracts.RequestContext, json.RawMessage) (json.RawMessage, error) {
 			return nil, nil
@@ -355,22 +356,22 @@ func serviceRegistration(serviceID, capabilityID, toolID string) registry.Servic
 		return nil, nil
 	}
 	return registry.ServiceRegistration{
-		Spec: registry.ServiceSpec{
+		Spec: capability.ServiceSpec{
 			ID:               serviceID,
 			Version:          "1.0.0",
 			ToolDependencies: []string{toolID},
 		},
 		Capabilities: map[string]struct {
-			Spec    registry.CapabilitySpec
+			Spec    capability.CapabilitySpec
 			Handler registry.Handler
 		}{
 			capabilityID: {
-				Spec: registry.CapabilitySpec{
+				Spec: capability.CapabilitySpec{
 					ID:              capabilityID,
 					Version:         "1.0.0",
 					ServiceID:       serviceID,
 					InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
-					SideEffect:      registry.SideEffectRead,
+					SideEffect:      capability.SideEffectRead,
 				},
 				Handler: handler,
 			},
