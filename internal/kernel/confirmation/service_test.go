@@ -63,7 +63,7 @@ func openService(t *testing.T) (*confirmation.Service, *sqlite.Store, *fakeClock
 func seedEchoRun(t *testing.T, store *sqlite.Store, appID, echoID, runID string) {
 	t.Helper()
 	now := time.Now().UTC()
-	err := store.CreateEchoRun(context.Background(), kernelecho.Record{
+	_, _, err := store.CreateEchoRunIdempotentLimited(context.Background(), "confirmation-"+echoID, idempotency.Fingerprint([]byte("test-input")), kernelecho.Record{
 		ID: echoID, AppID: appID, InputMessage: "test-input",
 		Status: kernelecho.StatusRunning, CreatedAt: now,
 	}, kernelecho.RunRecord{
@@ -77,7 +77,7 @@ func seedEchoRun(t *testing.T, store *sqlite.Store, appID, echoID, runID string)
 		AvailableAt:       now,
 		CreatedAt:         now,
 		RecoverableState:  json.RawMessage(`{}`),
-	})
+	}, 0)
 	if err != nil {
 		t.Fatalf("seed echo/run: %v", err)
 	}

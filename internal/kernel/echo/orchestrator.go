@@ -1255,11 +1255,15 @@ func (o *Orchestrator) invokeCapabilityOnce(ctx context.Context, run RunRecord, 
 	if contextDeadline, ok := ctx.Deadline(); ok && contextDeadline.Before(deadline) {
 		deadline = contextDeadline
 	}
+	traceID := observe.String(ctx, "trace_id")
+	if traceID == "" {
+		traceID = echoID
+	}
 	request := contracts.RequestContext{
 		AppID:           o.config.AppID,
 		EchoID:          echoID,
 		RequestID:       requestID,
-		TraceID:         firstNonEmpty(observe.String(ctx, "trace_id"), echoID),
+		TraceID:         traceID,
 		UserID:          run.UserID,
 		SessionID:       run.SessionID,
 		RunID:           runID,
@@ -1483,13 +1487,4 @@ func (o *Orchestrator) completeRun(ctx context.Context, run RunRecord, runStatus
 
 func detachedContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if value != "" {
-			return value
-		}
-	}
-	return ""
 }

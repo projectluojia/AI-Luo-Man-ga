@@ -182,12 +182,10 @@ type CapabilityAuditRecord struct {
 
 type Store interface {
 	idempotency.Store
-	CreateEchoRun(ctx context.Context, echo Record, run RunRecord) error
 	CreateEchoRunIdempotentLimited(ctx context.Context, key, fingerprint string, echo Record, run RunRecord, maxPending int) (string, bool, error)
 	CreateChildRun(ctx context.Context, parent, child RunRecord, maxChildRuns int) error
 	ClaimRun(ctx context.Context, appID, echoID, leaseToken string, startedAt, leaseExpiresAt time.Time) (RunRecord, error)
 	ClaimChildRun(ctx context.Context, appID, echoID, runID, parentRunID, leaseToken string, startedAt, leaseExpiresAt time.Time) (RunRecord, error)
-	FailQueuedChildRun(ctx context.Context, child RunRecord, failure publicerror.Error, completedAt time.Time) error
 	RenewRunLease(ctx context.Context, run RunRecord, renewedAt, leaseExpiresAt time.Time) error
 	AdvanceRunAgentSequence(ctx context.Context, run RunRecord, sequence uint64) error
 	AdvanceRunAgentSequenceWithUsage(ctx context.Context, run RunRecord, sequence, inputTokens, outputTokens, totalTokens, costMicrousd uint64, providerRetries uint32) error
@@ -200,10 +198,8 @@ type Store interface {
 	AppendEchoEvent(ctx context.Context, event Event) (Event, error)
 	GetEcho(ctx context.Context, appID, echoID string) (Record, []Event, error)
 	GetRun(ctx context.Context, appID, runID string) (RunRecord, error)
-	ListRuns(ctx context.Context, appID, echoID string) ([]RunRecord, error)
 	ListQueuedRuns(ctx context.Context, appID string, limit int) ([]RunWork, error)
 	ListRunnableRuns(ctx context.Context, appID string, now time.Time, limit int) ([]RunWork, error)
 	FailAbandonedRuns(ctx context.Context, appID string, now time.Time) (int64, error)
 	RecordCapabilityCall(ctx context.Context, callID, runID, echoID, appID, capabilityID string, payload []byte, success bool, failure publicerror.Error, duration time.Duration) error
-	ListCapabilityCalls(ctx context.Context, appID, echoID string) ([]CapabilityAuditRecord, error)
 }

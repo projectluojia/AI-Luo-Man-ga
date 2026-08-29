@@ -3,7 +3,6 @@ package configui
 import (
 	"context"
 	"embed"
-	"encoding/json"
 	"errors"
 	"io/fs"
 	"net"
@@ -14,7 +13,6 @@ import (
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access"
 	config "github.com/projectluojia/AI-Luo-Man-ga/internal/controlplane/config"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/jsonutil"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
 )
 
@@ -99,12 +97,8 @@ func (s *Server) updateConfig(writer http.ResponseWriter, request *http.Request)
 	if !authorizeLocal(writer, request) {
 		return
 	}
-	request.Body = http.MaxBytesReader(writer, request.Body, 256<<10)
-	decoder := json.NewDecoder(request.Body)
-	decoder.DisallowUnknownFields()
 	var input SaveInput
-	if err := decoder.Decode(&input); err != nil || jsonutil.EnsureEOF(decoder) != nil {
-		access.WriteJSON(writer, http.StatusBadRequest, map[string]string{"code": "invalid_request", "message": "配置内容不是有效的 JSON 对象"})
+	if !access.DecodeJSONBody(writer, request, &input, 256<<10) {
 		return
 	}
 	snapshot, err := s.service.Save(input)

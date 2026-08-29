@@ -5,12 +5,10 @@ package ingress
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"time"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/jsonutil"
 	kernelecho "github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/identity"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
@@ -69,18 +67,8 @@ func (s *Server) ingest(writer http.ResponseWriter, request *http.Request) {
 		access.WriteJSON(writer, http.StatusBadRequest, map[string]string{"code": "invalid_request", "message": "平台标识不合法"})
 		return
 	}
-	request.Body = http.MaxBytesReader(writer, request.Body, maxEventBytes)
-	decoder := json.NewDecoder(request.Body)
-	decoder.DisallowUnknownFields()
 	var event Event
-	if err := decoder.Decode(&event); err != nil {
-		observe.Warn(request.Context(), "平台事件请求体解析失败", observe.StringAttr("reason", err.Error()))
-		access.WriteJSON(writer, http.StatusBadRequest, map[string]string{"code": "invalid_request", "message": "请求体不是有效的 JSON 对象"})
-		return
-	}
-	if err := jsonutil.EnsureEOF(decoder); err != nil {
-		observe.Warn(request.Context(), "平台事件请求体包含多余内容", observe.StringAttr("reason", err.Error()))
-		access.WriteJSON(writer, http.StatusBadRequest, map[string]string{"code": "invalid_request", "message": "请求体只能包含一个 JSON 对象"})
+	if !access.DecodeJSONBody(writer, request, &event, maxEventBytes) {
 		return
 	}
 	intake, err := s.hub.Intake(request.Context(), s.toInbound(platform, event))
