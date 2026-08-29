@@ -31,13 +31,13 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime/runtimetest"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/session"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/agent"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus/campustest"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/blob"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/memory"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite"
 	"github.com/projectluojia/AI-Luo-Man-ga/pkg/bus"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
 )
 
 type integrationWebAuthenticator struct{}
@@ -92,24 +92,24 @@ func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 		hasToolResult := strings.Contains(bodyText, `"role":"tool"`)
 		switch {
 		case !isChild && !hasToolResult:
-			if !strings.Contains(bodyText, "cap_agent_run") || !strings.Contains(bodyText, "cap_campus_bus_routes_list") {
+			if !strings.Contains(bodyText, "cap_run_create_child") || !strings.Contains(bodyText, "cap_campus_bus_routes_list") {
 				t.Errorf("root model request missing projected tools: %s", body)
 			}
-			writeTurn("one", `{"role":"assistant","tool_calls":[{"index":0,"id":"delegate-call","type":"function","function":{"name":"cap_agent_run","arguments":"{\"task\":\"查询校巴线路\",\"capability_ids\":[\"campus.bus.routes.list\"]}"}}]}`, "tool_calls", `{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12}`)
+			writeTurn("one", `{"role":"assistant","tool_calls":[{"index":0,"id":"delegate-call","type":"function","function":{"name":"cap_run_create_child","arguments":"{\"task\":\"查询校巴线路\",\"capability_ids\":[\"campus.bus.routes.list\"]}"}}]}`, "tool_calls", `{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12}`)
 		case !isChild && hasToolResult:
-			if !strings.Contains(bodyText, "cap_agent_run") || !strings.Contains(bodyText, `"role":"tool"`) {
+			if !strings.Contains(bodyText, "cap_run_create_child") || !strings.Contains(bodyText, `"role":"tool"`) {
 				t.Errorf("root follow-up request is invalid: %s", body)
 			}
 			writeTurn("two", `{"role":"assistant","content":"当前有一条测试线路。"}`, "stop", `{"prompt_tokens":20,"completion_tokens":3,"total_tokens":23}`)
 		case isChild && !hasToolResult:
-			if strings.Contains(bodyText, "cap_agent_run") ||
+			if strings.Contains(bodyText, "cap_run_create_child") ||
 				!strings.Contains(bodyText, "cap_campus_bus_routes_list") ||
 				!strings.Contains(bodyText, "查询校巴线路") {
 				t.Errorf("child model request has wrong projection or task: %s", body)
 			}
 			writeTurn("three", `{"role":"assistant","tool_calls":[{"index":0,"id":"child-route-call","type":"function","function":{"name":"cap_campus_bus_routes_list","arguments":"{\"limit\":10}"}}]}`, "tool_calls", `{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12}`)
 		case isChild && hasToolResult:
-			if strings.Contains(bodyText, "cap_agent_run") || !strings.Contains(bodyText, `"role":"tool"`) {
+			if strings.Contains(bodyText, "cap_run_create_child") || !strings.Contains(bodyText, `"role":"tool"`) {
 				t.Errorf("child follow-up request is invalid: %s", body)
 			}
 			writeTurn("four", `{"role":"assistant","content":"子任务确认一条测试线路。"}`, "stop", `{"prompt_tokens":20,"completion_tokens":3,"total_tokens":23}`)
@@ -148,69 +148,70 @@ func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 	if err := os.WriteFile(secretPath, []byte("test-key\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	// 内置 AI 执行者经 agent 包以 isolated Runtime 纳管：进程启动、健康、停止与内核同构。
+	// Python 执行者经通用 executor.v1 宿主纳管：进程启动、健康、停止由 Loader 负责。
 	logs := &strings.Builder{}
-	agentHost, err := agent.NewHost(agent.Config{
-		Resolve: func(context.Context) (agent.Spec, error) {
-			return agent.Spec{
-				PythonPath: agent.DefaultPythonPath(root),
-				WorkDir:    root,
-				Address:    address,
+	executorManifest := loader.Manifest{
+		ID: "ailuo.agent.test", Version: "1.0.0", Mode: loader.ModeIsolated,
+		Role:         loader.RoleExecutor,
+		LockedDigest: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+	}
+	executorHost, err := loader.NewExecutorHost(loader.ExecutorHostConfig{
+		Manifest: executorManifest,
+		Resolve: func(context.Context) (packmgr.ProcessSpec, error) {
+			return packmgr.ProcessSpec{
+				Path: filepath.Join(root, "agent", ".venv", "bin", "python"),
+				Args: []string{"-m", "agent.runtime", "--listen", address},
 				Env: append(os.Environ(),
 					"AILUO_MODEL_API_KEY_FILE="+secretPath,
 					"AILUO_MODEL_BASE_URL="+modelServer.URL+"/v1",
 				),
+				WorkDir: root, Address: address,
 			}, nil
 		},
-		Spawn:          true,
-		Model:          "test-model",
-		Stdout:         logs,
-		Stderr:         logs,
+		Spawn: true, Model: "test-model", Stdout: logs, Stderr: logs,
 		DialTimeout:    10 * time.Second,
 		StopGrace:      3 * time.Second,
 		TerminateGrace: 2 * time.Second,
 	})
 	if err != nil {
-		t.Fatalf("NewAgentHost: %v", err)
+		t.Fatalf("NewExecutorHost: %v", err)
 	}
-	agentManager, err := loader.New(agentHost)
+	executorManager, err := loader.New(executorHost)
 	if err != nil {
-		t.Fatalf("new agent manager: %v", err)
+		t.Fatalf("new executor manager: %v", err)
 	}
 	reg := registry.New()
-	// 内置 agent 经与内核 main 相同的插件路径注册：agent.Record(host) 携带运行时
-	// 清单，RegisterInstalled 统一注册；预热清单由 Pinned() 从各清单声明推导。
-	if err := loader.RegisterInstalled(ctx, agentManager, reg, []loader.InstalledRecord{agent.Record(agentHost)}); err != nil {
-		t.Fatalf("register agent: %v", err)
+	if err := executorManager.Register(ctx, executorManifest); err != nil {
+		t.Fatalf("register executor: %v", err)
 	}
-	if err := agentManager.Warmup(ctx, agentManager.Pinned(), 1); err != nil {
-		t.Fatalf("warm agent: %v\n%s", err, logs.String())
+	if err := executorManager.Warmup(ctx, executorManager.Pinned(), 1); err != nil {
+		t.Fatalf("warm executor: %v\n%s", err, logs.String())
 	}
-	agentLease, err := agentManager.Executor(ctx)
+	executorLease, err := executorManager.Executor(ctx)
 	if err != nil {
 		t.Fatalf("resolve executor: %v", err)
 	}
-	agentRuntime := agentLease.Runtime()
-	clientProvider, ok := agentRuntime.(executor.ClientProvider)
+	executorRuntime := executorLease.Runtime()
+	clientProvider, ok := executorRuntime.(executor.ClientProvider)
 	if !ok {
 		t.Fatal("executor runtime does not expose an executor client")
 	}
-	agentClient := clientProvider.Client()
+	executorClient := clientProvider.Client()
 	// 关闭顺序（defer 逆序）：Shutdown 需等待租约排空，故租约归还最后注册、最先执行。
 	defer func() {
 		shutdownContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if err := agentManager.Shutdown(shutdownContext); err != nil {
-			t.Errorf("shutdown agent manager: %v", err)
+		if err := executorManager.Shutdown(shutdownContext); err != nil {
+			t.Errorf("shutdown executor manager: %v", err)
 		}
 	}()
-	defer agentLease.Release()
+	defer executorLease.Release()
 
 	busStore := memory.NewBusStore()
 	busStore.ReplaceCatalog(campus.AppID, nil, []bus.Route{{ID: "r1", Name: "测试线路", Direction: "去程"}})
 	policy := runtimetest.NewStaticAppPolicy()
 	policy.Enable(campus.AppID, campus.BusRouteListCapabilityID)
-	policy.Enable(campus.AppID, agent.CapabilityID)
+	policy.Enable(campus.AppID, kernelecho.CreateChildRunCapabilityID)
 	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{IdempotencyStore: store})
 	campustest.RegisterHosted(t, reg, busStore)
 	// 上下文装配使用真实会话来源（SQLite 消息存储 + 安全 Blob 存储）。
@@ -231,13 +232,13 @@ func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("seed app config: %v", err)
 	}
-	orchestrator := kernelecho.NewOrchestrator(agentClient, reg, dispatcher, policy, store, kernelecho.Config{
+	orchestrator := kernelecho.NewOrchestrator(executorClient, reg, dispatcher, policy, store, kernelecho.Config{
 		AppID:           campus.AppID,
 		AppConfigSource: store,
 		Context:         sessionService,
 		Prompts:         integrationPromptRenderer{},
 	})
-	if err := agent.Register(reg, orchestrator); err != nil {
+	if err := kernelecho.RegisterChildCapabilities(reg, orchestrator); err != nil {
 		t.Fatal(err)
 	}
 	echoEvents := access.NewEventHub()
@@ -271,7 +272,7 @@ func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 	}
 	handler := web.NewServer(
 		orchestrator, store,
-		health.Combined{store, health.ExecutorChecker{Client: agentClient, Model: "test-model"}},
+		health.Combined{store, health.ExecutorChecker{Client: executorClient, Model: "test-model"}},
 		reg, policy, campus.AppID, platformHub, runScheduler, echoEvents,
 		web.WithWebAuthenticator(integrationWebAuthenticator{}),
 	).Handler()
@@ -345,7 +346,7 @@ func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 		t.Fatalf("audits=%#v err=%v logs=%s", audits, err, logs.String())
 	}
 	for _, audit := range audits {
-		if audit.CapabilityID == agent.CapabilityID &&
+		if audit.CapabilityID == kernelecho.CreateChildRunCapabilityID &&
 			(bytes.Contains(audit.Payload, []byte("查询校巴线路")) ||
 				!bytes.Contains(audit.Payload, []byte(`"task":"[已脱敏]"`))) {
 			t.Fatalf("Subagent task leaked into audit: %s", audit.Payload)

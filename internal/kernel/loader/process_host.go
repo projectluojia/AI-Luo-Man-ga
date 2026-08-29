@@ -484,14 +484,16 @@ func validateProcessSpec(spec packmgr.ProcessSpec) error {
 	if info, err = os.Lstat(spec.WorkDir); err != nil || !info.IsDir() || info.Mode().Perm()&0o022 != 0 {
 		return ErrInvalidProcessSpec
 	}
-	socketPath := strings.TrimPrefix(spec.Address, "unix:")
-	relativeSocket, err := filepath.Rel(spec.WorkDir, socketPath)
-	if err != nil || relativeSocket == "." || relativeSocket == ".." ||
-		strings.HasPrefix(relativeSocket, ".."+string(filepath.Separator)) {
-		return ErrInvalidProcessSpec
-	}
-	if _, err := os.Lstat(socketPath); err == nil || !errors.Is(err, os.ErrNotExist) {
-		return ErrInvalidProcessSpec
+	if strings.HasPrefix(spec.Address, "unix:") {
+		socketPath := strings.TrimPrefix(spec.Address, "unix:")
+		relativeSocket, err := filepath.Rel(spec.WorkDir, socketPath)
+		if err != nil || relativeSocket == "." || relativeSocket == ".." ||
+			strings.HasPrefix(relativeSocket, ".."+string(filepath.Separator)) {
+			return ErrInvalidProcessSpec
+		}
+		if _, err := os.Lstat(socketPath); err == nil || !errors.Is(err, os.ErrNotExist) {
+			return ErrInvalidProcessSpec
+		}
 	}
 	for _, argument := range spec.Args {
 		if len(argument) > 4096 || strings.ContainsRune(argument, '\x00') {

@@ -305,7 +305,7 @@ func (o *Orchestrator) GetChild(ctx context.Context, request ChildStatusRequest)
 func (o *Orchestrator) childScopes(policy appconfig.PolicySnapshot, parent RunRecord, requested []string) ([]string, []string, error) {
 	if len(requested) == 0 {
 		for _, capability := range o.projectCapabilities(policy, parent) {
-			if capability.Id != SubagentCapabilityID && capability.Id != SubagentStatusCapabilityID {
+			if capability.Id != CreateChildRunCapabilityID && capability.Id != GetChildStatusCapabilityID {
 				requested = append(requested, capability.Id)
 			}
 		}
@@ -317,7 +317,7 @@ func (o *Orchestrator) childScopes(policy appconfig.PolicySnapshot, parent RunRe
 	sort.Strings(requested)
 	permissions := make(map[string]struct{})
 	for index, capabilityID := range requested {
-		if capabilityID == SubagentCapabilityID || capabilityID == SubagentStatusCapabilityID ||
+		if capabilityID == CreateChildRunCapabilityID || capabilityID == GetChildStatusCapabilityID ||
 			(index > 0 && requested[index-1] == capabilityID) ||
 			!policy.CapabilityEnabled(capabilityID) {
 			return nil, nil, registry.ErrPermissionDenied
@@ -1008,7 +1008,7 @@ func (o *Orchestrator) executeClaimedRun(ctx context.Context, request RunRequest
 				runErr := fmt.Errorf("send capability result: %w", err)
 				return errors.Join(runErr, o.fail(ctx, run, "agent_stream_failed", automaticRetrySafe))
 			}
-			if run.ParentRunID == "" && body.CapabilityCall.CapabilityId == SubagentCapabilityID && result.Success {
+			if run.ParentRunID == "" && body.CapabilityCall.CapabilityId == CreateChildRunCapabilityID && result.Success {
 				var child ChildRunResult
 				if err := json.Unmarshal(result.PayloadJson, &child); err != nil || child.RunID == "" || child.Status != RunStatusQueued {
 					return errors.Join(ErrInvalidChildRun, o.fail(ctx, run, "protocol_violation", false))
@@ -1127,7 +1127,7 @@ func (o *Orchestrator) projectCapabilities(policy appconfig.PolicySnapshot, run 
 		if _, enabled := scope[capability.ID]; !enabled {
 			continue
 		}
-		if run.ParentRunID != "" && (capability.ID == SubagentCapabilityID || capability.ID == SubagentStatusCapabilityID) {
+		if run.ParentRunID != "" && (capability.ID == CreateChildRunCapabilityID || capability.ID == GetChildStatusCapabilityID) {
 			continue
 		}
 		if _, err := registry.NarrowPermissions(policy.PermissionScope, capability.RequiredPermissions); err != nil {
@@ -1248,7 +1248,7 @@ func (o *Orchestrator) invokeCapabilityOnce(ctx context.Context, run RunRecord, 
 		}
 	}
 	index := sort.SearchStrings(run.CapabilityScope, call.CapabilityId)
-	if (run.ParentRunID != "" && (call.CapabilityId == SubagentCapabilityID || call.CapabilityId == SubagentStatusCapabilityID)) ||
+	if (run.ParentRunID != "" && (call.CapabilityId == CreateChildRunCapabilityID || call.CapabilityId == GetChildStatusCapabilityID)) ||
 		index >= len(run.CapabilityScope) || run.CapabilityScope[index] != call.CapabilityId {
 		return o.rejectedCapability(ctx, run, call, started, runtime.ErrCapabilityDisabled)
 	}
