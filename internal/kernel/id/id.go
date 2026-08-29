@@ -11,8 +11,6 @@ var (
 	StableMixedUncapped = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]*$`)
 	// AppID 小写 App 标识（≤128 字符）。
 	AppID = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,127}$`)
-	// StableLower 小写稳定标识：Service/Tool/Capability/渠道/平台等业务标识。
-	StableLower = regexp.MustCompile(`^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$`)
 	// Permission 权限标识：小写 + 点/下划线/冒号/连字符。
 	Permission = regexp.MustCompile(`^[a-z][a-z0-9]*(?:[._:-][a-z0-9]+)*$`)
 )

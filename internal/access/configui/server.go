@@ -21,13 +21,6 @@ const DefaultAddress = "127.0.0.1:9178"
 //go:embed static/*
 var staticFiles embed.FS
 
-type SaveInput = config.SaveInput
-
-var (
-	ErrConflict = config.ErrConflict
-	ErrInvalid  = config.ErrInvalid
-)
-
 // Server 是独立于内核就绪状态的本机配置 WebUI。
 type Server struct {
 	service *config.Service
@@ -97,16 +90,16 @@ func (s *Server) updateConfig(writer http.ResponseWriter, request *http.Request)
 	if !authorizeLocal(writer, request) {
 		return
 	}
-	var input SaveInput
+	var input config.SaveInput
 	if !access.DecodeJSONBody(writer, request, &input, 256<<10) {
 		return
 	}
 	snapshot, err := s.service.Save(input)
 	if err != nil {
 		switch {
-		case errors.Is(err, ErrConflict):
+		case errors.Is(err, config.ErrConflict):
 			access.WriteJSON(writer, http.StatusConflict, map[string]string{"code": "configuration_conflict", "message": "配置已更新，请刷新页面后重试"})
-		case errors.Is(err, ErrInvalid):
+		case errors.Is(err, config.ErrInvalid):
 			access.WriteJSON(writer, http.StatusBadRequest, map[string]string{"code": "invalid_configuration", "message": "请检查模型、密钥和 QQ 配置"})
 		default:
 			observe.Error(request.Context(), "保存本机配置失败", err)
