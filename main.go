@@ -18,6 +18,7 @@ import (
 	"time"
 
 	runtimev1 "github.com/projectluojia/AI-Luo-Man-ga/gen/runtimev1"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/adapters/packagesource"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/app"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/identity"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
@@ -514,7 +515,7 @@ func serveRuntimeHost(installRoot, address string, output io.Writer) error {
 		observe.StringAttr("install_root", installRoot),
 		observe.StringAttr("address", address),
 	)
-	catalog, err := loader.NewCatalog(installRoot)
+	catalog, err := packagesource.NewCatalog(installRoot)
 	if err != nil {
 		return err
 	}

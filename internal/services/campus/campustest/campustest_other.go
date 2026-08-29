@@ -2,7 +2,7 @@
 
 // Package campustest 提供校园服务 hosted 装配的共享测试辅助。
 // 非 Unix 平台：安装目录属主校验 fail-closed（无法等价验证文件属主，见
-// loader/install_owner_other.go），catalog.Discover 不可用。这里内存构造
+// packagesource/owner_other.go），catalog.Discover 不可用。这里内存构造
 // InstalledRecord 并直接装配 WasmHost——wasm 执行与宿主函数投影跨平台可用，
 // 仅"部署属主发现"是 Unix 边界（该边界由 loader 的 unix 测试覆盖）。
 package campustest
