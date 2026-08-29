@@ -180,12 +180,15 @@ type CapabilityAuditRecord struct {
 	CreatedAt    time.Time       `json:"created_at"`
 }
 
-// OrchestratorStore 是 Echo 编排流程使用的持久化端口；查询侧端口由各访问/审计
-// 消费者自行声明，避免把读取能力混入编排写端口。
-type OrchestratorStore interface {
-	idempotency.Store
+// EchoCreationStore 是 Echo 与首个 queued Run 原子创建的端口。
+type EchoCreationStore interface {
 	CreateEchoRunIdempotentLimited(ctx context.Context, key, fingerprint string, echo Record, run RunRecord, maxPending int) (string, bool, error)
+}
+
+// RunExecutionStore 是 Run 领取、执行进度和终态转换的端口。
+type RunExecutionStore interface {
 	CreateChildRun(ctx context.Context, parent, child RunRecord, maxChildRuns int) error
+	GetRun(ctx context.Context, appID, runID string) (RunRecord, error)
 	ClaimRun(ctx context.Context, appID, echoID, leaseToken string, startedAt, leaseExpiresAt time.Time) (RunRecord, error)
 	ClaimChildRun(ctx context.Context, appID, echoID, runID, parentRunID, leaseToken string, startedAt, leaseExpiresAt time.Time) (RunRecord, error)
 	RenewRunLease(ctx context.Context, run RunRecord, renewedAt, leaseExpiresAt time.Time) error
@@ -193,16 +196,43 @@ type OrchestratorStore interface {
 	AdvanceRunAgentSequenceWithUsage(ctx context.Context, run RunRecord, sequence, inputTokens, outputTokens, totalTokens, costMicrousd uint64, providerRetries uint32) error
 	// SetRunContext 固化 Run 的上下文摘要与来源版本（每次执行只可设置一次）。
 	SetRunContext(ctx context.Context, run RunRecord, digest string, sources json.RawMessage) error
-	CancelQueuedRun(ctx context.Context, appID, echoID string, completedAt time.Time) (bool, error)
-	CancelQueuedRuns(ctx context.Context, appID string, completedAt time.Time) error
 	RetryRun(ctx context.Context, current, next RunRecord, failure publicerror.Error, completedAt time.Time) error
 	CompleteRun(ctx context.Context, run RunRecord, runStatus, echoStatus, finalMessage string, failure publicerror.Error, completedAt time.Time) error
 	CompleteChildRun(ctx context.Context, run RunRecord, runStatus, resultMessage string, failure publicerror.Error, completedAt time.Time) error
-	AppendEchoEvent(ctx context.Context, event Event) (Event, error)
-	GetEcho(ctx context.Context, appID, echoID string) (Record, []Event, error)
-	GetRun(ctx context.Context, appID, runID string) (RunRecord, error)
+}
+
+// RunRecoveryStore 是启动恢复和持久队列读取的端口。
+type RunRecoveryStore interface {
 	ListQueuedRuns(ctx context.Context, appID string, limit int) ([]RunWork, error)
 	ListRunnableRuns(ctx context.Context, appID string, now time.Time, limit int) ([]RunWork, error)
 	FailAbandonedRuns(ctx context.Context, appID string, now time.Time) (int64, error)
+}
+
+// RunCancellationStore 是取消 queued Run 的端口。
+type RunCancellationStore interface {
+	CancelQueuedRun(ctx context.Context, appID, echoID string, completedAt time.Time) (bool, error)
+	CancelQueuedRuns(ctx context.Context, appID string, completedAt time.Time) error
+}
+
+// EchoEventStore 是 Echo 事件追加与重放的端口。
+type EchoEventStore interface {
+	AppendEchoEvent(ctx context.Context, event Event) (Event, error)
+	GetEcho(ctx context.Context, appID, echoID string) (Record, []Event, error)
+}
+
+// CapabilityAuditStore 是 Capability 调用审计持久化的端口。
+type CapabilityAuditStore interface {
 	RecordCapabilityCall(ctx context.Context, callID, runID, echoID, appID, capabilityID string, payload []byte, success bool, failure publicerror.Error, duration time.Duration) error
+}
+
+// StorePorts 是 Orchestrator 所需的最小领域端口集合。SQLite 只是组合根提供的
+// 一个实现，Run 编排不依赖具体数据库类型。
+type StorePorts struct {
+	Idempotency  idempotency.Store
+	Creation     EchoCreationStore
+	Execution    RunExecutionStore
+	Recovery     RunRecoveryStore
+	Cancellation RunCancellationStore
+	Events       EchoEventStore
+	Audit        CapabilityAuditStore
 }

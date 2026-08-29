@@ -948,7 +948,10 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 		observe.BoolAttr("managed_process", config.manageAgent),
 	)
 
-	orchestrator := kernelecho.NewOrchestrator(executorClient, reg, dispatcher, policy, store, kernelecho.Config{
+	orchestrator := kernelecho.NewOrchestrator(executorClient, reg, dispatcher, policy, kernelecho.StorePorts{
+		Idempotency: store, Creation: store, Execution: store, Recovery: store,
+		Cancellation: store, Events: store, Audit: store,
+	}, kernelecho.Config{
 		AppID:           campus.AppID,
 		AppConfigSource: store,
 		Context:         sessionService,
