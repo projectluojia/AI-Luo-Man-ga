@@ -18,6 +18,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	kernelecho "github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/executor"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/idempotency"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime/runtimetest"
@@ -729,7 +730,7 @@ func TestOrchestratorRejectsInvalidChildRunLimit(t *testing.T) {
 					t.Fatal("无效 child Run 上限未触发装配失败")
 				}
 			}()
-			kernelecho.NewOrchestrator(nil, nil, nil, nil, nil, kernelecho.Config{MaxChildRuns: limit})
+			kernelecho.NewOrchestrator(nil, nil, nil, nil, kernelecho.StorePorts{}, kernelecho.Config{MaxChildRuns: limit})
 		})
 	}
 }
@@ -765,7 +766,7 @@ func TestOrchestratorRunsAgentCapabilityLoop(t *testing.T) {
 	campustest.RegisterHosted(t, reg, busStore)
 	seedOrchestratorConfig(t, store, orchestratorSeed("test-model"))
 	orchestrator := kernelecho.NewOrchestrator(
-		executorv1.NewExecutorRuntimeClient(connection), reg, dispatcher, policy, store,
+		executorv1.NewExecutorRuntimeClient(connection), reg, dispatcher, policy, storePorts(store),
 		kernelecho.Config{AppID: campus.AppID, AppConfigSource: store, RunTimeout: 5 * time.Second, Context: newSessionSource(t, store), Prompts: testPromptRenderer{}},
 	)
 	events := []kernelecho.Event{}
@@ -847,7 +848,7 @@ func TestOrchestratorAssemblesSessionContextIntoRun(t *testing.T) {
 	campustest.RegisterHosted(t, reg, memory.NewBusStore())
 	seedOrchestratorConfig(t, store, orchestratorSeed("test-model"))
 	orchestrator := kernelecho.NewOrchestrator(
-		executorv1.NewExecutorRuntimeClient(connection), reg, dispatcher, policy, store,
+		executorv1.NewExecutorRuntimeClient(connection), reg, dispatcher, policy, storePorts(store),
 		kernelecho.Config{AppID: campus.AppID, AppConfigSource: store, RunTimeout: 5 * time.Second, Context: sessionService, Prompts: testPromptRenderer{}},
 	)
 	events := []kernelecho.Event{}
@@ -934,7 +935,7 @@ func TestOrchestratorRunsOneGovernedChildWithNarrowedProjection(t *testing.T) {
 		ProviderTimeout: time.Second,
 	})
 	orchestrator := kernelecho.NewOrchestrator(
-		executorv1.NewExecutorRuntimeClient(connection), reg, dispatcher, policy, store,
+		executorv1.NewExecutorRuntimeClient(connection), reg, dispatcher, policy, storePorts(store),
 		kernelecho.Config{
 			AppID: campus.AppID, AppConfigSource: store, RunTimeout: 5 * time.Second,
 			Context: newSessionSource(t, store), Prompts: testPromptRenderer{},
@@ -1051,7 +1052,7 @@ func TestParentCancellationPropagatesAndPersistsChildThenRootTerminalState(t *te
 		ProviderTimeout: time.Second,
 	})
 	orchestrator := kernelecho.NewOrchestrator(
-		executorv1.NewExecutorRuntimeClient(connection), reg, dispatcher, policy, store,
+		executorv1.NewExecutorRuntimeClient(connection), reg, dispatcher, policy, storePorts(store),
 		kernelecho.Config{
 			AppID: campus.AppID, AppConfigSource: store, RunTimeout: 30 * time.Second,
 			Context: newSessionSource(t, store), Prompts: testPromptRenderer{},
@@ -1155,7 +1156,7 @@ func TestOrchestratorRecoversHistoricalAppConfigRevision(t *testing.T) {
 	reg := registry.New()
 	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{})
 	orchestrator := kernelecho.NewOrchestrator(
-		executorv1.NewExecutorRuntimeClient(connection), reg, dispatcher, policy, store,
+		executorv1.NewExecutorRuntimeClient(connection), reg, dispatcher, policy, storePorts(store),
 		kernelecho.Config{AppID: campus.AppID, AppConfigSource: store, RunTimeout: 5 * time.Second, Context: newSessionSource(t, store), Prompts: testPromptRenderer{}},
 	)
 	echoID, created, err := orchestrator.CreateIdempotent(t.Context(), kernelecho.RunRequest{
@@ -1258,7 +1259,7 @@ func TestOrchestratorRevalidatesCapabilityPolicyAfterProjection(t *testing.T) {
 	t.Cleanup(func() { _ = connection.Close() })
 	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{})
 	orchestrator := kernelecho.NewOrchestrator(
-		executorv1.NewExecutorRuntimeClient(connection), reg, dispatcher, policy, store,
+		executorv1.NewExecutorRuntimeClient(connection), reg, dispatcher, policy, storePorts(store),
 		kernelecho.Config{AppID: campus.AppID, AppConfigSource: store, RunTimeout: 5 * time.Second, Context: newSessionSource(t, store), Prompts: testPromptRenderer{}},
 	)
 	if _, err := runOrchestrator(orchestrator, t.Context(), kernelecho.RunRequest{
@@ -1357,7 +1358,7 @@ func TestOrchestratorAcceptedRunScopeCannotExpandAfterGrant(t *testing.T) {
 	t.Cleanup(func() { _ = connection.Close() })
 	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{})
 	orchestrator := kernelecho.NewOrchestrator(
-		executorv1.NewExecutorRuntimeClient(connection), reg, dispatcher, policy, store,
+		executorv1.NewExecutorRuntimeClient(connection), reg, dispatcher, policy, storePorts(store),
 		kernelecho.Config{AppID: campus.AppID, AppConfigSource: store, RunTimeout: 5 * time.Second, Context: newSessionSource(t, store), Prompts: testPromptRenderer{}},
 	)
 	echoID, err := runOrchestrator(orchestrator, t.Context(), kernelecho.RunRequest{
@@ -1417,6 +1418,23 @@ func seedOrchestratorConfig(t *testing.T, store *sqlite.Store, seed appconfig.Co
 	}
 }
 
+type allStorePorts interface {
+	idempotency.Store
+	kernelecho.EchoCreationStore
+	kernelecho.RunExecutionStore
+	kernelecho.RunRecoveryStore
+	kernelecho.RunCancellationStore
+	kernelecho.EchoEventStore
+	kernelecho.CapabilityAuditStore
+}
+
+func storePorts(store allStorePorts) kernelecho.StorePorts {
+	return kernelecho.StorePorts{
+		Idempotency: store, Creation: store, Execution: store, Recovery: store,
+		Cancellation: store, Events: store, Audit: store,
+	}
+}
+
 // runOrchestrator 是测试便捷入口：等价于生产链路的 CreateIdempotent +
 // RunExisting 两步（Orchestrator 不再提供合并便捷方法）。
 func runOrchestrator(orchestrator *kernelecho.Orchestrator, ctx context.Context, request kernelecho.RunRequest, emit kernelecho.EventEmitter) (string, error) {
@@ -1465,7 +1483,7 @@ func TestOrchestratorAppendsChannelPromptFromPersistedConfig(t *testing.T) {
 	reg := registry.New()
 	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{})
 	orchestrator := kernelecho.NewOrchestrator(
-		executorv1.NewExecutorRuntimeClient(connection), reg, dispatcher, policy, store,
+		executorv1.NewExecutorRuntimeClient(connection), reg, dispatcher, policy, storePorts(store),
 		kernelecho.Config{AppID: campus.AppID, AppConfigSource: store, RunTimeout: 5 * time.Second, Context: newSessionSource(t, store), Prompts: testPromptRenderer{}},
 	)
 	echoID, err := runOrchestrator(orchestrator, t.Context(), kernelecho.RunRequest{
@@ -1509,7 +1527,7 @@ func TestOrchestratorDurablyRetriesOnlyRetryableRunAttempts(t *testing.T) {
 	policy := runtimetest.NewStaticAppPolicy()
 	seedOrchestratorConfig(t, store, orchestratorSeed("test-model"))
 	orchestrator := kernelecho.NewOrchestrator(
-		executorv1.NewExecutorRuntimeClient(connection), reg, runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{}), policy, store,
+		executorv1.NewExecutorRuntimeClient(connection), reg, runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{}), policy, storePorts(store),
 		kernelecho.Config{
 			AppID: campus.AppID, AppConfigSource: store, RunTimeout: 5 * time.Second, MaxRunAttempts: 2,
 			RetryBaseDelay: 20 * time.Millisecond, RetryMaxDelay: 20 * time.Millisecond,
@@ -1588,7 +1606,7 @@ func TestOrchestratorRenewsActiveRunLease(t *testing.T) {
 	policy := runtimetest.NewStaticAppPolicy()
 	seedOrchestratorConfig(t, baseStore, orchestratorSeed("test-model"))
 	orchestrator := kernelecho.NewOrchestrator(
-		executorv1.NewExecutorRuntimeClient(connection), reg, runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{}), policy, store,
+		executorv1.NewExecutorRuntimeClient(connection), reg, runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{}), policy, storePorts(store),
 		kernelecho.Config{
 			AppID: campus.AppID, AppConfigSource: baseStore, RunTimeout: 3 * time.Second, LeaseDuration: 400 * time.Millisecond,
 			Context: newSessionSource(t, baseStore), Prompts: testPromptRenderer{},
@@ -1651,7 +1669,7 @@ func TestOrchestratorDoesNotAutomaticallyRetryAfterSideEffect(t *testing.T) {
 	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{IdempotencyStore: store})
 	seedOrchestratorConfig(t, store, orchestratorSeed("test-model"))
 	orchestrator := kernelecho.NewOrchestrator(
-		executorv1.NewExecutorRuntimeClient(connection), reg, dispatcher, policy, store,
+		executorv1.NewExecutorRuntimeClient(connection), reg, dispatcher, policy, storePorts(store),
 		kernelecho.Config{
 			AppID: campus.AppID, AppConfigSource: store, RunTimeout: time.Second, MaxRunAttempts: 3,
 			Context: newSessionSource(t, store), Prompts: testPromptRenderer{},
@@ -1700,7 +1718,7 @@ func TestOrchestratorRejectsDuplicateAgentCallBeforeSecondEffect(t *testing.T) {
 	campustest.RegisterHosted(t, reg, busStore)
 	seedOrchestratorConfig(t, store, orchestratorSeed("test-model"))
 	orchestrator := kernelecho.NewOrchestrator(
-		executorv1.NewExecutorRuntimeClient(connection), reg, dispatcher, policy, store,
+		executorv1.NewExecutorRuntimeClient(connection), reg, dispatcher, policy, storePorts(store),
 		kernelecho.Config{AppID: campus.AppID, AppConfigSource: store, RunTimeout: 5 * time.Second, Context: newSessionSource(t, store), Prompts: testPromptRenderer{}},
 	)
 	echoID, err := runOrchestrator(orchestrator, ctx, kernelecho.RunRequest{Message: "duplicate", IdempotencyKey: "duplicate-run"}, nil)
@@ -1748,7 +1766,7 @@ func TestOrchestratorRejectsFramesAfterTerminalWithoutPublishingFinal(t *testing
 	policy := runtimetest.NewStaticAppPolicy()
 	seedOrchestratorConfig(t, store, orchestratorSeed("test-model"))
 	orchestrator := kernelecho.NewOrchestrator(
-		executorv1.NewExecutorRuntimeClient(connection), reg, runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{}), policy, store,
+		executorv1.NewExecutorRuntimeClient(connection), reg, runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{}), policy, storePorts(store),
 		kernelecho.Config{AppID: campus.AppID, AppConfigSource: store, RunTimeout: 5 * time.Second, Context: newSessionSource(t, store), Prompts: testPromptRenderer{}},
 	)
 	echoID, err := runOrchestrator(orchestrator, ctx, kernelecho.RunRequest{Message: "late", IdempotencyKey: "late-run"}, nil)
@@ -1794,7 +1812,7 @@ func TestOrchestratorRejectsSuccessfulTerminalWithoutUsage(t *testing.T) {
 	policy := runtimetest.NewStaticAppPolicy()
 	seedOrchestratorConfig(t, store, orchestratorSeed("test-model"))
 	orchestrator := kernelecho.NewOrchestrator(
-		executorv1.NewExecutorRuntimeClient(connection), reg, runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{}), policy, store,
+		executorv1.NewExecutorRuntimeClient(connection), reg, runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{}), policy, storePorts(store),
 		kernelecho.Config{AppID: campus.AppID, AppConfigSource: store, RunTimeout: 5 * time.Second, Context: newSessionSource(t, store), Prompts: testPromptRenderer{}},
 	)
 	echoID, err := runOrchestrator(orchestrator, ctx, kernelecho.RunRequest{Message: "usage", IdempotencyKey: "missing-usage-run"}, nil)
@@ -1850,7 +1868,7 @@ func TestOrchestratorDoesNotExposeAgentOrCapabilityInternalErrors(t *testing.T) 
 		reg,
 		runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{}),
 		policy,
-		store,
+		storePorts(store),
 		kernelecho.Config{
 			AppID: campus.AppID, AppConfigSource: store, RunTimeout: 5 * time.Second,
 			Context: newSessionSource(t, store), Prompts: testPromptRenderer{},
@@ -1927,7 +1945,7 @@ func TestOrchestratorUsesPromptServiceRenderer(t *testing.T) {
 	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{})
 	renderer := promptCaptureRenderer{requests: make(chan kernelecho.PromptRenderRequest, 1)}
 	orchestrator := kernelecho.NewOrchestrator(
-		executorv1.NewExecutorRuntimeClient(connection), reg, dispatcher, policy, store,
+		executorv1.NewExecutorRuntimeClient(connection), reg, dispatcher, policy, storePorts(store),
 		kernelecho.Config{
 			AppID: campus.AppID, AppConfigSource: store, RunTimeout: 5 * time.Second,
 			Context: newSessionSource(t, store), Prompts: renderer,

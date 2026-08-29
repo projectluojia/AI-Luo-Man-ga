@@ -232,7 +232,10 @@ func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("seed app config: %v", err)
 	}
-	orchestrator := kernelecho.NewOrchestrator(executorClient, reg, dispatcher, policy, store, kernelecho.Config{
+	orchestrator := kernelecho.NewOrchestrator(executorClient, reg, dispatcher, policy, kernelecho.StorePorts{
+		Idempotency: store, Creation: store, Execution: store, Recovery: store,
+		Cancellation: store, Events: store, Audit: store,
+	}, kernelecho.Config{
 		AppID:           campus.AppID,
 		AppConfigSource: store,
 		Context:         sessionService,
