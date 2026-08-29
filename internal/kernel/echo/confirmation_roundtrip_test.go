@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"net"
-	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -17,7 +16,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime/runtimetest"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite/sqlitetest"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -117,11 +116,7 @@ func TestOrchestratorConfirmationRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = connection.Close() })
-	store, err := sqlite.Open(filepath.Join(t.TempDir(), "confirmation-roundtrip.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
+	store := sqlitetest.NewStore(t, "confirmation-roundtrip.db")
 	seedOrchestratorConfig(t, store, orchestratorSeed("test-model"))
 	policy := runtimetest.NewStaticAppPolicy()
 	policy.Enable(campus.AppID, confirmationTestCapabilityID)

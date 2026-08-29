@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -23,12 +22,7 @@ import (
 
 func newConfirmationTestServer(t *testing.T) (http.Handler, *sqlite.Store, *confirmation.Service) {
 	t.Helper()
-	tempDir := t.TempDir()
-	store, err := sqlite.Open(filepath.Join(tempDir, "confirmations-web.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { sqlitetest.CloseAndWait(t, store, tempDir) })
+	store := sqlitetest.NewStore(t, "confirmations-web.db")
 	reg := registry.New()
 	policy := runtimetest.NewStaticAppPolicy()
 	confirmations := confirmation.NewService(store, confirmation.Config{})

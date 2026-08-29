@@ -199,8 +199,7 @@ func TestQQAdapterIntakesAndReplies(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go func() { _ = adapter.Run(ctx) }()
+	runQQAdapterForTest(t, adapter.Run, ctx, cancel)
 
 	select {
 	case header := <-bot.authHeader:
@@ -265,8 +264,7 @@ func TestQQAdapterForwardsEverySubagentTerminalReply(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go func() { _ = adapter.Run(ctx) }()
+	runQQAdapterForTest(t, adapter.Run, ctx, cancel)
 	select {
 	case <-bot.authHeader:
 	case <-time.After(5 * time.Second):
@@ -351,8 +349,7 @@ func TestQQAdapterQuickReplySkipsAgentAndDoesNotMentionSender(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go func() { _ = adapter.Run(ctx) }()
+	runQQAdapterForTest(t, adapter.Run, ctx, cancel)
 	select {
 	case <-bot.authHeader:
 	case <-time.After(5 * time.Second):
@@ -469,8 +466,7 @@ func TestQQAdapterRepliesPublicErrorOnUnboundIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go func() { _ = adapter.Run(ctx) }()
+	runQQAdapterForTest(t, adapter.Run, ctx, cancel)
 
 	select {
 	case <-bot.authHeader:
