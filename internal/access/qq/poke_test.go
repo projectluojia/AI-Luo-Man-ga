@@ -22,7 +22,8 @@ func newPokeAdapter(t *testing.T, bot *fakeOneBot) *Adapter {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	runQQAdapterForTest(t, adapter.Run, ctx, cancel)
+	t.Cleanup(cancel)
+	go func() { _ = adapter.Run(ctx) }()
 	select {
 	case <-bot.authHeader:
 	case <-time.After(5 * time.Second):
@@ -103,7 +104,8 @@ func TestQQAdapterCanDisablePokeTextWithoutDisablingGroupPoke(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	runQQAdapterForTest(t, adapter.Run, ctx, cancel)
+	t.Cleanup(cancel)
+	go func() { _ = adapter.Run(ctx) }()
 	select {
 	case <-bot.authHeader:
 	case <-time.After(5 * time.Second):
@@ -157,7 +159,8 @@ func TestQQAdapterIgnoresGroupMessageWithoutMention(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	runQQAdapterForTest(t, adapter.Run, ctx, cancel)
+	defer cancel()
+	go func() { _ = adapter.Run(ctx) }()
 	select {
 	case <-bot.authHeader:
 	case <-time.After(5 * time.Second):
@@ -189,7 +192,8 @@ func TestQQAdapterIgnoresMentionOfAnotherUser(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	runQQAdapterForTest(t, adapter.Run, ctx, cancel)
+	defer cancel()
+	go func() { _ = adapter.Run(ctx) }()
 	select {
 	case <-bot.authHeader:
 	case <-time.After(5 * time.Second):
@@ -220,7 +224,8 @@ func TestQQAdapterHandlesGroupMessageWithMention(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	runQQAdapterForTest(t, adapter.Run, ctx, cancel)
+	defer cancel()
+	go func() { _ = adapter.Run(ctx) }()
 	select {
 	case <-bot.authHeader:
 	case <-time.After(5 * time.Second):
