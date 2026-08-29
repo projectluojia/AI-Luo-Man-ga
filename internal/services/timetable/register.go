@@ -81,7 +81,7 @@ func (s *Service) Register(reg *registry.Registry) error {
 			CourseListCapabilityID:   capability(CourseListCapabilityID, timetabletool.CourseListToolID, "查看课程", "List courses in a timetable.", timetabletool.TimetableIDInputSchemaJSONExport, read),
 			CourseGetCapabilityID:    capability(CourseGetCapabilityID, timetabletool.CourseGetToolID, "查看一门课程", "Get one course.", timetabletool.CourseGetInputSchemaJSONExport, read),
 			CourseCreateCapabilityID: capability(CourseCreateCapabilityID, timetabletool.CourseCreateToolID, "新增课程", "Create a locally edited course.", timetabletool.CourseInputSchemaJSONExport, write),
-			CourseUpdateCapabilityID: capability(CourseUpdateCapabilityID, timetabletool.CourseUpdateToolID, "编辑课程", "Replace a course.", timetabletool.CourseInputSchemaJSONExport, write),
+			CourseUpdateCapabilityID: capability(CourseUpdateCapabilityID, timetabletool.CourseUpdateToolID, "编辑课程", "Replace a course.", timetabletool.CourseUpdateInputSchemaJSONExport, write),
 			CourseDeleteCapabilityID: capability(CourseDeleteCapabilityID, timetabletool.CourseDeleteToolID, "删除课程", "Delete a course.", timetabletool.CourseGetInputSchemaJSONExport, write),
 			ImportCapabilityID:       capability(ImportCapabilityID, timetabletool.TimetableImportToolID, "导入课表", "Import WuDa academic or WakeUp timetable content supplied by the user.", timetabletool.ImportInputSchemaJSONExport, write),
 		},

@@ -34,7 +34,10 @@ const (
 	TimetableUpdateInputSchemaJSON = `{"type":"object","properties":{"timetable_id":{"type":"string","minLength":1,"maxLength":128},"name":{"type":"string","minLength":1,"maxLength":512},"active":{"type":"boolean"}},"required":["timetable_id","name"],"additionalProperties":false}`
 	CourseInputSchemaJSON          = `{"type":"object","properties":{"timetable_id":{"type":"string","minLength":1,"maxLength":128},"course_id":{"type":"string","minLength":1,"maxLength":128},"title":{"type":"string","minLength":1,"maxLength":256},"weekday":{"type":"integer","minimum":1,"maximum":7},"class_from":{"type":"integer","minimum":1,"maximum":64},"class_to":{"type":"integer","minimum":1,"maximum":64},"weeks":{"type":"array","minItems":1,"maxItems":64,"items":{"type":"integer","minimum":1,"maximum":64}},"course_nature":{"type":"string","maxLength":512},"instructor":{"type":"string","maxLength":512},"location":{"type":"string","maxLength":512},"week_meta":{"type":"string","maxLength":512},"start_text":{"type":"string","maxLength":512},"end_text":{"type":"string","maxLength":512},"external_id":{"type":"string","maxLength":512}},"required":["timetable_id","title","weekday","class_from","class_to","weeks"],"additionalProperties":false}`
 	CourseGetInputSchemaJSON       = `{"type":"object","properties":{"timetable_id":{"type":"string","minLength":1,"maxLength":128},"course_id":{"type":"string","minLength":1,"maxLength":128}},"required":["timetable_id","course_id"],"additionalProperties":false}`
-	ImportInputSchemaJSON          = `{"type":"object","properties":{"format":{"type":"string","enum":["wuda","academic","whu","wakeup","csv","legacy"]},"content":{"type":"string","minLength":1,"maxLength":65536},"fileName":{"type":"string","maxLength":512},"name":{"type":"string","maxLength":512},"timetable_id":{"type":"string","maxLength":128},"active":{"type":"boolean"}},"required":["format","content"],"additionalProperties":false}`
+	// CourseUpdateInputSchemaJSON 与创建共用字段定义，但 course_id 为必填：
+	// 更新契约不允许缺省课程 ID，越界由 Dispatcher 按注册 Schema 直接拒绝。
+	CourseUpdateInputSchemaJSON = `{"type":"object","properties":{"timetable_id":{"type":"string","minLength":1,"maxLength":128},"course_id":{"type":"string","minLength":1,"maxLength":128},"title":{"type":"string","minLength":1,"maxLength":256},"weekday":{"type":"integer","minimum":1,"maximum":7},"class_from":{"type":"integer","minimum":1,"maximum":64},"class_to":{"type":"integer","minimum":1,"maximum":64},"weeks":{"type":"array","minItems":1,"maxItems":64,"items":{"type":"integer","minimum":1,"maximum":64}},"course_nature":{"type":"string","maxLength":512},"instructor":{"type":"string","maxLength":512},"location":{"type":"string","maxLength":512},"week_meta":{"type":"string","maxLength":512},"start_text":{"type":"string","maxLength":512},"end_text":{"type":"string","maxLength":512},"external_id":{"type":"string","maxLength":512}},"required":["timetable_id","course_id","title","weekday","class_from","class_to","weeks"],"additionalProperties":false}`
+	ImportInputSchemaJSON       = `{"type":"object","properties":{"format":{"type":"string","enum":["wuda","academic","whu","wakeup","csv","legacy"]},"content":{"type":"string","minLength":1,"maxLength":65536},"fileName":{"type":"string","maxLength":512},"name":{"type":"string","maxLength":512},"timetable_id":{"type":"string","maxLength":128},"active":{"type":"boolean"}},"required":["format","content"],"additionalProperties":false}`
 )
 
 // 导出的 Schema 别名供 Service 注册使用，避免 Tool 与 Capability 元数据漂移。
@@ -45,8 +48,8 @@ const (
 	TimetableUpdateInputSchemaJSONExport = TimetableUpdateInputSchemaJSON
 	CourseInputSchemaJSONExport          = CourseInputSchemaJSON
 	CourseGetInputSchemaJSONExport       = CourseGetInputSchemaJSON
+	CourseUpdateInputSchemaJSONExport    = CourseUpdateInputSchemaJSON
 	ImportInputSchemaJSONExport          = ImportInputSchemaJSON
-	CourseUpdateInputSchemaJSONExport    = CourseInputSchemaJSON
 )
 
 // ToolSpecs 返回课表原子 Tool 规格。Tool 与 Capability 的 JSON Schema 保持一致，
@@ -68,7 +71,7 @@ func ToolSpecs() []registry.ToolSpec {
 		read(CourseListToolID, "List courses in one owned timetable.", TimetableIDInputSchemaJSON),
 		read(CourseGetToolID, "Get one course in an owned timetable.", CourseGetInputSchemaJSON),
 		write(CourseCreateToolID, "Create a course in an owned timetable.", CourseInputSchemaJSON),
-		write(CourseUpdateToolID, "Replace one course in an owned timetable.", CourseInputSchemaJSON),
+		write(CourseUpdateToolID, "Replace one course in an owned timetable.", CourseUpdateInputSchemaJSON),
 		write(CourseDeleteToolID, "Delete one course from an owned timetable.", CourseGetInputSchemaJSON),
 		write(TimetableImportToolID, "Import a WuDa academic or WakeUp timetable.", ImportInputSchemaJSON),
 	}
