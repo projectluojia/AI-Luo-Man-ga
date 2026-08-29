@@ -110,6 +110,9 @@ type Orchestrator struct {
 	now           func() time.Time
 }
 
+// NewOrchestrator creates an Echo orchestrator with the supplied dependencies and configuration.
+// It applies default values for omitted settings and panics if the application configuration
+// source, context configuration, or child Run limit is invalid.
 func NewOrchestrator(
 	agent executor.Client,
 	reg *registry.Registry,
@@ -1431,7 +1434,7 @@ func (o *Orchestrator) attachConfirmation(
 }
 
 // confirmationInfo 把确认记录映射为面向执行者的公共投影：只含呈现与重试字段，
-// 不含参数原文、摘要与决策人。
+// confirmationInfo projects a confirmation record into its public details, excluding parameter data, summaries, and decision-maker information.
 func confirmationInfo(record *confirmation.Confirmation) *executor.ConfirmationInfo {
 	return &executor.ConfirmationInfo{
 		ConfirmationId: record.ConfirmationID,

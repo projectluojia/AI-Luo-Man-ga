@@ -16,7 +16,8 @@ import (
 )
 
 // NewStore 创建测试存储：使用自管临时目录（不经 t.TempDir，避免框架清理对
-// 外部锁竞争二次报错），并注册关闭与尽力而为的目录清理。
+// NewStore creates and opens a SQLite store in a dedicated temporary directory.
+// It registers cleanup to close the store and remove the directory when the test ends.
 func NewStore(t *testing.T, name string) *sqlite.Store {
 	t.Helper()
 	dir, err := os.MkdirTemp("", "ailuo-sqlite-test-")
@@ -35,7 +36,7 @@ func NewStore(t *testing.T, name string) *sqlite.Store {
 // CloseAndWait 关闭测试存储并等待文件句柄释放，随后删除临时目录：
 // 反复 GC + 重试直到目录可删（上限 10 秒）。删除是卫生问题而非正确性问题：
 // 新建数据库文件可能被外部进程（如 Defender 实时扫描）锁定，超出重试上限时
-// 只记录日志、不判定测试失败——残留目录位于系统临时空间，无害。
+// CloseAndWait closes the SQLite store and removes its temporary directory, retrying cleanup for up to 10 seconds.
 func CloseAndWait(t *testing.T, store *sqlite.Store, dir string) {
 	t.Helper()
 	if err := store.Close(); err != nil {

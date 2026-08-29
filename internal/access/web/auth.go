@@ -49,7 +49,7 @@ func WithQQAccessAdmin(admin QQAccessAdmin) ServerOption {
 	return func(server *Server) { server.qqAccessAdmin = admin }
 }
 
-// WithEventHub 注入跨平台共享的 Echo 事件中心。
+// WithEventHub configures the server with a shared Echo event hub when one is provided.
 func WithEventHub(hub *access.EventHub) ServerOption {
 	return func(server *Server) {
 		if hub != nil {
@@ -59,7 +59,7 @@ func WithEventHub(hub *access.EventHub) ServerOption {
 }
 
 // WithConfirmations 注入确认治理端口。未注入时确认查询与决策端点返回 503，
-// 不降级为无治理的确认语义。
+// WithConfirmations configures the server to use the provided confirmation governance interface when it is available.
 func WithConfirmations(confirmations ConfirmationGateway) ServerOption {
 	return func(server *Server) {
 		if confirmations != nil {
@@ -68,6 +68,8 @@ func WithConfirmations(confirmations ConfirmationGateway) ServerOption {
 	}
 }
 
+// loopbackAdminRequest reports whether a request originates from a loopback address,
+// targets localhost or a loopback host, and has a matching HTTP(S) Origin when provided.
 func loopbackAdminRequest(request *http.Request) bool {
 	remoteHost, _, err := net.SplitHostPort(request.RemoteAddr)
 	if err != nil {

@@ -11,6 +11,12 @@ from agent.runtime import ExecutorRuntime, PROTOCOL_VERSION
 
 
 def _capability() -> executor_pb2.Capability:
+    """
+    Create the campus bus routes listing capability used by the tests.
+    
+    Returns:
+    	executor_pb2.Capability: A capability definition with an optional integer route limit.
+    """
     return executor_pb2.Capability(
         id="campus.bus.routes.list",
         version="1.0.0",
@@ -25,6 +31,17 @@ def _confirmation(
     status: str,
     target_type: str = "capability",
 ) -> executor_pb2.ConfirmationInfo:
+    """
+    Construct confirmation metadata for the campus bus routes capability.
+    
+    Parameters:
+    	confirmation_id (str): Identifier of the confirmation request.
+    	status (str): Current confirmation status.
+    	target_type (str): Type of the confirmation target.
+    
+    Returns:
+    	ConfirmationInfo: Confirmation metadata for the capability.
+    """
     return executor_pb2.ConfirmationInfo(
         confirmation_id=confirmation_id,
         capability_id="campus.bus.routes.list",
@@ -37,6 +54,15 @@ def _confirmation(
 
 
 def _start_frame(pending: list[executor_pb2.ConfirmationInfo] | None = None) -> executor_pb2.ExecutorFrame:
+    """
+    Create the initial executor frame for a test run.
+    
+    Parameters:
+    	pending (list[executor_pb2.ConfirmationInfo] | None): Confirmation requests pending at the start of the run.
+    
+    Returns:
+    	executor_pb2.ExecutorFrame: The configured start frame.
+    """
     return executor_pb2.ExecutorFrame(
         echo_id="echo",
         run_id="run",
@@ -67,11 +93,26 @@ class ScriptedModel(ModelProvider):
     """可编程模型：第一轮按脚本产出事件，第二轮校验收到的结果正文。"""
 
     def __init__(self, first_turn, check_second_turn=None) -> None:
+        """Initialize a scripted model with its first response and an optional second-turn check.
+        
+        Parameters:
+        	first_turn: The model turn to return first.
+        	check_second_turn: An optional callable used to validate the messages received on the second turn.
+        """
         self._first_turn = first_turn
         self._check = check_second_turn
         self._turn = 0
 
     async def stream_turn(self, *, model: str, messages: list[dict[str, Any]], tools: list[dict[str, Any]]) -> AsyncIterator[ModelEvent]:
+        """
+        Stream scripted model events for the initial turn and a fixed final response thereafter.
+        
+        Parameters:
+            messages (list[dict[str, Any]]): Messages supplied for validation on subsequent turns.
+        
+        Yields:
+            ModelEvent: Events produced for the current model turn.
+        """
         self._turn += 1
         if self._turn == 1:
             async for event in self._first_turn():
@@ -84,6 +125,15 @@ class ScriptedModel(ModelProvider):
 
 
 def _tool_call_turn(call: ToolCall) -> AsyncIterator[ModelEvent]:
+    """
+    Create a model-event stream containing a completed turn with one tool call.
+    
+    Parameters:
+    	call (ToolCall): The tool call included in the completed turn.
+    
+    Returns:
+    	AsyncIterator[ModelEvent]: A stream containing the completed tool-call event.
+    """
     async def generate() -> AsyncIterator[ModelEvent]:
         yield TurnCompleted(
             text="",
@@ -99,6 +149,15 @@ def _tool_call_turn(call: ToolCall) -> AsyncIterator[ModelEvent]:
 
 
 def _final_turn(text: str) -> AsyncIterator[ModelEvent]:
+    """
+    Create a model event stream containing a final text response.
+    
+    Parameters:
+    	text (str): The response text to emit.
+    
+    Returns:
+    	AsyncIterator[ModelEvent]: Events for the text response and its completion.
+    """
     async def generate() -> AsyncIterator[ModelEvent]:
         yield TextDelta(text)
         yield TurnCompleted(
@@ -113,15 +172,30 @@ def _final_turn(text: str) -> AsyncIterator[ModelEvent]:
 class ConfirmationRoundTripTest(unittest.IsolatedAsyncioTestCase):
     @staticmethod
     async def _next_body(output: AsyncIterator[executor_pb2.ExecutorFrame], body: str) -> executor_pb2.ExecutorFrame:
+        """Return the next executor frame containing the specified body type.
+        
+        Parameters:
+        	output (AsyncIterator[executor_pb2.ExecutorFrame]): The stream of executor frames to inspect.
+        	body (str): The expected frame body field name.
+        
+        Returns:
+        	executor_pb2.ExecutorFrame: The first frame whose body matches `body`.
+        """
         while True:
             frame = await asyncio.wait_for(anext(output), timeout=1)
             if frame.WhichOneof("body") == body:
                 return frame
 
     def _stream(self) -> tuple[asyncio.Queue, AsyncIterator[executor_pb2.ExecutorFrame]]:
+        """Create a request queue and asynchronous iterator for executor frames.
+        
+        Returns:
+            tuple[asyncio.Queue, AsyncIterator[executor_pb2.ExecutorFrame]]: The queue used to submit request frames and an iterator that yields them in order.
+        """
         requests: asyncio.Queue[executor_pb2.ExecutorFrame] = asyncio.Queue()
 
         async def request_iterator() -> AsyncIterator[executor_pb2.ExecutorFrame]:
+            """Yield executor frames as they become available from the request queue."""
             while True:
                 yield await requests.get()
 
@@ -158,6 +232,7 @@ class ConfirmationRoundTripTest(unittest.IsolatedAsyncioTestCase):
     async def test_waiting_confirmation_does_not_suppress_capability_call(self) -> None:
         # 回归：Python 不做确认决策——waiting 投影不得抑制调用帧，判定与去重
         # 由 Go 内核权威执行；已批准确认仍随重试帧携带。
+        """Verify that a waiting confirmation does not suppress the capability call and is not treated as authorization."""
         seen: dict[str, Any] = {}
 
         def check(messages: list[dict[str, Any]]) -> None:
@@ -213,9 +288,18 @@ class ConfirmationRoundTripTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(frames[-1].final_message.text, "已处理。")
 
     async def test_confirmation_required_result_is_surfaced_to_model(self) -> None:
+        """
+        Verify that a confirmation-required capability result is forwarded to the model with its error code and confirmation details.
+        """
         seen: dict[str, Any] = {}
 
         def check(messages: list[dict[str, Any]]) -> None:
+            """
+            Extracts the error code and confirmation details from the latest message.
+            
+            Parameters:
+                messages: Model messages whose latest entry contains a JSON-encoded error.
+            """
             payload = json.loads(messages[-1]["content"])
             seen["code"] = payload["error"]["code"]
             seen["confirmation"] = payload["error"]["confirmation"]
@@ -255,6 +339,12 @@ class ConfirmationRoundTripTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_confirmation_required_projection_fields_are_validated(self) -> None:
         # 缺 capability_id 或状态取闭式外值的投影按协议违例拒绝，不转发给模型。
+        """
+        Validates confirmation metadata in required-confirmation results and rejects malformed projections.
+        
+        Raises:
+            AssertionError: If the executor does not report a protocol violation for invalid confirmation metadata.
+        """
         for confirmation in (
             _confirmation("conf-6", "waiting").__class__(
                 confirmation_id="conf-6", capability_id="", target_type="capability",
