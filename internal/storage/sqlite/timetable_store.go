@@ -78,7 +78,7 @@ func (s *Store) CreateTimetable(ctx context.Context, value timetable.Timetable) 
 		return timetable.Timetable{}, timetable.ErrCapacity
 	}
 	if value.Active {
-		if _, err := tx.ExecContext(ctx, `UPDATE timetables SET active=0,updated_at=? WHERE app_id=? AND user_id=?`, now.Format(time.RFC3339Nano), value.AppID, value.UserID); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE timetables SET active=0,updated_at=? WHERE app_id=? AND user_id=? AND active=1`, now.Format(time.RFC3339Nano), value.AppID, value.UserID); err != nil {
 			return timetable.Timetable{}, err
 		}
 	}
@@ -364,7 +364,7 @@ func (s *Store) ImportTimetable(ctx context.Context, value timetable.Timetable, 
 		return timetable.Timetable{}, nil, timetable.ErrCapacity
 	}
 	if value.Active {
-		if _, err := tx.ExecContext(ctx, `UPDATE timetables SET active=0,updated_at=? WHERE app_id=? AND user_id=?`, now.Format(time.RFC3339Nano), value.AppID, value.UserID); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE timetables SET active=0,updated_at=? WHERE app_id=? AND user_id=? AND active=1`, now.Format(time.RFC3339Nano), value.AppID, value.UserID); err != nil {
 			return timetable.Timetable{}, nil, err
 		}
 	}
