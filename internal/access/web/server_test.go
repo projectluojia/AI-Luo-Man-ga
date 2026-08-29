@@ -756,7 +756,7 @@ func TestWebAccessShutdownStopsAdmissionAndDrainsActiveRuns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer sqlitetest.CloseAndWait(t, store, tempDir)
+	t.Cleanup(func() { sqlitetest.CloseAndWait(t, store, tempDir) })
 	backend := &fakeOrchestrator{store: store, block: true}
 	server := newAuthenticatedServer(
 		t,
@@ -862,7 +862,7 @@ func TestShutdownWaitsForAdmittedCreationBeforeCancellingRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer sqlitetest.CloseAndWait(t, store, tempDir)
+	t.Cleanup(func() { sqlitetest.CloseAndWait(t, store, tempDir) })
 	backend := &fakeOrchestrator{
 		store:         store,
 		block:         true,
