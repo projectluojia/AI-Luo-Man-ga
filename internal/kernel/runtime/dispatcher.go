@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -36,11 +37,15 @@ type ConfirmationRequest struct {
 	AppID          string
 	EchoID         string
 	RunID          string
+	SessionID      string
 	ConfirmationID string
 	TargetType     string
 	TargetID       string
 	SideEffect     string
 	IdempotencyKey string
+	// ArgumentDigest 是本次调用参数的规范化 JSON 摘要（sha256 十六进制），
+	// 由 Dispatcher 边界统一计算，验证时与确认记录绑定摘要强制匹配。
+	ArgumentDigest string
 }
 
 type ConfirmationVerifier interface {
@@ -198,7 +203,7 @@ func (d *Dispatcher) route(
 		return nil, err
 	}
 	defer func() { target.metric(succeeded, time.Since(started)) }()
-	narrowedPermissions, err := d.authorize(ctx, request, targetType, target.targetID, target.sideEffect, target.requiresConfirmation, target.requiredPermissions)
+	narrowedPermissions, err := d.authorize(ctx, request, targetType, target.targetID, target.sideEffect, target.requiresConfirmation, target.requiredPermissions, payload)
 	if err != nil {
 		observe.Warn(ctx, "权限或副作用治理拒绝本次调用",
 			observe.StringAttr("error_class", "governance"),
@@ -285,6 +290,7 @@ func (d *Dispatcher) authorize(
 	sideEffect string,
 	requiresConfirmation bool,
 	requiredPermissions []string,
+	payload json.RawMessage,
 ) ([]string, error) {
 	narrowedPermissions, err := registry.NarrowPermissions(request.PermissionScope, requiredPermissions)
 	if err != nil {
@@ -299,21 +305,38 @@ func (d *Dispatcher) authorize(
 		if request.ConfirmationID == "" || d.confirmations == nil {
 			return nil, fmt.Errorf("%w: target=%q", ErrConfirmationRequired, targetID)
 		}
+		// 参数摘要与确认创建侧使用同一规范化算法（jsonutil.CanonicalDigest），
+		// 参数改变后旧确认摘要必然不匹配，fail-closed 收敛为 confirmation_required。
+		digest, err := argumentDigest(payload)
+		if err != nil {
+			return nil, fmt.Errorf("%w: target=%q", ErrConfirmationRequired, targetID)
+		}
 		confirmation := ConfirmationRequest{
 			AppID:          request.AppID,
 			EchoID:         request.EchoID,
 			RunID:          request.RunID,
+			SessionID:      request.SessionID,
 			ConfirmationID: request.ConfirmationID,
 			TargetType:     targetType,
 			TargetID:       targetID,
 			SideEffect:     sideEffect,
 			IdempotencyKey: request.IdempotencyKey,
+			ArgumentDigest: digest,
 		}
 		if err := d.confirmations.VerifyConfirmation(ctx, confirmation); err != nil {
 			return nil, fmt.Errorf("%w: target=%q", ErrConfirmationRequired, targetID)
 		}
 	}
 	return narrowedPermissions, nil
+}
+
+// argumentDigest 计算确认验证所需的参数摘要，算法与 confirmation.Digest 一致。
+func argumentDigest(payload json.RawMessage) (string, error) {
+	sum, err := jsonutil.CanonicalDigest(payload)
+	if err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(sum[:]), nil
 }
 
 func (d *Dispatcher) invokeHandler(

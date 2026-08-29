@@ -60,6 +60,22 @@ message StartRun {
   string trace_id = 16;
   string parent_span_id = 17;
   string parent_run_id = 18;
+  // 当前 Echo 下仍然活跃（waiting/approved 且未过期）的确认投影，
+  // 供执行者在重试高风险调用时附带 confirmation_id。
+  repeated ConfirmationInfo pending_confirmations = 19;
+}
+
+// ConfirmationInfo 是确认记录面向执行者的公共投影：只包含呈现与重试所需字段，
+// 不包含参数原文、参数摘要或决策人等治理细节。
+message ConfirmationInfo {
+  string confirmation_id = 1;
+  string capability_id = 2;
+  string target_type = 3;
+  string target_id = 4;
+  string side_effect = 5;
+  string status = 6;
+  // 有效期截止时间，UTC RFC3339。
+  string expires_at = 7;
 }
 
 message RunAccepted {
@@ -86,6 +102,8 @@ message CapabilityCall {
   string call_id = 1;
   string capability_id = 2;
   bytes payload_json = 3;
+  // 重试高风险调用时携带的已批准确认标识；首次调用留空。
+  string confirmation_id = 4;
 }
 
 message CapabilityResult {
@@ -95,6 +113,8 @@ message CapabilityResult {
   bytes payload_json = 4;
   string error_code = 5;
   string error_message = 6;
+  // error_code 为 confirmation_required 时携带新建确认的公共投影。
+  ConfirmationInfo confirmation = 7;
 }
 
 message ReplyDelta {

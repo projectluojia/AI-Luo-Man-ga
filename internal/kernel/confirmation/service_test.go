@@ -109,6 +109,7 @@ func verifyRequest(record confirmation.Confirmation) runtime.ConfirmationRequest
 		TargetID:       record.TargetID,
 		SideEffect:     record.SideEffect,
 		IdempotencyKey: record.IdempotencyKey,
+		ArgumentDigest: record.ArgumentDigest,
 	}
 }
 
@@ -270,9 +271,8 @@ func TestServiceVerifyRejectsScopeMismatch(t *testing.T) {
 		"跨 Capability": func(r *runtime.ConfirmationRequest) { r.TargetID = "other.capability" },
 		"跨目标类型":        func(r *runtime.ConfirmationRequest) { r.TargetType = confirmation.TargetTypeTool },
 		"跨 Echo":       func(r *runtime.ConfirmationRequest) { r.EchoID = "echo-other" },
-		"跨 Run":        func(r *runtime.ConfirmationRequest) { r.RunID = "run-other" },
 		"跨副作用类型":       func(r *runtime.ConfirmationRequest) { r.SideEffect = confirmation.SideEffectWrite },
-		"跨幂等键":         func(r *runtime.ConfirmationRequest) { r.IdempotencyKey = "operation-other" },
+		"跨参数摘要":        func(r *runtime.ConfirmationRequest) { r.ArgumentDigest = strings.Repeat("b", 64) },
 	} {
 		request := verifyRequest(record)
 		mutate(&request)
@@ -280,9 +280,108 @@ func TestServiceVerifyRejectsScopeMismatch(t *testing.T) {
 			t.Fatalf("%s got %v, want ErrScopeMismatch", name, err)
 		}
 	}
+	// 公共往返协议语义：Run 与幂等键仅是创建时的审计溯源，不参与验证绑定——
+	// 决策后的重试调用使用新的 call_id，甚至可以发生在同一 Echo 的后续 Run 中；
+	// 参数摘要保证批准只对确认时的精确参数生效。
+	retried := verifyRequest(record)
+	retried.RunID = "run-other"
+	retried.IdempotencyKey = "operation-other"
+	if err := service.VerifyConfirmation(context.Background(), retried); err != nil {
+		t.Fatalf("同 Echo 重试（跨 Run/幂等键）got %v, want nil", err)
+	}
 	// 跨 App 读不到记录：App 隔离在读取层已经保证。
 	if _, err := service.Resolve(context.Background(), "other", record.ConfirmationID); !errors.Is(err, confirmation.ErrNotFound) {
 		t.Fatalf("cross-app resolve got %v, want ErrNotFound", err)
+	}
+}
+
+func TestServiceVerifyAllowsSessionScopedRetry(t *testing.T) {
+	t.Parallel()
+	service, store, clock := openService(t)
+	seedEchoRun(t, store, "app", "echo-2", "run-2")
+	record := requestConfirmation(t, service, "app", "echo", "run", "call-1",
+		confirmation.RequestSpec{
+			CapabilityID: "campus.bus.notify", TargetType: confirmation.TargetTypeCapability,
+			TargetID: "campus.bus.notify", SideEffect: confirmation.SideEffectExternal,
+			IdempotencyKey: "operation-1", SessionID: "session-1",
+		},
+		`{"message":"发车提醒"}`, clock.current().Add(time.Hour))
+	if _, err := service.Decide(context.Background(), "app", record.ConfirmationID,
+		confirmation.StatusApproved, "user-1", clock.current().Add(time.Minute)); err != nil {
+		t.Fatalf("decide approve: %v", err)
+	}
+	// 同会话跨 Echo 的重试（新 call_id、新 Run）：公共往返协议的核心语义。
+	retried := verifyRequest(record)
+	retried.EchoID = "echo-2"
+	retried.RunID = "run-2"
+	retried.IdempotencyKey = "operation-2"
+	retried.SessionID = "session-1"
+	if err := service.VerifyConfirmation(context.Background(), retried); err != nil {
+		t.Fatalf("同会话跨 Echo 重试 got %v, want nil", err)
+	}
+	// 会话不同：即使目标与摘要一致也拒绝。
+	differentSession := retried
+	differentSession.SessionID = "session-2"
+	if err := service.VerifyConfirmation(context.Background(), differentSession); !errors.Is(err, confirmation.ErrScopeMismatch) {
+		t.Fatalf("跨会话重试 got %v, want ErrScopeMismatch", err)
+	}
+	// 无会话且跨 Echo：拒绝（存量无会话确认仍限于本 Echo）。
+	noSession := retried
+	noSession.SessionID = ""
+	if err := service.VerifyConfirmation(context.Background(), noSession); !errors.Is(err, confirmation.ErrScopeMismatch) {
+		t.Fatalf("无会话跨 Echo 重试 got %v, want ErrScopeMismatch", err)
+	}
+}
+
+func TestStoreListAndRevokeByEchoAndSession(t *testing.T) {
+	t.Parallel()
+	service, store, clock := openService(t)
+	spec := confirmation.RequestSpec{
+		CapabilityID: "campus.bus.notify", TargetType: confirmation.TargetTypeCapability,
+		TargetID: "campus.bus.notify", SideEffect: confirmation.SideEffectExternal,
+		IdempotencyKey: "operation-1", SessionID: "session-1",
+	}
+	first := requestConfirmation(t, service, "app", "echo", "run", "call-1", spec,
+		`{"message":"发车提醒"}`, clock.current().Add(time.Hour))
+	spec.IdempotencyKey = "operation-2"
+	second := requestConfirmation(t, service, "app", "echo", "run", "call-2", spec,
+		`{"message":"发车提醒"}`, clock.current().Add(time.Hour))
+	// 无会话的存量形态记录：只应出现在 Echo 列表，不出现在会话列表。
+	legacySpec := spec
+	legacySpec.IdempotencyKey = "operation-3"
+	legacySpec.SessionID = ""
+	requestConfirmation(t, service, "app", "echo", "run", "call-3", legacySpec,
+		`{"message":"发车提醒"}`, clock.current().Add(time.Hour))
+
+	active, err := service.ActiveByEcho(context.Background(), "app", "echo")
+	if err != nil || len(active) != 3 {
+		t.Fatalf("ActiveByEcho got %d records, err=%v, want 3", len(active), err)
+	}
+	sessionActive, err := service.ActiveBySession(context.Background(), "app", "session-1")
+	if err != nil || len(sessionActive) != 2 {
+		t.Fatalf("ActiveBySession got %d records, err=%v, want 2", len(sessionActive), err)
+	}
+	if sessionActive[0].ConfirmationID != first.ConfirmationID || sessionActive[1].ConfirmationID != second.ConfirmationID {
+		t.Fatalf("ActiveBySession ordering mismatch")
+	}
+	if _, err := service.ActiveBySession(context.Background(), "app", ""); !errors.Is(err, confirmation.ErrInvalidRequest) {
+		t.Fatalf("ActiveBySession 缺会话 got %v, want ErrInvalidRequest", err)
+	}
+	if _, err := service.ActiveByEcho(context.Background(), "other", "echo"); err != nil || len(active) != 3 {
+		t.Fatalf("跨 App 读取异常：err=%v", err)
+	}
+	// 撤销 Echo：后续活跃列表为空（App 隔离读取下跨 App 撤销数量为 0）。
+	revoked, err := store.RevokeEcho(context.Background(), "app", "echo", clock.current().Add(2*time.Minute))
+	if err != nil || revoked != 3 {
+		t.Fatalf("RevokeEcho got %d, err=%v, want 3", revoked, err)
+	}
+	revokedAgain, err := store.RevokeEcho(context.Background(), "app", "echo", clock.current().Add(3*time.Minute))
+	if err != nil || revokedAgain != 0 {
+		t.Fatalf("RevokeEcho 幂等 got %d, err=%v, want 0", revokedAgain, err)
+	}
+	after, err := service.ActiveByEcho(context.Background(), "app", "echo")
+	if err != nil || len(after) != 0 {
+		t.Fatalf("撤销后 ActiveByEcho got %d records, err=%v, want 0", len(after), err)
 	}
 }
 
@@ -727,9 +826,10 @@ func TestDispatcherExecutesApprovedSideEffectExactlyOnce(t *testing.T) {
 	if executions != 1 {
 		t.Fatalf("executions after replay=%d, want 1", executions)
 	}
-	// 参数改变（同键不同参数）：幂等指纹冲突拒绝执行，旧确认不可复用。
-	if _, err := dispatcher.InvokeCapability(context.Background(), request, "external-capability", json.RawMessage(`{"value":2}`)); !errors.Is(err, idempotency.ErrKeyConflict) {
-		t.Fatalf("changed arguments got %v, want ErrKeyConflict", err)
+	// 参数改变（同键不同参数）：确认摘要绑定在授权边界先拒绝，参数变化后
+	// 旧确认不可复用，副作用不执行。
+	if _, err := dispatcher.InvokeCapability(context.Background(), request, "external-capability", json.RawMessage(`{"value":2}`)); !errors.Is(err, runtime.ErrConfirmationRequired) {
+		t.Fatalf("changed arguments got %v, want ErrConfirmationRequired", err)
 	}
 	if executions != 1 {
 		t.Fatalf("executions after conflict=%d, want 1", executions)

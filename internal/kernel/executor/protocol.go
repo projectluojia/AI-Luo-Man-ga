@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"time"
 	"unicode/utf8"
 
 	"google.golang.org/protobuf/proto"
@@ -91,7 +92,7 @@ func ValidateStartFrame(frame *Frame) error {
 		!spanPattern.MatchString(start.ParentSpanId) ||
 		start.TraceId == "00000000000000000000000000000000" ||
 		start.ParentSpanId == "0000000000000000" ||
-		len(start.Capabilities) > MaxCapabilities {
+		len(start.Capabilities) > MaxCapabilities || len(start.PendingConfirmations) > MaxCapabilities {
 		return ErrInvalidFrame
 	}
 	seen := make(map[string]struct{}, len(start.Capabilities))
@@ -110,7 +111,47 @@ func ValidateStartFrame(frame *Frame) error {
 		}
 		seen[capability.Id] = struct{}{}
 	}
+	seenConfirmations := make(map[string]struct{}, len(start.PendingConfirmations))
+	for _, confirmation := range start.PendingConfirmations {
+		if !ValidConfirmationInfo(confirmation) {
+			return ErrInvalidFrame
+		}
+		if _, exists := seenConfirmations[confirmation.ConfirmationId]; exists {
+			return ErrInvalidFrame
+		}
+		seenConfirmations[confirmation.ConfirmationId] = struct{}{}
+	}
 	return nil
+}
+
+// ValidConfirmationInfo 校验确认公共投影的字段格式：标识为稳定 token，
+// 状态取闭式值，有效期必须是可解析的 UTC RFC3339 时间。
+func ValidConfirmationInfo(info *ConfirmationInfo) bool {
+	if info == nil ||
+		!validToken(info.ConfirmationId, MaxIdentifierBytes) ||
+		!validText(info.TargetId, 1, MaxIdentifierBytes) {
+		return false
+	}
+	switch info.TargetType {
+	case "capability", "tool":
+	default:
+		return false
+	}
+	switch info.SideEffect {
+	case "write", "external":
+	default:
+		return false
+	}
+	switch info.Status {
+	case "waiting", "approved":
+	default:
+		return false
+	}
+	if info.CapabilityId != "" && !validToken(info.CapabilityId, MaxIdentifierBytes) {
+		return false
+	}
+	expiresAt, err := time.Parse(time.RFC3339, info.ExpiresAt)
+	return err == nil && !expiresAt.IsZero()
 }
 
 func ValidateRunUsage(
@@ -171,6 +212,9 @@ func ValidateCapabilityCall(call *CapabilityCall) error {
 		!json.Valid(call.PayloadJson) {
 		return ErrInvalidFrame
 	}
+	if call.ConfirmationId != "" && !validToken(call.ConfirmationId, MaxIdentifierBytes) {
+		return ErrInvalidFrame
+	}
 	return nil
 }
 
@@ -219,6 +263,15 @@ func ValidateCapabilityResultFrame(frame *Frame, echoID, runID string, expectedS
 		!validToken(result.ErrorCode, 64) ||
 		!codePattern.MatchString(result.ErrorCode) ||
 		!validText(result.ErrorMessage, 1, MaxFailureMessageBytes) {
+		return ErrInvalidFrame
+	}
+	// confirmation_required 结果必须携带格式合法的确认公共投影；其余失败结果
+	// 不得携带投影，避免执行者把无关确认与调用错误绑定。
+	if result.ErrorCode == "confirmation_required" {
+		if !ValidConfirmationInfo(result.Confirmation) {
+			return ErrInvalidFrame
+		}
+	} else if result.Confirmation != nil {
 		return ErrInvalidFrame
 	}
 	return nil

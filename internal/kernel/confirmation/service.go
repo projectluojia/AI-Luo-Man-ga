@@ -66,6 +66,7 @@ func (s *Service) Request(
 		TargetID:       spec.TargetID,
 		SideEffect:     spec.SideEffect,
 		IdempotencyKey: spec.IdempotencyKey,
+		SessionID:      spec.SessionID,
 		ArgumentDigest: digest,
 		Status:         StatusWaiting,
 		ExpiresAt:      expiry,
@@ -239,6 +240,45 @@ func (s *Service) RevokeRun(ctx context.Context, appID, runID string, now time.T
 	return affected, nil
 }
 
+// RevokeEcho 撤销指定 Echo 下全部等待/已批准确认（Echo 取消场景），
+// 返回撤销数量。已失效记录不在撤销范围内。
+func (s *Service) RevokeEcho(ctx context.Context, appID, echoID string, now time.Time) (int64, error) {
+	if appID == "" || echoID == "" || now.IsZero() {
+		return 0, ErrInvalidRequest
+	}
+	affected, err := s.store.RevokeEcho(ctx, appID, echoID, now)
+	if err != nil {
+		return 0, err
+	}
+	if affected > 0 {
+		observe.Info(ctx, "Echo 的待确认记录已撤销",
+			observe.Component("confirmation"),
+			observe.StringAttr("app_id", appID),
+			observe.StringAttr("echo_id", echoID),
+			observe.Int64Attr("revoked_count", affected),
+		)
+	}
+	return affected, nil
+}
+
+// ActiveByEcho 返回指定 Echo 下仍未失效（waiting/approved 且有效期未过）的
+// 确认记录，按创建时间升序。供 Run 启动时的 StartRun 确认投影与状态查询使用。
+func (s *Service) ActiveByEcho(ctx context.Context, appID, echoID string) ([]Confirmation, error) {
+	if appID == "" || echoID == "" {
+		return nil, ErrInvalidRequest
+	}
+	return s.store.ListActiveByEcho(ctx, appID, echoID, s.now().UTC())
+}
+
+// ActiveBySession 返回指定会话下仍未失效的确认记录，按创建时间升序，
+// 供跨 Echo 续跑时的 StartRun 确认投影使用。
+func (s *Service) ActiveBySession(ctx context.Context, appID, sessionID string) ([]Confirmation, error) {
+	if appID == "" || sessionID == "" {
+		return nil, ErrInvalidRequest
+	}
+	return s.store.ListActiveBySession(ctx, appID, sessionID, s.now().UTC())
+}
+
 // Resolve 读取确认记录用于状态展示。有效期已过（含状态机已显式标记为 expired
 // 以及尚未显式标记但已超期的 waiting/approved 记录）一律返回 ErrExpired，
 // 便于界面呈现"已失效"；记录本身仍随错误返回。
@@ -296,12 +336,25 @@ func (s *Service) verify(ctx context.Context, request runtime.ConfirmationReques
 }
 
 // verifyRecord 执行确认记录的完整匹配规则。
+//
+// 公共往返协议的绑定语义：验证强制匹配 App、目标（类型与标识）、副作用、
+// 参数摘要与有效期，以及会话归属——记录必须属于本次调用的 Echo，或与调用
+// 同属一个已记录会话（支持决策后在同一会话的新 Echo 中续跑）。Run、Call 与
+// 幂等键仅是创建时的审计溯源，不参与验证绑定——决策后的重试调用使用新的
+// call_id。参数摘要保证批准只对确认时的精确参数生效，参数改变后旧确认必然
+// 失效；Run/Echo 取消时的批量撤销仍然 fail-closed。
 func verifyRecord(record Confirmation, request runtime.ConfirmationRequest, now time.Time) error {
-	// 范围绑定：跨 App、目标（Capability/Tool）、Echo、Run、副作用或幂等键一律拒绝。
+	sessionMatch := record.SessionID != "" && request.SessionID != "" &&
+		record.SessionID == request.SessionID
+	echoMatch := record.EchoID == request.EchoID
+	if !echoMatch && !sessionMatch {
+		return ErrScopeMismatch
+	}
+	// 范围绑定：跨 App、目标（Capability/Tool）、副作用或参数摘要不一致一律拒绝。
 	if record.AppID != request.AppID || record.TargetType != request.TargetType ||
-		record.TargetID != request.TargetID || record.EchoID != request.EchoID ||
-		record.RunID != request.RunID || record.SideEffect != request.SideEffect ||
-		record.IdempotencyKey != request.IdempotencyKey {
+		record.TargetID != request.TargetID ||
+		record.SideEffect != request.SideEffect ||
+		record.ArgumentDigest != request.ArgumentDigest {
 		return ErrScopeMismatch
 	}
 	// 有效期：无论状态机是否显式标记，超过 expires_at 一律失效。

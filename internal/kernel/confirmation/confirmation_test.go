@@ -100,6 +100,7 @@ func TestValidateRequestRejectsPartialBindings(t *testing.T) {
 		AppID: "app", EchoID: "echo", RunID: "run", ConfirmationID: "confirmation-1",
 		TargetType: TargetTypeCapability, TargetID: "campus.bus.notify",
 		SideEffect: SideEffectExternal, IdempotencyKey: "operation-1",
+		ArgumentDigest: strings.Repeat("a", 64),
 	}
 	if err := ValidateRequest(valid); err != nil {
 		t.Fatalf("valid request rejected: %v", err)
@@ -113,6 +114,8 @@ func TestValidateRequestRejectsPartialBindings(t *testing.T) {
 		"缺目标":     func(r *runtime.ConfirmationRequest) { r.TargetID = "" },
 		"非法副作用类型": func(r *runtime.ConfirmationRequest) { r.SideEffect = "read" },
 		"非法幂等键":   func(r *runtime.ConfirmationRequest) { r.IdempotencyKey = "bad key!" },
+		"缺参数摘要":   func(r *runtime.ConfirmationRequest) { r.ArgumentDigest = "" },
+		"非法参数摘要":  func(r *runtime.ConfirmationRequest) { r.ArgumentDigest = "zz" },
 		"超长确认标识":  func(r *runtime.ConfirmationRequest) { r.ConfirmationID = strings.Repeat("x", 257) },
 	} {
 		request := valid

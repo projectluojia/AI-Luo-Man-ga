@@ -21,6 +21,7 @@ type (
 	Capability       = executorv1.Capability
 	CapabilityCall   = executorv1.CapabilityCall
 	CapabilityResult = executorv1.CapabilityResult
+	ConfirmationInfo = executorv1.ConfirmationInfo
 	ReplyDelta       = executorv1.ReplyDelta
 	FinalMessage     = executorv1.FinalMessage
 	RunFailure       = executorv1.RunFailure

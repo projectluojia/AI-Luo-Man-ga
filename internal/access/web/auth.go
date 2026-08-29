@@ -58,6 +58,16 @@ func WithEventHub(hub *access.EventHub) ServerOption {
 	}
 }
 
+// WithConfirmations 注入确认治理端口。未注入时确认查询与决策端点返回 503，
+// 不降级为无治理的确认语义。
+func WithConfirmations(confirmations ConfirmationGateway) ServerOption {
+	return func(server *Server) {
+		if confirmations != nil {
+			server.confirmations = confirmations
+		}
+	}
+}
+
 func loopbackAdminRequest(request *http.Request) bool {
 	remoteHost, _, err := net.SplitHostPort(request.RemoteAddr)
 	if err != nil {

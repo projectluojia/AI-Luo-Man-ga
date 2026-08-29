@@ -1167,6 +1167,14 @@ Service 的 `requested_permissions` 是该 Service 及其依赖 Tool 的权限�
 
 这套机制提供有界重放与保守的故障后安全性，不声称实现外部系统的分布式事务。外部副作用若在远端成功、本地终态提交前进程丢失，会进入 `idempotency_outcome_unknown`，不会自动冒险重试；具体业务必须通过远端幂等协议或对账适配器收敛。
 
+### 确认公共往返协议实现基线（2026-08-29）
+
+确认的"公共往返协议"已补齐：`executor.proto` 加法新增 `ConfirmationInfo` 公共投影（仅含 confirmation_id、capability_id、target_type/target_id、side_effect、status、expires_at，不含参数原文、摘要与决策人）；`CapabilityCall.confirmation_id` 供执行者重试时携带；`StartRun.pending_confirmations` 投影当前会话/Echo 的活跃确认。执行者侧验证投影格式：标识 token、闭式目标/副作用/状态取值、RFC3339 有效期，畸形投影按协议违例拒绝；`confirmation_required` 结果必须携带投影，其余失败结果携带投影即协议违例。
+
+完整链路：`requires_confirmation` 的高风险调用被拒时，Orchestrator 自动以 `confirmation.Service.Request` 创建绑定 App/Echo/Run/Call/会话/目标/副作用/幂等键/参数摘要的持久确认（同 Echo 内同目标同摘要的 waiting 记录直接复用，不重复创建），并把投影附加到 `confirmation_required` 结果；同一 Echo 存在仅有 waiting 确认时，Python Agent 不再发帧调用，直接把 `confirmation_pending` 合成结果返回模型。用户经公共 HTTP 端点决策：`GET /api/v1/echoes/{echo_id}/confirmations[/{confirmation_id}]`（跨 Echo 的确认按 404 处理，过期记录按 `expired` 状态返回供呈现）与 `POST .../decision`（要求可信 Web 登录态；重复相同决策幂等、冲突决策 409 `confirmation_already_decided`）。批准后用户续跑，同会话新 Echo 的 Run 经 `pending_confirmations` 投影获得 confirmation_id 并随重试调用携带，Dispatcher 在授权边界校验。
+
+验证绑定语义随之收敛：强制匹配 App、目标（类型+标识）、副作用、参数摘要、有效期与会话归属（同 Echo，或同会话以支持跨 Echo 续跑）；Run/Call/幂等键仅是创建时审计溯源，不参与验证绑定——决策后的重试使用新 call_id。`runtime.ConfirmationRequest` 携带 Dispatcher 边界统一计算的 `ArgumentDigest`（与 `confirmation.Digest` 同一规范化算法），参数改变后旧确认在授权边界直接 fail-closed。Echo 取消撤销其全部等待/已批准确认，Run 取消/终止撤销该 Run 产生的确认（迁移 25/26：echo与会话查询索引、`session_id` 列；存量记录会话为空，重试仍限于本 Echo）。Run/Call 不再参与验证绑定是有意的协议决策，若需更强隔离应通过缩短有效期或收紧会话粒度实现，而非恢复按调用绑定。
+
 ### 确认与副作用治理实现基线（2026-08-12）
 
 高风险写入或外部副作用（`side_effect` 为 `write`/`external`）必须先经过 Go 权威确认存储，再由 Dispatcher 执行。SQLite 迁移 15 新增 `confirmations` 表：主键为 `(app_id, confirmation_id)`，外键绑定已存在的 Echo 与 Run，`target_type`/`side_effect`/`status` 均为闭式 CHECK，`argument_digest` 为规范化 JSON 的 SHA-256 摘要，`expires_at` 必须晚于创建时间，`waiting` 无决策时间而其余状态必须携带决策时间。所有读写按 `app_id` 作用域执行，跨 App 读取直接不可见。

@@ -17,6 +17,7 @@ import (
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/jsonutil"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/confirmation"
 	kernelecho "github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/idempotency"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
@@ -52,6 +53,14 @@ type queuedRunOrchestrator interface {
 	RunQueued(context.Context, kernelecho.RunWork, kernelecho.EventEmitter) error
 }
 
+// ConfirmationGateway 是确认决策公共 HTTP 端口的依赖视图：状态查询、原子决策
+// 与 Echo 内活跃确认列表。由 confirmation.Service 实现。
+type ConfirmationGateway interface {
+	Resolve(ctx context.Context, appID, confirmationID string) (confirmation.Confirmation, error)
+	Decide(ctx context.Context, appID, confirmationID, decision, confirmedBy string, decidedAt time.Time) (confirmation.Confirmation, error)
+	ActiveByEcho(ctx context.Context, appID, echoID string) ([]confirmation.Confirmation, error)
+}
+
 type Server struct {
 	schedulerCtx       context.Context
 	stopSchedule       context.CancelFunc
@@ -64,6 +73,7 @@ type Server struct {
 	platformHub        *access.Hub
 	webAuthenticator   WebAuthenticator
 	qqAccessAdmin      QQAccessAdmin
+	confirmations      ConfirmationGateway
 	hub                *access.EventHub
 	activeMu           sync.Mutex
 	active             map[runKey]context.CancelFunc
@@ -165,6 +175,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/runs/{run_id}", s.getRun)
 	mux.HandleFunc("DELETE /api/v1/echoes/{echo_id}", s.cancelEcho)
 	mux.HandleFunc("GET /api/v1/echoes/{echo_id}/events", s.echoEvents)
+	mux.HandleFunc("GET /api/v1/echoes/{echo_id}/confirmations", s.listConfirmations)
+	mux.HandleFunc("GET /api/v1/echoes/{echo_id}/confirmations/{confirmation_id}", s.getConfirmation)
+	mux.HandleFunc("POST /api/v1/echoes/{echo_id}/confirmations/{confirmation_id}/decision", s.decideConfirmation)
 	// 产品前端聊天契约（LuoYing-Frontend）：流式接口，经标准 Intake → Echo →
 	// 事件翻译链路，不直接暴露内核事件类型。
 	mux.HandleFunc("POST /chat/stream", s.chatStream)
@@ -669,6 +682,164 @@ func (s *Server) cancelEcho(writer http.ResponseWriter, request *http.Request) {
 		observe.StringAttr("echo_id", echoID),
 	)
 	writer.WriteHeader(http.StatusNoContent)
+}
+
+// publicConfirmation 是确认记录的公共响应视图：只暴露呈现与决策所需字段，
+// 不包含参数摘要、幂等键等治理细节。
+func publicConfirmation(record confirmation.Confirmation, effectiveStatus string) map[string]any {
+	view := map[string]any{
+		"confirmation_id": record.ConfirmationID,
+		"echo_id":         record.EchoID,
+		"capability_id":   record.CapabilityID,
+		"target_type":     record.TargetType,
+		"target_id":       record.TargetID,
+		"side_effect":     record.SideEffect,
+		"status":          effectiveStatus,
+		"expires_at":      record.ExpiresAt.UTC().Format(time.RFC3339),
+		"created_at":      record.CreatedAt.UTC().Format(time.RFC3339),
+	}
+	if record.ConfirmedBy != "" {
+		view["confirmed_by"] = record.ConfirmedBy
+	}
+	if record.DecidedAt != nil {
+		view["decided_at"] = record.DecidedAt.UTC().Format(time.RFC3339)
+	}
+	return view
+}
+
+// loadConfirmation 读取确认记录并强制 Echo 归属匹配：跨 Echo 的确认标识按
+// 不存在处理（fail-closed，不泄露记录是否存在）。已过有效期（含未显式过期）
+// 的记录按 expired 状态返回，便于界面呈现"已失效"。
+func (s *Server) loadConfirmation(writer http.ResponseWriter, request *http.Request, echoID, confirmationID string) (confirmation.Confirmation, string, bool) {
+	record, err := s.confirmations.Resolve(request.Context(), s.appID, confirmationID)
+	if err != nil {
+		if errors.Is(err, confirmation.ErrExpired) {
+			// Resolve 对已过期记录仍返回记录本体，界面据此呈现失效状态。
+			return record, confirmation.StatusExpired, true
+		}
+		observe.Warn(request.Context(), "查询的确认记录不存在",
+			observe.StringAttr("echo_id", echoID),
+		)
+		access.WriteJSON(writer, http.StatusNotFound, map[string]string{"code": "confirmation_not_found", "message": "确认记录不存在"})
+		return confirmation.Confirmation{}, "", false
+	}
+	if record.EchoID != echoID {
+		observe.Warn(request.Context(), "确认记录与 Echo 不匹配",
+			observe.StringAttr("echo_id", echoID),
+		)
+		access.WriteJSON(writer, http.StatusNotFound, map[string]string{"code": "confirmation_not_found", "message": "确认记录不存在"})
+		return confirmation.Confirmation{}, "", false
+	}
+	return record, record.Status, true
+}
+
+func (s *Server) listConfirmations(writer http.ResponseWriter, request *http.Request) {
+	if s.confirmations == nil {
+		access.WriteJSON(writer, http.StatusServiceUnavailable, map[string]string{"code": "confirmation_unavailable", "message": "确认治理暂不可用"})
+		return
+	}
+	echoID := request.PathValue("echo_id")
+	if _, _, err := s.reader.GetEcho(request.Context(), s.appID, echoID); err != nil {
+		if !errors.Is(err, kernelecho.ErrEchoNotFound) {
+			observe.Error(request.Context(), "读取确认列表前读取 Echo 状态失败", err,
+				observe.StringAttr("echo_id", echoID),
+			)
+			access.WriteJSON(writer, http.StatusInternalServerError, map[string]string{"code": "internal_error", "message": "确认记录读取失败"})
+			return
+		}
+		access.WriteJSON(writer, http.StatusNotFound, map[string]string{"code": "echo_not_found", "message": "Echo 不存在"})
+		return
+	}
+	records, err := s.confirmations.ActiveByEcho(request.Context(), s.appID, echoID)
+	if err != nil {
+		observe.Error(request.Context(), "读取 Echo 活跃确认失败", err,
+			observe.StringAttr("echo_id", echoID),
+		)
+		access.WriteJSON(writer, http.StatusInternalServerError, map[string]string{"code": "internal_error", "message": "确认记录读取失败"})
+		return
+	}
+	items := make([]map[string]any, 0, len(records))
+	for _, record := range records {
+		items = append(items, publicConfirmation(record, record.Status))
+	}
+	access.WriteJSON(writer, http.StatusOK, map[string]any{"confirmations": items})
+}
+
+func (s *Server) getConfirmation(writer http.ResponseWriter, request *http.Request) {
+	if s.confirmations == nil {
+		access.WriteJSON(writer, http.StatusServiceUnavailable, map[string]string{"code": "confirmation_unavailable", "message": "确认治理暂不可用"})
+		return
+	}
+	echoID := request.PathValue("echo_id")
+	record, status, ok := s.loadConfirmation(writer, request, echoID, request.PathValue("confirmation_id"))
+	if !ok {
+		return
+	}
+	access.WriteJSON(writer, http.StatusOK, map[string]any{"confirmation": publicConfirmation(record, status)})
+}
+
+func (s *Server) decideConfirmation(writer http.ResponseWriter, request *http.Request) {
+	if s.confirmations == nil {
+		access.WriteJSON(writer, http.StatusServiceUnavailable, map[string]string{"code": "confirmation_unavailable", "message": "确认治理暂不可用"})
+		return
+	}
+	echoID := request.PathValue("echo_id")
+	if _, authenticated := s.authenticateWeb(writer, request); !authenticated {
+		return
+	}
+	request.Body = http.MaxBytesReader(writer, request.Body, 4<<10)
+	decoder := json.NewDecoder(request.Body)
+	decoder.DisallowUnknownFields()
+	var input struct {
+		Decision    string `json:"decision"`
+		ConfirmedBy string `json:"confirmed_by"`
+	}
+	if err := decoder.Decode(&input); err != nil || jsonutil.EnsureEOF(decoder) != nil {
+		access.WriteJSON(writer, http.StatusBadRequest, map[string]string{"code": "invalid_request", "message": "请求体不是有效的 JSON 对象"})
+		return
+	}
+	input.ConfirmedBy = strings.TrimSpace(input.ConfirmedBy)
+	if (input.Decision != confirmation.StatusApproved && input.Decision != confirmation.StatusRejected) ||
+		input.ConfirmedBy == "" || utf8.RuneCountInString(input.ConfirmedBy) > 128 {
+		access.WriteJSON(writer, http.StatusBadRequest, map[string]string{
+			"code":    "invalid_request",
+			"message": "decision 必须是 approved 或 rejected，confirmed_by 必须为 1 至 128 个字符",
+		})
+		return
+	}
+	// Echo 归属校验：确认必须属于该 Echo（过期记录不可决策，Resolve 已拦）。
+	if _, _, ok := s.loadConfirmation(writer, request, echoID, request.PathValue("confirmation_id")); !ok {
+		return
+	}
+	confirmationID := request.PathValue("confirmation_id")
+	record, err := s.confirmations.Decide(request.Context(), s.appID, confirmationID,
+		input.Decision, input.ConfirmedBy, time.Now().UTC())
+	if err != nil {
+		switch {
+		case errors.Is(err, confirmation.ErrNotFound):
+			access.WriteJSON(writer, http.StatusNotFound, map[string]string{"code": "confirmation_not_found", "message": "确认记录不存在"})
+		case errors.Is(err, confirmation.ErrExpired):
+			access.WriteJSON(writer, http.StatusConflict, map[string]string{"code": "confirmation_expired", "message": "确认记录已过期"})
+		case errors.Is(err, confirmation.ErrRevoked):
+			access.WriteJSON(writer, http.StatusConflict, map[string]string{"code": "confirmation_revoked", "message": "确认记录已撤销"})
+		case errors.Is(err, confirmation.ErrAlreadyDecided):
+			access.WriteJSON(writer, http.StatusConflict, map[string]string{"code": "confirmation_already_decided", "message": "确认记录已决策"})
+		case errors.Is(err, confirmation.ErrInvalidRequest):
+			access.WriteJSON(writer, http.StatusBadRequest, map[string]string{"code": "invalid_request", "message": "决策请求字段不合法"})
+		default:
+			observe.Error(request.Context(), "持久化确认决策失败", err,
+				observe.StringAttr("echo_id", echoID),
+			)
+			access.WriteJSON(writer, http.StatusInternalServerError, map[string]string{"code": "internal_error", "message": "确认决策失败"})
+		}
+		return
+	}
+	observe.Info(request.Context(), "确认决策已提交",
+		observe.StringAttr("echo_id", echoID),
+		observe.StringAttr("confirmation_id", confirmationID),
+		observe.StringAttr("decision", record.Status),
+	)
+	access.WriteJSON(writer, http.StatusOK, map[string]any{"confirmation": publicConfirmation(record, record.Status)})
 }
 
 func (s *Server) echoEvents(writer http.ResponseWriter, request *http.Request) {
