@@ -180,7 +180,9 @@ type CapabilityAuditRecord struct {
 	CreatedAt    time.Time       `json:"created_at"`
 }
 
-type Store interface {
+// OrchestratorStore 是 Echo 编排流程使用的持久化端口；查询侧端口由各访问/审计
+// 消费者自行声明，避免把读取能力混入编排写端口。
+type OrchestratorStore interface {
 	idempotency.Store
 	CreateEchoRunIdempotentLimited(ctx context.Context, key, fingerprint string, echo Record, run RunRecord, maxPending int) (string, bool, error)
 	CreateChildRun(ctx context.Context, parent, child RunRecord, maxChildRuns int) error

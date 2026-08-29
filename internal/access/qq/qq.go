@@ -52,21 +52,11 @@ type Config struct {
 	QuickReplies          []QuickReply
 	PokeReplies           []string
 	Provisioner           IdentityProvisioner
+	Scheduler             kernelecho.Enqueuer
 	OnConnectionChange    func(bool)
 	DialTimeout           time.Duration
 	ReconnectDelay        time.Duration
 	RunTimeout            time.Duration
-}
-
-// EchoStarter 是适配器所需的 Echo 创建端口（*kernel/echo.Orchestrator 满足）。
-type EchoStarter interface {
-	CreateIdempotent(context.Context, kernelecho.RunRequest) (string, bool, error)
-}
-
-// EchoReader 是持久化事件重放端口（*sqlite.Store 满足）：订阅后先重放既有
-// 事件再等待实时事件，消除创建与订阅之间的竞态。
-type EchoReader interface {
-	GetEcho(context.Context, string, string) (kernelecho.Record, []kernelecho.Event, error)
 }
 
 // Adapter 是进程内 QQ 适配器：一条 OneBot 连接，消息事件循环 + 回复回发。
@@ -74,8 +64,9 @@ type Adapter struct {
 	cfg                 Config
 	hub                 *access.Hub
 	events              *access.EventHub
-	orchestrator        EchoStarter
-	reader              EchoReader
+	orchestrator        kernelecho.Creator
+	scheduler           kernelecho.Enqueuer
+	reader              kernelecho.Reader
 	allowedGroups       map[string]struct{}
 	allowedPrivateUsers map[string]struct{}
 	quickReplies        map[string]string
@@ -86,8 +77,8 @@ type Adapter struct {
 }
 
 // New 构造 QQ 适配器；配置缺失时返回显式错误。
-func New(cfg Config, hub *access.Hub, events *access.EventHub, orchestrator EchoStarter, reader EchoReader) (*Adapter, error) {
-	if cfg.AppID == "" || cfg.WSURL == "" || cfg.Provisioner == nil || hub == nil || events == nil || orchestrator == nil || reader == nil {
+func New(cfg Config, hub *access.Hub, events *access.EventHub, orchestrator kernelecho.Creator, reader kernelecho.Reader) (*Adapter, error) {
+	if cfg.AppID == "" || cfg.WSURL == "" || cfg.Provisioner == nil || cfg.Scheduler == nil || hub == nil || events == nil || orchestrator == nil || reader == nil {
 		return nil, errors.New("qq adapter configuration is incomplete")
 	}
 	normalized, err := qqsettings.Normalize(qqsettings.Settings{
@@ -115,7 +106,7 @@ func New(cfg Config, hub *access.Hub, events *access.EventHub, orchestrator Echo
 		cfg.RunTimeout = defaultRunTimeout
 	}
 	return &Adapter{
-		cfg: cfg, hub: hub, events: events, orchestrator: orchestrator, reader: reader,
+		cfg: cfg, hub: hub, events: events, orchestrator: orchestrator, scheduler: cfg.Scheduler, reader: reader,
 		allowedGroups: toSet(cfg.AllowedGroupIDs), allowedPrivateUsers: toSet(cfg.AllowedPrivateUserIDs),
 		quickReplies: toQuickReplyMap(cfg.QuickReplies), pokeReplies: append([]string(nil), cfg.PokeReplies...),
 	}, nil
@@ -271,7 +262,7 @@ func (a *Adapter) handleEvent(ctx context.Context, raw map[string]any) {
 		a.reply(ctx, inbound, message)
 		return
 	}
-	echoID, _, err := a.orchestrator.CreateIdempotent(ctx, kernelecho.RunRequest{
+	echoID, created, err := a.orchestrator.CreateIdempotent(ctx, kernelecho.RunRequest{
 		Message:        intake.Text,
 		IdempotencyKey: inbound.IdempotencyKey,
 		SessionID:      intake.SessionID,
@@ -285,6 +276,9 @@ func (a *Adapter) handleEvent(ctx context.Context, raw map[string]any) {
 		)
 		a.reply(ctx, inbound, "处理失败，请稍后重试")
 		return
+	}
+	if created {
+		a.scheduler.Enqueue(ctx, echoID)
 	}
 	a.forwardReplies(ctx, inbound, echoID)
 }

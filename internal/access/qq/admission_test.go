@@ -23,7 +23,7 @@ func TestQQAdmissionRejectsUnknownGroupBeforeHub(t *testing.T) {
 	provisioner := &countingProvisioner{}
 	adapter, err := New(Config{
 		AppID: "campus-services", WSURL: "ws://127.0.0.1:3001", BotQQID: testBotQQID,
-		AllowedGroupIDs: []string{"12345"}, Provisioner: provisioner,
+		AllowedGroupIDs: []string{"12345"}, Provisioner: provisioner, Scheduler: testScheduler{},
 	}, hub, access.NewEventHub(), &qqFakeOrchestrator{store: store, created: make(chan struct{})}, store)
 	if err != nil {
 		t.Fatal(err)
@@ -39,5 +39,3 @@ func TestQQAdmissionRejectsUnknownGroupBeforeHub(t *testing.T) {
 		t.Fatal("未允许群消息创建了 Echo")
 	}
 }
-
-var _ EchoStarter = (*qqFakeOrchestrator)(nil)

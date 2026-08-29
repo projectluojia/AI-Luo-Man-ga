@@ -5,15 +5,11 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"regexp"
 	"time"
 
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/id"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/task"
 )
-
-// taskIDPattern 与 internal/kernel/task 中的稳定标识规则保持一致，
-// 作为存储边界的防御性二次校验。
-var taskIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
 
 // 编译期保证：SQLite 适配器完整实现后台任务 Store 端口。
 var _ task.Store = (*Store)(nil)
@@ -61,7 +57,7 @@ const taskSelectColumns = `
 const taskSelect = "SELECT" + taskSelectColumns + " FROM tasks"
 
 // scanTask 将一行 tasks 扫描为内核任务记录，并对持久化字段做边界校验。
-func scanTask(scanner interface{ Scan(dest ...any) error }) (task.Task, error) {
+func scanTask(scanner rowScanner) (task.Task, error) {
 	var value task.Task
 	var attempt int64
 	var maxAttempts int64
@@ -127,7 +123,7 @@ func scanTasks(rows *sql.Rows, kind string) ([]task.Task, error) {
 // validateTaskIdentity 校验任务复合主键的合法形态。
 func validateTaskIdentity(appID, taskID string) error {
 	if len(appID) == 0 || len(appID) > 128 ||
-		len(taskID) == 0 || len(taskID) > 128 || !taskIDPattern.MatchString(taskID) {
+		len(taskID) == 0 || len(taskID) > 128 || !id.StableMixed.MatchString(taskID) {
 		return task.ErrInvalidTask
 	}
 	return nil

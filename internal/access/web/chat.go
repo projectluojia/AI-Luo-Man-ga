@@ -37,6 +37,16 @@ func (s *Server) chatStream(writer http.ResponseWriter, request *http.Request) {
 		access.WriteJSON(writer, http.StatusInternalServerError, map[string]string{"code": "streaming_unavailable"})
 		return
 	}
+	if !s.beginAdmission() {
+		access.WriteJSON(writer, http.StatusServiceUnavailable, map[string]string{"code": "shutting_down", "message": "服务正在关闭"})
+		return
+	}
+	admissionReleased := false
+	defer func() {
+		if !admissionReleased {
+			s.admissionWG.Done()
+		}
+	}()
 	webIdentity, authenticated := s.authenticateWeb(writer, request)
 	if !authenticated {
 		return
@@ -56,8 +66,10 @@ func (s *Server) chatStream(writer http.ResponseWriter, request *http.Request) {
 	writer.Header().Set("Connection", "keep-alive")
 	writer.WriteHeader(http.StatusOK)
 	if created {
-		s.queueEcho(request.Context(), echoID)
+		s.scheduler.Enqueue(request.Context(), echoID)
 	}
+	s.admissionWG.Done()
+	admissionReleased = true
 	started := time.Now()
 	heartbeat := time.NewTicker(15 * time.Second)
 	defer heartbeat.Stop()
@@ -98,11 +110,6 @@ func (s *Server) chatStream(writer http.ResponseWriter, request *http.Request) {
 // decodeChatRequest 严格解码前端聊天请求体：未知字段拒绝、单 JSON 对象、
 // 文本 1 至 4000 字符；附件字段暂不支持，非空即拒绝（fail-closed，不静默忽略）。
 func (s *Server) decodeChatRequest(writer http.ResponseWriter, request *http.Request) (*chatRequest, bool) {
-	if !s.beginAdmission() {
-		access.WriteJSON(writer, http.StatusServiceUnavailable, map[string]string{"code": "shutting_down", "message": "服务正在关闭"})
-		return nil, false
-	}
-	defer s.admissionWG.Done()
 	var input chatRequest
 	if !access.DecodeJSONBody(writer, request, &input, 64<<10) {
 		return nil, false
