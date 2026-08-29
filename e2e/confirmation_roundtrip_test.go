@@ -270,7 +270,7 @@ func TestConfirmationRoundTripThroughPythonAgent(t *testing.T) {
 	decisionRecorder := httptest.NewRecorder()
 	decisionRequest := httptest.NewRequest(http.MethodPost,
 		"/api/v1/echoes/"+echoID+"/confirmations/"+confirmationID+"/decision",
-		bytes.NewBufferString(`{"decision":"approved","confirmed_by":"integration-user"}`))
+		bytes.NewBufferString(`{"decision":"approved"}`))
 	decisionRequest.Header.Set("Content-Type", "application/json")
 	handler.ServeHTTP(decisionRecorder, decisionRequest)
 	if decisionRecorder.Code != http.StatusOK || !strings.Contains(decisionRecorder.Body.String(), `"status":"approved"`) {

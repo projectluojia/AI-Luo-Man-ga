@@ -18,15 +18,17 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime/runtimetest"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite/sqlitetest"
 )
 
 func newConfirmationTestServer(t *testing.T) (http.Handler, *sqlite.Store, *confirmation.Service) {
 	t.Helper()
-	store, err := sqlite.Open(filepath.Join(t.TempDir(), "confirmations-web.db"))
+	tempDir := t.TempDir()
+	store, err := sqlite.Open(filepath.Join(tempDir, "confirmations-web.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { store.Close() })
+	t.Cleanup(func() { sqlitetest.CloseAndWait(t, store, tempDir) })
 	reg := registry.New()
 	policy := runtimetest.NewStaticAppPolicy()
 	confirmations := confirmation.NewService(store, confirmation.Config{})
@@ -94,10 +96,13 @@ func TestWebConfirmationEndpointsRoundTrip(t *testing.T) {
 		t.Fatalf("get status=%d body=%s", getResponse.Code, getResponse.Body.String())
 	}
 
-	// 决策批准：原子决策成功并返回 approved 状态。
+	// 决策批准：原子决策成功并返回 approved 状态；决策人来自可信登录态。
 	authenticated := testAuthenticatedRequest(handler, http.MethodPost,
 		"/api/v1/echoes/"+echoID+"/confirmations/"+record.ConfirmationID+"/decision",
-		`{"decision":"approved","confirmed_by":"user-1"}`)
+		`{"decision":"approved"}`)
+	if !strings.Contains(authenticated.Body.String(), `"confirmed_by":"web-test-subject"`) {
+		t.Fatalf("decision attribution not bound to authenticated identity: %s", authenticated.Body.String())
+	}
 	if authenticated.Code != http.StatusOK || !strings.Contains(authenticated.Body.String(), `"status":"approved"`) {
 		t.Fatalf("decision status=%d body=%s", authenticated.Code, authenticated.Body.String())
 	}
@@ -109,7 +114,7 @@ func TestWebConfirmationEndpointsRoundTrip(t *testing.T) {
 	// 重复冲突决策返回稳定冲突错误。
 	conflict := testAuthenticatedRequest(handler, http.MethodPost,
 		"/api/v1/echoes/"+echoID+"/confirmations/"+record.ConfirmationID+"/decision",
-		`{"decision":"rejected","confirmed_by":"user-2"}`)
+		`{"decision":"rejected"}`)
 	if conflict.Code != http.StatusConflict || !strings.Contains(conflict.Body.String(), "confirmation_already_decided") {
 		t.Fatalf("conflict decision status=%d body=%s", conflict.Code, conflict.Body.String())
 	}
@@ -122,6 +127,25 @@ func TestWebConfirmationEndpointsRoundTrip(t *testing.T) {
 	if crossEcho.Code != http.StatusNotFound {
 		t.Fatalf("cross echo status=%d", crossEcho.Code)
 	}
+
+	// 回归：过期记录的元数据同样不得泄露给其他 Echo——过期判定先于可见性返回，
+	// 但 Echo 归属校验始终先行。
+	if _, err := service.Expire(ctx, "campus-services", record.ConfirmationID, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	expiredViaOtherEcho := httptest.NewRecorder()
+	handler.ServeHTTP(expiredViaOtherEcho, httptest.NewRequest(http.MethodGet,
+		"/api/v1/echoes/"+otherEchoID+"/confirmations/"+record.ConfirmationID, nil))
+	if expiredViaOtherEcho.Code != http.StatusNotFound {
+		t.Fatalf("cross echo expired status=%d body=%s", expiredViaOtherEcho.Code, expiredViaOtherEcho.Body.String())
+	}
+	// 归属 Echo 内查询过期确认：按 expired 状态呈现。
+	expiredOwn := httptest.NewRecorder()
+	handler.ServeHTTP(expiredOwn, httptest.NewRequest(http.MethodGet,
+		"/api/v1/echoes/"+echoID+"/confirmations/"+record.ConfirmationID, nil))
+	if expiredOwn.Code != http.StatusOK || !strings.Contains(expiredOwn.Body.String(), `"status":"expired"`) {
+		t.Fatalf("expired own echo status=%d body=%s", expiredOwn.Code, expiredOwn.Body.String())
+	}
 }
 
 func TestWebConfirmationDecisionValidatesInput(t *testing.T) {
@@ -130,10 +154,10 @@ func TestWebConfirmationDecisionValidatesInput(t *testing.T) {
 	base := "/api/v1/echoes/" + echoID + "/confirmations/" + record.ConfirmationID + "/decision"
 
 	for name, body := range map[string]string{
-		"非法决策值":  `{"decision":"maybe","confirmed_by":"user-1"}`,
-		"缺决策人":   `{"decision":"approved","confirmed_by":""}`,
-		"未知字段":   `{"decision":"approved","confirmed_by":"user-1","extra":1}`,
-		"非 JSON": `not-json`,
+		"非法决策值":    `{"decision":"maybe"}`,
+		"缺决策字段":    `{"confirmed_by":"user-1"}`,
+		"客户端伪造决策人": `{"decision":"approved","confirmed_by":"user-1"}`,
+		"非 JSON":   `not-json`,
 	} {
 		response := testAuthenticatedRequest(handler, http.MethodPost, base, body)
 		if response.Code != http.StatusBadRequest {

@@ -343,6 +343,8 @@ func TestStoreListAndRevokeByEchoAndSession(t *testing.T) {
 	}
 	first := requestConfirmation(t, service, "app", "echo", "run", "call-1", spec,
 		`{"message":"发车提醒"}`, clock.current().Add(time.Hour))
+	// 时钟推进使 created_at 严格递增：同刻创建时排序回退到随机 UUID，跨平台顺序不定。
+	clock.advance(time.Second)
 	spec.IdempotencyKey = "operation-2"
 	second := requestConfirmation(t, service, "app", "echo", "run", "call-2", spec,
 		`{"message":"发车提醒"}`, clock.current().Add(time.Hour))
@@ -367,8 +369,9 @@ func TestStoreListAndRevokeByEchoAndSession(t *testing.T) {
 	if _, err := service.ActiveBySession(context.Background(), "app", ""); !errors.Is(err, confirmation.ErrInvalidRequest) {
 		t.Fatalf("ActiveBySession 缺会话 got %v, want ErrInvalidRequest", err)
 	}
-	if _, err := service.ActiveByEcho(context.Background(), "other", "echo"); err != nil || len(active) != 3 {
-		t.Fatalf("跨 App 读取异常：err=%v", err)
+	crossApp, err := service.ActiveByEcho(context.Background(), "other", "echo")
+	if err != nil || len(crossApp) != 0 {
+		t.Fatalf("跨 App 读取 got %d records, err=%v, want 0", len(crossApp), err)
 	}
 	// 撤销 Echo：后续活跃列表为空（App 隔离读取下跨 App 撤销数量为 0）。
 	revoked, err := store.RevokeEcho(context.Background(), "app", "echo", clock.current().Add(2*time.Minute))

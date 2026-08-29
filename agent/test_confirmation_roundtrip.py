@@ -173,11 +173,15 @@ class ConfirmationRoundTripTest(unittest.IsolatedAsyncioTestCase):
                 frames.append(await asyncio.wait_for(anext(output), timeout=1))
             except StopAsyncIteration:
                 break
-        self.assertTrue(seen["code"], "confirmation_pending")
+        self.assertEqual(seen["code"], "confirmation_pending")
         self.assertEqual(seen["confirmation_id"], "conf-2")
         self.assertFalse(any(frame.WhichOneof("body") == "capability_call" for frame in frames),
                          "存在等待确认时不得向内核发起 Capability 调用")
         self.assertEqual(frames[-1].final_message.text, "已处理。")
+        # 回归：短路不发帧也不消耗序号，内核看到的帧序必须连续（空洞会被
+        # 内核按协议违例拒绝整个 Run）。
+        sequences = [frame.sequence for frame in frames]
+        self.assertEqual(sequences, list(range(1, len(sequences) + 1)))
 
     async def test_confirmation_required_result_is_surfaced_to_model(self) -> None:
         seen: dict[str, Any] = {}

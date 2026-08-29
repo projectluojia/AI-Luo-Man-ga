@@ -191,9 +191,11 @@ paths:
       summary: Approve or reject a capability confirmation
       description: >-
         Requires a trusted server-side Web login identity. decision is approved or
-        rejected; repeated identical decisions are idempotent, conflicting decisions
-        return 409 confirmation_already_decided. Only waiting records that are not
-        expired can be decided.
+        rejected; the decision attribution (confirmed_by) always comes from the
+        authenticated identity and cannot be supplied by clients. Repeated identical
+        decisions are idempotent; conflicting decisions return 409
+        confirmation_already_decided. Only waiting records that are not expired can
+        be decided.
       requestBody:
         required: true
         content:
@@ -201,15 +203,11 @@ paths:
             schema:
               type: object
               additionalProperties: false
-              required: [decision, confirmed_by]
+              required: [decision]
               properties:
                 decision:
                   type: string
                   enum: [approved, rejected]
-                confirmed_by:
-                  type: string
-                  minLength: 1
-                  maxLength: 128
       responses:
         "200":
           description: The decision was applied atomically.

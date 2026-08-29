@@ -708,15 +708,14 @@ func publicConfirmation(record confirmation.Confirmation, effectiveStatus string
 }
 
 // loadConfirmation 读取确认记录并强制 Echo 归属匹配：跨 Echo 的确认标识按
-// 不存在处理（fail-closed，不泄露记录是否存在）。已过有效期（含未显式过期）
+// 不存在处理（fail-closed，不泄露记录是否存在）——Echo 归属校验先于过期判定，
+// 过期记录的元数据同样不得泄露给其他 Echo 的调用方。已过有效期（含未显式过期）
 // 的记录按 expired 状态返回，便于界面呈现"已失效"。
 func (s *Server) loadConfirmation(writer http.ResponseWriter, request *http.Request, echoID, confirmationID string) (confirmation.Confirmation, string, bool) {
 	record, err := s.confirmations.Resolve(request.Context(), s.appID, confirmationID)
-	if err != nil {
-		if errors.Is(err, confirmation.ErrExpired) {
-			// Resolve 对已过期记录仍返回记录本体，界面据此呈现失效状态。
-			return record, confirmation.StatusExpired, true
-		}
+	// Resolve 对已过期记录仍返回记录本体（err=ErrExpired）；无论是否过期，
+	// 都先做 Echo 归属校验再决定可见性。
+	if err != nil && !errors.Is(err, confirmation.ErrExpired) {
 		observe.Warn(request.Context(), "查询的确认记录不存在",
 			observe.StringAttr("echo_id", echoID),
 		)
@@ -729,6 +728,9 @@ func (s *Server) loadConfirmation(writer http.ResponseWriter, request *http.Requ
 		)
 		access.WriteJSON(writer, http.StatusNotFound, map[string]string{"code": "confirmation_not_found", "message": "确认记录不存在"})
 		return confirmation.Confirmation{}, "", false
+	}
+	if err != nil {
+		return record, confirmation.StatusExpired, true
 	}
 	return record, record.Status, true
 }
@@ -784,26 +786,25 @@ func (s *Server) decideConfirmation(writer http.ResponseWriter, request *http.Re
 		return
 	}
 	echoID := request.PathValue("echo_id")
-	if _, authenticated := s.authenticateWeb(writer, request); !authenticated {
+	// 决策归因来自服务端可信登录态，不接受客户端自报：决策人字段不可伪造。
+	webIdentity, authenticated := s.authenticateWeb(writer, request)
+	if !authenticated {
 		return
 	}
 	request.Body = http.MaxBytesReader(writer, request.Body, 4<<10)
 	decoder := json.NewDecoder(request.Body)
 	decoder.DisallowUnknownFields()
 	var input struct {
-		Decision    string `json:"decision"`
-		ConfirmedBy string `json:"confirmed_by"`
+		Decision string `json:"decision"`
 	}
 	if err := decoder.Decode(&input); err != nil || jsonutil.EnsureEOF(decoder) != nil {
 		access.WriteJSON(writer, http.StatusBadRequest, map[string]string{"code": "invalid_request", "message": "请求体不是有效的 JSON 对象"})
 		return
 	}
-	input.ConfirmedBy = strings.TrimSpace(input.ConfirmedBy)
-	if (input.Decision != confirmation.StatusApproved && input.Decision != confirmation.StatusRejected) ||
-		input.ConfirmedBy == "" || utf8.RuneCountInString(input.ConfirmedBy) > 128 {
+	if input.Decision != confirmation.StatusApproved && input.Decision != confirmation.StatusRejected {
 		access.WriteJSON(writer, http.StatusBadRequest, map[string]string{
 			"code":    "invalid_request",
-			"message": "decision 必须是 approved 或 rejected，confirmed_by 必须为 1 至 128 个字符",
+			"message": "decision 必须是 approved 或 rejected",
 		})
 		return
 	}
@@ -813,7 +814,7 @@ func (s *Server) decideConfirmation(writer http.ResponseWriter, request *http.Re
 	}
 	confirmationID := request.PathValue("confirmation_id")
 	record, err := s.confirmations.Decide(request.Context(), s.appID, confirmationID,
-		input.Decision, input.ConfirmedBy, time.Now().UTC())
+		input.Decision, webIdentity.PlatformUserID, time.Now().UTC())
 	if err != nil {
 		switch {
 		case errors.Is(err, confirmation.ErrNotFound):

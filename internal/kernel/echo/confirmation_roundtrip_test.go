@@ -31,6 +31,9 @@ const confirmationTestCapabilityID = "test.confirm"
 // 决策；后续 Run 在 StartRun 投影中看到已批准确认时附带 confirmation_id 重试。
 type confirmationAgent struct {
 	executorv1.UnimplementedExecutorRuntimeServer
+	// forcedConfirmationID 非空时强制作为 CapabilityCall 的 confirmation_id，
+	// 用于模拟执行者携带过期/无效确认的场景。
+	forcedConfirmationID atomic.Value
 }
 
 func (a *confirmationAgent) Run(stream executorv1.ExecutorRuntime_RunServer) error {
@@ -39,9 +42,13 @@ func (a *confirmationAgent) Run(stream executorv1.ExecutorRuntime_RunServer) err
 		return err
 	}
 	approved := ""
-	for _, pending := range start.GetStartRun().GetPendingConfirmations() {
-		if pending.GetCapabilityId() == confirmationTestCapabilityID && pending.GetStatus() == confirmation.StatusApproved {
-			approved = pending.GetConfirmationId()
+	if override, ok := a.forcedConfirmationID.Load().(string); ok && override != "" {
+		approved = override
+	} else {
+		for _, pending := range start.GetStartRun().GetPendingConfirmations() {
+			if pending.GetCapabilityId() == confirmationTestCapabilityID && pending.GetStatus() == confirmation.StatusApproved {
+				approved = pending.GetConfirmationId()
+			}
 		}
 	}
 	for _, frame := range []*executorv1.ExecutorFrame{
@@ -184,6 +191,30 @@ func TestOrchestratorConfirmationRoundTrip(t *testing.T) {
 	}
 	if executions.Load() != 1 {
 		t.Fatalf("Capability handler 执行 %d 次，want 1", executions.Load())
+	}
+
+	// 自愈：执行者携带无效 confirmation_id（过期/被撤销）重试时，内核自动创建
+	// 新的 waiting 确认并继续携带投影，副作用仍不执行。
+	agent.forcedConfirmationID.Store("bogus-confirmation-1")
+	recoveryID, err := runOrchestrator(orchestrator, ctx, kernelecho.RunRequest{
+		Message: "确认过期了再试一次", IdempotencyKey: "confirmation-3", SessionID: "session-1",
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovered, _, err := store.GetEcho(ctx, campus.AppID, recoveryID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovered.Status != kernelecho.StatusSucceeded || recovered.FinalMessage != "等待确认" {
+		t.Fatalf("自愈 Echo 终态=%s final=%q", recovered.Status, recovered.FinalMessage)
+	}
+	if executions.Load() != 1 {
+		t.Fatalf("自愈阶段副作用执行 %d 次，want 1", executions.Load())
+	}
+	afterRecovery, err := confirmations.ActiveBySession(ctx, campus.AppID, "session-1")
+	if err != nil || len(afterRecovery) != 2 {
+		t.Fatalf("自愈后会话内确认记录=%d err=%v，want 2（approved + 新 waiting）", len(afterRecovery), err)
 	}
 }
 

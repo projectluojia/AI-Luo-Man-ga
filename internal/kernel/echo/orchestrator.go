@@ -1354,8 +1354,10 @@ func (o *Orchestrator) invokeCapabilityOnce(ctx context.Context, run RunRecord, 
 
 // attachConfirmation 在高风险调用因缺少有效确认被拒绝时，为本次调用自动创建
 // 持久确认并把公共投影（ConfirmationInfo）附加到返回给执行者的结果上，补齐
-// "confirmation_required → 用户决策 → 携带确认重试"的公共往返协议。执行者已
-// 显式携带 confirmation_id 但验证失败时不再新建确认，保持 fail-closed。
+// "confirmation_required → 用户决策 → 携带确认重试"的公共往返协议。执行者携带
+// 的 confirmation_id 验证失败（不存在、过期、被撤销）时同样走本路径自愈：先复用
+// 同 Echo 同目标同摘要的 waiting 记录，没有才新建——保证 confirmation_required
+// 结果始终携带投影，模型可以引导用户重新决策；副作用在批准前始终不会执行。
 func (o *Orchestrator) attachConfirmation(
 	ctx context.Context,
 	run RunRecord,
@@ -1363,7 +1365,7 @@ func (o *Orchestrator) attachConfirmation(
 	request contracts.RequestContext,
 	result *executor.CapabilityResult,
 ) {
-	if o.confirmations == nil || call.ConfirmationId != "" {
+	if o.confirmations == nil {
 		return
 	}
 	spec, _, err := o.registry.ResolveCapability(call.CapabilityId)

@@ -211,7 +211,6 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
                     max_cost_microusd=start.max_cost_microusd,
                     provider_timeout_seconds=start.provider_timeout_ms / 1000,
                 ):
-                    outbound_sequence += 1
                     if isinstance(event, CapabilityRequested):
                         if event.call.id in expected_capabilities:
                             raise ProtocolViolation("模型返回了重复的 ToolCall ID")
@@ -234,6 +233,7 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
                                 },
                             }, ensure_ascii=False, separators=(",", ":"))
                             continue
+                        outbound_sequence += 1
                         logger.info(
                             "向 Go 内核请求执行 Capability",
                             sequence=outbound_sequence,
@@ -254,6 +254,7 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
                         )
                     elif isinstance(event, ReplyDelta):
                         self._validate_text(event.text, 1, MAX_REPLY_DELTA_BYTES, "回复片段")
+                        outbound_sequence += 1
                         logger.debug(
                             "向 Go 内核发送模型回复片段",
                             sequence=outbound_sequence,
@@ -267,6 +268,7 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
                         )
                     elif isinstance(event, FinalReply):
                         self._validate_text(event.text, 1, MAX_FINAL_MESSAGE_BYTES, "最终回复")
+                        outbound_sequence += 1
                         logger.info(
                             "Agent Run 已生成最终回复",
                             sequence=outbound_sequence,
@@ -280,6 +282,7 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
                             final_message=executor_pb2.FinalMessage(text=event.text),
                         )
                     elif isinstance(event, UsageReported):
+                        outbound_sequence += 1
                         yield _frame(
                             first_frame.echo_id,
                             first_frame.run_id,
@@ -486,22 +489,23 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
             raise ProtocolViolation("失败 CapabilityResult 字段无效")
         ExecutorRuntime._valid_code(result.error_code)
         ExecutorRuntime._validate_text(result.error_message, 1, MAX_FAILURE_MESSAGE_BYTES, "Capability 错误消息")
-        # confirmation_required 必须携带格式合法的确认投影；其余失败不得携带，
-        # 避免执行者把无关确认与调用错误绑定。
+        # confirmation_required 携带投影时必须格式合法（内核常态）；无投影同样
+        # 容忍——确认治理端口未装配或建确认失败时，这仍是可恢复的受治理结果，
+        # 交由模型向用户说明。其余失败结果携带投影即协议违例，避免执行者把
+        # 无关确认与调用错误绑定。
         has_confirmation = result.HasField("confirmation")
         if result.error_code == "confirmation_required":
-            if not has_confirmation:
-                raise ProtocolViolation("confirmation_required 结果缺少确认投影")
-            confirmation = result.confirmation
-            ExecutorRuntime._valid_token(confirmation.confirmation_id)
-            if confirmation.target_type not in ("capability", "tool") or confirmation.side_effect not in ("write", "external"):
-                raise ProtocolViolation("确认投影目标或副作用类型无效")
-            try:
-                expires_at = datetime.fromisoformat(confirmation.expires_at.replace("Z", "+00:00"))
-            except ValueError as exc:
-                raise ProtocolViolation("确认投影有效期不是有效的 RFC3339 时间") from exc
-            if expires_at.tzinfo is None:
-                raise ProtocolViolation("确认投影有效期必须携带时区")
+            if has_confirmation:
+                confirmation = result.confirmation
+                ExecutorRuntime._valid_token(confirmation.confirmation_id)
+                if confirmation.target_type not in ("capability", "tool") or confirmation.side_effect not in ("write", "external"):
+                    raise ProtocolViolation("确认投影目标或副作用类型无效")
+                try:
+                    expires_at = datetime.fromisoformat(confirmation.expires_at.replace("Z", "+00:00"))
+                except ValueError as exc:
+                    raise ProtocolViolation("确认投影有效期不是有效的 RFC3339 时间") from exc
+                if expires_at.tzinfo is None:
+                    raise ProtocolViolation("确认投影有效期必须携带时区")
         elif has_confirmation:
             raise ProtocolViolation("非 confirmation_required 结果携带确认投影")
 

@@ -126,9 +126,10 @@ func (s *Store) RevokeEcho(ctx context.Context, appID, echoID string, now time.T
 	result, err := s.db.ExecContext(ctx, `
 UPDATE confirmations
 SET status=?,decided_at=?
-WHERE app_id=? AND echo_id=? AND status IN (?,?)`,
+WHERE app_id=? AND echo_id=? AND status IN (?,?) AND julianday(expires_at)>julianday(?)`,
 		confirmation.StatusRevoked, now.UTC().Format(time.RFC3339Nano),
 		appID, echoID, confirmation.StatusWaiting, confirmation.StatusApproved,
+		now.UTC().Format(time.RFC3339Nano),
 	)
 	if err != nil {
 		return 0, fmt.Errorf("revoke echo confirmations: %w", err)
