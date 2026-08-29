@@ -176,12 +176,18 @@ func (c *Catalog) readRecordByID(ctx context.Context, id string) (installedRecor
 	if err != nil {
 		return installedRecord{}, errors.Join(ErrInvalidCatalog, err)
 	}
+	if len(entries) > loader.MaxRegisteredRuntimes {
+		return installedRecord{}, ErrInvalidCatalog
+	}
 	for _, entry := range entries {
 		if packmgr.IsTransientInstallDirectory(entry.Name()) {
+			if !entry.IsDir() {
+				return installedRecord{}, ErrInvalidCatalog
+			}
 			continue
 		}
-		if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
-			continue
+		if strings.HasPrefix(entry.Name(), ".") || !entry.IsDir() {
+			return installedRecord{}, ErrInvalidCatalog
 		}
 		records, err := c.readPackage(ctx, filepath.Join(c.root, entry.Name()))
 		if err != nil {

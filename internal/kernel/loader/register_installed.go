@@ -33,8 +33,8 @@ func RegisterInstalled(ctx context.Context, manager *Manager, target *registry.R
 		return ErrInvalidInstalledRecord
 	}
 	for _, record := range records {
-		if err := validateRecordSpecs(record); err != nil {
-			return errors.Join(ErrInvalidInstalledRecord, err)
+		if err := ValidateInstalledRecord(record); err != nil {
+			return err
 		}
 	}
 	manifests := make([]Manifest, 0, len(records))
