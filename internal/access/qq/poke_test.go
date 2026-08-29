@@ -16,10 +16,10 @@ func newPokeAdapter(t *testing.T, bot *fakeOneBot) *Adapter {
 	hub := newQQTestHub(t, store, stubResolver{user: "user-1"})
 	adapter, err := New(Config{
 		AppID: "campus-services", WSURL: bot.wsURL(), BotQQID: "2647414417",
-		AllowedGroupIDs: []string{"12345"}, AllowedPrivateUserIDs: []string{"67890"}, Provisioner: testProvisioner{}, Scheduler: testScheduler{},
+		AllowedGroupIDs: []string{"12345"}, AllowedPrivateUserIDs: []string{"67890"}, Provisioner: testProvisioner{}, Admission: newQQAdmission(&qqFakeOrchestrator{store: store, created: make(chan struct{})}),
 		PokeReplies: DefaultPokeReplies(),
 		DialTimeout: 2 * time.Second, ReconnectDelay: 50 * time.Millisecond, RunTimeout: 5 * time.Second,
-	}, hub, access.NewEventHub(), &qqFakeOrchestrator{store: store, created: make(chan struct{})}, store)
+	}, hub, access.NewEventHub(), store)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,9 +106,9 @@ func TestQQAdapterCanDisablePokeTextWithoutDisablingGroupPoke(t *testing.T) {
 	hub := newQQTestHub(t, store, stubResolver{user: "user-1"})
 	adapter, err := New(Config{
 		AppID: "campus-services", WSURL: bot.wsURL(), BotQQID: "2647414417",
-		AllowedGroupIDs: []string{"12345"}, PokeReplies: []string{}, Provisioner: testProvisioner{}, Scheduler: testScheduler{},
+		AllowedGroupIDs: []string{"12345"}, PokeReplies: []string{}, Provisioner: testProvisioner{}, Admission: newQQAdmission(&qqFakeOrchestrator{store: store, created: make(chan struct{})}),
 		DialTimeout: 2 * time.Second, ReconnectDelay: 50 * time.Millisecond, RunTimeout: 5 * time.Second,
-	}, hub, access.NewEventHub(), &qqFakeOrchestrator{store: store, created: make(chan struct{})}, store)
+	}, hub, access.NewEventHub(), store)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,9 +161,9 @@ func TestQQAdapterIgnoresGroupMessageWithoutMention(t *testing.T) {
 	orchestrator := &qqFakeOrchestrator{store: store, created: make(chan struct{})}
 	adapter, err := New(Config{
 		AppID: "campus-services", WSURL: bot.wsURL(), BotQQID: "2647414417",
-		AllowedGroupIDs: []string{"12345"}, AllowedPrivateUserIDs: []string{"67890"}, Provisioner: testProvisioner{}, Scheduler: testScheduler{},
+		AllowedGroupIDs: []string{"12345"}, AllowedPrivateUserIDs: []string{"67890"}, Provisioner: testProvisioner{}, Admission: newQQAdmission(orchestrator),
 		DialTimeout: 2 * time.Second, ReconnectDelay: 50 * time.Millisecond, RunTimeout: 5 * time.Second,
-	}, hub, access.NewEventHub(), orchestrator, store)
+	}, hub, access.NewEventHub(), store)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -194,9 +194,9 @@ func TestQQAdapterIgnoresMentionOfAnotherUser(t *testing.T) {
 	orchestrator := &qqFakeOrchestrator{store: store, created: make(chan struct{})}
 	adapter, err := New(Config{
 		AppID: "campus-services", WSURL: bot.wsURL(), BotQQID: testBotQQID,
-		AllowedGroupIDs: []string{"12345"}, AllowedPrivateUserIDs: []string{"67890"}, Provisioner: testProvisioner{}, Scheduler: testScheduler{},
+		AllowedGroupIDs: []string{"12345"}, AllowedPrivateUserIDs: []string{"67890"}, Provisioner: testProvisioner{}, Admission: newQQAdmission(orchestrator),
 		DialTimeout: 2 * time.Second, ReconnectDelay: 50 * time.Millisecond, RunTimeout: 5 * time.Second,
-	}, hub, access.NewEventHub(), orchestrator, store)
+	}, hub, access.NewEventHub(), store)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -227,9 +227,9 @@ func TestQQAdapterHandlesGroupMessageWithMention(t *testing.T) {
 	echoReader := completedEchoReader{}
 	adapter, err := New(Config{
 		AppID: "campus-services", WSURL: bot.wsURL(), BotQQID: "2647414417",
-		AllowedGroupIDs: []string{"12345"}, AllowedPrivateUserIDs: []string{"67890"}, Provisioner: testProvisioner{}, Scheduler: testScheduler{},
+		AllowedGroupIDs: []string{"12345"}, AllowedPrivateUserIDs: []string{"67890"}, Provisioner: testProvisioner{}, Admission: newQQAdmission(orchestrator),
 		DialTimeout: 2 * time.Second, ReconnectDelay: 50 * time.Millisecond, RunTimeout: 5 * time.Second,
-	}, hub, access.NewEventHub(), orchestrator, echoReader)
+	}, hub, access.NewEventHub(), echoReader)
 	if err != nil {
 		t.Fatal(err)
 	}

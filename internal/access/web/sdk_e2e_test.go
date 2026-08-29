@@ -127,7 +127,7 @@ func TestInvokeEndpointRejectsUnknownCapability(t *testing.T) {
 	policy := runtimetest.NewStaticAppPolicy()
 	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{})
 	server := web.NewServer(
-		&fakeOrchestrator{}, nil, nil,
+		newEchoAdmission(&fakeOrchestrator{}, testController{}), nil, nil,
 		reg, policy, campus.AppID, nil, testController{}, access.NewEventHub(),
 		web.WithWebAuthenticator(testWebAuthenticator{}),
 		web.WithIdentityResolver(testWebResolver{}),
@@ -184,7 +184,7 @@ func newCampusE2E(t *testing.T) (*httptest.Server, json.RawMessage) {
 	}
 	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{})
 	server := web.NewServer(
-		&fakeOrchestrator{}, nil, nil,
+		newEchoAdmission(&fakeOrchestrator{}, testController{}), nil, nil,
 		reg, policy, campus.AppID, nil, testController{}, access.NewEventHub(),
 		web.WithWebAuthenticator(sdkTestWebAuthenticator{}),
 		web.WithIdentityResolver(testWebResolver{}),
