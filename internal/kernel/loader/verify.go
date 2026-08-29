@@ -1,4 +1,4 @@
-package packagefmt
+package loader
 
 import (
 	"context"
@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
 	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
 )
 
@@ -21,19 +20,19 @@ func VerifyHostedProtocol(ctx context.Context, sourceDir string, manifest packmg
 			continue
 		}
 		artifactPath := filepath.Join(sourceDir, component.Entrypoint)
-		host, err := loader.NewWasmHost(loader.WasmHostConfig{
-			ReadArtifact: func(context.Context, loader.Manifest) ([]byte, error) {
+		host, err := NewWasmHost(WasmHostConfig{
+			ReadArtifact: func(context.Context, Manifest) ([]byte, error) {
 				return packmgr.ReadFileLimited(artifactPath, packmgr.MaxArtifactBytes)
 			},
 		})
 		if err != nil {
-			return fmt.Errorf("packagefmt: 构造协议校验宿主失败: %w", err)
+			return fmt.Errorf("loader: 构造协议校验宿主失败: %w", err)
 		}
-		runtime, err := host.Load(ctx, loader.Manifest{
-			ID: component.ID, Version: manifest.Version, Mode: loader.ModeHosted,
+		runtime, err := host.Load(ctx, Manifest{
+			ID: component.ID, Version: manifest.Version, Mode: ModeHosted,
 		})
 		if err != nil {
-			return fmt.Errorf("packagefmt: 组件 %s 装载失败: %w", component.ID, err)
+			return fmt.Errorf("loader: 组件 %s 装载失败: %w", component.ID, err)
 		}
 		stopRuntime := func() error {
 			stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
@@ -41,29 +40,29 @@ func VerifyHostedProtocol(ctx context.Context, sourceDir string, manifest packmg
 			cancel()
 			return err
 		}
-		invoker, ok := runtime.(loader.Invoker)
+		invoker, ok := runtime.(Invoker)
 		if !ok {
 			if err := stopRuntime(); err != nil {
-				return fmt.Errorf("packagefmt: 组件 %s 调用面校验清理失败: %w", component.ID, err)
+				return fmt.Errorf("loader: 组件 %s 调用面校验清理失败: %w", component.ID, err)
 			}
-			return fmt.Errorf("packagefmt: 组件 %s 不提供 Capability 调用面", component.ID)
+			return fmt.Errorf("loader: 组件 %s 不提供 Capability 调用面", component.ID)
 		}
 		for _, capabilityID := range component.Exports {
 			_, invokeErr := invoker.Invoke(ctx, contracts.RequestContext{
 				AppID: manifest.ID, EchoID: "package-verify", RequestID: capabilityID,
 				ToolID: capabilityID, Deadline: time.Now().UTC().Add(30 * time.Second),
 			}, []byte(`{}`))
-			if invokeErr != nil && !errors.Is(invokeErr, loader.ErrHostedCallRejected) {
+			if invokeErr != nil && !errors.Is(invokeErr, ErrHostedCallRejected) {
 				stopErr := stopRuntime()
 				if stopErr != nil {
-					return fmt.Errorf("packagefmt: 组件 %s 协议校验失败且清理失败: %w", component.ID, errors.Join(invokeErr, stopErr))
+					return fmt.Errorf("loader: 组件 %s 协议校验失败且清理失败: %w", component.ID, errors.Join(invokeErr, stopErr))
 				}
-				return fmt.Errorf("packagefmt: 组件 %s 未返回可接受的 WASI 信封: %w", component.ID, invokeErr)
+				return fmt.Errorf("loader: 组件 %s 未返回可接受的 WASI 信封: %w", component.ID, invokeErr)
 			}
 		}
 		stopErr := stopRuntime()
 		if stopErr != nil {
-			return fmt.Errorf("packagefmt: 组件 %s 协议校验清理失败: %w", component.ID, stopErr)
+			return fmt.Errorf("loader: 组件 %s 协议校验清理失败: %w", component.ID, stopErr)
 		}
 	}
 	return nil

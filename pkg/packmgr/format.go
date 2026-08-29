@@ -9,6 +9,8 @@ import (
 	"regexp"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/capability"
 )
 
 // 包格式版本：清单与 lock 共用的 schema 版本。
@@ -30,9 +32,7 @@ var (
 	ErrInvalidFormat = errors.New("invalid package format")
 )
 
-// 标识模式与内核 id 包保持一致，但本包自持以保证中立性（格式层可独立迁移）。
 var (
-	stableLowerPattern      = regexp.MustCompile(`^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$`)
 	storageNamespacePattern = regexp.MustCompile(`^[a-z][a-z0-9]*(?:[/._:-][a-z0-9]+)*$`)
 )
 
@@ -64,7 +64,7 @@ type Dependency struct {
 func ValidateHostedFunctions(decls []HostedFunctionDecl) error {
 	seen := make(map[string]struct{}, len(decls))
 	for _, decl := range decls {
-		if !stableLowerPattern.MatchString(decl.Module) || !stableLowerPattern.MatchString(decl.Name) ||
+		if !capability.IsStableID(decl.Module) || !capability.IsStableID(decl.Name) ||
 			decl.Module == "wasi_snapshot_preview1" || len(decl.Purpose) > 256 || !utf8.ValidString(decl.Purpose) {
 			return ErrInvalidFormat
 		}
@@ -95,7 +95,7 @@ func ValidateStorage(storage Storage) error {
 
 // ValidateDependency 校验依赖声明：标识符闭式 + semver 约束可解析。
 func ValidateDependency(dep Dependency) error {
-	if !stableLowerPattern.MatchString(dep.ID) || len(dep.ID) > 128 {
+	if !capability.IsStableID(dep.ID) {
 		return ErrInvalidFormat
 	}
 	if _, err := ParseConstraint(dep.Constraint); err != nil {

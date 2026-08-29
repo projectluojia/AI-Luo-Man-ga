@@ -43,7 +43,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/session"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/task"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/packagefmt"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packagefmt"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/promptcatalog"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/agent"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus"
@@ -442,7 +442,7 @@ func resolveSource(ctx context.Context, sourceDir, version string) (manifest pac
 		if err := packagefmt.Build(ctx, sourceDir, manifest, packagefmt.BuildSpec{Tool: buildTool}); err != nil {
 			return packmgr.Manifest{}, nil, err
 		}
-		if err := packagefmt.VerifyHostedProtocol(ctx, sourceDir, manifest); err != nil {
+		if err := loader.VerifyHostedProtocol(ctx, sourceDir, manifest); err != nil {
 			return packmgr.Manifest{}, nil, err
 		}
 		return manifest, manifestBytes, nil

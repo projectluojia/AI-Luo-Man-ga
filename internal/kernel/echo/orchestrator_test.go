@@ -30,6 +30,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite/sqlitetest"
 	"github.com/projectluojia/AI-Luo-Man-ga/pkg/bus"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/capability"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -1214,17 +1215,17 @@ func TestOrchestratorRevalidatesCapabilityPolicyAfterProjection(t *testing.T) {
 	reg := registry.New()
 	var called atomic.Int32
 	if err := reg.RegisterService(registry.ServiceRegistration{
-		Spec: registry.ServiceSpec{ID: "test", Version: "1.0.0"},
+		Spec: capability.ServiceSpec{ID: "test", Version: "1.0.0"},
 		Capabilities: map[string]struct {
-			Spec    registry.CapabilitySpec
+			Spec    capability.CapabilitySpec
 			Handler registry.Handler
 		}{
 			capabilityID: {
-				Spec: registry.CapabilitySpec{
+				Spec: capability.CapabilitySpec{
 					ID: capabilityID, Version: "1.0.0", Name: "测试读取",
 					Description: "验证运行中动态撤权", ServiceID: "test",
 					InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
-					SideEffect:      registry.SideEffectRead,
+					SideEffect:      capability.SideEffectRead,
 				},
 				Handler: func(context.Context, contracts.RequestContext, json.RawMessage) (json.RawMessage, error) {
 					called.Add(1)
@@ -1296,7 +1297,7 @@ func TestOrchestratorAcceptedRunScopeCannotExpandAfterGrant(t *testing.T) {
 	reg := registry.New()
 	var newlyGrantedCalled atomic.Int32
 	capabilities := make(map[string]struct {
-		Spec    registry.CapabilitySpec
+		Spec    capability.CapabilitySpec
 		Handler registry.Handler
 	})
 	for _, capabilityID := range []string{acceptedCapability, newCapability, permissionCapability} {
@@ -1311,21 +1312,21 @@ func TestOrchestratorAcceptedRunScopeCannotExpandAfterGrant(t *testing.T) {
 			requiredPermissions = []string{permission}
 		}
 		capabilities[capabilityID] = struct {
-			Spec    registry.CapabilitySpec
+			Spec    capability.CapabilitySpec
 			Handler registry.Handler
 		}{
-			Spec: registry.CapabilitySpec{
+			Spec: capability.CapabilitySpec{
 				ID: capabilityID, Version: "1.0.0", Name: "测试读取",
 				Description: "验证已接受 Run 的授权范围不可扩张", ServiceID: "test",
 				InputSchemaJSON:     `{"type":"object","additionalProperties":false}`,
-				SideEffect:          registry.SideEffectRead,
+				SideEffect:          capability.SideEffectRead,
 				RequiredPermissions: requiredPermissions,
 			},
 			Handler: handler,
 		}
 	}
 	if err := reg.RegisterService(registry.ServiceRegistration{
-		Spec: registry.ServiceSpec{
+		Spec: capability.ServiceSpec{
 			ID: "test", Version: "1.0.0", RequestedPermissions: []string{permission},
 		},
 		Capabilities: capabilities,
@@ -1628,16 +1629,16 @@ func TestOrchestratorDoesNotAutomaticallyRetryAfterSideEffect(t *testing.T) {
 	policy.Enable(campus.AppID, "test.external")
 	var calls atomic.Int32
 	if err := reg.RegisterService(registry.ServiceRegistration{
-		Spec: registry.ServiceSpec{ID: "test", Version: "1.0.0"},
+		Spec: capability.ServiceSpec{ID: "test", Version: "1.0.0"},
 		Capabilities: map[string]struct {
-			Spec    registry.CapabilitySpec
+			Spec    capability.CapabilitySpec
 			Handler registry.Handler
 		}{
 			"test.external": {
-				Spec: registry.CapabilitySpec{
+				Spec: capability.CapabilitySpec{
 					ID: "test.external", Version: "1.0.0", Name: "外部测试", Description: "验证副作用重试边界", ServiceID: "test",
 					InputSchemaJSON: `{"type":"object","properties":{},"additionalProperties":false}`,
-					SideEffect:      registry.SideEffectExternal,
+					SideEffect:      capability.SideEffectExternal,
 				},
 				Handler: func(context.Context, contracts.RequestContext, json.RawMessage) (json.RawMessage, error) {
 					calls.Add(1)

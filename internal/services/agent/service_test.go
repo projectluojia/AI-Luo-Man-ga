@@ -10,6 +10,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/agent"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/capability"
 )
 
 type captureRunner struct {
@@ -39,7 +40,7 @@ func TestRegisterRoutesGovernedParentIdentityAndStrictInput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if spec.SideEffect != registry.SideEffectExternal || spec.RequiresConfirmation {
+	if spec.SideEffect != capability.SideEffectExternal || spec.RequiresConfirmation {
 		t.Fatalf("spec=%#v", spec)
 	}
 	result, err := handler(context.Background(), contracts.RequestContext{

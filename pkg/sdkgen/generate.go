@@ -49,7 +49,7 @@ func Generate(source json.RawMessage, options Options) ([]Generated, error) {
 			return nil, err
 		}
 		inputName := typeName(capability.ID, options.PackageID)
-		model, err := schemaType(json.RawMessage(capability.InputSchema), inputName)
+		model, err := schemaType(json.RawMessage(capability.InputSchemaJSON), inputName)
 		if err != nil {
 			return nil, fmt.Errorf("sdkgen: capability %q: %w", capability.ID, err)
 		}

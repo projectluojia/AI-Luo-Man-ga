@@ -14,6 +14,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/capability"
 	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
 )
 
@@ -64,16 +65,16 @@ func writeMultiComponentFixture(t *testing.T, root, version string) string {
 		}
 	}
 	extensions, err := json.Marshal(map[string]any{
-		"service": registry.ServiceSpec{
+		"service": capability.ServiceSpec{
 			ID: "campus", Version: version, Description: "校园服务",
 		},
-		"capabilities": []registry.CapabilitySpec{
+		"capabilities": []capability.CapabilitySpec{
 			{ID: "campus.bus.query", Version: version, Name: "校巴查询", Description: "查询校巴",
 				ServiceID: "campus", InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
-				SideEffect: registry.SideEffectRead},
+				SideEffect: capability.SideEffectRead},
 			{ID: "campus.bus.transport", Version: version, Name: "实时交通", Description: "实时校巴位置",
 				ServiceID: "campus", InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
-				SideEffect: registry.SideEffectRead},
+				SideEffect: capability.SideEffectRead},
 		},
 	})
 	if err != nil {
