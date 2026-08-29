@@ -25,12 +25,6 @@ type Canceller interface {
 	Cancel(context.Context, string) (bool, error)
 }
 
-// Admission 是访问层创建和取消 Echo 所需的内核端口。
-type Admission interface {
-	Creator
-	Canceller
-}
-
 // SchedulerRunner 是持久 Run 调度器执行队列工作所需的编排端口。
 type SchedulerRunner interface {
 	RunQueued(context.Context, RunWork, EventEmitter) error
