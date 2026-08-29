@@ -2,6 +2,8 @@ package timetable
 
 import (
 	"encoding/json"
+	"errors"
+	"strings"
 	"testing"
 )
 
@@ -45,6 +47,52 @@ header-1
 	legacyData, err := ParseWakeUpEnvelope([]byte(`{"format":"legacy","content":` + quoteJSON(legacy) + `}`))
 	if err != nil || len(legacyData.Courses) != 1 || legacyData.Courses[0].Title != "物理" || legacyData.Courses[0].Weeks[0] != 2 {
 		t.Fatalf("legacy data=%#v err=%v", legacyData, err)
+	}
+}
+
+func TestParseWakeUpLegacyAcceptsQuotedNumericFields(t *testing.T) {
+	legacy := `header-0
+header-1
+{"tableName":"旧课表"}
+[{"id":"7","courseName":"化学"}]
+[{"id":"7","day":"4","startNode":"2","step":"3","type":"1","teacher":"王老师","room":"教三","startWeek":"3","endWeek":"18"}]`
+	data, err := ParseWakeUpEnvelope([]byte(`{"format":"legacy","content":` + quoteJSON(legacy) + `}`))
+	if err != nil || len(data.Courses) != 1 {
+		t.Fatalf("legacy data=%#v err=%v", data, err)
+	}
+	course := data.Courses[0]
+	if course.Title != "化学" || course.Weekday != 4 || course.ClassFrom != 2 || course.ClassTo != 4 {
+		t.Fatalf("course=%#v", course)
+	}
+	if want := []int{3, 5, 7, 9, 11, 13, 15, 17}; !sameInts(course.Weeks, want) {
+		t.Fatalf("weeks=%v", course.Weeks)
+	}
+}
+
+func TestParseWakeUpCSVRejectsClassPeriodBeyondLimit(t *testing.T) {
+	csvEnvelope := []byte(`{"format":"csv","content":"name,day,startNode,endNode,teacher,location,weekMeta\n高数,1,1,65,张老师,教一,1-16周"}`)
+	if _, err := ParseWakeUpEnvelope(csvEnvelope); !errors.Is(err, ErrMalformedData) {
+		t.Fatalf("csv err=%v", err)
+	}
+}
+
+func TestSanitizeDisplayCollapsesLineBreaks(t *testing.T) {
+	if got := SanitizeDisplay("高数\r\n第二节\t "); got != "高数 第二节" {
+		t.Fatalf("sanitize=%q", got)
+	}
+}
+
+func TestNormalizeCourseRejectsOverlongDisplayFields(t *testing.T) {
+	course := Course{AppID: "app-a", UserID: "alice", TimetableID: "table-1", ID: "course-1",
+		Title: "高数", Weekday: 1, ClassFrom: 1, ClassTo: 2, Weeks: []int{1},
+		Instructor: strings.Repeat("张", MaxTextChars+1)}
+	if _, err := NormalizeCourse(course); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("overlong instructor err=%v", err)
+	}
+	course.Instructor = strings.Repeat("张", MaxTextChars)
+	course.CourseNature = strings.Repeat("通", MaxTextChars)
+	if _, err := NormalizeCourse(course); err != nil {
+		t.Fatalf("boundary fields err=%v", err)
 	}
 }
 

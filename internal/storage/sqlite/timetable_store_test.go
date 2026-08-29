@@ -72,10 +72,23 @@ func TestTimetableImportIsAtomicAndValidatesCapacity(t *testing.T) {
 	defer sqlitetest.CloseAndWait(t, store, dir)
 	createTimetableUser(t, store, "alice")
 	valid := testCourse("app-a", "alice", "imported", "course-1")
+	emptyImport := timetable.Timetable{AppID: "app-a", UserID: "alice", ID: "imported", Name: "导入", Source: timetable.SourceWUDA}
+	if _, _, err := store.ImportTimetable(t.Context(), emptyImport, nil); !errors.Is(err, timetable.ErrNoCourses) {
+		t.Fatalf("empty import err=%v", err)
+	}
+	overflow := make([]timetable.Course, 0, timetable.MaxCoursesPerTable+1)
+	for i := 0; i <= timetable.MaxCoursesPerTable; i++ {
+		item := valid
+		item.ID = fmt.Sprintf("course-%d", i)
+		overflow = append(overflow, item)
+	}
+	if _, _, err := store.ImportTimetable(t.Context(), emptyImport, overflow); !errors.Is(err, timetable.ErrCapacity) {
+		t.Fatalf("capacity import err=%v", err)
+	}
 	invalid := valid
 	invalid.ID = "course-2"
 	invalid.Weeks = nil
-	if _, _, err := store.ImportTimetable(t.Context(), timetable.Timetable{AppID: "app-a", UserID: "alice", ID: "imported", Name: "导入", Source: timetable.SourceWUDA}, []timetable.Course{valid, invalid}); !errors.Is(err, timetable.ErrInvalid) {
+	if _, _, err := store.ImportTimetable(t.Context(), emptyImport, []timetable.Course{valid, invalid}); !errors.Is(err, timetable.ErrInvalid) {
 		t.Fatalf("invalid import err=%v", err)
 	}
 	if _, err := store.GetTimetable(t.Context(), "app-a", "alice", "imported"); !errors.Is(err, timetable.ErrNotFound) {
@@ -87,6 +100,25 @@ func TestTimetableImportIsAtomicAndValidatesCapacity(t *testing.T) {
 	}
 	if got, err := store.ListCourses(t.Context(), "app-a", "alice", "imported"); err != nil || len(got) != 1 {
 		t.Fatalf("stored courses=%#v err=%v", got, err)
+	}
+}
+
+func TestTimetableStoreMapsConstraintViolationsToConflict(t *testing.T) {
+	store, dir := openTimetableStore(t)
+	defer sqlitetest.CloseAndWait(t, store, dir)
+	createTimetableUser(t, store, "alice")
+	duplicate := timetable.Timetable{AppID: "app-a", UserID: "alice", ID: "dup", Name: "重复", Source: timetable.SourceLocal}
+	if _, err := store.CreateTimetable(t.Context(), duplicate); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateTimetable(t.Context(), duplicate); !errors.Is(err, timetable.ErrConflict) {
+		t.Fatalf("duplicate timetable err=%v", err)
+	}
+	if _, err := store.CreateCourse(t.Context(), testCourse("app-a", "alice", "dup", "course-1")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateCourse(t.Context(), testCourse("app-a", "alice", "dup", "course-1")); !errors.Is(err, timetable.ErrConflict) {
+		t.Fatalf("duplicate course err=%v", err)
 	}
 }
 

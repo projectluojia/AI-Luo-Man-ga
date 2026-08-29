@@ -24,9 +24,11 @@ const (
 	MaxTimetablesPerUser = 32
 	MaxCoursesPerTable   = 512
 	MaxWeeks             = 64
-	MaxCourseTitleChars  = 256
-	MaxTextChars         = 512
-	MaxImportBytes       = 64 << 10
+	// MaxClassPeriod 是单次连堂的节次上限；SQLite CHECK 约束使用同一数值。
+	MaxClassPeriod      = 64
+	MaxCourseTitleChars = 256
+	MaxTextChars        = 512
+	MaxImportBytes      = 64 << 10
 )
 
 var (
@@ -158,9 +160,12 @@ func NormalizeCourse(value Course) (Course, error) {
 		!id.StableMixed.MatchString(value.TimetableID) || !id.StableMixed.MatchString(value.ID) ||
 		utf8.RuneCountInString(value.Title) > MaxCourseTitleChars ||
 		value.Weekday < 1 || value.Weekday > 7 || value.ClassFrom < 1 ||
-		value.ClassTo < value.ClassFrom || value.ClassTo > 64 ||
+		value.ClassTo < value.ClassFrom || value.ClassTo > MaxClassPeriod ||
 		utf8.RuneCountInString(value.TitleRaw) > MaxTextChars || utf8.RuneCountInString(value.InstructorRaw) > MaxTextChars ||
-		utf8.RuneCountInString(value.ExternalID) > MaxTextChars {
+		utf8.RuneCountInString(value.ExternalID) > MaxTextChars ||
+		utf8.RuneCountInString(value.CourseNature) > MaxTextChars || utf8.RuneCountInString(value.Instructor) > MaxTextChars ||
+		utf8.RuneCountInString(value.Location) > MaxTextChars || utf8.RuneCountInString(value.WeekMeta) > MaxTextChars ||
+		utf8.RuneCountInString(value.StartText) > MaxTextChars || utf8.RuneCountInString(value.EndText) > MaxTextChars {
 		return Course{}, ErrInvalid
 	}
 	weeks, err := normalizeWeeks(value.Weeks)
@@ -205,11 +210,13 @@ func SanitizeDisplay(value string) string {
 	return strings.TrimSpace(collapseASCIIWhitespace(builder.String()))
 }
 
+// collapseASCIIWhitespace 把连续 ASCII 空白折叠为单个空格；CR/LF 属于展示文本
+// 边界内的可折叠空白，不能原样保留在课程展示字段中。
 func collapseASCIIWhitespace(value string) string {
 	var builder strings.Builder
 	space := false
 	for _, r := range value {
-		if r == ' ' || r == '\t' || r == '\f' || r == '\v' {
+		if r == ' ' || r == '\t' || r == '\f' || r == '\v' || r == '\r' || r == '\n' {
 			space = true
 			continue
 		}

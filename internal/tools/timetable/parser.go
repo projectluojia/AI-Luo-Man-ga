@@ -89,33 +89,6 @@ func ParseWakeUpEnvelope(raw []byte) (ImportData, error) {
 // ParseWakeUp 是 WakeUp envelope 解析的稳定入口别名。
 func ParseWakeUp(raw []byte) (ImportData, error) { return ParseWakeUpEnvelope(raw) }
 
-// ParseImport 根据导入格式统一入口，便于 Service 只保留一个导入边界。
-func ParseImport(format, content, fileName string) (ImportData, error) {
-	if len(content) > MaxImportBytes {
-		return ImportData{}, ErrMalformedData
-	}
-	switch strings.ToLower(strings.TrimSpace(format)) {
-	case "wuda", "academic", "whu":
-		courses, err := ParseAcademic([]byte(content))
-		return ImportData{Name: fileBase(fileName), Source: SourceWUDA, Courses: courses}, err
-	case "wakeup", "wakeup-csv":
-		return ParseWakeUpEnvelope(mustMarshalEnvelope("csv", content, fileName))
-	case "wakeup-legacy":
-		return ParseWakeUpEnvelope(mustMarshalEnvelope("legacy", content, fileName))
-	default:
-		return ImportData{}, ErrUnsupported
-	}
-}
-
-func mustMarshalEnvelope(format, content, fileName string) []byte {
-	encoded, _ := json.Marshal(struct {
-		Format   string `json:"format"`
-		Content  string `json:"content"`
-		FileName string `json:"fileName"`
-	}{format, content, fileName})
-	return encoded
-}
-
 func parseWakeUpCSV(content, fileName string) (ImportData, error) {
 	lines := strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n")
 	filtered := make([]string, 0, len(lines))
@@ -137,7 +110,7 @@ func parseWakeUpCSV(content, fileName string) (ImportData, error) {
 		from, okFrom := strictInt(row[2])
 		to, okTo := strictInt(row[3])
 		weeks := parseWeeks(row[6])
-		if !okDay || !okFrom || !okTo || day < 1 || day > 7 || from < 1 || to < from || len(weeks) == 0 {
+		if !okDay || !okFrom || !okTo || day < 1 || day > 7 || from < 1 || to < from || to > MaxClassPeriod || len(weeks) == 0 {
 			return ImportData{}, ErrMalformedData
 		}
 		teacher := SanitizeDisplay(row[4])
@@ -210,7 +183,7 @@ func parseWakeUpLegacy(content string) (ImportData, error) {
 		if value, ok := integerRaw(detail.Step); ok {
 			step = value
 		}
-		if step < 1 || start+step-1 > 64 {
+		if step < 1 || start+step-1 > MaxClassPeriod {
 			return ImportData{}, ErrMalformedData
 		}
 		typeValue, _ := integerRaw(detail.Type)
@@ -301,7 +274,7 @@ func parseClassPeriod(text string) *classPeriod {
 	if len(numbers) > 1 {
 		to, _ = strconv.Atoi(numbers[1])
 	}
-	if from <= 0 || to < from || to > 64 {
+	if from <= 0 || to < from || to > MaxClassPeriod {
 		return nil
 	}
 	return &classPeriod{from: from, to: to}
@@ -382,11 +355,22 @@ func strictInt(value string) (int, bool) {
 	return parsed, err == nil
 }
 
+// integerRaw 读取 legacy JSON 的数字字段。旧版 WakeUp 导出在数字与字符串两种
+// 编码间混排（如 "day":3 与 "day":"3"），带引号的合法数字需要先解码再校验，
+// 否则整行课程会被静默丢弃。
 func integerRaw(value json.RawMessage) (int, bool) {
 	if len(value) == 0 {
 		return -1, false
 	}
-	return strictInt(string(value))
+	trimmed := strings.TrimSpace(string(value))
+	if strings.HasPrefix(trimmed, `"`) {
+		var text string
+		if json.Unmarshal(value, &text) != nil {
+			return -1, false
+		}
+		return strictInt(text)
+	}
+	return strictInt(trimmed)
 }
 
 func jsonKey(value json.RawMessage) string {

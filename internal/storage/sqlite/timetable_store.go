@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"strings"
 	"time"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/identity"
@@ -345,7 +344,10 @@ func (s *Store) ImportTimetable(ctx context.Context, value timetable.Timetable, 
 	if err != nil {
 		return timetable.Timetable{}, nil, err
 	}
-	if len(courses) == 0 || len(courses) > timetable.MaxCoursesPerTable {
+	if len(courses) == 0 {
+		return timetable.Timetable{}, nil, timetable.ErrNoCourses
+	}
+	if len(courses) > timetable.MaxCoursesPerTable {
 		return timetable.Timetable{}, nil, timetable.ErrCapacity
 	}
 	now := time.Now().UTC()
@@ -460,6 +462,14 @@ func scanCourse(row scanner, appID, userID, timetableID string) (timetable.Cours
 	}
 	return item, nil
 }
+
+// isUniqueError 判定 SQLITE_CONSTRAINT_UNIQUE（扩展码 2067）与
+// SQLITE_CONSTRAINT_PRIMARYKEY（扩展码 1555）两类约束冲突，其余错误一律不
+// 视为冲突，避免错误文本匹配误伤无关错误。
 func isUniqueError(err error) bool {
-	return err != nil && strings.Contains(strings.ToLower(err.Error()), "unique")
+	var coded interface{ Code() int }
+	if !errors.As(err, &coded) {
+		return false
+	}
+	return coded.Code() == 2067 || coded.Code() == 1555
 }

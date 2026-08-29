@@ -458,6 +458,8 @@ func importTimetableHandler(store Store) registry.Handler {
 	}
 }
 
+// parseCapabilityImport 是导入格式的唯一分发入口，别名集合必须与
+// ImportInputSchemaJSON 的 enum 保持一致，避免出现第二套漂移的实现。
 func parseCapabilityImport(input importInput) (ImportData, error) {
 	format := strings.ToLower(strings.TrimSpace(input.Format))
 	switch format {
