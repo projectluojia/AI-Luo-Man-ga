@@ -176,13 +176,22 @@ func (c *Catalog) readRecordByID(ctx context.Context, id string) (installedRecor
 	if err != nil {
 		return installedRecord{}, errors.Join(ErrInvalidCatalog, err)
 	}
+	if len(entries) > loader.MaxRegisteredRuntimes {
+		return installedRecord{}, ErrInvalidCatalog
+	}
 	// 先精确匹配包目录（id 等于目录名或以其为前缀），再回退扫描其余目录，
 	// 防止目录名前缀重叠时错误包先命中。
 	for pass := 0; pass < 2; pass++ {
 		for _, entry := range entries {
 			name := entry.Name()
-			if packmgr.IsTransientInstallDirectory(name) || !entry.IsDir() || strings.HasPrefix(name, ".") {
+			if packmgr.IsTransientInstallDirectory(name) {
+				if !entry.IsDir() {
+					return installedRecord{}, ErrInvalidCatalog
+				}
 				continue
+			}
+			if strings.HasPrefix(name, ".") || !entry.IsDir() {
+				return installedRecord{}, ErrInvalidCatalog
 			}
 			candidate := id == name || strings.HasPrefix(id, name+".")
 			if (pass == 0) != candidate {
