@@ -560,6 +560,7 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
             error["confirmation"] = {
                 "confirmation_id": confirmation.confirmation_id,
                 "capability_id": confirmation.capability_id,
+                "target_type": confirmation.target_type,
                 "target_id": confirmation.target_id,
                 "side_effect": confirmation.side_effect,
                 "status": confirmation.status,

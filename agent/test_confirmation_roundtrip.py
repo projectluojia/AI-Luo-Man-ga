@@ -214,6 +214,7 @@ class ConfirmationRoundTripTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(seen["code"], "confirmation_required")
         self.assertEqual(seen["confirmation"]["confirmation_id"], "conf-3")
         self.assertEqual(seen["confirmation"]["status"], "waiting")
+        self.assertEqual(seen["confirmation"]["target_type"], "capability")
 
     async def test_malformed_confirmation_projection_is_rejected(self) -> None:
         requests, request_iterator = self._stream()
