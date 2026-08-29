@@ -126,11 +126,8 @@ func validateTarball(ctx context.Context, tarballPath string) (Manifest, error) 
 	if err := validatePackagedLock(lock, source.Manifest); err != nil {
 		return Manifest{}, err
 	}
-	for _, artifact := range lock.Artifacts {
-		digest, err := HashFile(ctx, artifact.Path, MaxArtifactBytes)
-		if err != nil || digest != artifact.SHA256 {
-			return Manifest{}, ErrInvalidFormat
-		}
+	if err := verifyInstalledArtifacts(ctx, sourceDir, lock.Artifacts); err != nil {
+		return Manifest{}, err
 	}
 	return source.Manifest, nil
 }
