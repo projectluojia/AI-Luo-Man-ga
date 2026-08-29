@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -10,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access/configui"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/identity"
@@ -220,7 +222,9 @@ func TestConfigureInstalledRuntimesRegistersHostedCatalogAndRequiresAddress(t *t
 		t.Fatalf("create runtime loader: %v", err)
 	}
 	t.Cleanup(func() {
-		if err := manager.Shutdown(t.Context()); err != nil {
+		shutdownContext, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := manager.Shutdown(shutdownContext); err != nil {
 			t.Errorf("shutdown runtime manager: %v", err)
 		}
 	})

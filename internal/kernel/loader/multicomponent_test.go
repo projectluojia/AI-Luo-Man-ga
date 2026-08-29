@@ -17,6 +17,11 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/packmgr"
 )
 
+const (
+	busCoreRuntimeID    = "campus.bus.bus.core"
+	busAdapterRuntimeID = "campus.bus.bus.adapter"
+)
+
 // multiModeKeyedHost 按 mode 过滤、按 组件ID@版本 返回运行时。
 type multiModeKeyedHost struct {
 	mode     string
@@ -172,27 +177,27 @@ func TestCampusBusMultiComponentRoutesCapabilitiesAndUpgradesGroup(t *testing.T)
 	// 注册：hosted/isolated 各一个宿主，同时提供 v1/v2 运行时。
 	recorder := &stopRecorder{}
 	core1 := &recordingRuntime{
-		fakeRuntime: &fakeRuntime{description: loader.Description{ID: "bus.core", Version: "1.0.0", Mode: loader.ModeHosted}},
+		fakeRuntime: &fakeRuntime{description: loader.Description{ID: busCoreRuntimeID, Version: "1.0.0", Mode: loader.ModeHosted}},
 		recorder:    recorder, id: "bus.core",
 	}
 	adapter1 := &recordingRuntime{
-		fakeRuntime: &fakeRuntime{description: loader.Description{ID: "bus.adapter", Version: "1.0.0", Mode: loader.ModeIsolated}},
+		fakeRuntime: &fakeRuntime{description: loader.Description{ID: busAdapterRuntimeID, Version: "1.0.0", Mode: loader.ModeIsolated}},
 		recorder:    recorder, id: "bus.adapter",
 	}
 	core2 := &recordingRuntime{
-		fakeRuntime: &fakeRuntime{description: loader.Description{ID: "bus.core", Version: "2.0.0", Mode: loader.ModeHosted}},
+		fakeRuntime: &fakeRuntime{description: loader.Description{ID: busCoreRuntimeID, Version: "2.0.0", Mode: loader.ModeHosted}},
 		recorder:    recorder, id: "bus.core",
 	}
 	adapter2 := &recordingRuntime{
-		fakeRuntime: &fakeRuntime{description: loader.Description{ID: "bus.adapter", Version: "2.0.0", Mode: loader.ModeIsolated}},
+		fakeRuntime: &fakeRuntime{description: loader.Description{ID: busAdapterRuntimeID, Version: "2.0.0", Mode: loader.ModeIsolated}},
 		recorder:    recorder, id: "bus.adapter",
 	}
 	manager, err := loader.New(
 		&multiModeKeyedHost{mode: loader.ModeHosted, runtimes: map[string]loader.Runtime{
-			"bus.core@1.0.0": core1, "bus.core@2.0.0": core2,
+			busCoreRuntimeID + "@1.0.0": core1, busCoreRuntimeID + "@2.0.0": core2,
 		}},
 		&multiModeKeyedHost{mode: loader.ModeIsolated, runtimes: map[string]loader.Runtime{
-			"bus.adapter@1.0.0": adapter1, "bus.adapter@2.0.0": adapter2,
+			busAdapterRuntimeID + "@1.0.0": adapter1, busAdapterRuntimeID + "@2.0.0": adapter2,
 		}},
 	)
 	if err != nil {
@@ -221,27 +226,27 @@ func TestCampusBusMultiComponentRoutesCapabilitiesAndUpgradesGroup(t *testing.T)
 	}
 
 	// 组升级：持有旧组件租约 → 候选全绿后原子切换 → 旧版本反序 drain。
-	leaseCore, err := manager.Acquire(ctx, "bus.core")
+	leaseCore, err := manager.Acquire(ctx, busCoreRuntimeID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	leaseAdapter, err := manager.Acquire(ctx, "bus.adapter")
+	leaseAdapter, err := manager.Acquire(ctx, busAdapterRuntimeID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := manager.UpgradePackage(ctx, loader.PackageSpec{
 		ID: "campus.bus",
 		Components: []loader.ComponentSpec{
-			{Runtime: loader.Manifest{ID: "bus.adapter", Version: "2.0.0", Mode: loader.ModeIsolated,
+			{Runtime: loader.Manifest{ID: busAdapterRuntimeID, Version: "2.0.0", Mode: loader.ModeIsolated,
 				Role: loader.RoleCapability, LockedDigest: digest}},
-			{Runtime: loader.Manifest{ID: "bus.core", Version: "2.0.0", Mode: loader.ModeHosted,
+			{Runtime: loader.Manifest{ID: busCoreRuntimeID, Version: "2.0.0", Mode: loader.ModeHosted,
 				Role: loader.RoleCapability, LockedDigest: digest}},
 		},
 	}); err != nil {
 		t.Fatalf("UpgradePackage: %v", err)
 	}
 	// 新租约打到 v2。
-	for id, runtime := range map[string]loader.Runtime{"bus.core": core2, "bus.adapter": adapter2} {
+	for id, runtime := range map[string]loader.Runtime{busCoreRuntimeID: core2, busAdapterRuntimeID: adapter2} {
 		lease, err := manager.Acquire(ctx, id)
 		if err != nil {
 			t.Fatal(err)

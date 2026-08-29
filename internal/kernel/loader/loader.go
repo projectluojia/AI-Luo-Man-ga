@@ -115,7 +115,6 @@ type entry struct {
 	host Host
 
 	mu              sync.Mutex
-	upgradeMu       sync.Mutex
 	state           string
 	runtime         Runtime
 	inFlight        int
