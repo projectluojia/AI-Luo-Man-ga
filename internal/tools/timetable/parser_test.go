@@ -69,6 +69,17 @@ header-1
 	}
 }
 
+func TestParseWakeUpLegacyRejectsInvalidDetailRow(t *testing.T) {
+	legacy := `header-0
+header-1
+{"tableName":"旧课表"}
+[{"id":7,"courseName":"物理"}]
+[{"id":7,"day":"9","startNode":2,"step":2,"type":2,"teacher":"李老师","room":"教二"}]`
+	if _, err := ParseWakeUpEnvelope([]byte(`{"format":"legacy","content":` + quoteJSON(legacy) + `}`)); !errors.Is(err, ErrMalformedData) {
+		t.Fatalf("legacy invalid row err=%v", err)
+	}
+}
+
 func TestParseWakeUpCSVRejectsClassPeriodBeyondLimit(t *testing.T) {
 	csvEnvelope := []byte(`{"format":"csv","content":"name,day,startNode,endNode,teacher,location,weekMeta\n高数,1,1,65,张老师,教一,1-16周"}`)
 	if _, err := ParseWakeUpEnvelope(csvEnvelope); !errors.Is(err, ErrMalformedData) {

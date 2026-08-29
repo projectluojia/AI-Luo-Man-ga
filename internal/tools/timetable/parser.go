@@ -177,7 +177,9 @@ func parseWakeUpLegacy(content string) (ImportData, error) {
 		day, okDay := integerRaw(detail.Day)
 		start, okStart := integerRaw(detail.StartNode)
 		if !okDay || !okStart || day < 1 || day > 7 || start < 1 {
-			continue
+			// 与 CSV 分支一致采用全有或全无：单行非法即整体拒绝，
+			// 不允许静默丢行让用户拿到不完整的课表。
+			return ImportData{}, ErrMalformedData
 		}
 		step := 1
 		if value, ok := integerRaw(detail.Step); ok {
