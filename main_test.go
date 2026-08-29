@@ -15,9 +15,12 @@ import (
 	"time"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access/configui"
+	kernelecho "github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/identity"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus"
+	promptservice "github.com/projectluojia/AI-Luo-Man-ga/internal/services/prompt"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite"
 	"github.com/projectluojia/AI-Luo-Man-ga/pkg/capability"
 	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
@@ -36,6 +39,26 @@ func TestLoadConfigRejectsInvalidBoolean(t *testing.T) {
 	_, err := loadConfig()
 	if err == nil || !strings.Contains(err.Error(), "AILUO_MANAGE_AGENT must be a boolean") {
 		t.Fatalf("error=%v", err)
+	}
+}
+
+func TestMigrateEnabledCapabilitiesRenamesChildControl(t *testing.T) {
+	got := migrateEnabledCapabilities([]string{"agent.run", "agent.status", "agent.run", "campus.bus.routes.list"})
+	want := map[string]bool{
+		kernelecho.CreateChildRunCapabilityID: true,
+		kernelecho.GetChildStatusCapabilityID: true,
+		campus.BusRouteListCapabilityID:       true,
+		promptservice.PreferenceGetID:         true,
+		promptservice.PreferenceSetID:         true,
+		promptservice.PreferenceResetID:       true,
+	}
+	if len(got) != len(want) {
+		t.Fatalf("capabilities=%v, want %d unique entries", got, len(want))
+	}
+	for _, capabilityID := range got {
+		if !want[capabilityID] {
+			t.Fatalf("unexpected capability %q in %v", capabilityID, got)
+		}
 	}
 }
 

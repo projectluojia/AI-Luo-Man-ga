@@ -998,7 +998,7 @@ components:
           type: array
           maxItems: 64
           uniqueItems: true
-          description: Persisted acceptance-time Capability ceiling; child Runs contain a further narrowed subset and never contain agent.run.
+          description: Persisted acceptance-time Capability ceiling; child Runs contain a further narrowed subset and never contain run.create_child.
           items:
             type: string
         error_code:

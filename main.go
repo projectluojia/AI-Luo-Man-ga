@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -16,6 +18,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	goruntime "runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -43,14 +46,13 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/session"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/task"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
-	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packagefmt"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/promptcatalog"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/agent"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus/demo"
 	promptservice "github.com/projectluojia/AI-Luo-Man-ga/internal/services/prompt"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/blob"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packagefmt"
 	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
 	"github.com/projectluojia/AI-Luo-Man-ga/pkg/sdkgen"
 
@@ -708,6 +710,24 @@ func waitForConfigurationChange(ctx context.Context, manager *controlconfig.Serv
 	}
 }
 
+const (
+	builtInExecutorRuntimeID      = "ailuo.agent"
+	builtInExecutorRuntimeVersion = "1.0.0"
+)
+
+var builtInExecutorRuntimeDigest = func() string {
+	sum := sha256.Sum256([]byte("ailuo.agent built-in isolated executor runtime\nprotocol " + executor.Version))
+	return hex.EncodeToString(sum[:])
+}()
+
+func builtInExecutorManifest() loader.Manifest {
+	return loader.Manifest{
+		ID: builtInExecutorRuntimeID, Version: builtInExecutorRuntimeVersion,
+		Mode: loader.ModeIsolated, Role: loader.RoleExecutor,
+		LockedDigest: builtInExecutorRuntimeDigest, Pin: true,
+	}
+}
+
 func runCore(ctx context.Context, stop context.CancelFunc, config config, localConfig *controlconfig.Service) (resultErr error) {
 	observe.Info(ctx, "正在启动AI珞（爱珞）内核",
 		observe.StringAttr("http_address", config.httpAddress),
@@ -767,8 +787,8 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 			campus.BusStopSearchCapabilityID,
 			campus.BusRouteListCapabilityID,
 			campus.BusJourneySearchCapabilityID,
-			agent.CapabilityID,
-			agent.StatusCapabilityID,
+			kernelecho.CreateChildRunCapabilityID,
+			kernelecho.GetChildStatusCapabilityID,
 			promptservice.PreferenceGetID,
 			promptservice.PreferenceSetID,
 			promptservice.PreferenceResetID,
@@ -778,7 +798,7 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 		return fmt.Errorf("ensure campus App config: %w", err)
 	}
 	if !created {
-		// 既有部署升级：把 V2 人格/渠道提示与 prompt 偏好 Capability 补齐到当前配置。
+		// 既有部署升级：把旧 child Capability 名称和 prompt 偏好补齐到当前配置。
 		// CompareAndSwap 在内容未变化时直接返回原修订，不会反复增加 generation。
 		replacement := app
 		replacement.Model = config.model
@@ -792,7 +812,7 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 		replacement.MaxOutputBytes = config.agentRun.MaxOutputBytes
 		replacement.SystemPrompt = config.baseSystemPrompt
 		replacement.ChannelPrompts = config.channelPrompts
-		replacement.EnabledCapabilities = ensurePromptCapabilities(app.EnabledCapabilities)
+		replacement.EnabledCapabilities = migrateEnabledCapabilities(app.EnabledCapabilities)
 		app, err = store.CompareAndSwap(ctx, app.Generation, replacement)
 		if err != nil {
 			return fmt.Errorf("migrate campus App prompt configuration: %w", err)
@@ -825,28 +845,28 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 	// 同池管理；campus.bus 是安装目录包（声明宿主函数 → 进程内 WasmHost 装载）。
 	workDir, err := filepath.Abs(".")
 	if err != nil {
-		return fmt.Errorf("resolve agent working directory: %w", err)
+		return fmt.Errorf("resolve executor working directory: %w", err)
 	}
-	agentHost, err := agent.NewHost(agent.Config{
-		Resolve: func(context.Context) (agent.Spec, error) {
-			return agent.Spec{
-				PythonPath: config.pythonPath,
-				WorkDir:    workDir,
-				Address:    config.agentAddress,
-				Env:        agentEnvironment(config),
-				Limits:     packmgr.ProcessLimits{},
+	executorManifest := builtInExecutorManifest()
+	executorHost, err := loader.NewExecutorHost(loader.ExecutorHostConfig{
+		Manifest: executorManifest,
+		Resolve: func(context.Context) (packmgr.ProcessSpec, error) {
+			return packmgr.ProcessSpec{
+				Path:    config.pythonPath,
+				Args:    []string{"-m", "agent.runtime", "--listen", config.agentAddress},
+				Env:     agentEnvironment(config),
+				WorkDir: workDir,
+				Address: config.agentAddress,
+				Limits:  packmgr.ProcessLimits{},
 			}, nil
 		},
-		Spawn:          config.manageAgent,
-		Model:          app.Model,
-		Stdout:         os.Stdout,
-		Stderr:         os.Stderr,
+		Spawn: config.manageAgent, Model: app.Model, Stdout: os.Stdout, Stderr: os.Stderr,
 		DialTimeout:    secondsDuration(config.agentProcess.DialTimeoutSeconds),
 		StopGrace:      secondsDuration(config.agentProcess.StopGraceSeconds),
 		TerminateGrace: secondsDuration(config.agentProcess.TerminateGraceSeconds),
 	})
 	if err != nil {
-		return fmt.Errorf("create built-in agent runtime: %w", err)
+		return fmt.Errorf("create executor runtime host: %w", err)
 	}
 	// 宿主函数集：当前只有 campus 的存储投影（内核特权，供安装目录 hosted 包声明）。
 	hostFunctions := campus.HostedFunctions(store)
@@ -855,7 +875,7 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 		return err
 	}
 	hosts := make([]loader.Host, 0, 1+len(installedHosts))
-	hosts = append(hosts, agentHost)
+	hosts = append(hosts, executorHost)
 	hosts = append(hosts, installedHosts...)
 	runtimeLoader, err := loader.New(hosts...)
 	if err != nil {
@@ -866,11 +886,10 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 		defer cancel()
 		resultErr = errors.Join(resultErr, runtimeLoader.Shutdown(shutdownContext))
 	}()
-	// 内置 agent 以安装清单形式经统一 RegisterInstalled 路径注册（agent 记录只
-	// 携带运行时清单，其 Service agent.run 依赖 Orchestrator，在内核装配完成后
-	// 单独注册）；campus.bus 与其余 installed 包随后注册。
-	if err := loader.RegisterInstalled(ctx, runtimeLoader, reg, []loader.InstalledRecord{agent.Record(agentHost)}); err != nil {
-		return fmt.Errorf("register built-in packages: %w", err)
+	// 执行者是 Core 的运行时角色，不注册为 Capability Service；业务包仍经安装目录
+	// 的统一注册路径进入 Registry。
+	if err := runtimeLoader.Register(ctx, executorManifest); err != nil {
+		return fmt.Errorf("register executor runtime: %w", err)
 	}
 	if len(installedRecords) > 0 {
 		if err := loader.RegisterInstalled(ctx, runtimeLoader, reg, installedRecords); err != nil {
@@ -945,7 +964,7 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 		QueueCapacity:  config.orchestration.QueueCapacity,
 		MaxChildRuns:   int(config.agentRun.MaxChildRuns),
 	})
-	if err := agent.Register(reg, orchestrator); err != nil {
+	if err := kernelecho.RegisterChildCapabilities(reg, orchestrator); err != nil {
 		return fmt.Errorf("register governed Subagent service: %w", err)
 	}
 	observe.Info(ctx, "校园服务与受治理子 Run Capability 注册完成",
@@ -1181,7 +1200,7 @@ func loadConfig() (config, error) {
 		configUIAddress:    envOr("AILUO_CONFIG_UI_ADDRESS", configui.DefaultAddress),
 		localConfigRoot:    envOr("AILUO_CONFIG_DIR", "var"),
 		agentAddress:       envOr("AILUO_AGENT_ADDRESS", "127.0.0.1:50051"),
-		pythonPath:         envOr("AILUO_PYTHON", agent.DefaultPythonPath(".")),
+		pythonPath:         envOr("AILUO_PYTHON", defaultPythonPath(".")),
 		databasePath:       envOr("AILUO_DATABASE_PATH", "var/ailuo.db"),
 		manageAgent:        manageAgent,
 		loadDemoData:       loadDemoData,
@@ -1269,6 +1288,13 @@ func agentEnvironment(config config) []string {
 		"AILUO_MODEL_REQUESTS_PER_MINUTE=" + strconv.Itoa(config.modelRequestsMinute),
 		"AILUO_MODEL_MAX_CONCURRENCY=" + strconv.Itoa(config.modelMaxConcurrency),
 	}
+}
+
+func defaultPythonPath(projectRoot string) string {
+	if goruntime.GOOS == "windows" {
+		return filepath.Join(projectRoot, "agent", ".venv", "Scripts", "python.exe")
+	}
+	return filepath.Join(projectRoot, "agent", ".venv", "bin", "python")
 }
 
 // configureInstalledRuntimes 发现安装目录中的 installed 包，返回加入统一 Loader
@@ -1413,10 +1439,21 @@ func (r promptServiceRenderer) RenderSystemPrompt(ctx context.Context, request k
 	})
 }
 
-func ensurePromptCapabilities(existing []string) []string {
-	result := slices.Clone(existing)
+func migrateEnabledCapabilities(existing []string) []string {
+	result := make([]string, 0, len(existing)+5)
+	for _, capabilityID := range existing {
+		switch capabilityID {
+		case "agent.run":
+			capabilityID = kernelecho.CreateChildRunCapabilityID
+		case "agent.status":
+			capabilityID = kernelecho.GetChildStatusCapabilityID
+		}
+		if !slices.Contains(result, capabilityID) {
+			result = append(result, capabilityID)
+		}
+	}
 	for _, capabilityID := range []string{
-		agent.StatusCapabilityID,
+		kernelecho.GetChildStatusCapabilityID,
 		promptservice.PreferenceGetID,
 		promptservice.PreferenceSetID,
 		promptservice.PreferenceResetID,

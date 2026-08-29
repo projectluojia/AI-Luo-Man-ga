@@ -15,7 +15,7 @@ Go 是系统唯一核心：负责与前端和外部平台通信、编排用户�
 - **Service（具体服务）**：有业务语义的装配体，对外暴露 Capability；
 - **Tool（原子包）**：可被多个 Service 依赖的原子能力，类似包管理器中的 package。
 
-Agent 与其他业务服务同级注册；root Run 可调用 `agent.run` 形成受治理的 Subagent，但 child Run 不再投影 `agent.run`，所有子运行仍由 Go 创建与治理。
+Agent 作为执行者通过 `executor.v1` 接入；root Run 可调用 Core 的 `run.create_child` 形成受治理的 Subagent，但 child Run 不再投影 `run.create_child`，所有子运行仍由 Go 创建与治理。
 
 这里的“Agent 内核”指 Agent 的认知内核，不代表整个AI珞（爱珞）系统的主进程或基础设施中心。
 
@@ -155,14 +155,14 @@ Go 对所有系统状态拥有最终解释权。Python 与扩展包返回的是�
 
 ## 五、Python Agent 内核
 
-Python Agent 内核负责一次 Agent 运行中的认知闭环，在系统中以 **Agent Service** 注册，对外核心能力为 `agent.run`。
+Python Agent 内核负责一次 Agent 运行中的认知闭环，通过 `executor.v1` 接入；创建 child Run 的 `run.create_child` 是 Core 能力，不是 Python Service 自有路由。
 
 ### 主要职责
 
 - 根据运行输入选择模型和模型参数。
 - 组织系统提示词、会话上下文和记忆上下文。
 - 判断是否需要激活或调用外部 Capability。
-- 将 Capability 的公开入口转换为模型原生 tools，并把模型原生 tool call 还原为结构化能力调用请求（含对 `agent.run` 的 Subagent 请求）。
+- 将 Capability 的公开入口转换为模型原生 tools，并把模型原生 tool call 还原为结构化能力调用请求（含对 `run.create_child` 的 Subagent 请求）。
 - 接收能力调用结果并继续推理。
 - 流式生成回复内容。
 - 产生标准最终消息（root Run）或结构化子结果（child Run）。
@@ -273,7 +273,7 @@ internal/
 ├─ tools/             共享原子 Tool 包（跨 Service 复用）
 │  └─ bus/            bus 域工具（stops/routes/journeys + Store 端口）
 └─ services/          业务 Service 装配（对应安装形态 services/）
-   ├─ agent/          Agent Service（isolated 运行时宿主 + agent.run）
+   ├─ executor/       Executor Runtime（isolated/hosted + executor.v1）
    └─ campus/         Campus Service（hosted 包的宿主函数投影与能力面注册）
       ├─ hosted.go    宿主函数与 Register（main 与测试共用）
       ├─ builtin/     go:embed 工件副本（仅供 campustest 装配，非生产路径）
@@ -383,7 +383,7 @@ session 元数据、成员关系、标准消息、回复关系和完整历史。
 
 ### Agent 服务
 
-模型推理与工具调用循环；由 Go 按需调用；当前仅 root Run 可通过 `agent.run` Capability 创建一层受治理 Subagent，root 可并行创建多个直接 child，child 不可继续派生。
+模型推理与工具调用循环；由 Go 按需调用；当前仅 root Run 可通过 `run.create_child` Capability 创建一层受治理 Subagent，root 可并行创建多个直接 child，child 不可继续派生。
 
 ## 八、即插即用与包管理
 
@@ -542,14 +542,14 @@ isolated 扩展由 Go `IsolatedProcessHost` 启动。可执行文件、参数、
 
 安装目录使用 `ailuo.package.v2` 清单与 lock。内核只接受由有效进程用户持有、目录链和文件均不允许组或其他用户写入、没有符号链接的绝对目录；严格拒绝未知字段、重复 JSON 键、超限文件、非法稳定 ID、跨目录路径和不完整引用。lock 同时固定清单原始字节与实现文件的 SHA-256；isolated 还固定完整进程规格。发现结果先作为一批完成 Runtime、Tool、Service、Capability 全量校验，再分别原子发布到 Loader 与 Registry，Registry 冲突时回滚 Loader 发布。主程序通过 `AILUO_RUNTIME_INSTALL_ROOT` 启用恢复；未显式设置时回退用户配置目录 `ailuo/runtime`（与 `ailuo install` 默认位置一致，目录不存在则视为未配置）。hosted 分两条装载路径：声明宿主函数的包只能在内核进程内由 wazero 执行（宿主函数是内核特权，不出进程）；未声明宿主函数的 hosted 包才经外部 Runtime Host 装载，此时必须提供本机 `AILUO_RUNTIME_HOST_ADDRESS`，否则启动 fail-closed。启动只预热 `pin` 项，失败则整个内核拒绝就绪；非 pin 项保持首次调用懒加载。已注册 Capability 不会自动进入任何 App，仍须通过持久 App 配置显式启用。
 
-上述实现完成了可长期保留的 Runtime Host 协议、Go 客户端/宿主校验器、持久安装目录发现与内核启动重注册、hosted 连接与容量边界，以及 isolated 真进程监管，但还不等于完整包平台已经交付。仓库尚未提供承载某种扩展语言或包格式的真实 Host Backend；hosted 共享进程的 CPU、内存和文件系统级资源隔离也需结合最终 Deployment 方案完成。当前安装目录属主校验在非 Unix 平台关闭失败，因此该能力目前只支持 Unix Deployment。内置 Python Agent 已由 `internal/services/agent` 包以 isolated Runtime 形态纳管（见下）。产品链路接入真实扩展 Backend 并完成对应恢复和资源限制验证前，不得把测试夹具描述成已上线扩展。
+上述实现完成了可长期保留的 Runtime Host 协议、Go 客户端/宿主校验器、持久安装目录发现与内核启动重注册、hosted 连接与容量边界，以及 isolated 真进程监管，但还不等于完整包平台已经交付。仓库尚未提供承载某种扩展语言或包格式的真实 Host Backend；hosted 共享进程的 CPU、内存和文件系统级资源隔离也需结合最终 Deployment 方案完成。当前安装目录属主校验在非 Unix 平台关闭失败，因此该能力目前只支持 Unix Deployment。内置 Python Agent 通过 `internal/kernel/loader.ExecutorHost` 以 `executor.v1` isolated Runtime 形态纳管；Core 的 child Run 控制能力由 `internal/kernel/echo` 注册。产品链路接入真实扩展 Backend 并完成对应恢复和资源限制验证前，不得把测试夹具描述成已上线扩展。
 
 2026-08-12 三模式接入基线：三种运行模式已由 Loader 统一接入，**campus 完全重构为 hosted 包（无旧兼容），并已迁出仓库为独立包仓库 `ailuo-packages/campus-bus`，经安装目录装载**：
 
 - **hosted 生产 Backend = wazero 进程内沙箱**（`internal/kernel/loader/wasm_host.go`）。业务扩展包默认形态：wasm32-wasi 工件经线性内存上限（默认 128 MiB）与 WASI 裁剪（无文件系统/网络/环境变量）执行，每次调用独立实例（零共享状态），stdin/stdout JSON 信封 ABI（`{tool_id,payload}` → `{ok,result,code,message}`）。guest 需要内核能力时经宿主函数（host function）投影，线性内存 ABI + 按调用绑定的治理上下文（guest 无法伪造 app_id/权限）；`CapabilitySpec.ToolID` 让 Dispatcher 把 Capability 直接执行的工具注入治理上下文，运行时级 Handler 据此分发。campus 的存储查询即经 `ailuo.bus.query` 宿主函数投影（App 隔离在宿主侧强制），业务治理（数据权威性/新鲜度）留在 guest 复用 `pkg/bus` 中立包。
 - **embedded 机制**（`embedded_host.go`）：进程内 Runtime，供内核自有组件以包形式纳入统一治理；当前无生产业务包，机制完整并有测试。
 - **isolated 资源限额**：`ProcessSpec.Limits`（RLIMIT_AS/CPU/NOFILE/FSIZE）由锁固定，Linux 用 prlimit 在子进程启动后立即应用，其余平台对非零限额 fail-closed。
-- **Agent 定位（2026-08-13 最终结构）**：`internal/services/agent` 是与其他业务 Service 同级的包——运行实现（`agent.Host`/`agent.Runtime`，implements `loader.Host`/`loader.Runtime`）与能力面注册（`agent.Register`：ServiceID=`agent`、核心能力 `agent.run`）同包内聚。Python Agent 进程以 isolated Runtime 形态受监督，复用 loader 导出的进程原语；Loader 不包含任何 agent 特化代码。`loader.New(hosts ...Host)` 支持同一模式多个宿主，main.go 只装配一个共享 Manager（内置 campus/agent 与 installed 包同池，清单注册时按 Verify 精确绑定宿主），不再按包分叉多个 Loader。
+- **Agent 定位（目标结构）**：Python Agent 是独立的 `executor.v1` Package/Service 实现；Go Core 只通过 `internal/kernel/executor` 契约和 `internal/kernel/loader.ExecutorHost` 接入，不 import Agent 实现。child Run 控制能力由 Core 自己注册为 `run.create_child` / `run.get_child_status`，不由 Agent Service 提供。`loader.New(hosts ...Host)` 持有全部运行模式宿主，main.go 只装配一个共享 Manager，不按 Agent/业务包分叉 Loader。
 - 安装目录发现仍只支持 Unix Deployment（属主校验 fail-closed），campus 既然经安装目录装载，也随之只在 Unix 可用。hosted 工件 CPU 指令级预算与外部 Runtime Host 进程形态接线保留为后续 P1。
 
 ### 防止微服务化失控
@@ -788,7 +788,7 @@ app_id / service_id / entity_type
 ### AgentService 与 AgentRun
 
 ```text
-AgentService     部署与注册单元，可多实例，实现 capability agent.run
+ExecutorPackage  部署与注册单元，实现 executor.v1；Core 提供 run.create_child
 AgentRun         一次认知过程：run_id、parent_run_id、budget、capabilities、终态
 ```
 
@@ -798,7 +798,7 @@ Subagent 不是“服务 A 私连服务 B 的模型”，而是：
 Echo
 └─ AgentRun (root)
    ├─ CapabilityCall → knowledge.search
-   ├─ CapabilityCall → agent.run
+   ├─ CapabilityCall → run.create_child
    │    └─ AgentRun (child, parent_run_id=root)
    │         └─ CapabilityCall → workspace.read
    └─ final_message（默认仅 root 对用户可见发送）
@@ -825,8 +825,8 @@ flowchart TD
 
     Need -- "是" --> Call["CapabilityCall"]
     Call --> Auth["Go 鉴权并路由"]
-    Auth --> IsAgent{"目标是 agent.run？"}
-    IsAgent -- "是" --> Child["创建 child Run<br/>depth+1 scope/budget 收紧"]
+    Auth --> IsChild{"目标是 run.create_child？"}
+    IsChild -- "是" --> Child["创建 child Run<br/>depth+1 scope/budget 收紧"]
     Child --> ThinkChild["子 Agent 推理..."]
     ThinkChild --> ChildDone["结构化结果回 parent"]
     IsAgent -- "否" --> Exec["目标 Service 编排"]
@@ -860,9 +860,9 @@ SubagentPolicy
 3. Parent 取消/超时 → 整棵 Run 树取消。
 4. 禁止 Python 进程内私拉子模型环绕过 Go。
 
-当前已实现的是这一设计的窄而可保留基线：只允许一层；每个 root 默认最多创建 4 个直接 child，控制面可在 1–32 范围内调整。`agent.run` 注册为 `external` SideEffect，输入只含最长 4000 字符的任务与至多 16 个 Capability ID；父 `run_id` 和 `call_id` 只能取自 Go 治理的调用上下文，不能由模型参数指定。root 在接受时持久化 Capability/权限上界，后续只允许因当前 App 策略撤权而收窄，不能因运行中新增授权而扩张；child 的 Capability 必须同时属于该上界与当前策略，权限取所选 Capability 要求的并集并再次验证为 parent/current 的子集。
+当前已实现的是这一设计的窄而可保留基线：只允许一层；每个 root 默认最多创建 4 个直接 child，控制面可在 1–32 范围内调整。`run.create_child` 注册为 `external` SideEffect，输入只含最长 4000 字符的任务与至多 16 个 Capability ID；父 `run_id` 和 `call_id` 只能取自 Go 治理的调用上下文，不能由模型参数指定。root 在接受时持久化 Capability/权限上界，后续只允许因当前 App 策略撤权而收窄，不能因运行中新增授权而扩张；child 的 Capability 必须同时属于该上界与当前策略，权限取所选 Capability 要求的并集并再次验证为 parent/current 的子集。
 
-child 使用独立 `run_id`、`run_group_id`、lease、Agent 序号、Token/输出/成本预算与终态。初始策略把 parent 的时间、步数、ToolCall、Token、输出和非零成本上限各取不大于一半；每个 root 的直接 child 数量受持久创建事务中的配置上限约束，默认最多 4 个，child 不自动重试且不能继续派生。`agent.run` 只原子创建持久化的 queued child 并立即返回 `run_id/status`，root 不等待 child；root 可通过只读 `agent.status` 查询直接 child，也可直接结束。child 的任务正文只保存在 Go 管理的 Run 业务状态中；生命周期、Capability 完成步骤、模型输出片段与最终安全结果通过 App-scoped Echo 事件和 Run 查询对 Access 可见，但提示词、思维链和 Tool 参数不公开。`agent.run` 审计中的 `task` 由集中清洗器脱敏。即使恶意 Agent 发送未投影或嵌套的调用，Go 仍会拒绝并写入按 Run 隔离的审计。
+child 使用独立 `run_id`、`run_group_id`、lease、Executor 序号、Token/输出/成本预算与终态。初始策略把 parent 的时间、步数、ToolCall、Token、输出和非零成本上限各取不大于一半；每个 root 的直接 child 数量受持久创建事务中的配置上限约束，默认最多 4 个，child 不自动重试且不能继续派生。`run.create_child` 只原子创建持久化的 queued child 并立即返回 `run_id/status`，root 不等待 child；root 可通过只读 `run.get_child_status` 查询直接 child，也可直接结束。child 的任务正文只保存在 Go 管理的 Run 业务状态中；生命周期、Capability 完成步骤、模型输出片段与最终安全结果通过 App-scoped Echo 事件和 Run 查询对 Access 可见，但提示词、思维链和 Tool 参数不公开。`run.create_child` 审计中的 `task` 由集中清洗器脱敏。即使恶意 Executor 发送未投影或嵌套的调用，Go 仍会拒绝并写入按 Run 隔离的审计。
 
 ### 运行结束
 
@@ -1076,7 +1076,7 @@ Go、Python、Service、Tool 可独立发布；跨进程协议显式版本化。
 4. Service 与 Tool 分级：至少一个业务 Service 通过声明依赖装配 Tools，并对外只暴露 Capability。
 5. Registry 全量注册元数据；至少一个扩展实现启动时未装入，首次调用时懒加载，且不进入 Go 主进程地址空间（hosted 或 isolated）。
 6. Agent 的行动范围仅来自 Go 下发的 Capability 安全投影；模型通过原生 ToolCall 调用至少一个投影后的外部 Capability，并能完成流式回复与最终消息。
-7. 支持一层多 child Subagent：`agent.run` child 由 Go 异步创建，root 可并行委派多个直接 child，结果回 parent；默认仅 root 产生用户可见发送。
+7. 支持一层多 child Subagent：`run.create_child` child 由 Go 异步创建，root 可并行委派多个直接 child，结果回 parent；默认仅 root 产生用户可见发送。
 8. 调用链具备 `app_id`、`echo_id`、`request_id`、`run_id`、`parent_run_id`（如有）、`call_id`、基础审计。
 9. 运行模式至少覆盖 embedded、hosted、isolated；不主动上 remote，不拆大量微服务。
 10. 不追求一次性迁完 V2 Skill；先钉住控制权、数据权、包边界与统一协议。
@@ -1103,7 +1103,7 @@ AI珞（爱珞） V3 以 **Go 内核** 为系统主体：接入前端与外部�
 
 上层是 **Service + Tool** 的包式能力面：Tool 是原子可复用包，Service 是薄装配与对外 Capability；实现默认可懒加载，不进入“启动即塞满 Go”或“每个业务一个封闭小程序”的形态。逻辑复用走 Tool，跨业务协作走 Capability，调用必经 Go。
 
-Python Agent 是受 Go 管理的认知 Service。它负责思考，不掌握系统；可请求行动，不可绕过 Go；当前只有 root Run 可请求 `agent.run` 形成一层 Subagent，root 可并行创建多个直接 child，child Run 不获得该 Capability，且其权限、预算与副作用仍由 Go 约束。
+Python Agent 是受 Go 管理的认知 Executor Service。它负责思考，不掌握系统；可请求行动，不可绕过 Go；当前只有 root Run 可请求 `run.create_child` 形成一层 Subagent，root 可并行创建多个直接 child，child Run 不获得该 Capability，且其权限、预算与副作用仍由 Go 约束。
 
 Deployment 共享基础设施与安装单元，App 隔离数据、权限、Agent 配置与 Session。系统以 Echo 表示一次完整用户交互，以统一 Invoke 表示内部调用，以 gRPC + Protobuf 处理跨进程通信。
 
@@ -1183,7 +1183,7 @@ Go 健康探测携带可接受的协议版本和当前模型标识；Python 只�
 
 Go→Python 与 Python→Go 分别维护独立且严格递增的序号。传输消息上限为 512 KiB，单帧上限为 300 KiB，标识、提示、Schema、Capability 参数、结果、回复片段和终态文本另有更小的字段上限。两端拒绝未知 Protobuf 字段、身份不匹配、序号跳跃或重复、未知帧、重复 `call_id`、错配结果和终态后的迟到帧。Go 在收到干净 EOF 前不发布最终回复或提交成功终态；同一流中的重复调用在第二次副作用前拒绝，跨进程重放仍由持久化幂等记录治理。
 
-真实跨进程集成测试由 Go 启动生产 Python Agent 和 OpenAI-compatible 原生 ToolCall 流：root 模型调用 `agent.run`，Go 创建带 `parent_run_id` 的 child，child 只能看到收窄后的校巴只读 Capability，结果经第二条 Agent 流返回 parent，最终只由 root 写入 Echo/SSE。测试同时核对两条 Run 的独立序号、用量、scope、来源 `call_id`、按 Run 审计和任务正文脱敏。
+真实跨进程集成测试由 Go 启动生产 Python Agent 和 OpenAI-compatible 原生 ToolCall 流：root 模型调用 `run.create_child`，Go 创建带 `parent_run_id` 的 child，child 只能看到收窄后的校巴只读 Capability，结果经第二条 Executor 流返回 parent，最终只由 root 写入 Echo/SSE。测试同时核对两条 Run 的独立序号、用量、scope、来源 `call_id`、按 Run 审计和任务正文脱敏。
 
 模型一次返回多个 ToolCall 时，Python 按 Provider 给出的索引顺序串行执行：每个调用得到 Go 返回结果后才处理下一个，不并发执行，也不因后续失败重放已经执行的调用。该确定性语义是当前协议合同；未来若引入并发必须升版并明确副作用、排序、取消和聚合规则。
 
