@@ -17,7 +17,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/pkg/capability"
-	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packagecontract"
 )
 
 func TestInstalledCatalogDiscoversVerifiesAndRegistersHostedRuntime(t *testing.T) {
@@ -33,7 +33,7 @@ func TestInstalledCatalogDiscoversVerifiesAndRegistersHostedRuntime(t *testing.T
 	}
 	record := records[0]
 	if record.Runtime.ID != "extension.test.extension.test" || record.Runtime.Mode != loader.ModeHosted ||
-		record.Process != nil || record.Service.ID != "extension" ||
+		record.Service.ID != "extension" ||
 		len(record.Tools) != 1 || len(record.Capabilities) != 1 {
 		t.Fatalf("record=%#v", record)
 	}
@@ -60,7 +60,7 @@ func TestInstalledCatalogDiscoversVerifiesAndRegistersHostedRuntime(t *testing.T
 	if err := os.WriteFile(artifact, []byte("changed"), 0o640); err != nil {
 		t.Fatal(err)
 	}
-	if err := catalog.VerifyRuntime(t.Context(), record.Runtime); !errors.Is(err, loader.ErrInstallCatalogInvalid) {
+	if err := catalog.VerifyRuntime(t.Context(), record.Runtime); !errors.Is(err, packagesource.ErrInvalidCatalog) {
 		t.Fatalf("篡改后的校验错误=%v", err)
 	}
 }
@@ -73,20 +73,20 @@ func TestInstalledCatalogResolvesIsolatedProcessAndRejectsCatalogTampering(t *te
 		t.Fatal(err)
 	}
 	records, err := catalog.Discover(t.Context())
-	if err != nil || len(records) != 1 || records[0].Process == nil {
+	if err != nil || len(records) != 1 {
 		t.Fatalf("records=%#v err=%v", records, err)
 	}
 	process, err := catalog.ResolveProcess(t.Context(), records[0].Runtime)
 	if err != nil || process.Path == "" || process.WorkDir == "" ||
-		process.Address != "unix:"+filepath.Join(records[0].Directory, "runtime.sock") {
+		process.Address != "unix:"+filepath.Join(root, "isolated.test", "runtime.sock") {
 		t.Fatalf("process=%#v err=%v", process, err)
 	}
 	process.Args = []string{"mutated"}
-	if err := catalog.VerifyProcess(t.Context(), records[0].Runtime, process); !errors.Is(err, loader.ErrInstallChanged) {
+	if err := catalog.VerifyProcess(t.Context(), records[0].Runtime, process); !errors.Is(err, packagesource.ErrChanged) {
 		t.Fatalf("变更 ProcessSpec 后的校验错误=%v", err)
 	}
 
-	manifestPath := filepath.Join(records[0].Directory, "manifest.json")
+	manifestPath := filepath.Join(root, "isolated.test", "manifest.json")
 	manifest, err := os.ReadFile(manifestPath)
 	if err != nil {
 		t.Fatal(err)
@@ -96,7 +96,7 @@ func TestInstalledCatalogResolvesIsolatedProcessAndRejectsCatalogTampering(t *te
 		t.Fatal(err)
 	}
 	rewriteManifestDigest(t, records[0].Directory, manifest)
-	if _, err := catalog.Discover(t.Context()); !errors.Is(err, loader.ErrInstallCatalogInvalid) {
+	if _, err := catalog.Discover(t.Context()); !errors.Is(err, packagesource.ErrInvalidCatalog) {
 		t.Fatalf("未知字段目录错误=%v", err)
 	}
 }
@@ -145,7 +145,7 @@ func TestInstalledCatalogRejectsDuplicateJSONAndWritableDirectory(t *testing.T) 
 	}
 	rewriteManifestDigest(t, directory, duplicate)
 	catalog, _ := packagesource.NewCatalog(root)
-	if _, err := catalog.Discover(t.Context()); !errors.Is(err, loader.ErrInstallCatalogInvalid) {
+	if _, err := catalog.Discover(t.Context()); !errors.Is(err, packagesource.ErrInvalidCatalog) {
 		t.Fatalf("重复 JSON 键错误=%v", err)
 	}
 
@@ -155,7 +155,7 @@ func TestInstalledCatalogRejectsDuplicateJSONAndWritableDirectory(t *testing.T) 
 		t.Fatal(err)
 	}
 	catalog, _ = packagesource.NewCatalog(root)
-	if _, err := catalog.Discover(t.Context()); !errors.Is(err, loader.ErrInstallCatalogInvalid) {
+	if _, err := catalog.Discover(t.Context()); !errors.Is(err, packagesource.ErrInvalidCatalog) {
 		t.Fatalf("可写安装目录错误=%v", err)
 	}
 }
@@ -196,10 +196,10 @@ func writeInstalledFixture(t *testing.T, root, pkgID, mode string, unknown bool)
 	if err != nil {
 		t.Fatal(err)
 	}
-	installed := packmgr.Manifest{
-		SchemaVersion: packmgr.SchemaVersion, ID: pkgID, Version: "1.0.0",
+	installed := packagecontract.Manifest{
+		SchemaVersion: packagecontract.SchemaVersion, ID: pkgID, Version: "1.0.0",
 		IdleTTLMS: 1000, Extensions: extensions,
-		Components: []packmgr.Component{{
+		Components: []packagecontract.Component{{
 			ID: pkgID, Mode: mode, Entrypoint: "runtime-artifact",
 			Exports: []string{"extension.query"},
 		}},
@@ -216,19 +216,19 @@ func writeInstalledFixture(t *testing.T, root, pkgID, mode string, unknown bool)
 	}
 	manifestDigest := sha256.Sum256(manifest)
 	artifactDigest := sha256.Sum256(artifactBody)
-	lockedArtifact := packmgr.LockedArtifact{
+	lockedArtifact := packagecontract.LockedArtifact{
 		ComponentID: pkgID, Path: artifact, SHA256: hex.EncodeToString(artifactDigest[:]),
 	}
 	if mode == loader.ModeIsolated {
-		lockedArtifact.Process = &packmgr.ProcessSpec{
+		lockedArtifact.Process = &packagecontract.ProcessSpec{
 			Path: artifact, WorkDir: directory, Address: "unix:" + filepath.Join(directory, "runtime.sock"),
 		}
 	}
-	lock := packmgr.Lock{
-		SchemaVersion: packmgr.SchemaVersion, PackageID: pkgID,
+	lock := packagecontract.Lock{
+		SchemaVersion: packagecontract.SchemaVersion, PackageID: pkgID,
 		PackageVersion: "1.0.0",
 		ManifestSHA256: hex.EncodeToString(manifestDigest[:]),
-		Artifacts:      []packmgr.LockedArtifact{lockedArtifact},
+		Artifacts:      []packagecontract.LockedArtifact{lockedArtifact},
 	}
 	lockBytes, err := json.Marshal(lock)
 	if err != nil {
@@ -247,7 +247,7 @@ func rewriteManifestDigest(t *testing.T, directory string, manifest []byte) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var lock packmgr.Lock
+	var lock packagecontract.Lock
 	if err := json.Unmarshal(lockBytes, &lock); err != nil {
 		t.Fatal(err)
 	}
@@ -266,8 +266,8 @@ var noopCatalogHandler registry.Handler = func(context.Context, contracts.Reques
 	return json.RawMessage(`{}`), nil
 }
 
-// writeDeclaredFixture 写入携带宿主函数/storage 声明的 hosted fixture。
-func writeDeclaredFixture(t *testing.T, root, runtimeID string, decls []packmgr.HostedFunctionDecl, storage *packmgr.Storage) loader.InstalledRecord {
+// writeDeclaredFixture 写入携带宿主函数声明的 hosted fixture。
+func writeDeclaredFixture(t *testing.T, root, runtimeID string, decls []packagecontract.HostedFunctionDecl) loader.InstalledRecord {
 	t.Helper()
 	directory := filepath.Join(root, runtimeID)
 	if err := os.Mkdir(directory, 0o750); err != nil {
@@ -297,10 +297,10 @@ func writeDeclaredFixture(t *testing.T, root, runtimeID string, decls []packmgr.
 	if err != nil {
 		t.Fatal(err)
 	}
-	installed := packmgr.Manifest{
-		SchemaVersion: packmgr.SchemaVersion, ID: runtimeID, Version: "1.0.0",
-		IdleTTLMS: 1000, Storage: storage, Extensions: extensions,
-		Components: []packmgr.Component{{
+	installed := packagecontract.Manifest{
+		SchemaVersion: packagecontract.SchemaVersion, ID: runtimeID, Version: "1.0.0",
+		IdleTTLMS: 1000, Extensions: extensions,
+		Components: []packagecontract.Component{{
 			ID: runtimeID, Mode: loader.ModeHosted, Entrypoint: "runtime-artifact",
 			Exports: []string{"extension.query"}, HostFunctions: decls,
 		}},
@@ -314,11 +314,11 @@ func writeDeclaredFixture(t *testing.T, root, runtimeID string, decls []packmgr.
 	}
 	manifestDigest := sha256.Sum256(manifest)
 	artifactDigest := sha256.Sum256([]byte("hosted artifact"))
-	lock := packmgr.Lock{
-		SchemaVersion: packmgr.SchemaVersion, PackageID: runtimeID,
+	lock := packagecontract.Lock{
+		SchemaVersion: packagecontract.SchemaVersion, PackageID: runtimeID,
 		PackageVersion: "1.0.0",
 		ManifestSHA256: hex.EncodeToString(manifestDigest[:]),
-		Artifacts: []packmgr.LockedArtifact{{
+		Artifacts: []packagecontract.LockedArtifact{{
 			ComponentID: runtimeID, Path: artifact, SHA256: hex.EncodeToString(artifactDigest[:]),
 		}},
 	}
@@ -343,20 +343,14 @@ func writeDeclaredFixture(t *testing.T, root, runtimeID string, decls []packmgr.
 	return records[0]
 }
 
-func TestInstalledCatalogAcceptsHostFunctionAndStorageDeclarations(t *testing.T) {
+func TestInstalledCatalogAcceptsHostFunctionDeclarations(t *testing.T) {
 	root := t.TempDir()
-	record := writeDeclaredFixture(t, root, "extension.decl", []packmgr.HostedFunctionDecl{
+	record := writeDeclaredFixture(t, root, "extension.decl", []packagecontract.HostedFunctionDecl{
 		{Module: "ailuo.extension", Name: "query", Purpose: "查询扩展权威存储"},
-	}, &packmgr.Storage{
-		Namespace: "ext/data", SchemaVersion: 1,
-		Sensitivity: packmgr.SensitivityPublic, Retention: packmgr.RetentionPermanent,
 	})
 	if len(record.Runtime.HostFunctions) != 1 ||
 		record.Runtime.HostFunctions[0].Module != "ailuo.extension" || record.Runtime.HostFunctions[0].Name != "query" {
 		t.Fatalf("record host functions = %+v, want ailuo.extension.query", record.Runtime.HostFunctions)
-	}
-	if record.Storage == nil || record.Storage.Namespace != "ext/data" || record.Storage.SchemaVersion != 1 {
-		t.Fatalf("record storage = %+v, want ext/data v1", record.Storage)
 	}
 	catalog, err := packagesource.NewCatalog(root)
 	if err != nil {
@@ -370,35 +364,18 @@ func TestInstalledCatalogAcceptsHostFunctionAndStorageDeclarations(t *testing.T)
 func TestInstalledCatalogRejectsInvalidDeclarations(t *testing.T) {
 	cases := []struct {
 		name     string
-		decls    []packmgr.HostedFunctionDecl
-		storage  *packmgr.Storage
+		decls    []packagecontract.HostedFunctionDecl
 		hostedOK bool
 	}{
-		{name: "duplicate host function", decls: []packmgr.HostedFunctionDecl{
+		{name: "duplicate host function", decls: []packagecontract.HostedFunctionDecl{
 			{Module: "ailuo.x", Name: "one"}, {Module: "ailuo.x", Name: "one"},
 		}, hostedOK: false},
-		{name: "wasi module reserved", decls: []packmgr.HostedFunctionDecl{
+		{name: "wasi module reserved", decls: []packagecontract.HostedFunctionDecl{
 			{Module: "wasi_snapshot_preview1", Name: "fd_write"},
 		}, hostedOK: true},
-		{name: "invalid module", decls: []packmgr.HostedFunctionDecl{
+		{name: "invalid module", decls: []packagecontract.HostedFunctionDecl{
 			{Module: "Ailuo.X", Name: "query"},
 		}, hostedOK: true},
-		{name: "zero schema version", storage: &packmgr.Storage{
-			Namespace: "ext/data", SchemaVersion: 0,
-			Sensitivity: packmgr.SensitivityPublic, Retention: packmgr.RetentionPermanent,
-		}, hostedOK: false},
-		{name: "invalid sensitivity", storage: &packmgr.Storage{
-			Namespace: "ext/data", SchemaVersion: 1,
-			Sensitivity: "top_secret", Retention: packmgr.RetentionPermanent,
-		}, hostedOK: true},
-		{name: "invalid retention", storage: &packmgr.Storage{
-			Namespace: "ext/data", SchemaVersion: 1,
-			Sensitivity: packmgr.SensitivityPrivate, Retention: "forever",
-		}, hostedOK: true},
-		{name: "invalid namespace", storage: &packmgr.Storage{
-			Namespace: "Ext/data", SchemaVersion: 1,
-			Sensitivity: packmgr.SensitivityPublic, Retention: packmgr.RetentionPermanent,
-		}, hostedOK: false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -432,10 +409,10 @@ func TestInstalledCatalogRejectsInvalidDeclarations(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				installed := packmgr.Manifest{
-					SchemaVersion: packmgr.SchemaVersion, ID: "extension.bad", Version: "1.0.0",
-					Storage: tc.storage, Extensions: extensions,
-					Components: []packmgr.Component{{
+				installed := packagecontract.Manifest{
+					SchemaVersion: packagecontract.SchemaVersion, ID: "extension.bad", Version: "1.0.0",
+					Extensions: extensions,
+					Components: []packagecontract.Component{{
 						ID: "extension.bad", Mode: loader.ModeHosted, Entrypoint: "runtime-artifact",
 						Exports: []string{"extension.query"}, HostFunctions: tc.decls,
 					}},
@@ -449,11 +426,11 @@ func TestInstalledCatalogRejectsInvalidDeclarations(t *testing.T) {
 				}
 				manifestDigest := sha256.Sum256(manifest)
 				artifactDigest := sha256.Sum256([]byte("hosted artifact"))
-				lock := packmgr.Lock{
-					SchemaVersion: packmgr.SchemaVersion, PackageID: "extension.bad",
+				lock := packagecontract.Lock{
+					SchemaVersion: packagecontract.SchemaVersion, PackageID: "extension.bad",
 					PackageVersion: "1.0.0",
 					ManifestSHA256: hex.EncodeToString(manifestDigest[:]),
-					Artifacts: []packmgr.LockedArtifact{{
+					Artifacts: []packagecontract.LockedArtifact{{
 						ComponentID: "extension.bad", Path: artifact, SHA256: hex.EncodeToString(artifactDigest[:]),
 					}},
 				}
@@ -468,8 +445,8 @@ func TestInstalledCatalogRejectsInvalidDeclarations(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if _, err := catalog.Discover(t.Context()); !errors.Is(err, loader.ErrInstallCatalogInvalid) {
-					t.Fatalf("Discover with invalid declarations error = %v, want ErrInstallCatalogInvalid", err)
+				if _, err := catalog.Discover(t.Context()); !errors.Is(err, packagesource.ErrInvalidCatalog) {
+					t.Fatalf("Discover with invalid declarations error = %v, want ErrInvalidCatalog", err)
 				}
 				return
 			}
@@ -497,10 +474,9 @@ func TestInstalledCatalogRejectsInvalidDeclarations(t *testing.T) {
 					InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
 					SideEffect:      capability.SideEffectRead,
 				}},
-				Storage: tc.storage,
 			}
-			if err := loader.RegisterInstalled(t.Context(), manager, reg, []loader.InstalledRecord{record}); !errors.Is(err, loader.ErrInstallCatalogInvalid) {
-				t.Fatalf("RegisterInstalled with invalid declarations error = %v, want ErrInstallCatalogInvalid", err)
+			if err := loader.RegisterInstalled(t.Context(), manager, reg, []loader.InstalledRecord{record}); !errors.Is(err, loader.ErrInvalidInstalledRecord) {
+				t.Fatalf("RegisterInstalled with invalid declarations error = %v, want ErrInvalidInstalledRecord", err)
 			}
 		})
 	}

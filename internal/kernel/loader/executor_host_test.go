@@ -11,7 +11,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/executor"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
-	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packagecontract"
 
 	"google.golang.org/grpc"
 )
@@ -42,8 +42,8 @@ func TestExecutorHostLoadsConnectedRuntime(t *testing.T) {
 	}
 	host, err := loader.NewExecutorHost(loader.ExecutorHostConfig{
 		Manifest: manifest,
-		Resolve: func(context.Context) (packmgr.ProcessSpec, error) {
-			return packmgr.ProcessSpec{Address: listener.Addr().String()}, nil
+		Resolve: func(context.Context) (packagecontract.ProcessSpec, error) {
+			return packagecontract.ProcessSpec{Address: listener.Addr().String()}, nil
 		},
 		Model: "test-model", DialTimeout: 5 * time.Second,
 		StopGrace: time.Second, TerminateGrace: time.Second,
@@ -87,7 +87,7 @@ func TestExecutorHostLoadsConnectedRuntime(t *testing.T) {
 func TestExecutorHostRejectsMissingExecutorManifest(t *testing.T) {
 	_, err := loader.NewExecutorHost(loader.ExecutorHostConfig{
 		Manifest: loader.Manifest{ID: "capability.test", Version: "1.0.0", Mode: loader.ModeHosted, Role: loader.RoleCapability, LockedDigest: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"},
-		Resolve:  func(context.Context) (packmgr.ProcessSpec, error) { return packmgr.ProcessSpec{}, nil },
+		Resolve:  func(context.Context) (packagecontract.ProcessSpec, error) { return packagecontract.ProcessSpec{}, nil },
 		Model:    "test-model",
 	})
 	if !errors.Is(err, loader.ErrInvalidManifest) {

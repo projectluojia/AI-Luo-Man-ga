@@ -38,7 +38,7 @@ import (
 	promptservice "github.com/projectluojia/AI-Luo-Man-ga/internal/services/prompt"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/blob"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite"
-	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packagecontract"
 )
 
 // Run 启动配置控制面及其受监督的 Core 运行时。
@@ -252,11 +252,11 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 	executorManifest := builtInExecutorManifest()
 	executorHost, err := loader.NewExecutorHost(loader.ExecutorHostConfig{
 		Manifest: executorManifest,
-		Resolve: func(context.Context) (packmgr.ProcessSpec, error) {
-			return packmgr.ProcessSpec{
+		Resolve: func(context.Context) (packagecontract.ProcessSpec, error) {
+			return packagecontract.ProcessSpec{
 				Path: config.pythonPath, Args: []string{"-m", "agent.runtime", "--listen", config.agentAddress},
 				Env: agentEnvironment(config), WorkDir: workDir, Address: config.agentAddress,
-				Limits: packmgr.ProcessLimits{},
+				Limits: packagecontract.ProcessLimits{},
 			}, nil
 		},
 		Spawn: config.manageAgent, Model: app.Model, Stdout: os.Stdout, Stderr: os.Stderr,

@@ -13,12 +13,18 @@ import (
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
 	"github.com/projectluojia/AI-Luo-Man-ga/pkg/capability"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packagecontract"
 	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
 )
 
 const (
 	installManifestName = "manifest.json"
 	installLockName     = "lock.json"
+)
+
+var (
+	ErrInvalidCatalog = errors.New("installed package catalog is invalid")
+	ErrChanged        = errors.New("installed package changed after discovery")
 )
 
 type aiLuoExtensions struct {
@@ -31,29 +37,35 @@ type Catalog struct {
 	root string
 }
 
+type installedRecord struct {
+	record       loader.InstalledRecord
+	artifactPath string
+	process      *packagecontract.ProcessSpec
+}
+
 func NewCatalog(root string) (*Catalog, error) {
 	if !filepath.IsAbs(root) || filepath.Clean(root) != root {
-		return nil, loader.ErrInstallCatalogInvalid
+		return nil, ErrInvalidCatalog
 	}
 	return &Catalog{root: root}, nil
 }
 
 func (c *Catalog) Discover(ctx context.Context) ([]loader.InstalledRecord, error) {
 	if c == nil || c.root == "" {
-		return nil, loader.ErrInstallCatalogInvalid
+		return nil, ErrInvalidCatalog
 	}
 	if err := validateSecureDirectory(c.root); err != nil {
-		return nil, errors.Join(loader.ErrInstallCatalogInvalid, err)
+		return nil, errors.Join(ErrInvalidCatalog, err)
 	}
 	if err := packmgr.RecoverInstallRoot(ctx, c.root); err != nil {
-		return nil, errors.Join(loader.ErrInstallCatalogInvalid, err)
+		return nil, errors.Join(ErrInvalidCatalog, err)
 	}
 	entries, err := os.ReadDir(c.root)
 	if err != nil {
-		return nil, errors.Join(loader.ErrInstallCatalogInvalid, err)
+		return nil, errors.Join(ErrInvalidCatalog, err)
 	}
-	if len(entries) > loader.MaxInstalledRuntimes {
-		return nil, loader.ErrInstallCatalogInvalid
+	if len(entries) > loader.MaxRegisteredRuntimes {
+		return nil, ErrInvalidCatalog
 	}
 	records := make([]loader.InstalledRecord, 0, len(entries))
 	for _, entry := range entries {
@@ -62,27 +74,29 @@ func (c *Catalog) Discover(ctx context.Context) ([]loader.InstalledRecord, error
 		}
 		if packmgr.IsTransientInstallDirectory(entry.Name()) {
 			if !entry.IsDir() {
-				return nil, loader.ErrInstallCatalogInvalid
+				return nil, ErrInvalidCatalog
 			}
 			continue
 		}
 		if strings.HasPrefix(entry.Name(), ".") {
-			return nil, loader.ErrInstallCatalogInvalid
+			return nil, ErrInvalidCatalog
 		}
 		directory := filepath.Join(c.root, entry.Name())
 		info, err := os.Lstat(directory)
 		if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 ||
 			info.Mode().Perm()&0o022 != 0 || !ownerMatchesProcess(info) {
-			return nil, loader.ErrInstallCatalogInvalid
+			return nil, ErrInvalidCatalog
 		}
 		packageRecords, err := c.readPackage(ctx, directory)
 		if err != nil {
 			return nil, err
 		}
-		if len(packageRecords) == 0 || entry.Name() != packageRecords[0].PackageID {
-			return nil, loader.ErrInstallCatalogInvalid
+		if len(packageRecords) == 0 || entry.Name() != packageRecords[0].record.PackageID {
+			return nil, ErrInvalidCatalog
 		}
-		records = append(records, packageRecords...)
+		for _, record := range packageRecords {
+			records = append(records, record.record)
+		}
 	}
 	sort.Slice(records, func(i, j int) bool { return records[i].Runtime.ID < records[j].Runtime.ID })
 	return records, nil
@@ -93,31 +107,31 @@ func (c *Catalog) VerifyRuntime(ctx context.Context, manifest loader.Manifest) e
 	if err != nil {
 		return err
 	}
-	if !record.Runtime.Equal(manifest) {
-		return loader.ErrInstallChanged
+	if !record.record.Runtime.Equal(manifest) {
+		return ErrChanged
 	}
 	return nil
 }
 
-func (c *Catalog) ResolveProcess(ctx context.Context, manifest loader.Manifest) (packmgr.ProcessSpec, error) {
+func (c *Catalog) ResolveProcess(ctx context.Context, manifest loader.Manifest) (packagecontract.ProcessSpec, error) {
 	record, err := c.readRecordByID(ctx, manifest.ID)
 	if err != nil {
-		return packmgr.ProcessSpec{}, err
+		return packagecontract.ProcessSpec{}, err
 	}
-	if !record.Runtime.Equal(manifest) || record.Process == nil {
-		return packmgr.ProcessSpec{}, loader.ErrInstallChanged
+	if !record.record.Runtime.Equal(manifest) || record.process == nil {
+		return packagecontract.ProcessSpec{}, ErrChanged
 	}
-	return cloneProcessSpec(*record.Process), nil
+	return cloneProcessSpec(*record.process), nil
 }
 
-func (c *Catalog) VerifyProcess(ctx context.Context, manifest loader.Manifest, process packmgr.ProcessSpec) error {
+func (c *Catalog) VerifyProcess(ctx context.Context, manifest loader.Manifest, process packagecontract.ProcessSpec) error {
 	record, err := c.readRecordByID(ctx, manifest.ID)
 	if err != nil {
 		return err
 	}
-	if !record.Runtime.Equal(manifest) || record.Process == nil ||
-		!reflect.DeepEqual(*record.Process, process) {
-		return loader.ErrInstallChanged
+	if !record.record.Runtime.Equal(manifest) || record.process == nil ||
+		!reflect.DeepEqual(*record.process, process) {
+		return ErrChanged
 	}
 	return nil
 }
@@ -132,35 +146,35 @@ func (c *Catalog) ReadArtifact(ctx context.Context, manifest loader.Manifest) ([
 	if err != nil {
 		return nil, err
 	}
-	if !record.Runtime.SameIdentity(manifest) {
-		return nil, loader.ErrInstallChanged
+	if !record.record.Runtime.SameIdentity(manifest) {
+		return nil, ErrChanged
 	}
-	if record.Runtime.Mode != loader.ModeHosted {
+	if record.record.Runtime.Mode != loader.ModeHosted {
 		return nil, loader.ErrUnsupportedMode
 	}
-	data, err := os.ReadFile(record.ArtifactPath)
+	data, err := os.ReadFile(record.artifactPath)
 	if err != nil {
-		return nil, errors.Join(loader.ErrInstallCatalogInvalid, err)
+		return nil, errors.Join(ErrInvalidCatalog, err)
 	}
-	if int64(len(data)) > packmgr.MaxArtifactBytes {
-		return nil, loader.ErrInstallCatalogInvalid
+	if int64(len(data)) > packagecontract.MaxArtifactBytes {
+		return nil, ErrInvalidCatalog
 	}
 	return data, nil
 }
 
-func (c *Catalog) readRecordByID(ctx context.Context, id string) (loader.InstalledRecord, error) {
+func (c *Catalog) readRecordByID(ctx context.Context, id string) (installedRecord, error) {
 	if c == nil || !capability.IsStableID(id) {
-		return loader.InstalledRecord{}, loader.ErrInstallCatalogInvalid
+		return installedRecord{}, ErrInvalidCatalog
 	}
 	if err := validateSecureDirectory(c.root); err != nil {
-		return loader.InstalledRecord{}, errors.Join(loader.ErrInstallCatalogInvalid, err)
+		return installedRecord{}, errors.Join(ErrInvalidCatalog, err)
 	}
 	if err := packmgr.RecoverInstallRoot(ctx, c.root); err != nil {
-		return loader.InstalledRecord{}, errors.Join(loader.ErrInstallCatalogInvalid, err)
+		return installedRecord{}, errors.Join(ErrInvalidCatalog, err)
 	}
 	entries, err := os.ReadDir(c.root)
 	if err != nil {
-		return loader.InstalledRecord{}, errors.Join(loader.ErrInstallCatalogInvalid, err)
+		return installedRecord{}, errors.Join(ErrInvalidCatalog, err)
 	}
 	for _, entry := range entries {
 		if packmgr.IsTransientInstallDirectory(entry.Name()) {
@@ -171,62 +185,62 @@ func (c *Catalog) readRecordByID(ctx context.Context, id string) (loader.Install
 		}
 		records, err := c.readPackage(ctx, filepath.Join(c.root, entry.Name()))
 		if err != nil {
-			return loader.InstalledRecord{}, err
+			return installedRecord{}, err
 		}
 		for _, record := range records {
-			if record.Runtime.ID == id {
+			if record.record.Runtime.ID == id {
 				return record, nil
 			}
 		}
 	}
-	return loader.InstalledRecord{}, loader.ErrNotFound
+	return installedRecord{}, loader.ErrNotFound
 }
 
 // readPackage 读取一个包目录并产出每组件一条的内核记录。中性格式（manifest +
 // lock + 每组件工件哈希）由 packmgr.ReadInstalled 完成；本函数叠加部署属主
 // 校验、解析 AI珞 扩展段并按组件 exports 映射 Capability 到组件运行时。
-func (c *Catalog) readPackage(ctx context.Context, directory string) ([]loader.InstalledRecord, error) {
+func (c *Catalog) readPackage(ctx context.Context, directory string) ([]installedRecord, error) {
 	if err := validateSecureDirectory(directory); err != nil {
-		return nil, errors.Join(loader.ErrInstallCatalogInvalid, err)
+		return nil, errors.Join(ErrInvalidCatalog, err)
 	}
 	// 部署级属主/权限校验叠加在格式层读取之上。
 	for _, name := range []string{installManifestName, installLockName} {
 		info, err := os.Lstat(filepath.Join(directory, name))
 		if err != nil || !ownerMatchesProcess(info) || info.Mode().Perm()&0o022 != 0 {
-			return nil, loader.ErrInstallCatalogInvalid
+			return nil, ErrInvalidCatalog
 		}
 	}
 	neutral, err := packmgr.ReadInstalled(ctx, directory)
 	if err != nil {
-		return nil, errors.Join(loader.ErrInstallCatalogInvalid, err)
+		return nil, errors.Join(ErrInvalidCatalog, err)
 	}
 	var extensions aiLuoExtensions
 	if len(neutral.Manifest.Extensions) > 0 {
-		if err := packmgr.DecodeStrictJSON(neutral.Manifest.Extensions, &extensions); err != nil {
-			return nil, errors.Join(loader.ErrInstallCatalogInvalid, err)
+		if err := packagecontract.DecodeStrictJSON(neutral.Manifest.Extensions, &extensions); err != nil {
+			return nil, errors.Join(ErrInvalidCatalog, err)
 		}
 	}
-	order, err := packmgr.ComponentOrder(neutral.Manifest.Components)
+	order, err := packagecontract.ComponentOrder(neutral.Manifest.Components)
 	if err != nil {
-		return nil, errors.Join(loader.ErrInstallCatalogInvalid, err)
+		return nil, errors.Join(ErrInvalidCatalog, err)
 	}
 	orderIndex := make(map[string]int, len(order))
 	for index, componentID := range order {
 		orderIndex[componentID] = index
 	}
-	artifactsByComponent := make(map[string]packmgr.LockedArtifact, len(neutral.Lock.Artifacts))
+	artifactsByComponent := make(map[string]packagecontract.LockedArtifact, len(neutral.Lock.Artifacts))
 	for _, artifact := range neutral.Lock.Artifacts {
 		artifactsByComponent[artifact.ComponentID] = artifact
 	}
-	records := make([]loader.InstalledRecord, 0, len(neutral.Manifest.Components))
+	records := make([]installedRecord, 0, len(neutral.Manifest.Components))
 	for _, component := range neutral.Manifest.Components {
 		runtimeID := neutral.Manifest.ID + "." + component.ID
 		if !capability.IsStableID(runtimeID) || len(runtimeID) > 128 {
-			return nil, loader.ErrInstallCatalogInvalid
+			return nil, ErrInvalidCatalog
 		}
 		artifact, ok := artifactsByComponent[component.ID]
 		if !ok {
-			return nil, loader.ErrInstallCatalogInvalid
+			return nil, ErrInvalidCatalog
 		}
 		runtimeManifest := loader.Manifest{
 			ID: runtimeID, Version: neutral.Manifest.Version, Mode: component.Mode,
@@ -248,11 +262,9 @@ func (c *Catalog) readPackage(ctx context.Context, directory string) ([]loader.I
 			}
 		}
 		record := loader.InstalledRecord{
-			Directory: directory, ArtifactPath: artifact.Path,
 			Runtime: runtimeManifest, PackageID: neutral.Manifest.ID,
 			ComponentID: component.ID, ComponentOrder: orderIndex[component.ID],
-			Capabilities: capabilities, Process: artifact.Process,
-			Storage: cloneInstalledStorage(neutral.Manifest.Storage),
+			Capabilities: capabilities,
 		}
 		// Service 与 Tools 路由到依赖拓扑第一个组件（Provider 基座）。
 		if orderIndex[component.ID] == 0 {
@@ -260,9 +272,16 @@ func (c *Catalog) readPackage(ctx context.Context, directory string) ([]loader.I
 			record.Tools = cloneToolSpecs(extensions.Tools)
 		}
 		if err := loader.ValidateInstalledRecord(record); err != nil {
-			return nil, err
+			return nil, errors.Join(ErrInvalidCatalog, err)
 		}
-		records = append(records, record)
+		var process *packagecontract.ProcessSpec
+		if artifact.Process != nil {
+			cloned := cloneProcessSpec(*artifact.Process)
+			process = &cloned
+		}
+		records = append(records, installedRecord{
+			record: record, artifactPath: artifact.Path, process: process,
+		})
 	}
 	return records, nil
 }
@@ -271,12 +290,12 @@ func validateSecureDirectory(path string) error {
 	info, err := os.Lstat(path)
 	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 ||
 		info.Mode().Perm()&0o022 != 0 || !ownerMatchesProcess(info) {
-		return loader.ErrInstallCatalogInvalid
+		return ErrInvalidCatalog
 	}
 	return nil
 }
 
-func cloneProcessSpec(spec packmgr.ProcessSpec) packmgr.ProcessSpec {
+func cloneProcessSpec(spec packagecontract.ProcessSpec) packagecontract.ProcessSpec {
 	spec.Args = slices.Clone(spec.Args)
 	spec.Env = slices.Clone(spec.Env)
 	return spec
@@ -299,12 +318,4 @@ func cloneInstalledService(spec capability.ServiceSpec) capability.ServiceSpec {
 	spec.ToolDependencies = slices.Clone(spec.ToolDependencies)
 	spec.RequestedPermissions = slices.Clone(spec.RequestedPermissions)
 	return spec
-}
-
-func cloneInstalledStorage(storage *packmgr.Storage) *packmgr.Storage {
-	if storage == nil {
-		return nil
-	}
-	cloned := *storage
-	return &cloned
 }

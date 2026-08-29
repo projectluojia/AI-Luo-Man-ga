@@ -1,4 +1,4 @@
-package packmgr
+package packagecontract
 
 import (
 	"crypto/sha256"
@@ -79,13 +79,6 @@ type ProcessLimits struct {
 	MaxFileBytes    uint64 `json:"max_file_bytes,omitempty"`
 }
 
-// InstalledRecord 是中立的安装目录记录（清单 + lock）。
-type InstalledRecord struct {
-	Directory string
-	Manifest  Manifest
-	Lock      Lock
-}
-
 // ValidateManifest 校验包清单：组件唯一性、mode/entrypoint 闭合、imports/exports
 // 标识合法、依赖拓扑无环。宿主扩展段在宿主解析时严格解码。
 func ValidateManifest(manifest Manifest) error {
@@ -126,7 +119,7 @@ func ValidateManifest(manifest Manifest) error {
 		if component.Mode != ModeHosted && component.Mode != ModeIsolated {
 			return ErrInvalidFormat
 		}
-		if !isPackageEntrypoint(component.Entrypoint) ||
+		if !IsPackageEntrypoint(component.Entrypoint) ||
 			component.Entrypoint == "manifest.json" || component.Entrypoint == "lock.json" {
 			return ErrInvalidFormat
 		}
@@ -170,10 +163,7 @@ func ComponentOrder(components []Component) ([]string, error) {
 			if !ok {
 				continue // 由包依赖/注册表提供，不构成包内边
 			}
-			providerIndex, ok := indexByID[provider]
-			if !ok {
-				return nil, fmt.Errorf("%w: import %q 引用未知组件 %q", ErrInvalidFormat, capability, provider)
-			}
+			providerIndex := indexByID[provider]
 			dependents[providerIndex] = append(dependents[providerIndex], index)
 			indegree[index]++
 		}
@@ -220,7 +210,7 @@ func ValidateLock(lock Lock, manifest Manifest) error {
 	}
 	seen := make(map[string]struct{}, len(lock.Artifacts))
 	for _, artifact := range lock.Artifacts {
-		component, ok := findComponent(manifest, artifact.ComponentID)
+		component, ok := FindComponent(manifest, artifact.ComponentID)
 		if !ok {
 			return ErrInvalidFormat
 		}
@@ -258,9 +248,8 @@ func ValidateLock(lock Lock, manifest Manifest) error {
 	return nil
 }
 
-// isPackageEntrypoint 只接受包根目录下的普通文件名。包格式明确采用扁平工件
-// 布局，不能依赖运行验证器所在平台解释路径分隔符或盘符。
-func isPackageEntrypoint(value string) bool {
+// IsPackageEntrypoint 校验包根目录下的扁平工件路径。
+func IsPackageEntrypoint(value string) bool {
 	return IsPackagePath(value) && value != "." && !strings.ContainsRune(value, '/')
 }
 
@@ -271,7 +260,8 @@ func isSHA256Hex(digest string) bool {
 	return err == nil && len(raw) == sha256.Size
 }
 
-func findComponent(manifest Manifest, id string) (Component, bool) {
+// FindComponent 按稳定 ID 查找一个包组件。
+func FindComponent(manifest Manifest, id string) (Component, bool) {
 	for _, component := range manifest.Components {
 		if component.ID == id {
 			return component, true

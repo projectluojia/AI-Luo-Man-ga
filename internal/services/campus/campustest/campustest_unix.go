@@ -26,7 +26,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus/builtin"
 	"github.com/projectluojia/AI-Luo-Man-ga/pkg/bus"
-	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packagecontract"
 )
 
 // RegisterHosted 以真实安装目录路径装配校园服务：构造 campus.bus 安装包 →
@@ -71,23 +71,23 @@ func writeCampusBusPackage(t testing.TB, root string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manifest := packmgr.Manifest{
-		SchemaVersion: packmgr.SchemaVersion, ID: campus.ServiceID, Version: "1.0.0",
-		Storage: &packmgr.Storage{
+	manifest := packagecontract.Manifest{
+		SchemaVersion: packagecontract.SchemaVersion, ID: campus.ServiceID, Version: "1.0.0",
+		Storage: &packagecontract.Storage{
 			Namespace:     "campus/bus",
 			SchemaVersion: 1,
-			Sensitivity:   packmgr.SensitivityPublic,
-			Retention:     packmgr.RetentionPermanent,
+			Sensitivity:   packagecontract.SensitivityPublic,
+			Retention:     packagecontract.RetentionPermanent,
 		},
 		Extensions: extensions,
-		Components: []packmgr.Component{{
+		Components: []packagecontract.Component{{
 			ID: campus.BusComponentID, Mode: loader.ModeHosted, Entrypoint: "campus.wasm",
 			Exports: []string{
 				campus.BusStopSearchCapabilityID,
 				campus.BusRouteListCapabilityID,
 				campus.BusJourneySearchCapabilityID,
 			},
-			HostFunctions: []packmgr.HostedFunctionDecl{{
+			HostFunctions: []packagecontract.HostedFunctionDecl{{
 				Module: "ailuo.bus", Name: "query",
 				Purpose: "查询 Go 托管权威校巴存储（App 隔离在宿主侧强制）",
 			}},
@@ -106,10 +106,10 @@ func writeCampusBusPackage(t testing.TB, root string) {
 	}
 	artifactDigest := sha256.Sum256(builtin.CampusWASM)
 	manifestDigest := sha256.Sum256(manifestBytes)
-	lock, err := json.Marshal(packmgr.Lock{
-		SchemaVersion: packmgr.SchemaVersion, PackageID: campus.ServiceID,
+	lock, err := json.Marshal(packagecontract.Lock{
+		SchemaVersion: packagecontract.SchemaVersion, PackageID: campus.ServiceID,
 		PackageVersion: "1.0.0", ManifestSHA256: hex.EncodeToString(manifestDigest[:]),
-		Artifacts: []packmgr.LockedArtifact{{
+		Artifacts: []packagecontract.LockedArtifact{{
 			ComponentID: campus.BusComponentID, Path: artifactPath, SHA256: hex.EncodeToString(artifactDigest[:]),
 		}},
 	})

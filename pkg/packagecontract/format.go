@@ -1,8 +1,8 @@
-// Package packmgr 是 AI珞 包管理器的中立包格式层：semver、包清单、声明与
+// Package packagecontract 是 AI珞 包格式的版本化公共契约：semver、包清单、声明与
 // 校验。本包不引用任何内核包，除 semver 约束求解（github.com/Masterminds/semver/v3）
 // 外只依赖标准库，是可整体迁移到独立仓库的包管理器基底；宿主（AI珞 内核）在
 // 装载时解释包清单中的宿主扩展段。
-package packmgr
+package packagecontract
 
 import (
 	"errors"

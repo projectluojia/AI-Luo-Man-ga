@@ -14,6 +14,7 @@ import (
 	"sync"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/pkg/capability"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packagecontract"
 )
 
 // 安装根内的内部工作目录前缀：Install 的阶段目录与旧版本备份目录都建在安装根
@@ -37,7 +38,7 @@ func packageInstallLock(root, id string) *sync.Mutex {
 // 版本相同视为重复安装并返回错误。
 func Install(ctx context.Context, root, sourcePath string) (InstalledRecord, error) {
 	if root == "" {
-		return InstalledRecord{}, ErrInvalidFormat
+		return InstalledRecord{}, packagecontract.ErrInvalidFormat
 	}
 	root, err := filepath.Abs(root)
 	if err != nil {
@@ -90,31 +91,31 @@ func Install(ctx context.Context, root, sourcePath string) (InstalledRecord, err
 		return InstalledRecord{}, err
 	}
 	// 复制每组件工件、计算哈希、为 isolated 组件生成默认进程规格。
-	lockedArtifacts := make([]LockedArtifact, 0, len(artifacts))
+	lockedArtifacts := make([]packagecontract.LockedArtifact, 0, len(artifacts))
 	for _, artifact := range artifacts {
 		artifactName := filepath.Base(artifact.path)
 		stageArtifact := filepath.Join(stageDir, artifactName)
 		if err := copyFile(artifact.path, stageArtifact); err != nil {
 			return InstalledRecord{}, err
 		}
-		artifactDigest, err := HashFile(ctx, stageArtifact, MaxArtifactBytes)
+		artifactDigest, err := HashFile(ctx, stageArtifact, packagecontract.MaxArtifactBytes)
 		if err != nil {
 			return InstalledRecord{}, err
 		}
-		locked := LockedArtifact{
+		locked := packagecontract.LockedArtifact{
 			ComponentID: artifact.componentID,
 			Path:        filepath.Join(targetDir, artifactName),
 			SHA256:      artifactDigest,
 		}
-		if component, ok := findComponent(source.Manifest, artifact.componentID); ok && component.Mode == ModeIsolated {
+		if component, ok := packagecontract.FindComponent(source.Manifest, artifact.componentID); ok && component.Mode == packagecontract.ModeIsolated {
 			locked.Process = defaultProcessSpec(component.ID, filepath.Join(targetDir, artifactName), targetDir)
 		}
 		lockedArtifacts = append(lockedArtifacts, locked)
 	}
 	// 写入 lock。
 	manifestDigest := sha256.Sum256(source.manifestBytes)
-	lockBytes, err := json.Marshal(Lock{
-		SchemaVersion: SchemaVersion, PackageID: source.Manifest.ID,
+	lockBytes, err := json.Marshal(packagecontract.Lock{
+		SchemaVersion: packagecontract.SchemaVersion, PackageID: source.Manifest.ID,
 		PackageVersion: source.Manifest.Version,
 		ManifestSHA256: hex.EncodeToString(manifestDigest[:]),
 		Artifacts:      lockedArtifacts,
@@ -200,9 +201,9 @@ func reserveBackupDir(root, targetDir string) (string, error) {
 
 // defaultProcessSpec 为 isolated 组件生成默认进程规格：可执行文件为工件、
 // 工作目录为包目录、Unix socket 位于包目录内（与工件同名去后缀）。
-func defaultProcessSpec(componentID, artifactPath, workDir string) *ProcessSpec {
+func defaultProcessSpec(componentID, artifactPath, workDir string) *packagecontract.ProcessSpec {
 	base := strings.TrimSuffix(filepath.Base(artifactPath), filepath.Ext(artifactPath))
-	return &ProcessSpec{
+	return &packagecontract.ProcessSpec{
 		Path: artifactPath, WorkDir: workDir,
 		Address: "unix:" + filepath.Join(workDir, base+"-"+componentID+".sock"),
 	}
@@ -258,7 +259,7 @@ func Uninstall(ctx context.Context, root, id string) error {
 	target := filepath.Join(absoluteRoot, id)
 	relative, err := filepath.Rel(absoluteRoot, target)
 	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-		return ErrInvalidFormat
+		return packagecontract.ErrInvalidFormat
 	}
 	info, err := os.Lstat(target)
 	if errors.Is(err, os.ErrNotExist) {
@@ -282,7 +283,7 @@ func Uninstall(ctx context.Context, root, id string) error {
 
 // manifestFile 是包目录读取结果：清单字节原样保留以锁定 digest。
 type manifestFile struct {
-	Manifest      Manifest
+	Manifest      packagecontract.Manifest
 	manifestBytes []byte
 }
 
@@ -294,15 +295,15 @@ type sourceArtifact struct {
 
 // readManifest 读取包目录的 manifest.json 并校验。
 func readManifest(directory string) (manifestFile, error) {
-	manifestBytes, err := ReadFileLimited(filepath.Join(directory, "manifest.json"), MaxManifestBytes)
+	manifestBytes, err := ReadFileLimited(filepath.Join(directory, "manifest.json"), packagecontract.MaxManifestBytes)
 	if err != nil {
 		return manifestFile{}, err
 	}
-	var manifest Manifest
-	if err := DecodeStrictJSON(manifestBytes, &manifest); err != nil {
+	var manifest packagecontract.Manifest
+	if err := packagecontract.DecodeStrictJSON(manifestBytes, &manifest); err != nil {
 		return manifestFile{}, err
 	}
-	if err := ValidateManifest(manifest); err != nil {
+	if err := packagecontract.ValidateManifest(manifest); err != nil {
 		return manifestFile{}, err
 	}
 	return manifestFile{Manifest: manifest, manifestBytes: manifestBytes}, nil
@@ -311,7 +312,7 @@ func readManifest(directory string) (manifestFile, error) {
 // readSourceArtifacts 校验并收集清单声明的每组件 entrypoint 工件。安装与打包
 // 都按 basename 平铺工件，因此这里拒绝 basename 冲突：否则两个组件的
 // `a/mod.wasm` 与 `b/mod.wasm` 会互相覆盖，且 lock 里两条记录指向同一个文件。
-func readSourceArtifacts(sourceDir string, manifest Manifest) ([]sourceArtifact, error) {
+func readSourceArtifacts(sourceDir string, manifest packagecontract.Manifest) ([]sourceArtifact, error) {
 	artifacts := make([]sourceArtifact, 0, len(manifest.Components))
 	ownerByName := make(map[string]string, len(manifest.Components))
 	for _, component := range manifest.Components {
@@ -323,13 +324,13 @@ func readSourceArtifacts(sourceDir string, manifest Manifest) ([]sourceArtifact,
 		if !info.Mode().IsRegular() {
 			return nil, fmt.Errorf("组件 %s entrypoint 工件不是普通文件", component.ID)
 		}
-		if info.Size() <= 0 || info.Size() > MaxArtifactBytes {
-			return nil, fmt.Errorf("组件 %s entrypoint 工件大小 %d 超出 (0, %d]", component.ID, info.Size(), MaxArtifactBytes)
+		if info.Size() <= 0 || info.Size() > packagecontract.MaxArtifactBytes {
+			return nil, fmt.Errorf("组件 %s entrypoint 工件大小 %d 超出 (0, %d]", component.ID, info.Size(), packagecontract.MaxArtifactBytes)
 		}
 		name := filepath.Base(artifactPath)
 		if owner, exists := ownerByName[name]; exists {
 			return nil, fmt.Errorf("%w: 组件 %s 与 %s 的 entrypoint 同名 %q（工件按 basename 平铺，不可冲突）",
-				ErrInvalidFormat, owner, component.ID, name)
+				packagecontract.ErrInvalidFormat, owner, component.ID, name)
 		}
 		ownerByName[name] = component.ID
 		artifacts = append(artifacts, sourceArtifact{componentID: component.ID, path: artifactPath})
@@ -361,7 +362,7 @@ func unpackSource(source string) (string, func(), error) {
 }
 
 // resolveDependencies 检查每个依赖在安装根内存在已安装包且版本满足约束。
-func resolveDependencies(ctx context.Context, root string, deps []Dependency) error {
+func resolveDependencies(ctx context.Context, root string, deps []packagecontract.Dependency) error {
 	if len(deps) == 0 {
 		return nil
 	}
@@ -380,11 +381,11 @@ func resolveDependencies(ctx context.Context, root string, deps []Dependency) er
 			missing = append(missing, dep.ID+" (未安装)")
 			continue
 		}
-		candidate, err := ParseVersion(versionText)
+		candidate, err := packagecontract.ParseVersion(versionText)
 		if err != nil {
 			return fmt.Errorf("已安装包 %s 版本 %q 非法: %w", dep.ID, versionText, err)
 		}
-		constraint, err := ParseConstraint(dep.Constraint)
+		constraint, err := packagecontract.ParseConstraint(dep.Constraint)
 		if err != nil {
 			return fmt.Errorf("依赖约束 %s@%s 非法: %w", dep.ID, dep.Constraint, err)
 		}
@@ -404,9 +405,9 @@ func validateDependents(ctx context.Context, root, id, replacement string) error
 	if err != nil {
 		return err
 	}
-	var replacementVersion Version
+	var replacementVersion packagecontract.Version
 	if replacement != "" {
-		replacementVersion, err = ParseVersion(replacement)
+		replacementVersion, err = packagecontract.ParseVersion(replacement)
 		if err != nil {
 			return err
 		}
@@ -422,7 +423,7 @@ func validateDependents(ctx context.Context, root, id, replacement string) error
 			if replacement == "" {
 				return fmt.Errorf("无法变更包 %s：已安装包 %s 依赖它", id, record.Manifest.ID)
 			}
-			constraint, err := ParseConstraint(dependency.Constraint)
+			constraint, err := packagecontract.ParseConstraint(dependency.Constraint)
 			if err != nil || !constraint.Matches(replacementVersion) {
 				return fmt.Errorf("无法升级包 %s：已安装包 %s 的依赖约束不再满足", id, record.Manifest.ID)
 			}
