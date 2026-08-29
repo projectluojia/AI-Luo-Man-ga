@@ -72,13 +72,21 @@ func Install(ctx context.Context, root, sourcePath string) (InstalledRecord, err
 	installLock.Lock()
 	defer installLock.Unlock()
 	targetDir := filepath.Join(root, source.Manifest.ID)
-	if existing, err := ReadInstalled(ctx, targetDir); err == nil {
+	_, targetErr := os.Lstat(targetDir)
+	switch {
+	case targetErr == nil:
+		existing, err := ReadInstalled(ctx, targetDir)
+		if err != nil {
+			return InstalledRecord{}, fmt.Errorf("已安装包 %s 校验失败: %w", source.Manifest.ID, err)
+		}
 		if existing.Manifest.Version == source.Manifest.Version {
 			return InstalledRecord{}, fmt.Errorf("包 %s@%s 已安装", source.Manifest.ID, source.Manifest.Version)
 		}
 		if err := validateDependents(ctx, root, source.Manifest.ID, source.Manifest.Version); err != nil {
 			return InstalledRecord{}, err
 		}
+	case !errors.Is(targetErr, os.ErrNotExist):
+		return InstalledRecord{}, fmt.Errorf("检查已安装包 %s 失败: %w", source.Manifest.ID, targetErr)
 	}
 	// 原子发布：先在安装根内创建临时阶段目录，再 rename 为目标。
 	stageDir, err := os.MkdirTemp(root, stagePrefix)
