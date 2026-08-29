@@ -1,12 +1,10 @@
 package timetable
 
 import (
-	"bytes"
 	"encoding/csv"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -98,20 +96,21 @@ func ParseWakeUpEnvelope(raw []byte) (ImportData, error) {
 func ParseWakeUp(raw []byte) (ImportData, error) { return ParseWakeUpEnvelope(raw) }
 
 func parseWakeUpCSV(content, fileName string) (ImportData, error) {
-	lines := strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n")
-	filtered := make([]string, 0, len(lines))
-	for _, line := range lines {
-		if strings.TrimSpace(line) != "" {
-			filtered = append(filtered, line)
-		}
+	// 单个 csv.Reader 解析整个文档：带引号的字段可以合法包含换行，按行
+	// 切分会把一条完整记录截断成两行；空行由 Reader 自动跳过。
+	reader := csv.NewReader(strings.NewReader(content))
+	reader.FieldsPerRecord = -1
+	reader.ReuseRecord = false
+	rows, err := reader.ReadAll()
+	if err != nil {
+		return ImportData{}, ErrMalformedData
 	}
-	if len(filtered) < 2 {
+	if len(rows) < 2 {
 		return ImportData{}, ErrNoCourses
 	}
-	items := make([]Course, 0, len(filtered)-1)
-	for _, line := range filtered[1:] {
-		row, err := splitCSV(line)
-		if err != nil || len(row) < 7 {
+	items := make([]Course, 0, len(rows)-1)
+	for _, row := range rows[1:] {
+		if len(row) < 7 {
 			return ImportData{}, ErrMalformedData
 		}
 		day, okDay := strictInt(row[1])
@@ -234,17 +233,6 @@ func parseWakeUpLegacy(content string) (ImportData, error) {
 		name = "WakeUp 课程表"
 	}
 	return ImportData{Name: name, Source: SourceWakeUp, Courses: items}, nil
-}
-
-func splitCSV(line string) ([]string, error) {
-	reader := csv.NewReader(bytes.NewBufferString(line))
-	reader.FieldsPerRecord = -1
-	reader.ReuseRecord = false
-	row, err := reader.Read()
-	if errors.Is(err, io.EOF) {
-		return nil, ErrMalformedData
-	}
-	return row, err
 }
 
 func parseWeekday(raw, label string) int {

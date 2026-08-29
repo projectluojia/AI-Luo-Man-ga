@@ -129,6 +129,17 @@ func TestNormalizeCourseRejectsOverlongDisplayFields(t *testing.T) {
 	}
 }
 
+func TestParseWakeUpCSVHandlesQuotedNewline(t *testing.T) {
+	content := "name,day,startNode,endNode,teacher,location,weekMeta\n\"多行\n课程\",2,1,2,\"张老师\",\"教一\",1-16周"
+	data, err := ParseWakeUpEnvelope([]byte(`{"format":"csv","content":` + quoteJSON(content) + `}`))
+	if err != nil || len(data.Courses) != 1 {
+		t.Fatalf("quoted newline data=%#v err=%v", data, err)
+	}
+	if data.Courses[0].Title != "多行 课程" || data.Courses[0].Weekday != 2 {
+		t.Fatalf("course=%#v", data.Courses[0])
+	}
+}
+
 func TestParseWeeksSupportsOddEvenAndRanges(t *testing.T) {
 	if got := parseWeeks("1-6周,8周"); !sameInts(got, []int{1, 2, 3, 4, 5, 6, 8}) {
 		t.Fatalf("range weeks=%v", got)
