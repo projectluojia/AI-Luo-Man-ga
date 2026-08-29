@@ -13,15 +13,7 @@ from typing import AsyncIterator
 
 import grpc
 
-from agent.core import (
-    AgentKernel,
-    BudgetExceeded,
-    Capability,
-    CapabilityRequested,
-    FinalReply,
-    ReplyDelta,
-    UsageReported,
-)
+from agent.core import AgentKernel, BudgetExceeded, Capability, CapabilityRequested, FinalReply, ReplyDelta, UsageReported
 from agent.generated import executor_pb2, executor_pb2_grpc
 from agent.model import ModelProvider, ProviderFailure, ToolCall
 from agent.observe import bind, configure, get_logger
@@ -53,23 +45,11 @@ TRACE_PATTERN = re.compile(r"^[0-9a-f]{32}$")
 SPAN_PATTERN = re.compile(r"^[0-9a-f]{16}$")
 
 
-def _frame(
-    echo_id: str, run_id: str, sequence: int, **body
-) -> executor_pb2.ExecutorFrame:
-    return executor_pb2.ExecutorFrame(
-        echo_id=echo_id, run_id=run_id, sequence=sequence, **body
-    )
+def _frame(echo_id: str, run_id: str, sequence: int, **body) -> executor_pb2.ExecutorFrame:
+    return executor_pb2.ExecutorFrame(echo_id=echo_id, run_id=run_id, sequence=sequence, **body)
 
 
-def _failure(
-    echo_id: str,
-    run_id: str,
-    sequence: int,
-    code: str,
-    message: str,
-    *,
-    retryable: bool = False,
-):
+def _failure(echo_id: str, run_id: str, sequence: int, code: str, message: str, *, retryable: bool = False):
     safe_message = message
     if len(safe_message.encode("utf-8")) > MAX_FAILURE_MESSAGE_BYTES:
         safe_message = "Agent 执行失败"
@@ -77,9 +57,7 @@ def _failure(
         echo_id,
         run_id,
         sequence,
-        run_failure=executor_pb2.RunFailure(
-            code=code, message=safe_message, retryable=retryable
-        ),
+        run_failure=executor_pb2.RunFailure(code=code, message=safe_message, retryable=retryable),
     )
 
 
@@ -100,13 +78,9 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
         status_code = ""
         if compatible and request.model:
             try:
-                provider_ready = await asyncio.wait_for(
-                    self._provider.check_readiness(request.model), timeout=3.0
-                )
+                provider_ready = await asyncio.wait_for(self._provider.check_readiness(request.model), timeout=3.0)
             except Exception as exc:
-                logger.warning(
-                    "模型 Provider 就绪检查失败", error_type=type(exc).__name__
-                )
+                logger.warning("模型 Provider 就绪检查失败", error_type=type(exc).__name__)
                 status_code = "provider_unavailable"
         if not compatible:
             status_code = "protocol_version_mismatch"
@@ -121,17 +95,15 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
             status_code=status_code,
         )
 
-    async def Run(
-        self, request_iterator, context
-    ) -> AsyncIterator[executor_pb2.ExecutorFrame]:
+    async def Run(self, request_iterator, context) -> AsyncIterator[executor_pb2.ExecutorFrame]:
         """
         Execute an Agent run over a bidirectional gRPC stream.
-
+        
         Parameters:
             request_iterator: Incoming protocol frames containing the run request,
                 capability results, or cancellation.
             context: gRPC request context.
-
+        
         Returns:
             executor_pb2.ExecutorFrame: Outbound frames reporting run acceptance,
                 capability calls, replies, usage, or failures.
@@ -141,9 +113,7 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
             first_frame = await anext(request_iterator)
         except StopAsyncIteration:
             logger.warning("Agent 双向流未提供启动帧")
-            yield _failure(
-                "", "", 1, "invalid_request", "第一个 Agent 帧必须是 start_run"
-            )
+            yield _failure("", "", 1, "invalid_request", "第一个 Agent 帧必须是 start_run")
             return
 
         try:
@@ -154,12 +124,7 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
                 frame_type=first_frame.WhichOneof("body"),
                 error_type=type(exc).__name__,
             )
-            code = (
-                "protocol_version_mismatch"
-                if first_frame.start_run.protocol_version
-                and first_frame.start_run.protocol_version != PROTOCOL_VERSION
-                else "invalid_request"
-            )
+            code = "protocol_version_mismatch" if first_frame.start_run.protocol_version and first_frame.start_run.protocol_version != PROTOCOL_VERSION else "invalid_request"
             yield _failure(
                 first_frame.echo_id,
                 first_frame.run_id,
@@ -192,9 +157,7 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
                 first_frame.echo_id,
                 first_frame.run_id,
                 outbound_sequence,
-                run_accepted=executor_pb2.RunAccepted(
-                    protocol_version=PROTOCOL_VERSION
-                ),
+                run_accepted=executor_pb2.RunAccepted(protocol_version=PROTOCOL_VERSION),
             )
             try:
                 capabilities = self._parse_capabilities(start.capabilities)
@@ -207,10 +170,10 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
                 async def execute(call: ToolCall) -> str:
                     """
                     Waits for the result of a capability call and converts it to model-readable JSON.
-
+                    
                     Returns:
                         str: The capability result encoded as JSON.
-
+                    
                     Raises:
                         asyncio.CancelledError: If the run is cancelled while waiting.
                         ProtocolViolation: If the inbound frames or capability result are invalid.
@@ -220,9 +183,7 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
                     if not expected_capability_id:
                         raise ProtocolViolation("Capability 调用没有对应的已投影标识")
                     async for frame in request_iterator:
-                        self._validate_inbound_frame(
-                            frame, first_frame, expected_kernel_sequence
-                        )
+                        self._validate_inbound_frame(frame, first_frame, expected_kernel_sequence)
                         expected_kernel_sequence += 1
                         frame_type = frame.WhichOneof("body")
                         if frame_type == "cancel_run":
@@ -232,19 +193,13 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
                             )
                             raise asyncio.CancelledError(frame.cancel_run.reason)
                         if frame_type != "capability_result":
-                            raise ProtocolViolation(
-                                f"等待 Capability 结果时收到无效帧：{frame_type}"
-                            )
+                            raise ProtocolViolation(f"等待 Capability 结果时收到无效帧：{frame_type}")
                         result = frame.capability_result
                         self._validate_capability_result(result)
                         if result.call_id != call.id:
-                            raise ProtocolViolation(
-                                "Capability 结果的 call_id 与当前调用不一致"
-                            )
+                            raise ProtocolViolation("Capability 结果的 call_id 与当前调用不一致")
                         if result.capability_id != expected_capability_id:
-                            raise ProtocolViolation(
-                                "Capability 结果的 capability_id 与当前调用不一致"
-                            )
+                            raise ProtocolViolation("Capability 结果的 capability_id 与当前调用不一致")
                         encoded = self._model_result(result)
                         logger.info(
                             "收到 Capability 执行结果",
@@ -252,8 +207,7 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
                             capability_id=result.capability_id,
                             success=result.success,
                             result_bytes=len(result.payload_json),
-                            confirmation_required=not result.success
-                            and result.error_code == "confirmation_required",
+                            confirmation_required=not result.success and result.error_code == "confirmation_required",
                         )
                         return encoded
                     raise ProtocolViolation("等待 Capability 结果时输入流提前结束")
@@ -277,9 +231,7 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
                     if isinstance(event, CapabilityRequested):
                         if event.call.id in expected_capabilities:
                             raise ProtocolViolation("模型返回了重复的 ToolCall ID")
-                        self._validate_model_call(
-                            event.call.id, event.capability_id, event.call.arguments
-                        )
+                        self._validate_model_call(event.call.id, event.capability_id, event.call.arguments)
                         expected_capabilities[event.call.id] = event.capability_id
                         # 公共确认往返：确认判定与去重由 Go 内核权威执行——本进程
                         # 恒发调用帧（已批准确认随帧携带），waiting 投影不用于本地
@@ -300,15 +252,11 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
                                 call_id=event.call.id,
                                 capability_id=event.capability_id,
                                 payload_json=event.call.arguments.encode("utf-8"),
-                                confirmation_id=approved_confirmations.get(
-                                    event.capability_id, ""
-                                ),
+                                confirmation_id=approved_confirmations.get(event.capability_id, ""),
                             ),
                         )
                     elif isinstance(event, ReplyDelta):
-                        self._validate_text(
-                            event.text, 1, MAX_REPLY_DELTA_BYTES, "回复片段"
-                        )
+                        self._validate_text(event.text, 1, MAX_REPLY_DELTA_BYTES, "回复片段")
                         outbound_sequence += 1
                         logger.debug(
                             "向 Go 内核发送模型回复片段",
@@ -322,9 +270,7 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
                             reply_delta=executor_pb2.ReplyDelta(text=event.text),
                         )
                     elif isinstance(event, FinalReply):
-                        self._validate_text(
-                            event.text, 1, MAX_FINAL_MESSAGE_BYTES, "最终回复"
-                        )
+                        self._validate_text(event.text, 1, MAX_FINAL_MESSAGE_BYTES, "最终回复")
                         outbound_sequence += 1
                         logger.info(
                             "Agent Run 已生成最终回复",
@@ -404,12 +350,8 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
                 raise ProtocolViolation("Capability ID 重复")
             ExecutorRuntime._valid_token(specification.id)
             ExecutorRuntime._valid_token(specification.version)
-            ExecutorRuntime._validate_text(
-                specification.name, 1, MAX_NAME_BYTES, "Capability 名称"
-            )
-            ExecutorRuntime._validate_text(
-                specification.description, 1, MAX_DESCRIPTION_BYTES, "Capability 描述"
-            )
+            ExecutorRuntime._validate_text(specification.name, 1, MAX_NAME_BYTES, "Capability 名称")
+            ExecutorRuntime._validate_text(specification.description, 1, MAX_DESCRIPTION_BYTES, "Capability 描述")
             ExecutorRuntime._validate_text(
                 specification.input_schema_json,
                 2,
@@ -419,22 +361,16 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
             try:
                 schema = json.loads(specification.input_schema_json)
             except json.JSONDecodeError as exc:
-                raise ProtocolViolation(
-                    f"Capability 输入模式不是有效 JSON：{specification.id}"
-                ) from exc
+                raise ProtocolViolation(f"Capability 输入模式不是有效 JSON：{specification.id}") from exc
             if not isinstance(schema, dict):
-                raise ProtocolViolation(
-                    f"Capability 输入模式必须是 JSON 对象：{specification.id}"
-                )
+                raise ProtocolViolation(f"Capability 输入模式必须是 JSON 对象：{specification.id}")
             seen.add(specification.id)
-            capabilities.append(
-                Capability(
-                    id=specification.id,
-                    name=specification.name,
-                    description=specification.description,
-                    input_schema=schema,
-                )
-            )
+            capabilities.append(Capability(
+                id=specification.id,
+                name=specification.name,
+                description=specification.description,
+                input_schema=schema,
+            ))
         return capabilities
 
     @staticmethod
@@ -452,14 +388,10 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
         if start.protocol_version != PROTOCOL_VERSION:
             raise ProtocolViolation("Agent 协议版本不兼容")
         ExecutorRuntime._valid_token(start.app_id)
-        ExecutorRuntime._validate_text(
-            start.input_message, 1, MAX_INPUT_MESSAGE_BYTES, "输入消息"
-        )
+        ExecutorRuntime._validate_text(start.input_message, 1, MAX_INPUT_MESSAGE_BYTES, "输入消息")
         ExecutorRuntime._validate_text(start.timezone, 1, MAX_IDENTIFIER_BYTES, "时区")
         ExecutorRuntime._validate_text(start.model, 1, MAX_IDENTIFIER_BYTES, "模型")
-        ExecutorRuntime._validate_text(
-            start.system_prompt, 1, MAX_SYSTEM_PROMPT_BYTES, "系统提示"
-        )
+        ExecutorRuntime._validate_text(start.system_prompt, 1, MAX_SYSTEM_PROMPT_BYTES, "系统提示")
         if (
             start.max_steps < 1
             or start.max_steps > MAX_PROTOCOL_STEPS
@@ -499,24 +431,22 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
         ):
             raise ProtocolViolation("Agent 输入帧的身份、序号、类型或大小无效")
         if frame.WhichOneof("body") == "cancel_run":
-            ExecutorRuntime._validate_text(
-                frame.cancel_run.reason, 1, MAX_FAILURE_MESSAGE_BYTES, "取消原因"
-            )
+            ExecutorRuntime._validate_text(frame.cancel_run.reason, 1, MAX_FAILURE_MESSAGE_BYTES, "取消原因")
 
     @staticmethod
     def _parse_pending_confirmations(specifications) -> dict[str, str]:
         """
         Validate pending confirmation projections and collect approved confirmations by capability.
-
+        
         Parameters:
-                specifications: Confirmation projections associated with a run.
-
+        	specifications: Confirmation projections associated with a run.
+        
         Returns:
-                dict[str, str]: A mapping from capability IDs to approved confirmation IDs.
-
+        	dict[str, str]: A mapping from capability IDs to approved confirmation IDs.
+        
         Raises:
-                ProtocolViolation: If a projection exceeds protocol limits or contains invalid
-                identifiers, types, status, expiration, or duplicate confirmation IDs.
+        	ProtocolViolation: If a projection exceeds protocol limits or contains invalid
+        	identifiers, types, status, expiration, or duplicate confirmation IDs.
         """
         if len(specifications) > MAX_CAPABILITIES:
             raise ProtocolViolation("确认投影数量超过协议限制")
@@ -530,21 +460,15 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
             ExecutorRuntime._valid_token(confirmation.capability_id)
             if confirmation.target_type not in ("capability", "tool"):
                 raise ProtocolViolation("确认投影目标类型无效")
-            ExecutorRuntime._validate_text(
-                confirmation.target_id, 1, MAX_IDENTIFIER_BYTES, "确认投影目标"
-            )
+            ExecutorRuntime._validate_text(confirmation.target_id, 1, MAX_IDENTIFIER_BYTES, "确认投影目标")
             if confirmation.side_effect not in ("write", "external"):
                 raise ProtocolViolation("确认投影副作用类型无效")
             if confirmation.status not in ("waiting", "approved"):
                 raise ProtocolViolation("确认投影状态无效")
             try:
-                expires_at = datetime.fromisoformat(
-                    confirmation.expires_at.replace("Z", "+00:00")
-                )
+                expires_at = datetime.fromisoformat(confirmation.expires_at.replace("Z", "+00:00"))
             except ValueError as exc:
-                raise ProtocolViolation(
-                    "确认投影有效期不是有效的 RFC3339 时间"
-                ) from exc
+                raise ProtocolViolation("确认投影有效期不是有效的 RFC3339 时间") from exc
             if expires_at.tzinfo is None:
                 raise ProtocolViolation("确认投影有效期必须携带时区")
             if confirmation.status == "approved":
@@ -555,12 +479,12 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
     def _validate_capability_result(result) -> None:
         """
         Validate a capability result and its optional confirmation projection.
-
+        
         Parameters:
-                result: The capability result to validate.
-
+        	result: The capability result to validate.
+        
         Raises:
-                ProtocolViolation: If the result fields, payload, error details, or confirmation projection are invalid.
+        	ProtocolViolation: If the result fields, payload, error details, or confirmation projection are invalid.
         """
         ExecutorRuntime._valid_token(result.call_id)
         ExecutorRuntime._valid_token(result.capability_id)
@@ -580,9 +504,7 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
         if result.payload_json:
             raise ProtocolViolation("失败 CapabilityResult 字段无效")
         ExecutorRuntime._valid_code(result.error_code)
-        ExecutorRuntime._validate_text(
-            result.error_message, 1, MAX_FAILURE_MESSAGE_BYTES, "Capability 错误消息"
-        )
+        ExecutorRuntime._validate_text(result.error_message, 1, MAX_FAILURE_MESSAGE_BYTES, "Capability 错误消息")
         # confirmation_required 携带投影时必须格式合法（内核常态）；无投影同样
         # 容忍——确认治理端口未装配或建确认失败时，这仍是可恢复的受治理结果，
         # 交由模型向用户说明。其余失败结果携带投影即协议违例，避免执行者把
@@ -596,24 +518,15 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
                 # 值，畸形投影不转发给模型（本协议版本下确认按 capability_id
                 # 索引，缺标识的投影不可用）。
                 ExecutorRuntime._valid_token(confirmation.capability_id)
-                ExecutorRuntime._validate_text(
-                    confirmation.target_id, 1, MAX_IDENTIFIER_BYTES, "确认投影目标"
-                )
+                ExecutorRuntime._validate_text(confirmation.target_id, 1, MAX_IDENTIFIER_BYTES, "确认投影目标")
                 if confirmation.status not in ("waiting", "approved"):
                     raise ProtocolViolation("确认投影状态无效")
-                if confirmation.target_type not in (
-                    "capability",
-                    "tool",
-                ) or confirmation.side_effect not in ("write", "external"):
+                if confirmation.target_type not in ("capability", "tool") or confirmation.side_effect not in ("write", "external"):
                     raise ProtocolViolation("确认投影目标或副作用类型无效")
                 try:
-                    expires_at = datetime.fromisoformat(
-                        confirmation.expires_at.replace("Z", "+00:00")
-                    )
+                    expires_at = datetime.fromisoformat(confirmation.expires_at.replace("Z", "+00:00"))
                 except ValueError as exc:
-                    raise ProtocolViolation(
-                        "确认投影有效期不是有效的 RFC3339 时间"
-                    ) from exc
+                    raise ProtocolViolation("确认投影有效期不是有效的 RFC3339 时间") from exc
                 if expires_at.tzinfo is None:
                     raise ProtocolViolation("确认投影有效期必须携带时区")
         elif has_confirmation:
@@ -623,17 +536,15 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
     def _validate_model_call(call_id: str, capability_id: str, arguments: str) -> None:
         """
         Validate a model capability call's identifiers and argument payload.
-
+        
         Parameters:
-                call_id (str): Identifier of the model call.
-                capability_id (str): Identifier of the requested capability.
-                arguments (str): JSON argument payload for the capability.
+        	call_id (str): Identifier of the model call.
+        	capability_id (str): Identifier of the requested capability.
+        	arguments (str): JSON argument payload for the capability.
         """
         ExecutorRuntime._valid_token(call_id)
         ExecutorRuntime._valid_token(capability_id)
-        ExecutorRuntime._validate_text(
-            arguments, 2, MAX_CAPABILITY_PAYLOAD_BYTES, "Capability 参数"
-        )
+        ExecutorRuntime._validate_text(arguments, 2, MAX_CAPABILITY_PAYLOAD_BYTES, "Capability 参数")
 
     @staticmethod
     def _valid_token(value: str) -> None:
@@ -665,12 +576,12 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
     def _model_result(result) -> str:
         """
         Convert a capability result into model-readable JSON.
-
+        
         Parameters:
-                result: A capability result containing either a JSON payload or structured error details.
-
+        	result: A capability result containing either a JSON payload or structured error details.
+        
         Returns:
-                str: The decoded payload JSON for a successful result, or a JSON object containing the error and optional confirmation details.
+        	str: The decoded payload JSON for a successful result, or a JSON object containing the error and optional confirmation details.
         """
         if result.success:
             return result.payload_json.decode("utf-8")
@@ -695,21 +606,19 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
 async def serve(address: str) -> None:
     """
     Start the Agent gRPC server, wait for termination, and perform graceful shutdown.
-
+    
     Parameters:
         address (str): Loopback or Unix-socket address on which to listen.
-
+    
     Raises:
         RuntimeError: If the address is not loopback or the server cannot bind to it.
     """
     if not _is_loopback_address(address):
         raise RuntimeError("Agent gRPC 非回环监听必须配置认证传输")
-    server = grpc.aio.server(
-        options=[
-            ("grpc.max_receive_message_length", MAX_GRPC_MESSAGE_BYTES),
-            ("grpc.max_send_message_length", MAX_GRPC_MESSAGE_BYTES),
-        ]
-    )
+    server = grpc.aio.server(options=[
+        ("grpc.max_receive_message_length", MAX_GRPC_MESSAGE_BYTES),
+        ("grpc.max_send_message_length", MAX_GRPC_MESSAGE_BYTES),
+    ])
     runtime = ExecutorRuntime()
     executor_pb2_grpc.add_ExecutorRuntimeServicer_to_server(runtime, server)
     if server.add_insecure_port(address) == 0:
