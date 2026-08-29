@@ -155,33 +155,62 @@ class ConfirmationRoundTripTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(final.final_message.text, "已处理。")
         self.assertEqual(seen["payload"]["routes"], [])
 
-    async def test_waiting_confirmation_short_circuits_capability_call(self) -> None:
+    async def test_waiting_confirmation_does_not_suppress_capability_call(self) -> None:
+        # 回归：Python 不做确认决策——waiting 投影不得抑制调用帧，判定与去重
+        # 由 Go 内核权威执行；已批准确认仍随重试帧携带。
         seen: dict[str, Any] = {}
 
         def check(messages: list[dict[str, Any]]) -> None:
-            payload = json.loads(messages[-1]["content"])
-            seen["code"] = payload["error"]["code"]
-            seen["confirmation_id"] = payload["error"]["confirmation_id"]
+            seen["payload"] = json.loads(messages[-1]["content"])
 
         model = ScriptedModel(lambda: _tool_call_turn(ToolCall("call-1", "cap_campus_bus_routes_list", '{"limit":10}')), check)
         requests, iterator = self._stream()
         await requests.put(_start_frame(pending=[_confirmation("conf-2", "waiting")]))
         output = ExecutorRuntime(model).Run(iterator, None)
-        frames: list[executor_pb2.ExecutorFrame] = []
+        await anext(output)
+        call = await self._next_body(output, "capability_call")
+        self.assertEqual(call.capability_call.confirmation_id, "",
+                         "waiting 投影不是授权，重试帧不得携带其标识")
+        await requests.put(executor_pb2.ExecutorFrame(
+            echo_id="echo", run_id="run", sequence=2,
+            capability_result=executor_pb2.CapabilityResult(
+                call_id=call.capability_call.call_id,
+                capability_id="campus.bus.routes.list",
+                success=False,
+                error_code="confirmation_required",
+                error_message="Capability 调用需要有效确认",
+                confirmation=_confirmation("conf-2", "waiting"),
+            ),
+        ))
+        await asyncio.wait_for(anext(output), timeout=1)
+        final = await self._next_body(output, "final_message")
+        self.assertEqual(final.final_message.text, "已处理。")
+        self.assertEqual(seen["payload"]["error"]["code"], "confirmation_required")
+        self.assertEqual(seen["payload"]["error"]["confirmation"]["confirmation_id"], "conf-2")
+
+    async def test_sequences_stay_contiguous_across_confirmed_calls(self) -> None:
+        # 回归：帧序连续——出站序号只为实际发送的帧递增（空洞会被内核按协议
+        # 违例拒绝整个 Run）。
+        model = ScriptedModel(lambda: _tool_call_turn(ToolCall("call-1", "cap_campus_bus_routes_list", '{"limit":10}')), lambda messages: None)
+        requests, iterator = self._stream()
+        await requests.put(_start_frame(pending=[_confirmation("conf-9", "approved")]))
+        output = ExecutorRuntime(model).Run(iterator, None)
+        frames = [await anext(output)]
+        await requests.put(executor_pb2.ExecutorFrame(
+            echo_id="echo", run_id="run", sequence=2,
+            capability_result=executor_pb2.CapabilityResult(
+                call_id="call-1", capability_id="campus.bus.routes.list",
+                success=True, payload_json=b'{"routes":[]}',
+            ),
+        ))
         while True:
             try:
                 frames.append(await asyncio.wait_for(anext(output), timeout=1))
             except StopAsyncIteration:
                 break
-        self.assertEqual(seen["code"], "confirmation_pending")
-        self.assertEqual(seen["confirmation_id"], "conf-2")
-        self.assertFalse(any(frame.WhichOneof("body") == "capability_call" for frame in frames),
-                         "存在等待确认时不得向内核发起 Capability 调用")
-        self.assertEqual(frames[-1].final_message.text, "已处理。")
-        # 回归：短路不发帧也不消耗序号，内核看到的帧序必须连续（空洞会被
-        # 内核按协议违例拒绝整个 Run）。
         sequences = [frame.sequence for frame in frames]
         self.assertEqual(sequences, list(range(1, len(sequences) + 1)))
+        self.assertEqual(frames[-1].final_message.text, "已处理。")
 
     async def test_confirmation_required_result_is_surfaced_to_model(self) -> None:
         seen: dict[str, Any] = {}

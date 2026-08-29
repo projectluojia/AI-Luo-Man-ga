@@ -149,11 +149,10 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
             )
             try:
                 capabilities = self._parse_capabilities(start.capabilities)
-                approved_confirmations, waiting_confirmations = self._parse_pending_confirmations(
+                approved_confirmations = self._parse_pending_confirmations(
                     start.pending_confirmations,
                 )
                 expected_capabilities: dict[str, str] = {}
-                short_circuit_results: dict[str, str] = {}
                 expected_kernel_sequence = 2
 
                 async def execute(call: ToolCall) -> str:
@@ -161,10 +160,6 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
                     expected_capability_id = expected_capabilities.pop(call.id, "")
                     if not expected_capability_id:
                         raise ProtocolViolation("Capability 调用没有对应的已投影标识")
-                    # 公共确认往返：仅有待决策确认时，调用帧不发往内核，直接把
-                    # 等待决策的合成结果返回模型，避免重复触发治理请求。
-                    if call.id in short_circuit_results:
-                        return short_circuit_results.pop(call.id)
                     async for frame in request_iterator:
                         self._validate_inbound_frame(frame, first_frame, expected_kernel_sequence)
                         expected_kernel_sequence += 1
@@ -216,23 +211,9 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
                             raise ProtocolViolation("模型返回了重复的 ToolCall ID")
                         self._validate_model_call(event.call.id, event.capability_id, event.call.arguments)
                         expected_capabilities[event.call.id] = event.capability_id
-                        # 公共确认往返：仅有待决策确认的 Capability 不向内核发起调用，
-                        # 由 execute 返回合成结果，避免重复创建等待确认。
-                        if event.capability_id not in approved_confirmations and event.capability_id in waiting_confirmations:
-                            waiting_id = waiting_confirmations[event.capability_id]
-                            logger.info(
-                                "Capability 存在待决策确认，已向模型返回等待提示",
-                                capability_id=event.capability_id,
-                                confirmation_id=waiting_id,
-                            )
-                            short_circuit_results[event.call.id] = json.dumps({
-                                "error": {
-                                    "code": "confirmation_pending",
-                                    "message": "该操作需要用户确认后才能执行，请告知用户在界面上批准或拒绝，等待决策后再重试。",
-                                    "confirmation_id": waiting_id,
-                                },
-                            }, ensure_ascii=False, separators=(",", ":"))
-                            continue
+                        # 公共确认往返：确认判定与去重由 Go 内核权威执行——本进程
+                        # 恒发调用帧（已批准确认随帧携带），waiting 投影不用于本地
+                        # 决策，调用失败时由内核返回 confirmation_required + 投影。
                         outbound_sequence += 1
                         logger.info(
                             "向 Go 内核请求执行 Capability",
@@ -430,17 +411,17 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
             ExecutorRuntime._validate_text(frame.cancel_run.reason, 1, MAX_FAILURE_MESSAGE_BYTES, "取消原因")
 
     @staticmethod
-    def _parse_pending_confirmations(specifications) -> tuple[dict[str, str], dict[str, str]]:
-        """解析 StartRun 的活跃确认投影。
+    def _parse_pending_confirmations(specifications) -> dict[str, str]:
+        """解析 StartRun 的活跃确认投影，返回按 capability_id 索引的已批准确认。
 
-        返回 (approved, waiting)：按 capability_id 索引的最新确认标识。同目标
-        存在多条投影时取最新的 approved，其次是最新的 waiting；畸形投影按协议
-        违例拒绝，fail-closed。
+        waiting 投影只做格式校验、不参与本地决策：确认判定与去重由 Go 内核在
+        调用失败时权威返回（confirmation_required + 投影），Python 不替代内核
+        做确认状态机决策。同目标多条投影取最新 approved；畸形投影按协议违例
+        拒绝，fail-closed。
         """
         if len(specifications) > MAX_CAPABILITIES:
             raise ProtocolViolation("确认投影数量超过协议限制")
         approved: dict[str, str] = {}
-        waiting: dict[str, str] = {}
         seen: set[str] = set()
         for confirmation in specifications:
             ExecutorRuntime._valid_token(confirmation.confirmation_id)
@@ -461,11 +442,9 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
                 raise ProtocolViolation("确认投影有效期不是有效的 RFC3339 时间") from exc
             if expires_at.tzinfo is None:
                 raise ProtocolViolation("确认投影有效期必须携带时区")
-            if confirmation.status == "approved" and confirmation.capability_id:
+            if confirmation.status == "approved":
                 approved[confirmation.capability_id] = confirmation.confirmation_id
-            elif confirmation.capability_id:
-                waiting[confirmation.capability_id] = confirmation.confirmation_id
-        return approved, waiting
+        return approved
 
     @staticmethod
     def _validate_capability_result(result) -> None:
