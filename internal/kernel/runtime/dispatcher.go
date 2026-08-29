@@ -331,7 +331,7 @@ func (d *Dispatcher) authorize(
 }
 
 // argumentDigest computes the canonical JSON SHA-256 digest of an invocation payload.
-// It returns the digest as hexadecimal text.
+// argumentDigest computes the canonical SHA-256 digest of a JSON payload and returns it as hexadecimal text.
 func argumentDigest(payload json.RawMessage) (string, error) {
 	sum, err := jsonutil.CanonicalDigest(payload)
 	if err != nil {

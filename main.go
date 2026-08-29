@@ -403,6 +403,8 @@ func run() error {
 	}
 }
 
+// waitForConfigurationChange waits for shutdown, a control-configuration server error, or a configuration update.
+// It returns the server error when the server fails, or nil when shutdown or a configuration update occurs.
 func waitForConfigurationChange(ctx context.Context, manager *controlconfig.Service, serverErrors <-chan error) error {
 	select {
 	case <-ctx.Done():
@@ -415,7 +417,8 @@ func waitForConfigurationChange(ctx context.Context, manager *controlconfig.Serv
 }
 
 // runCore initializes and supervises the service stack, serving requests until
-// cancellation or a server failure, then gracefully shuts down managed services.
+// runCore starts and supervises the service stack until cancellation or a server
+// failure, then gracefully shuts down managed services.
 func runCore(ctx context.Context, stop context.CancelFunc, config config, localConfig *controlconfig.Service) (resultErr error) {
 	observe.Info(ctx, "正在启动AI珞（爱珞）内核",
 		observe.StringAttr("http_address", config.httpAddress),

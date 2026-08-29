@@ -175,7 +175,7 @@ coalesce(capability_id,''),target_type,target_id,
 side_effect,idempotency_key,argument_digest,status,expires_at,coalesce(confirmed_by,''),decided_at,created_at`
 
 // scanConfirmation 把一行确认查询结果映射为记录；scan 由调用方提供
-// scanConfirmation maps a database row to a confirmation record, parsing required and optional timestamps.
+// scanConfirmation maps a database row to a confirmation record and parses its required and optional timestamps.
 func scanConfirmation(scan func(dest ...any) error) (confirmation.Confirmation, error) {
 	var record confirmation.Confirmation
 	var expiresAt, createdAt string

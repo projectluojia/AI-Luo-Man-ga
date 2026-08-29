@@ -357,7 +357,8 @@ func (s *Service) verify(ctx context.Context, request runtime.ConfirmationReques
 // verifyRecord validates that a confirmation matches the request, remains within its
 // validity period, and has been approved.
 // It returns a scope mismatch, expiration, revocation, or approval error when the
-// record cannot authorize the request.
+// verifyRecord validates that a confirmation record authorizes a request at the specified time.
+// It returns nil only for an approved, unexpired record matching the request's scope and argument digest.
 func verifyRecord(record Confirmation, request runtime.ConfirmationRequest, now time.Time) error {
 	sessionMatch := record.SessionID != "" && request.SessionID != "" &&
 		record.SessionID == request.SessionID

@@ -189,7 +189,7 @@ func ValidateTargetType(value string) error {
 	}
 }
 
-// ValidateSideEffect 校验确认适用的副作用类型。
+// ValidateSideEffect validates whether a side-effect type is supported for confirmation.
 func ValidateSideEffect(value string) error {
 	switch value {
 	case SideEffectWrite, SideEffectExternal:
@@ -209,6 +209,7 @@ func ValidateArgumentDigest(value string) error {
 
 // ValidateRequest 校验 Dispatcher 注入的确认验证请求字段。
 // ValidateRequest validates the required fields and constraints of a confirmation request.
+// ValidateRequest validates the required fields and values of a runtime confirmation request.
 // It returns ErrInvalidRequest when validation fails.
 func ValidateRequest(request runtime.ConfirmationRequest) error {
 	switch {
@@ -230,7 +231,8 @@ func ValidateRequest(request runtime.ConfirmationRequest) error {
 }
 
 // ValidateConfirmation validates a complete confirmation record, including its fields, status consistency, and time constraints.
-// It returns ErrInvalidRequest when the record is invalid.
+// ValidateConfirmation validates a confirmation record and returns ErrInvalidRequest
+// when any required field, identifier, digest, timestamp, status, or decision field is invalid.
 func ValidateConfirmation(record Confirmation) error {
 	if !validID(record.AppID) || !validID(record.ConfirmationID) || !validID(record.EchoID) ||
 		!validID(record.RunID) || !validID(record.CallID) {

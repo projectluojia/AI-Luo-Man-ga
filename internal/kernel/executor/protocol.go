@@ -54,6 +54,7 @@ var (
 	spanPattern  = regexp.MustCompile(`^[0-9a-f]{16}$`)
 )
 
+// Supports reports whether the supplied versions include the supported protocol version.
 func Supports(versions []string) bool {
 	for _, version := range versions {
 		if version == Version {
@@ -65,7 +66,8 @@ func Supports(versions []string) bool {
 
 // ValidateStartFrame validates a start frame, including its protocol envelope, run
 // configuration, capability declarations, and pending confirmation metadata.
-// It returns an error when the frame is invalid.
+// ValidateStartFrame validates a start frame and its run configuration.
+// It returns nil for a valid frame and an error when the frame is invalid.
 func ValidateStartFrame(frame *Frame) error {
 	if err := validateEnvelope(frame, frame.GetEchoId(), frame.GetRunId(), 1); err != nil {
 		return err
@@ -129,7 +131,7 @@ func ValidateStartFrame(frame *Frame) error {
 
 // ValidConfirmationInfo 校验确认公共投影的字段格式：标识为稳定 token，
 // ValidConfirmationInfo validates confirmation metadata and its expiration timestamp.
-// It returns true when all required fields and allowed values are valid.
+// ValidConfirmationInfo reports whether confirmation metadata contains valid identifiers, allowed values, and an RFC3339 expiration timestamp.
 func ValidConfirmationInfo(info *ConfirmationInfo) bool {
 	if info == nil ||
 		!validToken(info.ConfirmationId, MaxIdentifierBytes) ||
@@ -159,7 +161,7 @@ func ValidConfirmationInfo(info *ConfirmationInfo) bool {
 }
 
 // ValidateRunUsage validates cumulative token, cost, and provider-retry usage against protocol and configured limits.
-// It returns ErrInvalidFrame when usage is missing, inconsistent, exceeds a limit, or decreases from previously reported usage.
+// ValidateRunUsage validates cumulative token, cost, and provider-retry usage against protocol limits, configured limits, and previously reported values. It returns nil for valid usage or ErrInvalidFrame when usage is missing, inconsistent, exceeds a limit, or decreases from previously reported usage.
 func ValidateRunUsage(
 	usage *RunUsage,
 	previousInput uint64,
@@ -198,6 +200,7 @@ func ValidateInboundEnvelope(frame *Frame, echoID, runID string, expectedSequenc
 	return validateEnvelope(frame, echoID, runID, expectedSequence)
 }
 
+// ValidateRunAccepted verifies that a frame contains a run-accepted message using the supported protocol version.
 func ValidateRunAccepted(frame *Frame) error {
 	accepted := frame.GetRunAccepted()
 	if accepted == nil {
@@ -239,6 +242,8 @@ func ValidateFinalMessage(message *FinalMessage) error {
 	return nil
 }
 
+// ValidateRunFailure validates a run failure code and message.
+// It returns ErrInvalidFrame when the failure is nil or contains invalid fields.
 func ValidateRunFailure(failure *RunFailure) error {
 	if failure == nil ||
 		!validToken(failure.Code, 64) ||
@@ -251,7 +256,11 @@ func ValidateRunFailure(failure *RunFailure) error {
 
 // ValidateCapabilityResultFrame validates a capability result frame and its result data.
 // Successful results require a valid JSON payload, while failed results require an error
-// code and message; confirmation metadata is allowed only for confirmation_required errors.
+// ValidateCapabilityResultFrame validates a capability result frame and its envelope.
+// Successful results require a valid JSON payload, while failed results require a valid
+// error code and message. Confirmation metadata is required for confirmation_required
+// errors and must be absent for other failures. It returns ErrInvalidFrame for invalid
+// frames and nil for valid frames.
 func ValidateCapabilityResultFrame(frame *Frame, echoID, runID string, expectedSequence uint64) error {
 	if err := validateEnvelope(frame, echoID, runID, expectedSequence); err != nil {
 		return err

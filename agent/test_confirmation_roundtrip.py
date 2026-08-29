@@ -135,6 +135,12 @@ def _tool_call_turn(call: ToolCall) -> AsyncIterator[ModelEvent]:
     	AsyncIterator[ModelEvent]: A stream containing the completed tool-call event.
     """
     async def generate() -> AsyncIterator[ModelEvent]:
+        """
+        Emit a completed model turn containing the configured tool call.
+        
+        Returns:
+            An event containing the assistant message, tool call, and token usage.
+        """
         yield TurnCompleted(
             text="",
             tool_calls=[call],
@@ -159,6 +165,7 @@ def _final_turn(text: str) -> AsyncIterator[ModelEvent]:
     	AsyncIterator[ModelEvent]: Events for the text response and its completion.
     """
     async def generate() -> AsyncIterator[ModelEvent]:
+        """Emits the final text response as a delta followed by a completed model turn."""
         yield TextDelta(text)
         yield TurnCompleted(
             text=text,
@@ -172,10 +179,10 @@ def _final_turn(text: str) -> AsyncIterator[ModelEvent]:
 class ConfirmationRoundTripTest(unittest.IsolatedAsyncioTestCase):
     @staticmethod
     async def _next_body(output: AsyncIterator[executor_pb2.ExecutorFrame], body: str) -> executor_pb2.ExecutorFrame:
-        """Return the next executor frame containing the specified body type.
+        """
+        Finds the next executor frame containing the specified body type.
         
         Parameters:
-        	output (AsyncIterator[executor_pb2.ExecutorFrame]): The stream of executor frames to inspect.
         	body (str): The expected frame body field name.
         
         Returns:
