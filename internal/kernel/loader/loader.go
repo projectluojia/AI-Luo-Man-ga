@@ -15,7 +15,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/id"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
-	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packagecontract"
 )
 
 const (
@@ -64,14 +64,14 @@ type Manifest struct {
 	IdleTTL      time.Duration
 	// HostFunctions 是包声明的宿主函数依赖（仅 hosted 有意义）：guest 只可
 	// 调用清单声明且宿主提供的宿主函数，未声明调用在加载期被拒绝。
-	HostFunctions []packmgr.HostedFunctionDecl
+	HostFunctions []packagecontract.HostedFunctionDecl
 }
 
 // Equal 比较运行时清单的完整身份与装载声明。
 func (m Manifest) Equal(other Manifest) bool {
 	return m.ID == other.ID && m.Version == other.Version && m.Mode == other.Mode &&
 		m.Role == other.Role && m.LockedDigest == other.LockedDigest && m.Pin == other.Pin &&
-		m.IdleTTL == other.IdleTTL && packmgr.EqualHostedFunctions(m.HostFunctions, other.HostFunctions)
+		m.IdleTTL == other.IdleTTL && packagecontract.EqualHostedFunctions(m.HostFunctions, other.HostFunctions)
 }
 
 // SameIdentity 只比较装载工件所需的运行时身份字段。
@@ -864,10 +864,10 @@ func ValidateManifest(manifest Manifest) error {
 		manifest.IdleTTL < 0 || len(manifest.LockedDigest) != 64 {
 		return ErrInvalidManifest
 	}
-	if _, err := packmgr.ParseVersion(manifest.Version); err != nil {
+	if _, err := packagecontract.ParseVersion(manifest.Version); err != nil {
 		return ErrInvalidManifest
 	}
-	if err := packmgr.ValidateHostedFunctions(manifest.HostFunctions); err != nil {
+	if err := packagecontract.ValidateHostedFunctions(manifest.HostFunctions); err != nil {
 		return ErrInvalidManifest
 	}
 	digest, err := hex.DecodeString(manifest.LockedDigest)

@@ -12,7 +12,7 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packagecontract"
 )
 
 // BuildToolGoWasm 是内置的 Go→wasm32-wasi 构建器：跨平台一致（os/exec 设
@@ -44,7 +44,7 @@ type BuildSpec struct {
 // Build 执行 [build] 声明的构建：为每个 hosted 组件交叉编译 entrypoint 工件。
 // 支持 go-wasm（Go，内置）与 ts-as（TypeScript，AssemblyScript 编译器）；
 // 未知工具 fail-closed。源码目录相对包目录解析，校验不逃逸包目录。
-func Build(ctx context.Context, sourceDir string, manifest packmgr.Manifest, spec BuildSpec) error {
+func Build(ctx context.Context, sourceDir string, manifest packagecontract.Manifest, spec BuildSpec) error {
 	switch spec.Tool {
 	case BuildToolGoWasm:
 		return buildGoWasm(ctx, sourceDir, manifest, spec)
@@ -60,12 +60,12 @@ func Build(ctx context.Context, sourceDir string, manifest packmgr.Manifest, spe
 // 或仓库根，向上查找；跨平台一致，无 shell 脚本）。工件输出到包目录根
 // （entrypoint 相对包目录），源码目录是包目录内的相对位置。sourceDir 转绝对
 // 路径，避免输出相对 workDir 解析错位。
-func buildGoWasm(ctx context.Context, sourceDir string, manifest packmgr.Manifest, spec BuildSpec) error {
+func buildGoWasm(ctx context.Context, sourceDir string, manifest packagecontract.Manifest, spec BuildSpec) error {
 	if runtime.GOARCH == "wasm" {
 		return fmt.Errorf("%w: 当前平台自身是 wasm，无法交叉编译", ErrBuildFailed)
 	}
 	return buildHostedComponents(ctx, sourceDir, manifest, spec,
-		func(ctx context.Context, workDir string, _ packmgr.Component, output string) ([]byte, error) {
+		func(ctx context.Context, workDir string, _ packagecontract.Component, output string) ([]byte, error) {
 			command := exec.CommandContext(ctx, "go", "build", "-trimpath", "-o", output, ".")
 			command.Dir = workDir
 			command.Env = append(os.Environ(), "GOOS=wasip1", "GOARCH=wasm")
@@ -77,9 +77,9 @@ func buildGoWasm(ctx context.Context, sourceDir string, manifest packmgr.Manifes
 // npx --yes --package assemblyscript asc <入口>.ts -o <entrypoint>，
 // 在源码目录内执行（需 node/npx 环境）。入口约定：entrypoint 声明为
 // <名>.wasm，对应源码 <名>.ts（与 schemaextract 的 main.ts 约定一致）。
-func buildAssemblyScript(ctx context.Context, sourceDir string, manifest packmgr.Manifest, spec BuildSpec) error {
+func buildAssemblyScript(ctx context.Context, sourceDir string, manifest packagecontract.Manifest, spec BuildSpec) error {
 	return buildHostedComponents(ctx, sourceDir, manifest, spec,
-		func(ctx context.Context, workDir string, component packmgr.Component, output string) ([]byte, error) {
+		func(ctx context.Context, workDir string, component packagecontract.Component, output string) ([]byte, error) {
 			// 源码名 = entrypoint 去 .wasm 后缀 + .ts（main.wasm → main.ts）。
 			input := filepath.Join(workDir, strings.TrimSuffix(filepath.Base(component.Entrypoint), ".wasm")+".ts")
 			command := exec.CommandContext(ctx, "npx", "--yes", "--package", assemblyScriptPackage, "asc", input, "-o", output)
@@ -92,9 +92,9 @@ func buildAssemblyScript(ctx context.Context, sourceDir string, manifest packmgr
 func buildHostedComponents(
 	ctx context.Context,
 	sourceDir string,
-	manifest packmgr.Manifest,
+	manifest packagecontract.Manifest,
 	spec BuildSpec,
-	build func(context.Context, string, packmgr.Component, string) ([]byte, error),
+	build func(context.Context, string, packagecontract.Component, string) ([]byte, error),
 ) error {
 	absoluteSourceDir, err := filepath.Abs(sourceDir)
 	if err != nil {
@@ -104,15 +104,15 @@ func buildHostedComponents(
 	if source == "" {
 		source = "."
 	}
-	if !packmgr.IsPackagePath(source) {
+	if !packagecontract.IsPackagePath(source) {
 		return fmt.Errorf("%w: 源码目录非法 %q", ErrBuildFailed, source)
 	}
 	workDir := filepath.Join(absoluteSourceDir, source)
 	for _, component := range manifest.Components {
-		if component.Mode != packmgr.ModeHosted {
+		if component.Mode != packagecontract.ModeHosted {
 			continue
 		}
-		if component.Entrypoint == "" || !packmgr.IsPackagePath(component.Entrypoint) {
+		if component.Entrypoint == "" || !packagecontract.IsPackagePath(component.Entrypoint) {
 			return fmt.Errorf("%w: 组件 %s entrypoint 非法 %q", ErrBuildFailed, component.ID, component.Entrypoint)
 		}
 		output := filepath.Join(absoluteSourceDir, component.Entrypoint)

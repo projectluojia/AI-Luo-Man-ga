@@ -9,7 +9,7 @@ import (
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/executor"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/health"
-	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packagecontract"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -20,7 +20,7 @@ import (
 // 和协议生命周期。
 type ExecutorHostConfig struct {
 	Manifest Manifest
-	Resolve  func(context.Context) (packmgr.ProcessSpec, error)
+	Resolve  func(context.Context) (packagecontract.ProcessSpec, error)
 	Spawn    bool
 	Model    string
 	Stdout   io.Writer
@@ -111,8 +111,8 @@ func (h *ExecutorHost) Load(ctx context.Context, manifest Manifest) (Runtime, er
 	}, nil
 }
 
-func validateExecutorSpec(spec packmgr.ProcessSpec, spawn bool) error {
-	if !packmgr.IsLocalRuntimeAddress(spec.Address) || !packmgr.ValidProcessLimits(spec.Limits) {
+func validateExecutorSpec(spec packagecontract.ProcessSpec, spawn bool) error {
+	if !packagecontract.IsLocalRuntimeAddress(spec.Address) || !packagecontract.ValidProcessLimits(spec.Limits) {
 		return ErrInvalidProcessSpec
 	}
 	if !spawn {

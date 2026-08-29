@@ -18,7 +18,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus/builtin"
 	"github.com/projectluojia/AI-Luo-Man-ga/pkg/bus"
-	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packagecontract"
 )
 
 // RegisterHosted 以 hosted 包形态装配校园服务：内置 wasm 工件经进程内沙箱执行，
@@ -41,12 +41,11 @@ func RegisterHosted(t testing.TB, target *registry.Registry, store bus.Store) {
 		t.Fatalf("NewWasmHost: %v", err)
 	}
 	record := loader.InstalledRecord{
-		Directory: "", ArtifactPath: "",
 		Runtime: loader.Manifest{
 			ID: campus.ServiceID, Version: "1.0.0", Mode: loader.ModeHosted,
 			Role: loader.RoleCapability, LockedDigest: hex.EncodeToString(digest[:]),
 			Pin: true,
-			HostFunctions: []packmgr.HostedFunctionDecl{{
+			HostFunctions: []packagecontract.HostedFunctionDecl{{
 				Module: "ailuo.bus", Name: "query",
 				Purpose: "查询 Go 托管权威校巴存储（App 隔离在宿主侧强制）",
 			}},
@@ -55,12 +54,6 @@ func RegisterHosted(t testing.TB, target *registry.Registry, store bus.Store) {
 		Tools:        campus.ToolSpecs(),
 		Service:      campus.ServiceSpec(),
 		Capabilities: campus.CapabilitySpecs(),
-		Storage: &packmgr.Storage{
-			Namespace:     "campus/bus",
-			SchemaVersion: 1,
-			Sensitivity:   packmgr.SensitivityPublic,
-			Retention:     packmgr.RetentionPermanent,
-		},
 	}
 	registerHosted(t, target, host, []loader.InstalledRecord{record})
 }

@@ -15,7 +15,7 @@ import (
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
-	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packagecontract"
 )
 
 var (
@@ -26,8 +26,8 @@ var (
 var environmentNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,127}$`)
 
 type IsolatedProcessHostConfig struct {
-	ResolveInstalled func(context.Context, Manifest) (packmgr.ProcessSpec, error)
-	VerifyInstalled  func(context.Context, Manifest, packmgr.ProcessSpec) error
+	ResolveInstalled func(context.Context, Manifest) (packagecontract.ProcessSpec, error)
+	VerifyInstalled  func(context.Context, Manifest, packagecontract.ProcessSpec) error
 	DialTimeout      time.Duration
 	StopGrace        time.Duration
 	TerminateGrace   time.Duration
@@ -217,7 +217,7 @@ type Process struct {
 
 // StartProcess 启动受监督子进程并应用资源限额。stdout/stderr 决定子进程
 // 输出去向：installed 扩展默认丢弃，内置 agent 直接透传内核输出。
-func StartProcess(ctx context.Context, spec packmgr.ProcessSpec, stdout, stderr io.Writer) (*Process, error) {
+func StartProcess(ctx context.Context, spec packagecontract.ProcessSpec, stdout, stderr io.Writer) (*Process, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -471,10 +471,9 @@ func (r *processRuntime) releaseProcessLimits() {
 	r.process.Release()
 }
 
-func validateProcessSpec(spec packmgr.ProcessSpec) error {
-	// 形状校验（绝对路径/本地地址/上限闭式）由中立格式层负责；此处只做
-	// 装载时刻的文件系统与内容安全校验。
-	if err := packmgr.ValidateProcessSpec(spec); err != nil {
+func validateProcessSpec(spec packagecontract.ProcessSpec) error {
+	// 运行时重新校验形状，再叠加装载时刻的文件系统与内容安全校验。
+	if err := packagecontract.ValidateProcessSpec(spec); err != nil {
 		return ErrInvalidProcessSpec
 	}
 	info, err := os.Lstat(spec.Path)

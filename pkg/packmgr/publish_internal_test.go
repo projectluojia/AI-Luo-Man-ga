@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packagecontract"
 )
 
 func TestPublishStageRestoresOldDirectoryWhenPublishRenameFails(t *testing.T) {
@@ -43,7 +45,7 @@ func TestPublishStageRestoresPreviousInstallOnVerifyFailure(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(source, "app.wasm"), []byte("artifact"), 0o640); err != nil {
 		t.Fatal(err)
 	}
-	manifest := `{"schema_version":"` + SchemaVersion + `","id":"demo.pkg","version":"1.0.0",` +
+	manifest := `{"schema_version":"` + packagecontract.SchemaVersion + `","id":"demo.pkg","version":"1.0.0",` +
 		`"components":[{"id":"core","mode":"hosted","entrypoint":"app.wasm"}]}`
 	if err := os.WriteFile(filepath.Join(source, "manifest.json"), []byte(manifest), 0o640); err != nil {
 		t.Fatal(err)
@@ -91,7 +93,7 @@ func TestListInstalledRecoversInterruptedPublication(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(source, "app.wasm"), []byte("artifact"), 0o640); err != nil {
 		t.Fatal(err)
 	}
-	manifest := `{"schema_version":"` + SchemaVersion + `","id":"demo.pkg","version":"1.0.0",` +
+	manifest := `{"schema_version":"` + packagecontract.SchemaVersion + `","id":"demo.pkg","version":"1.0.0",` +
 		`"components":[{"id":"core","mode":"hosted","entrypoint":"app.wasm"}]}`
 	if err := os.WriteFile(filepath.Join(source, "manifest.json"), []byte(manifest), 0o640); err != nil {
 		t.Fatal(err)
@@ -123,7 +125,7 @@ func TestPublishStageRestoresPreviousInstallOnRenameFailure(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(source, "app.wasm"), []byte("artifact"), 0o640); err != nil {
 		t.Fatal(err)
 	}
-	manifest := `{"schema_version":"` + SchemaVersion + `","id":"demo.pkg","version":"1.0.0",` +
+	manifest := `{"schema_version":"` + packagecontract.SchemaVersion + `","id":"demo.pkg","version":"1.0.0",` +
 		`"components":[{"id":"core","mode":"hosted","entrypoint":"app.wasm"}]}`
 	if err := os.WriteFile(filepath.Join(source, "manifest.json"), []byte(manifest), 0o640); err != nil {
 		t.Fatal(err)

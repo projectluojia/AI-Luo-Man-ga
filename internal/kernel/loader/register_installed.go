@@ -7,40 +7,34 @@ import (
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/pkg/capability"
-	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
 )
 
-const MaxInstalledRuntimes = 256
+const MaxRegisteredRuntimes = 256
 
 var (
-	ErrInstallCatalogInvalid = errors.New("installed runtime catalog is invalid")
-	ErrInstallChanged        = errors.New("installed runtime changed after discovery")
+	ErrInvalidInstalledRecord = errors.New("invalid installed runtime record")
 )
 
 // InstalledRecord 是安装目录中单个组件（运行单元）的内核记录。
 // 一个包产生多条记录（每组件一条）；Runtime.ID 是包命名空间内的稳定组件标识。
 type InstalledRecord struct {
-	Directory    string
-	ArtifactPath string
-	Runtime      Manifest
-	PackageID    string
-	ComponentID  string
+	Runtime     Manifest
+	PackageID   string
+	ComponentID string
 	// ComponentOrder 是该组件在包内的依赖拓扑序号（Provider 小号在前）。
 	ComponentOrder int
 	Tools          []capability.ToolSpec
 	Service        capability.ServiceSpec
 	Capabilities   []capability.CapabilitySpec
-	Process        *packmgr.ProcessSpec
-	Storage        *packmgr.Storage
 }
 
 func RegisterInstalled(ctx context.Context, manager *Manager, target *registry.Registry, records []InstalledRecord) error {
-	if manager == nil || target == nil || len(records) == 0 || len(records) > MaxInstalledRuntimes {
-		return ErrInstallCatalogInvalid
+	if manager == nil || target == nil || len(records) == 0 || len(records) > MaxRegisteredRuntimes {
+		return ErrInvalidInstalledRecord
 	}
 	for _, record := range records {
 		if err := validateRecordSpecs(record); err != nil {
-			return errors.Join(ErrInstallCatalogInvalid, err)
+			return errors.Join(ErrInvalidInstalledRecord, err)
 		}
 	}
 	manifests := make([]Manifest, 0, len(records))
@@ -112,43 +106,32 @@ type componentWithOrder struct {
 }
 
 func ValidateInstalledRecord(record InstalledRecord) error {
-	if record.Directory == "" || len(record.Capabilities) == 0 {
-		return ErrInstallCatalogInvalid
-	}
-	if record.Runtime.Mode == ModeIsolated && record.Process == nil {
-		return ErrInstallCatalogInvalid
-	}
-	if record.Runtime.Mode == ModeHosted && record.Process != nil {
-		return ErrInstallCatalogInvalid
+	if len(record.Capabilities) == 0 {
+		return ErrInvalidInstalledRecord
 	}
 	return validateRecordSpecs(record)
 }
 
 // validateRecordSpecs 校验内置包与 installed 包共用的规格契约：运行时清单、
-// 宿主函数声明、storage 声明，以及 Tool/Service/Capability 与运行时版本一致。
+// 宿主函数声明，以及 Tool/Service/Capability 与运行时版本一致。
 // 运行时专用记录（如内置 agent）不携带 Service 规格，只校验运行时清单与声明。
 func validateRecordSpecs(record InstalledRecord) error {
 	if err := ValidateManifest(record.Runtime); err != nil {
-		return errors.Join(ErrInstallCatalogInvalid, err)
-	}
-	if record.Storage != nil {
-		if err := packmgr.ValidateStorage(*record.Storage); err != nil {
-			return err
-		}
+		return errors.Join(ErrInvalidInstalledRecord, err)
 	}
 	if record.Service.ID != "" {
 		if record.Service.Version != record.Runtime.Version {
-			return ErrInstallCatalogInvalid
+			return ErrInvalidInstalledRecord
 		}
 		for _, tool := range record.Tools {
 			if tool.Version != record.Runtime.Version {
-				return ErrInstallCatalogInvalid
+				return ErrInvalidInstalledRecord
 			}
 		}
 	}
 	for _, capability := range record.Capabilities {
 		if capability.Version != record.Runtime.Version {
-			return ErrInstallCatalogInvalid
+			return ErrInvalidInstalledRecord
 		}
 	}
 	return nil

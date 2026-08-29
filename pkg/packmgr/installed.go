@@ -10,24 +10,16 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packagecontract"
 )
 
-// DefaultInstallRoot 返回用户级默认安装根目录（用户配置目录下 ailuo/runtime）。
-// 包管理器和 Core 共享同一默认位置，避免各自推导不同路径。
-func DefaultInstallRoot() string {
-	base, err := os.UserConfigDir()
-	if err != nil {
-		return ""
-	}
-	return filepath.Join(base, "ailuo", "runtime")
+// InstalledRecord 是已安装包的格式层记录。
+type InstalledRecord struct {
+	Directory string
+	Manifest  packagecontract.Manifest
+	Lock      packagecontract.Lock
 }
-
-// 安装目录格式的容量上限（与宿主发现校验一致）。
-const (
-	MaxManifestBytes = int64(256 << 10)
-	MaxLockBytes     = int64(64 << 10)
-	MaxArtifactBytes = int64(1 << 30)
-)
 
 // IsTransientInstallDirectory 判断安装根内的阶段/备份工作目录。
 func IsTransientInstallDirectory(name string) bool {
@@ -39,7 +31,7 @@ func IsTransientInstallDirectory(name string) bool {
 // 在发现时叠加校验，本函数面向 CLI 工具、依赖解析与安装回读验证。
 func ReadInstalled(ctx context.Context, directory string) (InstalledRecord, error) {
 	if directory == "" {
-		return InstalledRecord{}, ErrInvalidFormat
+		return InstalledRecord{}, packagecontract.ErrInvalidFormat
 	}
 	root, err := filepath.Abs(directory)
 	if err != nil {
@@ -49,21 +41,21 @@ func ReadInstalled(ctx context.Context, directory string) (InstalledRecord, erro
 	if err != nil {
 		return InstalledRecord{}, err
 	}
-	lockBytes, err := ReadFileLimited(filepath.Join(directory, "lock.json"), MaxLockBytes)
+	lockBytes, err := ReadFileLimited(filepath.Join(directory, "lock.json"), packagecontract.MaxLockBytes)
 	if err != nil {
 		return InstalledRecord{}, err
 	}
 	manifest := source.Manifest
-	var lock Lock
-	if err := DecodeStrictJSON(lockBytes, &lock); err != nil {
+	var lock packagecontract.Lock
+	if err := packagecontract.DecodeStrictJSON(lockBytes, &lock); err != nil {
 		return InstalledRecord{}, err
 	}
-	if err := ValidateLock(lock, manifest); err != nil {
+	if err := packagecontract.ValidateLock(lock, manifest); err != nil {
 		return InstalledRecord{}, err
 	}
 	manifestDigest := sha256.Sum256(source.manifestBytes)
 	if lock.ManifestSHA256 != hex.EncodeToString(manifestDigest[:]) {
-		return InstalledRecord{}, ErrInvalidFormat
+		return InstalledRecord{}, packagecontract.ErrInvalidFormat
 	}
 	if err := verifyInstalledArtifacts(ctx, root, lock.Artifacts); err != nil {
 		return InstalledRecord{}, err
@@ -71,15 +63,15 @@ func ReadInstalled(ctx context.Context, directory string) (InstalledRecord, erro
 	return InstalledRecord{Directory: directory, Manifest: manifest, Lock: lock}, nil
 }
 
-func verifyInstalledArtifacts(ctx context.Context, root string, artifacts []LockedArtifact) error {
+func verifyInstalledArtifacts(ctx context.Context, root string, artifacts []packagecontract.LockedArtifact) error {
 	for _, artifact := range artifacts {
 		relative, err := filepath.Rel(root, filepath.Clean(artifact.Path))
 		if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-			return ErrInvalidFormat
+			return packagecontract.ErrInvalidFormat
 		}
-		artifactDigest, err := HashFile(ctx, artifact.Path, MaxArtifactBytes)
+		artifactDigest, err := HashFile(ctx, artifact.Path, packagecontract.MaxArtifactBytes)
 		if err != nil || artifactDigest != artifact.SHA256 {
-			return ErrInvalidFormat
+			return packagecontract.ErrInvalidFormat
 		}
 	}
 	return nil
@@ -90,7 +82,7 @@ func verifyInstalledArtifacts(ctx context.Context, root string, artifacts []Lock
 // 启动或列表读取时必须先恢复旧安装，不能把临时目录静默当作不存在。
 func RecoverInstallRoot(ctx context.Context, root string) error {
 	if root == "" {
-		return ErrInvalidFormat
+		return packagecontract.ErrInvalidFormat
 	}
 	entries, err := os.ReadDir(root)
 	if errors.Is(err, os.ErrNotExist) {
@@ -107,7 +99,7 @@ func RecoverInstallRoot(ctx context.Context, root string) error {
 			continue
 		}
 		if !entry.IsDir() {
-			return fmt.Errorf("%w: 备份路径不是目录 %q", ErrInvalidFormat, entry.Name())
+			return fmt.Errorf("%w: 备份路径不是目录 %q", packagecontract.ErrInvalidFormat, entry.Name())
 		}
 		if err := recoverInstallBackup(ctx, root, entry.Name()); err != nil {
 			return err
@@ -157,7 +149,7 @@ func recoverInstallBackup(ctx context.Context, root, name string) error {
 // ListInstalled 列出安装根目录内的全部已安装包（按 ID 排序）。
 func ListInstalled(ctx context.Context, root string) ([]InstalledRecord, error) {
 	if root == "" {
-		return nil, ErrInvalidFormat
+		return nil, packagecontract.ErrInvalidFormat
 	}
 	if err := RecoverInstallRoot(ctx, root); err != nil {
 		return nil, err
@@ -184,22 +176,22 @@ func listInstalled(ctx context.Context, root string) ([]InstalledRecord, error) 
 		// 解析永久失败。其他非包条目仍然 fail closed。
 		if IsTransientInstallDirectory(entry.Name()) {
 			if !entry.IsDir() {
-				return nil, fmt.Errorf("%w: 临时安装路径不是目录 %q", ErrInvalidFormat, entry.Name())
+				return nil, fmt.Errorf("%w: 临时安装路径不是目录 %q", packagecontract.ErrInvalidFormat, entry.Name())
 			}
 			continue
 		}
 		if strings.HasPrefix(entry.Name(), ".") || !entry.IsDir() {
-			return nil, fmt.Errorf("%w: 安装根包含非包目录 %q", ErrInvalidFormat, entry.Name())
+			return nil, fmt.Errorf("%w: 安装根包含非包目录 %q", packagecontract.ErrInvalidFormat, entry.Name())
 		}
 		record, err := ReadInstalled(ctx, filepath.Join(root, entry.Name()))
 		if err != nil {
 			return nil, err
 		}
 		if record.Manifest.ID != entry.Name() {
-			return nil, fmt.Errorf("%w: 目录 %q 与清单 ID %q 不一致", ErrInvalidFormat, entry.Name(), record.Manifest.ID)
+			return nil, fmt.Errorf("%w: 目录 %q 与清单 ID %q 不一致", packagecontract.ErrInvalidFormat, entry.Name(), record.Manifest.ID)
 		}
 		if _, duplicate := seen[record.Manifest.ID]; duplicate {
-			return nil, fmt.Errorf("%w: 重复包 ID %q", ErrInvalidFormat, record.Manifest.ID)
+			return nil, fmt.Errorf("%w: 重复包 ID %q", packagecontract.ErrInvalidFormat, record.Manifest.ID)
 		}
 		seen[record.Manifest.ID] = struct{}{}
 		records = append(records, record)

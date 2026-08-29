@@ -13,7 +13,7 @@ import (
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
-	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packagecontract"
 )
 
 // stringToolArtifact 读取参考包编译产物；测试工作目录为 internal/kernel/loader。
@@ -186,7 +186,7 @@ func TestWasmHostHostFunctionProjectionBindsGovernedContext(t *testing.T) {
 	}
 	runtime, err := host.Load(context.Background(), loader.Manifest{
 		ID: "hostfn.test", Version: "1.0.0", Mode: loader.ModeHosted, Role: loader.RoleCapability, LockedDigest: digest,
-		HostFunctions: []packmgr.HostedFunctionDecl{{Module: "ailuo.host", Name: "echo"}},
+		HostFunctions: []packagecontract.HostedFunctionDecl{{Module: "ailuo.host", Name: "echo"}},
 	})
 	if err != nil {
 		t.Fatalf("Load: %v", err)
@@ -249,7 +249,7 @@ func TestWasmHostVerifyRejectsUndeclaredHostFunction(t *testing.T) {
 	}
 	manifest := loader.Manifest{
 		ID: "hostfn.verify", Version: "1.0.0", Mode: loader.ModeHosted, Role: loader.RoleCapability, LockedDigest: digest,
-		HostFunctions: []packmgr.HostedFunctionDecl{{Module: "ailuo.nonexistent", Name: "missing"}},
+		HostFunctions: []packagecontract.HostedFunctionDecl{{Module: "ailuo.nonexistent", Name: "missing"}},
 	}
 	if err := host.Verify(context.Background(), manifest); !errors.Is(err, loader.ErrInvalidManifest) {
 		t.Fatalf("Verify with undeclared host function error = %v, want ErrInvalidManifest", err)
@@ -272,7 +272,7 @@ func TestWasmHostConcurrentInvocationsAreIsolated(t *testing.T) {
 	}
 	runtime, err := host.Load(context.Background(), loader.Manifest{
 		ID: "hostfn.conc", Version: "1.0.0", Mode: loader.ModeHosted, Role: loader.RoleCapability, LockedDigest: digest,
-		HostFunctions: []packmgr.HostedFunctionDecl{{Module: "ailuo.host", Name: "echo"}},
+		HostFunctions: []packagecontract.HostedFunctionDecl{{Module: "ailuo.host", Name: "echo"}},
 	})
 	if err != nil {
 		t.Fatalf("Load: %v", err)

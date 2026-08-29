@@ -15,7 +15,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/pkg/capability"
-	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packagecontract"
 )
 
 // TestRuntimeHostProductionWiring 验证外部 Runtime Host 产品接线：真实安装目录
@@ -54,10 +54,10 @@ func TestRuntimeHostProductionWiring(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	installed := packmgr.Manifest{
-		SchemaVersion: packmgr.SchemaVersion, ID: "strings.tool", Version: "1.0.0",
+	installed := packagecontract.Manifest{
+		SchemaVersion: packagecontract.SchemaVersion, ID: "strings.tool", Version: "1.0.0",
 		Pin: true, Extensions: extensions,
-		Components: []packmgr.Component{{
+		Components: []packagecontract.Component{{
 			ID: "core", Mode: loader.ModeHosted, Entrypoint: "strings.tool.wasm",
 			Exports: []string{"strings.len.cap"},
 		}},
@@ -71,11 +71,11 @@ func TestRuntimeHostProductionWiring(t *testing.T) {
 	}
 	manifestDigest := sha256.Sum256(manifest)
 	artifactDigest := sha256.Sum256(artifactBytes)
-	lock := packmgr.Lock{
-		SchemaVersion: packmgr.SchemaVersion, PackageID: "strings.tool",
+	lock := packagecontract.Lock{
+		SchemaVersion: packagecontract.SchemaVersion, PackageID: "strings.tool",
 		PackageVersion: "1.0.0",
 		ManifestSHA256: hex.EncodeToString(manifestDigest[:]),
-		Artifacts: []packmgr.LockedArtifact{{
+		Artifacts: []packagecontract.LockedArtifact{{
 			ComponentID: "core", Path: artifactPath, SHA256: hex.EncodeToString(artifactDigest[:]),
 		}},
 	}

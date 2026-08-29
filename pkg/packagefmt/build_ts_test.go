@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packagecontract"
 )
 
 // TestBuildAssemblyScript 验证 ts-as 构建器：AssemblyScript guest 编译为 wasm
@@ -24,9 +24,9 @@ func TestBuildAssemblyScript(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "main.ts"), []byte(source), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	manifest := packmgr.Manifest{
-		SchemaVersion: packmgr.SchemaVersion, ID: "ts.pkg", Version: "0.1.0",
-		Components: []packmgr.Component{{ID: "main", Mode: packmgr.ModeHosted, Entrypoint: "main.wasm"}},
+	manifest := packagecontract.Manifest{
+		SchemaVersion: packagecontract.SchemaVersion, ID: "ts.pkg", Version: "0.1.0",
+		Components: []packagecontract.Component{{ID: "main", Mode: packagecontract.ModeHosted, Entrypoint: "main.wasm"}},
 	}
 	if err := Build(context.Background(), dir, manifest, BuildSpec{Tool: BuildToolAssemblyScript}); err != nil {
 		t.Fatalf("AssemblyScript 编译失败: %v", err)

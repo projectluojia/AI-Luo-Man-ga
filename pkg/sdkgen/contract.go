@@ -10,7 +10,7 @@ import (
 	"fmt"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/pkg/capability"
-	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packagecontract"
 )
 
 // extensions 是 Manifest.Extensions 的严格形状：tools 与 service 由内核
@@ -24,7 +24,7 @@ type extensions struct {
 // decodeCapabilities 严格解码 extensions 段并校验生成所需的最小契约。
 func decodeCapabilities(source json.RawMessage) ([]capability.CapabilitySpec, error) {
 	var ext extensions
-	if err := packmgr.DecodeStrictJSON(source, &ext); err != nil {
+	if err := packagecontract.DecodeStrictJSON(source, &ext); err != nil {
 		return nil, fmt.Errorf("sdkgen: 解码契约失败: %w", err)
 	}
 	if len(ext.Capabilities) == 0 {
