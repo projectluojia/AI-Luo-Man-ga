@@ -513,6 +513,8 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 	if !created {
 		// 既有部署升级：把 V2 人格/渠道提示与 prompt 偏好 Capability 补齐到当前配置。
 		// CompareAndSwap 在内容未变化时直接返回原修订，不会反复增加 generation。
+		// 课表 Capability 不在此补齐：开机自动追加会让运营者的撤销在重启后
+		// 复活（权限只应收窄）；既有部署由运营者显式启用，初始发放才默认全量。
 		replacement := app
 		replacement.Model = config.model
 		replacement.ProviderTimeout = config.modelRequestTimeout
@@ -525,7 +527,7 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 		replacement.MaxOutputBytes = config.agentRun.MaxOutputBytes
 		replacement.SystemPrompt = baseSystemPrompt
 		replacement.ChannelPrompts = channelPrompts
-		replacement.EnabledCapabilities = ensureProductCapabilities(ensureAppCapabilities(app.EnabledCapabilities))
+		replacement.EnabledCapabilities = ensurePromptCapabilities(app.EnabledCapabilities)
 		app, err = store.CompareAndSwap(ctx, app.Generation, replacement)
 		if err != nil {
 			return fmt.Errorf("migrate campus App prompt configuration: %w", err)
@@ -1322,40 +1324,13 @@ func loadOptionalSecret(envName, fileEnvName string) (string, error) {
 	return strings.TrimSpace(os.Getenv(envName)), nil
 }
 
-func ensureAppCapabilities(existing []string) []string {
+func ensurePromptCapabilities(existing []string) []string {
 	result := append([]string(nil), existing...)
 	for _, capabilityID := range []string{
 		agent.StatusCapabilityID,
 		promptservice.PreferenceGetID,
 		promptservice.PreferenceSetID,
 		promptservice.PreferenceResetID,
-		weatherservice.CurrentCapabilityID,
-		weatherservice.HourlyCapabilityID,
-		weatherservice.AQICapabilityID,
-		weatherservice.AlertsCapabilityID,
-	} {
-		if !slices.Contains(result, capabilityID) {
-			result = append(result, capabilityID)
-		}
-	}
-	return result
-}
-
-func ensureProductCapabilities(existing []string) []string {
-	result := ensurePromptCapabilities(existing)
-	for _, capabilityID := range []string{
-		timetableservice.ListCapabilityID,
-		timetableservice.GetCapabilityID,
-		timetableservice.CreateCapabilityID,
-		timetableservice.UpdateCapabilityID,
-		timetableservice.DeleteCapabilityID,
-		timetableservice.ActivateCapabilityID,
-		timetableservice.CourseListCapabilityID,
-		timetableservice.CourseGetCapabilityID,
-		timetableservice.CourseCreateCapabilityID,
-		timetableservice.CourseUpdateCapabilityID,
-		timetableservice.CourseDeleteCapabilityID,
-		timetableservice.ImportCapabilityID,
 	} {
 		if !slices.Contains(result, capabilityID) {
 			result = append(result, capabilityID)
