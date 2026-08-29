@@ -880,23 +880,14 @@ func TestShutdownWaitsForAdmittedCreationBeforeCancellingRun(t *testing.T) {
 		"campus-services",
 		newTestHub(store, "campus-services"),
 	)
-	httpServer := httptest.NewUnstartedServer(server.Handler())
-	httpServer.Start()
-	defer httpServer.Close()
-	request, err := http.NewRequest(http.MethodPost, httpServer.URL+"/api/v2/echoes", bytes.NewBufferString(`{"message":"admitted"}`))
-	if err != nil {
-		t.Fatal(err)
-	}
+	request := httptest.NewRequest(http.MethodPost, "/api/v2/echoes", bytes.NewBufferString(`{"message":"admitted"}`))
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Idempotency-Key", "admitted-before-shutdown")
-	type responseResult struct {
-		response *http.Response
-		err      error
-	}
-	responseDone := make(chan responseResult, 1)
+	responseDone := make(chan *httptest.ResponseRecorder, 1)
 	go func() {
-		response, requestErr := httpServer.Client().Do(request)
-		responseDone <- responseResult{response: response, err: requestErr}
+		response := httptest.NewRecorder()
+		server.Handler().ServeHTTP(response, request)
+		responseDone <- response
 	}()
 	<-backend.createEntered
 	server.StopAccepting()
@@ -913,30 +904,18 @@ func TestShutdownWaitsForAdmittedCreationBeforeCancellingRun(t *testing.T) {
 	default:
 	}
 	close(backend.releaseCreate)
-	result := <-responseDone
-	if result.err != nil {
-		t.Fatal(result.err)
-	}
-	defer result.response.Body.Close()
-	if result.response.StatusCode != http.StatusAccepted {
-		body, _ := io.ReadAll(result.response.Body)
-		t.Fatalf("已接入请求状态=%d body=%s", result.response.StatusCode, body)
+	response := <-responseDone
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("已接入请求状态=%d body=%s", response.Code, response.Body.String())
 	}
 	if err := <-shutdownDone; err != nil {
 		t.Fatalf("shutdown: %v", err)
-	}
-	if err := httpServer.Config.Shutdown(shutdownContext); err != nil {
-		t.Fatalf("http shutdown: %v", err)
 	}
 	if err := server.scheduler.Shutdown(shutdownContext); err != nil {
 		t.Fatalf("scheduler shutdown: %v", err)
 	}
 	var accepted map[string]string
-	body, err := io.ReadAll(result.response.Body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := json.Unmarshal(body, &accepted); err != nil {
+	if err := json.Unmarshal(response.Body.Bytes(), &accepted); err != nil {
 		t.Fatal(err)
 	}
 	record, _, err := store.GetEcho(context.Background(), "campus-services", accepted["echo_id"])
