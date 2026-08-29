@@ -45,8 +45,8 @@ CREATE TABLE timetable_courses (
   instructor_raw TEXT NOT NULL DEFAULT '' CHECK(length(instructor_raw)<=2048),
   location TEXT NOT NULL DEFAULT '' CHECK(length(location)<=2048),
   week_meta TEXT NOT NULL DEFAULT '' CHECK(length(week_meta)<=2048),
-  start_text TEXT NOT NULL DEFAULT '' CHECK(length(start_text)<=512),
-  end_text TEXT NOT NULL DEFAULT '' CHECK(length(end_text)<=512),
+  start_text TEXT NOT NULL DEFAULT '' CHECK(length(start_text)<=2048),
+  end_text TEXT NOT NULL DEFAULT '' CHECK(length(end_text)<=2048),
   external_id TEXT NOT NULL DEFAULT '' CHECK(length(external_id)<=2048),
   PRIMARY KEY(app_id,user_id,timetable_id,course_id),
   FOREIGN KEY(app_id,user_id,timetable_id) REFERENCES timetables(app_id,user_id,timetable_id) ON DELETE CASCADE
@@ -457,10 +457,11 @@ func scanCourse(row scanner, appID, userID, timetableID string) (timetable.Cours
 		return timetable.Course{}, timetable.ErrInvalid
 	}
 	item.AppID, item.UserID, item.TimetableID = appID, userID, timetableID
-	if _, err := timetable.NormalizeCourse(item); err != nil {
+	normalized, err := timetable.NormalizeCourse(item)
+	if err != nil {
 		return timetable.Course{}, err
 	}
-	return item, nil
+	return normalized, nil
 }
 
 // isUniqueError 判定 SQLITE_CONSTRAINT_UNIQUE（扩展码 2067）与
