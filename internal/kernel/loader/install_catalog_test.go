@@ -114,7 +114,7 @@ func TestInstalledCatalogResolvesIsolatedProcessAndRejectsCatalogTampering(t *te
 	if err := os.WriteFile(manifestPath, manifest, 0o640); err != nil {
 		t.Fatal(err)
 	}
-	rewriteManifestDigest(t, records[0].Directory, manifest)
+	rewriteManifestDigest(t, filepath.Join(root, "isolated.test"), manifest)
 	if _, err := catalog.Discover(t.Context()); !errors.Is(err, packagesource.ErrInvalidCatalog) {
 		t.Fatalf("未知字段目录错误=%v", err)
 	}
