@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -17,6 +18,63 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
 )
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) Do(request *http.Request) (*http.Response, error) {
+	return f(request)
+}
+
+type closeErrorBody struct {
+	io.Reader
+	err error
+}
+
+func (b closeErrorBody) Close() error { return b.err }
+
+func TestHTTPRejectsOriginChangingRedirect(t *testing.T) {
+	client := NewClient(ClientConfig{})
+	httpClient, ok := client.http.(*http.Client)
+	if !ok || httpClient.CheckRedirect == nil {
+		t.Fatal("default HTTP client did not configure redirect policy")
+	}
+	from := &http.Request{URL: &url.URL{Scheme: "https", Host: "weather.example"}}
+	to := &http.Request{URL: &url.URL{Scheme: "http", Host: "weather.example"}}
+	if err := httpClient.CheckRedirect(to, []*http.Request{from}); err == nil {
+		t.Fatal("HTTPS to HTTP redirect was accepted")
+	}
+}
+
+func TestHTTPClassifiesResponseCloseErrorsAndRetries(t *testing.T) {
+	closeErr := errors.New("close failed")
+	var calls atomic.Int32
+	client := NewClient(ClientConfig{
+		HTTP: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+			if calls.Add(1) == 1 {
+				return &http.Response{StatusCode: http.StatusOK, Body: closeErrorBody{Reader: strings.NewReader(`{"ok":true}`), err: closeErr}, Request: request}, nil
+			}
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"ok":true}`)), Request: request}, nil
+		}),
+		AllowHTTP: true, MaxRetries: 1, RetryBase: time.Millisecond, RetryMax: time.Millisecond,
+	})
+	var dest map[string]any
+	if err := client.getJSON(t.Context(), ProviderOpenMeteo, "http://weather.example", &dest); err != nil {
+		t.Fatal(err)
+	}
+	if calls.Load() != 2 || dest["ok"] != true {
+		t.Fatalf("calls=%d dest=%v", calls.Load(), dest)
+	}
+
+	client = NewClient(ClientConfig{
+		HTTP: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusOK, Body: closeErrorBody{Reader: strings.NewReader(`{}`), err: closeErr}, Request: request}, nil
+		}),
+		AllowHTTP: true,
+	})
+	if err := client.getJSON(t.Context(), ProviderOpenMeteo, "http://weather.example", &dest); !errors.Is(err, contracts.ErrDataIncomplete) {
+		t.Fatalf("got %v, want incomplete close error", err)
+	}
+}
 
 func TestHTTPRetriesRetryableStatusThenSucceeds(t *testing.T) {
 	t.Parallel()

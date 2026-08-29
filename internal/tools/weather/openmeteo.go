@@ -87,7 +87,7 @@ func (c *Client) OpenMeteoForecast(ctx context.Context, appID string, query Loca
 	values := url.Values{}
 	values.Set("latitude", formatCoord(query.Latitude))
 	values.Set("longitude", formatCoord(query.Longitude))
-	values.Set("timezone", "auto")
+	values.Set("timezone", "UTC")
 	values.Set("wind_speed_unit", "ms")
 	values.Set("forecast_hours", strconv.Itoa(query.Hours))
 	values.Set("current", "temperature_2m,relative_humidity_2m,apparent_temperature,precipitation,weather_code,wind_speed_10m,wind_direction_10m,visibility")
@@ -146,7 +146,7 @@ func (c *Client) OpenMeteoAirQuality(ctx context.Context, appID string, query Lo
 	values := url.Values{}
 	values.Set("latitude", formatCoord(query.Latitude))
 	values.Set("longitude", formatCoord(query.Longitude))
-	values.Set("timezone", "auto")
+	values.Set("timezone", "UTC")
 	values.Set("current", "us_aqi,european_aqi,pm2_5,pm10")
 	rawURL, err := c.join(c.openMeteoAirBase, "/v1/air-quality", values)
 	if err != nil {
@@ -359,7 +359,7 @@ func normalizeOpenMeteoAir(query LocationQuery, raw openMeteoAirResponse, now ti
 			ObservedAt: observedAt,
 			Index:      index,
 			Scale:      scale,
-			Category:   USAqiCategory(index),
+			Category:   aqiCategory(index, scale),
 			PM25:       raw.Current.PM25,
 			PM10:       raw.Current.PM10,
 		},

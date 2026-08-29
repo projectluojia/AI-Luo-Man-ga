@@ -334,7 +334,7 @@ func (c *Client) accuHourly(ctx context.Context, locationKey string, hours int) 
 	values.Set("language", "zh-cn")
 	values.Set("metric", "true")
 	values.Set("details", "true")
-	rawURL, err := c.join(c.accuWeatherBase, "/forecasts/v1/hourly/12hour/"+url.PathEscape(locationKey), values)
+	rawURL, err := c.join(c.accuWeatherBase, "/forecasts/v1/hourly/24hour/"+url.PathEscape(locationKey), values)
 	if err != nil {
 		return nil, err
 	}
@@ -345,12 +345,11 @@ func (c *Client) accuHourly(ctx context.Context, locationKey string, hours int) 
 	if len(raw) == 0 {
 		return nil, fmt.Errorf("%w: accuweather hourly weather is incomplete", contracts.ErrDataIncomplete)
 	}
-	limit := hours
-	if limit > len(raw) {
-		limit = len(raw)
+	if len(raw) < hours {
+		return nil, fmt.Errorf("%w: accuweather returned %d hourly points for %d requested", contracts.ErrDataIncomplete, len(raw), hours)
 	}
-	points := make([]HourlyPoint, 0, limit)
-	for i := 0; i < limit; i++ {
+	points := make([]HourlyPoint, 0, hours)
+	for i := 0; i < hours; i++ {
 		item := raw[i]
 		if item.Temperature.Value == nil {
 			return nil, fmt.Errorf("%w: accuweather hourly weather is incomplete", contracts.ErrDataIncomplete)

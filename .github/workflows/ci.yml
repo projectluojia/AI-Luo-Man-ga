@@ -75,7 +75,6 @@ jobs:
         # grpc.NewClient 涉及内核拨号语义与 15 处测试同步，作为独立重构任务跟进。
         run: go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 '-checks=inherit,-SA1019' ./...
       - name: 运行 Go race 测试
-        if: github.event_name != 'pull_request'
         run: go test -race ./...
       - name: 运行 Runtime Host 集成测试
         run: go test -tags=integration ./internal/kernel/loader -v -timeout=30s

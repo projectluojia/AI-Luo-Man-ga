@@ -89,8 +89,8 @@ func NewClient(config ClientConfig) *Client {
 				if len(via) >= maxRedirects {
 					return errors.New("too many redirects")
 				}
-				if req.URL.Host != via[0].URL.Host {
-					return errors.New("redirect host mismatch")
+				if req.URL.Host != via[0].URL.Host || req.URL.Scheme != via[0].URL.Scheme {
+					return errors.New("redirect origin mismatch")
 				}
 				return nil
 			},
@@ -195,13 +195,7 @@ func (c *Client) getJSON(ctx context.Context, provider, rawURL string, dest any)
 	if parsed.Scheme != "https" && !(c.allowHTTP && parsed.Scheme == "http") {
 		return fmt.Errorf("%w: weather provider url must be https", contracts.ErrDataUntrusted)
 	}
-	if !c.limiter(provider).allow(c.now()) {
-		observe.Warn(ctx, "天气数据源触发限流",
-			observe.StringAttr("provider", provider),
-			observe.StringAttr("host", parsed.Host),
-		)
-		return fmt.Errorf("%w: weather provider rate limited", contracts.ErrDataUnavailable)
-	}
+	limiter := c.limiter(provider)
 	var last error
 	for attempt := 0; attempt <= c.maxRetries; attempt++ {
 		if err := ctx.Err(); err != nil {
@@ -216,6 +210,14 @@ func (c *Client) getJSON(ctx context.Context, provider, rawURL string, dest any)
 				return ctx.Err()
 			case <-timer.C:
 			}
+		}
+		if !limiter.allow(c.now()) {
+			observe.Warn(ctx, "天气数据源触发限流",
+				observe.StringAttr("provider", provider),
+				observe.StringAttr("host", parsed.Host),
+				observe.IntAttr("attempt", attempt+1),
+			)
+			return fmt.Errorf("%w: weather provider rate limited", contracts.ErrDataUnavailable)
 		}
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, parsed.String(), nil)
 		if err != nil {
@@ -251,7 +253,11 @@ func (c *Client) getJSON(ctx context.Context, provider, rawURL string, dest any)
 			continue
 		}
 		if closeErr != nil {
-			last = fmt.Errorf("close weather response: %w", closeErr)
+			last = fmt.Errorf("%w: weather provider response close failed", contracts.ErrDataIncomplete)
+			if attempt == c.maxRetries {
+				return last
+			}
+			continue
 		}
 		observe.Debug(ctx, "天气数据源响应已接收",
 			observe.StringAttr("provider", provider),

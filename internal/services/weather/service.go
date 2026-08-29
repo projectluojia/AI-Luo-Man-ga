@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/jsonutil"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
@@ -21,10 +22,18 @@ type Invoker interface {
 type Service struct {
 	invoker Invoker
 	client  *wx.Client
+	now     func() time.Time
 }
 
 func NewService(invoker Invoker, client *wx.Client) *Service {
-	return &Service{invoker: invoker, client: client}
+	return NewServiceWithClock(invoker, client, time.Now)
+}
+
+func NewServiceWithClock(invoker Invoker, client *wx.Client, now func() time.Time) *Service {
+	if now == nil {
+		now = time.Now
+	}
+	return &Service{invoker: invoker, client: client, now: now}
 }
 
 func (s *Service) current(ctx context.Context, request contracts.RequestContext, payload json.RawMessage) (json.RawMessage, error) {
@@ -124,7 +133,7 @@ func (s *Service) alerts(ctx context.Context, request contracts.RequestContext, 
 		status.Source = "weather-alerts"
 		status.Provider = wx.ProviderAuto
 	}
-	governed, err := status.Govern(status.FetchedAt)
+	governed, err := status.Govern(s.now())
 	if err != nil {
 		return nil, err
 	}
@@ -211,7 +220,7 @@ func (s *Service) resolve(ctx context.Context, request contracts.RequestContext,
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return wx.LookupRequest{}, wx.Location{}, fmt.Errorf("%w: geocode result is invalid", contracts.ErrDataIncomplete)
 	}
-	if _, err := result.DataStatus.Govern(result.DataStatus.FetchedAt); err != nil {
+	if _, err := result.DataStatus.Govern(s.now()); err != nil {
 		return wx.LookupRequest{}, wx.Location{}, err
 	}
 	if lookup.Latitude == nil {

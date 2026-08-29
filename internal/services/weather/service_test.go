@@ -141,7 +141,7 @@ func newWeatherDispatcher(t *testing.T, server *httptest.Server, now time.Time, 
 		policy.Enable("campus-services", id)
 	}
 	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{})
-	if err := weatherservice.Register(reg, weatherservice.NewService(dispatcher, client)); err != nil {
+	if err := weatherservice.Register(reg, weatherservice.NewServiceWithClock(dispatcher, client, func() time.Time { return now })); err != nil {
 		t.Fatal(err)
 	}
 	return dispatcher

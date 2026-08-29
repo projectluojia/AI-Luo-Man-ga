@@ -72,6 +72,26 @@ func TestOpenMeteoNormalizesForecastAndAQI(t *testing.T) {
 	}
 }
 
+func TestOpenMeteoUsesEuropeanAQICategory(t *testing.T) {
+	now := time.Date(2026, 8, 27, 8, 0, 0, 0, time.UTC)
+	query := LocationQuery{Latitude: DefaultLatitude, Longitude: DefaultLongitude}
+	result, err := normalizeOpenMeteoAir(query, openMeteoAirResponse{
+		Current: struct {
+			Time        string   `json:"time"`
+			USAQI       *int     `json:"us_aqi"`
+			EuropeanAQI *int     `json:"european_aqi"`
+			PM25        *float64 `json:"pm2_5"`
+			PM10        *float64 `json:"pm10"`
+		}{EuropeanAQI: func() *int { value := 30; return &value }()},
+	}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.AQI.Scale != "european" || result.AQI.Category != "良" {
+		t.Fatalf("aqi=%+v", result.AQI)
+	}
+}
+
 func TestOpenMeteoRejectsIncompletePayload(t *testing.T) {
 	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {

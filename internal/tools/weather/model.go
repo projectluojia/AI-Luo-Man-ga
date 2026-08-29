@@ -466,6 +466,26 @@ func ChinaAQICategory(index int) string {
 	}
 }
 
+func aqiCategory(index int, scale string) string {
+	if scale == "european" {
+		switch {
+		case index <= 20:
+			return "优"
+		case index <= 40:
+			return "良"
+		case index <= 60:
+			return "中等"
+		case index <= 80:
+			return "较差"
+		case index <= 100:
+			return "很差"
+		default:
+			return "极差"
+		}
+	}
+	return USAqiCategory(index)
+}
+
 func alertSeverity(value string) string {
 	normalized := strings.ToLower(strings.TrimSpace(value))
 	switch {
