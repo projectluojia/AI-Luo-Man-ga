@@ -22,7 +22,6 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime/runtimetest"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/session"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/agent"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus/campustest"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/blob"
@@ -145,7 +144,7 @@ func (a *cancellingNestedAgent) Run(stream executorv1.ExecutorRuntime_RunServer)
 	if err := stream.Send(&executorv1.ExecutorFrame{
 		EchoId: start.EchoId, RunId: start.RunId, Sequence: 2,
 		Body: &executorv1.ExecutorFrame_CapabilityCall{CapabilityCall: &executorv1.CapabilityCall{
-			CallId: "delegate-call", CapabilityId: agent.CapabilityID,
+			CallId: "delegate-call", CapabilityId: kernelecho.CreateChildRunCapabilityID,
 			PayloadJson: []byte(`{"task":"等待取消","capability_ids":["campus.bus.routes.list"]}`),
 		}},
 	}); err != nil {
@@ -202,7 +201,7 @@ func (a *nestedRunAgent) Run(stream executorv1.ExecutorRuntime_RunServer) error 
 	if err := stream.Send(&executorv1.ExecutorFrame{
 		EchoId: startFrame.EchoId, RunId: startFrame.RunId, Sequence: 3,
 		Body: &executorv1.ExecutorFrame_CapabilityCall{CapabilityCall: &executorv1.CapabilityCall{
-			CallId: "nested-delegate-call", CapabilityId: agent.CapabilityID, PayloadJson: []byte(`{"task":"越权嵌套"}`),
+			CallId: "nested-delegate-call", CapabilityId: kernelecho.CreateChildRunCapabilityID, PayloadJson: []byte(`{"task":"越权嵌套"}`),
 		}},
 	}); err != nil {
 		return err
@@ -226,7 +225,7 @@ func (a *nestedRunAgent) Run(stream executorv1.ExecutorRuntime_RunServer) error 
 func (a *nestedRunAgent) runRoot(stream executorv1.ExecutorRuntime_RunServer, start *executorv1.ExecutorFrame) error {
 	hasSubagent := false
 	for _, capability := range start.GetStartRun().GetCapabilities() {
-		if capability.GetId() == agent.CapabilityID {
+		if capability.GetId() == kernelecho.CreateChildRunCapabilityID {
 			hasSubagent = true
 		}
 	}
@@ -239,7 +238,7 @@ func (a *nestedRunAgent) runRoot(stream executorv1.ExecutorRuntime_RunServer, st
 	if err := stream.Send(&executorv1.ExecutorFrame{
 		EchoId: start.EchoId, RunId: start.RunId, Sequence: 2,
 		Body: &executorv1.ExecutorFrame_CapabilityCall{CapabilityCall: &executorv1.CapabilityCall{
-			CallId: "delegate-call", CapabilityId: agent.CapabilityID,
+			CallId: "delegate-call", CapabilityId: kernelecho.CreateChildRunCapabilityID,
 			PayloadJson: []byte(`{"task":"只查询线路并总结","capability_ids":["campus.bus.routes.list"]}`),
 		}},
 	}); err != nil {
@@ -925,7 +924,7 @@ func TestOrchestratorRunsOneGovernedChildWithNarrowedProjection(t *testing.T) {
 	reg := registry.New()
 	policy := runtimetest.NewStaticAppPolicy()
 	policy.Enable(campus.AppID, campus.BusRouteListCapabilityID)
-	policy.Enable(campus.AppID, agent.CapabilityID)
+	policy.Enable(campus.AppID, kernelecho.CreateChildRunCapabilityID)
 	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{IdempotencyStore: store})
 	campustest.RegisterHosted(t, reg, busStore)
 	seedOrchestratorConfig(t, store, appconfig.Config{
@@ -941,7 +940,7 @@ func TestOrchestratorRunsOneGovernedChildWithNarrowedProjection(t *testing.T) {
 			Context: newSessionSource(t, store), Prompts: testPromptRenderer{},
 		},
 	)
-	if err := agent.Register(reg, orchestrator); err != nil {
+	if err := kernelecho.RegisterChildCapabilities(reg, orchestrator); err != nil {
 		t.Fatal(err)
 	}
 	var delivered []kernelecho.Event
@@ -1002,7 +1001,7 @@ func TestOrchestratorRunsOneGovernedChildWithNarrowedProjection(t *testing.T) {
 	}
 	delegationAudits := 0
 	for _, audit := range audits {
-		if audit.CapabilityID != agent.CapabilityID {
+		if audit.CapabilityID != kernelecho.CreateChildRunCapabilityID {
 			continue
 		}
 		delegationAudits++
@@ -1042,7 +1041,7 @@ func TestParentCancellationPropagatesAndPersistsChildThenRootTerminalState(t *te
 	reg := registry.New()
 	policy := runtimetest.NewStaticAppPolicy()
 	policy.Enable(campus.AppID, campus.BusRouteListCapabilityID)
-	policy.Enable(campus.AppID, agent.CapabilityID)
+	policy.Enable(campus.AppID, kernelecho.CreateChildRunCapabilityID)
 	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{IdempotencyStore: store})
 	campustest.RegisterHosted(t, reg, memory.NewBusStore())
 	seedOrchestratorConfig(t, store, appconfig.Config{
@@ -1058,7 +1057,7 @@ func TestParentCancellationPropagatesAndPersistsChildThenRootTerminalState(t *te
 			Context: newSessionSource(t, store), Prompts: testPromptRenderer{},
 		},
 	)
-	if err := agent.Register(reg, orchestrator); err != nil {
+	if err := kernelecho.RegisterChildCapabilities(reg, orchestrator); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())

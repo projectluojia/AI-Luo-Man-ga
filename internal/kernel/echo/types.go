@@ -11,8 +11,8 @@ import (
 )
 
 const (
-	SubagentCapabilityID       = "agent.run"
-	SubagentStatusCapabilityID = "agent.status"
+	CreateChildRunCapabilityID = "run.create_child"
+	GetChildStatusCapabilityID = "run.get_child_status"
 
 	StatusRunning   = "running"
 	StatusSucceeded = "succeeded"
