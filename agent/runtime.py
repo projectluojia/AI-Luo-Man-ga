@@ -447,8 +447,7 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
             if confirmation.confirmation_id in seen:
                 raise ProtocolViolation("确认投影标识重复")
             seen.add(confirmation.confirmation_id)
-            if confirmation.capability_id:
-                ExecutorRuntime._valid_token(confirmation.capability_id)
+            ExecutorRuntime._valid_token(confirmation.capability_id)
             if confirmation.target_type not in ("capability", "tool"):
                 raise ProtocolViolation("确认投影目标类型无效")
             ExecutorRuntime._validate_text(confirmation.target_id, 1, MAX_IDENTIFIER_BYTES, "确认投影目标")
@@ -498,6 +497,13 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
             if has_confirmation:
                 confirmation = result.confirmation
                 ExecutorRuntime._valid_token(confirmation.confirmation_id)
+                # 投影字段规则与 StartRun 解析一致：能力标识/目标必填、状态取闭式
+                # 值，畸形投影不转发给模型（本协议版本下确认按 capability_id
+                # 索引，缺标识的投影不可用）。
+                ExecutorRuntime._valid_token(confirmation.capability_id)
+                ExecutorRuntime._validate_text(confirmation.target_id, 1, MAX_IDENTIFIER_BYTES, "确认投影目标")
+                if confirmation.status not in ("waiting", "approved"):
+                    raise ProtocolViolation("确认投影状态无效")
                 if confirmation.target_type not in ("capability", "tool") or confirmation.side_effect not in ("write", "external"):
                     raise ProtocolViolation("确认投影目标或副作用类型无效")
                 try:

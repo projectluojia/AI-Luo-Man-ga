@@ -103,7 +103,7 @@ func TestOrchestratorConfirmationRoundTrip(t *testing.T) {
 	executorv1.RegisterExecutorRuntimeServer(grpcServer, agent)
 	go grpcServer.Serve(listener)
 	t.Cleanup(grpcServer.Stop)
-	connection, err := grpc.DialContext(t.Context(), "bufnet",
+	connection, err := grpc.NewClient("passthrough:///bufnet",
 		grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) { return listener.Dial() }),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 	)

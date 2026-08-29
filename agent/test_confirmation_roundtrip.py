@@ -223,6 +223,35 @@ class ConfirmationRoundTripTest(unittest.IsolatedAsyncioTestCase):
         failure = await asyncio.wait_for(anext(output), timeout=1)
         self.assertEqual(failure.run_failure.code, "protocol_violation")
 
+    async def test_confirmation_required_projection_fields_are_validated(self) -> None:
+        # 缺 capability_id 或状态取闭式外值的投影按协议违例拒绝，不转发给模型。
+        for confirmation in (
+            _confirmation("conf-6", "waiting").__class__(
+                confirmation_id="conf-6", capability_id="", target_type="capability",
+                target_id="campus.bus.routes.list", side_effect="external",
+                status="waiting", expires_at="2026-08-29T10:00:00+00:00",
+            ),
+            _confirmation("conf-7", "revoked"),
+        ):
+            requests, request_iterator = self._stream()
+            await requests.put(_start_frame())
+            output = ExecutorRuntime(ScriptedModel(lambda: _tool_call_turn(ToolCall("call-1", "cap_campus_bus_routes_list", '{"limit":10}')))).Run(request_iterator, None)
+            await anext(output)
+            call = await self._next_body(output, "capability_call")
+            await requests.put(executor_pb2.ExecutorFrame(
+                echo_id="echo", run_id="run", sequence=2,
+                capability_result=executor_pb2.CapabilityResult(
+                    call_id=call.capability_call.call_id,
+                    capability_id="campus.bus.routes.list",
+                    success=False,
+                    error_code="confirmation_required",
+                    error_message="Capability 调用需要有效确认",
+                    confirmation=confirmation,
+                ),
+            ))
+            failure = await asyncio.wait_for(anext(output), timeout=1)
+            self.assertEqual(failure.run_failure.code, "protocol_violation")
+
     async def test_non_confirmation_result_may_not_carry_confirmation(self) -> None:
         requests, request_iterator = self._stream()
         await requests.put(_start_frame())
