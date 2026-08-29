@@ -270,8 +270,9 @@ func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	echoAdmission := kernelecho.NewAdmission(orchestrator, runScheduler)
 	handler := web.NewServer(
-		orchestrator, store,
+		echoAdmission, store,
 		health.Combined{store, health.ExecutorChecker{Client: executorClient, Model: "test-model"}},
 		reg, policy, campus.AppID, platformHub, runScheduler, echoEvents,
 		web.WithWebAuthenticator(integrationWebAuthenticator{}),

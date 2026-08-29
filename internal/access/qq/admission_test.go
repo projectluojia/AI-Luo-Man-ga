@@ -23,8 +23,8 @@ func TestQQAdmissionRejectsUnknownGroupBeforeHub(t *testing.T) {
 	provisioner := &countingProvisioner{}
 	adapter, err := New(Config{
 		AppID: "campus-services", WSURL: "ws://127.0.0.1:3001", BotQQID: testBotQQID,
-		AllowedGroupIDs: []string{"12345"}, Provisioner: provisioner, Scheduler: testScheduler{},
-	}, hub, access.NewEventHub(), &qqFakeOrchestrator{store: store, created: make(chan struct{})}, store)
+		AllowedGroupIDs: []string{"12345"}, Provisioner: provisioner, Admission: newQQAdmission(&qqFakeOrchestrator{store: store, created: make(chan struct{})}),
+	}, hub, access.NewEventHub(), store)
 	if err != nil {
 		t.Fatal(err)
 	}

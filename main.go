@@ -1007,6 +1007,7 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 	if _, err := runScheduler.Recover(ctx); err != nil {
 		return fmt.Errorf("recover durable runs: %w", err)
 	}
+	echoAdmission := kernelecho.NewAdmission(orchestrator, runScheduler)
 	readiness := health.Combined{store, health.ExecutorAppChecker{Client: executorClient, Source: store, AppID: campus.AppID}}
 	// 平台接入统一入口：标准消息 → 身份解析 → 会话/消息入库 → Echo。
 	// Web 登录边界尚未接入时聊天创建入口返回 401，不降级为匿名用户。
@@ -1024,20 +1025,20 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 			AppID: settings.AppID, WSURL: settings.WSURL, Token: config.qqToken, BotQQID: settings.BotQQID,
 			AllowedGroupIDs: settings.AllowedGroupIDs, AllowedPrivateUserIDs: settings.AllowedPrivateUserIDs,
 			QuickReplies: config.qqQuickReplies, PokeReplies: config.qqPokeReplies,
-			Provisioner: qqProvisioner, Scheduler: runScheduler, OnConnectionChange: connectionChange,
+			Provisioner: qqProvisioner, Admission: echoAdmission, OnConnectionChange: connectionChange,
 			DialTimeout:    secondsDuration(config.qqConnection.DialTimeoutSeconds),
 			ReconnectDelay: secondsDuration(config.qqConnection.ReconnectDelaySeconds),
 			RunTimeout:     secondsDuration(config.qqConnection.RunTimeoutSeconds),
-		}, platformHub, echoEvents, orchestrator, store)
+		}, platformHub, echoEvents, store)
 	}, secondsDuration(config.qqConnection.ManagerStopTimeoutSeconds))
 	if err != nil {
 		return fmt.Errorf("configure QQ access manager: %w", err)
 	}
-	webAccess := web.NewServer(orchestrator, store, readiness, reg, policy, campus.AppID, platformHub, runScheduler, echoEvents,
+	webAccess := web.NewServer(echoAdmission, store, readiness, reg, policy, campus.AppID, platformHub, runScheduler, echoEvents,
 		web.WithDispatcher(dispatcher))
 	// 平台事件入口独立挂载：/api/v1/ingress/{platform} 由平台适配器规范化事件驱动，
 	// 其余路径全部交给 Web Access（健康检查、Echo/SSE、演示页面）。
-	ingressServer := ingress.NewServer(campus.AppID, platformHub, orchestrator, runScheduler)
+	ingressServer := ingress.NewServer(campus.AppID, platformHub, echoAdmission)
 	if err := qqManager.Start(ctx, qqsettings.Settings{
 		AppID: campus.AppID, Enabled: config.qqEnabled, WSURL: config.qqWSURL, BotQQID: config.qqBotID,
 		AllowedGroupIDs: config.qqAllowedGroupIDs, AllowedPrivateUserIDs: config.qqAllowedPrivateIDs,
