@@ -55,17 +55,24 @@ func ReadInstalled(ctx context.Context, directory string) (InstalledRecord, erro
 	if lock.ManifestSHA256 != hex.EncodeToString(manifestDigest[:]) {
 		return InstalledRecord{}, ErrInvalidFormat
 	}
-	for _, artifact := range lock.Artifacts {
+	if err := verifyInstalledArtifacts(ctx, root, lock.Artifacts); err != nil {
+		return InstalledRecord{}, err
+	}
+	return InstalledRecord{Directory: directory, Manifest: manifest, Lock: lock}, nil
+}
+
+func verifyInstalledArtifacts(ctx context.Context, root string, artifacts []LockedArtifact) error {
+	for _, artifact := range artifacts {
 		relative, err := filepath.Rel(root, filepath.Clean(artifact.Path))
 		if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-			return InstalledRecord{}, ErrInvalidFormat
+			return ErrInvalidFormat
 		}
 		artifactDigest, err := HashFile(ctx, artifact.Path, MaxArtifactBytes)
 		if err != nil || artifactDigest != artifact.SHA256 {
-			return InstalledRecord{}, ErrInvalidFormat
+			return ErrInvalidFormat
 		}
 	}
-	return InstalledRecord{Directory: directory, Manifest: manifest, Lock: lock}, nil
+	return nil
 }
 
 // RecoverInstallRoot 恢复安装发布过程中遗留的备份目录。
