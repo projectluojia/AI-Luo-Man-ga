@@ -75,6 +75,10 @@ class RuntimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(mismatch.ready)
         self.assertEqual(mismatch.status_code, "protocol_version_mismatch")
 
+        missing = await runtime.Health(executor_pb2.HealthRequest(model="test-model"), None)
+        self.assertFalse(missing.ready)
+        self.assertEqual(missing.status_code, "protocol_version_mismatch")
+
         unavailable = await runtime.Health(executor_pb2.HealthRequest(
             accepted_protocol_versions=[PROTOCOL_VERSION],
             model="missing-model",
