@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime/runtimetest"
@@ -95,8 +96,8 @@ func TestHostedCampusCapabilityBehaviors(t *testing.T) {
 		payload := mustJSON(t, bus.SearchRequest{
 			OriginStopID: "stop-a", DestinationStopID: "stop-b", DepartAfter: time.Now(),
 		})
-		if _, err := invoke("another-app", payload); !errors.Is(err, bus.ErrDataUnavailable) {
-			t.Fatalf("cross-App error = %v, want ErrDataUnavailable", err)
+		if _, err := invoke("another-app", payload); !hasInvocationCode(err, "data_unavailable") {
+			t.Fatalf("cross-App error = %v, want data_unavailable", err)
 		}
 	})
 
@@ -105,7 +106,7 @@ func TestHostedCampusCapabilityBehaviors(t *testing.T) {
 		cases := []struct {
 			name     string
 			metadata bus.SnapshotMetadata
-			target   error
+			code     string
 		}{
 			{
 				name: "non-authoritative",
@@ -113,7 +114,7 @@ func TestHostedCampusCapabilityBehaviors(t *testing.T) {
 					Revision: "demo", Source: "demo-copy", ImportedAt: now.Add(-time.Hour),
 					ValidUntil: now.Add(time.Hour), Complete: true,
 				},
-				target: bus.ErrDataUntrusted,
+				code: "data_non_authoritative",
 			},
 			{
 				name: "expired",
@@ -121,7 +122,7 @@ func TestHostedCampusCapabilityBehaviors(t *testing.T) {
 					Revision: "expired", Source: "zhihui-luojia", Authoritative: true,
 					ImportedAt: now.Add(-2 * time.Hour), ValidUntil: now.Add(-time.Hour), Complete: true,
 				},
-				target: bus.ErrDataExpired,
+				code: "data_expired",
 			},
 			{
 				name: "incomplete",
@@ -129,7 +130,7 @@ func TestHostedCampusCapabilityBehaviors(t *testing.T) {
 					Revision: "incomplete", Source: "zhihui-luojia", Authoritative: true,
 					ImportedAt: now.Add(-time.Hour), ValidUntil: now.Add(time.Hour),
 				},
-				target: bus.ErrDataIncomplete,
+				code: "data_incomplete",
 			},
 		}
 		for _, tc := range cases {
@@ -137,8 +138,8 @@ func TestHostedCampusCapabilityBehaviors(t *testing.T) {
 			t.Run(tc.name, func(t *testing.T) {
 				store.Replace(campus.AppID, []bus.Journey{})
 				store.SetSnapshotMetadata(campus.AppID, tc.metadata)
-				if _, err := invoke(campus.AppID, validPayload(t)); !errors.Is(err, tc.target) {
-					t.Fatalf("error = %v, want %v", err, tc.target)
+				if _, err := invoke(campus.AppID, validPayload(t)); !hasInvocationCode(err, tc.code) {
+					t.Fatalf("error = %v, want %s", err, tc.code)
 				}
 			})
 		}
@@ -236,6 +237,11 @@ func mustJSON(t *testing.T, value any) json.RawMessage {
 		t.Fatalf("marshal payload: %v", err)
 	}
 	return payload
+}
+
+func hasInvocationCode(err error, code string) bool {
+	var invocation loader.InvocationError
+	return errors.As(err, &invocation) && invocation.Code == code
 }
 
 func journey(id, origin, destination string, departure time.Time) bus.Journey {

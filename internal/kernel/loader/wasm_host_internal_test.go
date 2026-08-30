@@ -2,6 +2,8 @@ package loader
 
 import (
 	"bytes"
+	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -43,5 +45,41 @@ func TestLimitedBufferAcceptsWithinLimit(t *testing.T) {
 	}
 	if len(buffer.Buffer()) != len(payload) {
 		t.Fatalf("buffered = %d, want %d", len(buffer.Buffer()), len(payload))
+	}
+}
+
+func TestParseHostedEnvelopeReturnsGenericInvocationErrors(t *testing.T) {
+	cases := []struct {
+		code string
+		want string
+	}{
+		{code: "data_unavailable", want: "data_unavailable"},
+		{code: "data_incomplete", want: "data_incomplete"},
+		{code: "data_untrusted", want: "data_non_authoritative"},
+		{code: "data_expired", want: "data_expired"},
+		{code: "invalid_argument", want: "invalid_arguments"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.code, func(t *testing.T) {
+			payload, err := json.Marshal(hostedEnvelope{Code: tc.code, Message: "package detail"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = parseHostedEnvelope("test.runtime", payload)
+			if !errors.Is(err, ErrHostedCallRejected) {
+				t.Fatalf("error = %v, want ErrHostedCallRejected", err)
+			}
+			var invocation InvocationError
+			if !errors.As(err, &invocation) || invocation.Code != tc.want {
+				t.Fatalf("invocation error = %#v, want code %q", invocation, tc.want)
+			}
+		})
+	}
+	unknown, err := json.Marshal(hostedEnvelope{Code: "data_non_authoritative"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := parseHostedEnvelope("test.runtime", unknown); !errors.Is(err, ErrRuntimeProtocol) {
+		t.Fatalf("unknown hosted error code = %v, want ErrRuntimeProtocol", err)
 	}
 }
