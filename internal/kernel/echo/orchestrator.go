@@ -495,25 +495,6 @@ func (o *Orchestrator) CreateIdempotent(ctx context.Context, request RunRequest)
 	return storedEchoID, true, nil
 }
 
-func (o *Orchestrator) RunExisting(ctx context.Context, echoID string, request RunRequest, emit EventEmitter) (resultErr error) {
-	echoRecord, _, err := o.ports.Events.GetEcho(ctx, o.config.AppID, echoID)
-	if err != nil {
-		return err
-	}
-	if request.Message == "" {
-		request.Message = echoRecord.InputMessage
-	} else if request.Message != echoRecord.InputMessage {
-		return ErrRunInputMismatch
-	}
-	runStarted := o.now().UTC()
-	leaseToken := uuid.NewString()
-	run, err := o.ports.Execution.ClaimRun(ctx, o.config.AppID, echoID, leaseToken, runStarted, runStarted.Add(o.config.LeaseDuration))
-	if err != nil {
-		return err
-	}
-	return o.executeClaimedRun(ctx, request, emit, run, runStarted, nil)
-}
-
 // RunQueued 按持久队列返回的精确 run_id 认领并执行 root 或 child Run。
 // child 的任务正文只从 Run 业务状态读取，不能回退到 Echo 用户输入。
 func (o *Orchestrator) RunQueued(ctx context.Context, work RunWork, emit EventEmitter) (resultErr error) {
