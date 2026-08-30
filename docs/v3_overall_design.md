@@ -274,16 +274,15 @@ internal/
 │  └─ bus/            bus 域工具（stops/routes/journeys + Store 端口）
 └─ services/          业务 Service 装配（对应安装形态 services/）
    ├─ executor/       Executor Runtime（isolated/hosted + executor.v1）
-   └─ campus/         Campus Service（hosted 包的宿主函数投影与能力面注册）
-      ├─ hosted.go    宿主函数与 Register（main 与测试共用）
-      ├─ builtin/     go:embed 工件副本（仅供 campustest 装配，非生产路径）
-      ├─ demo/        演示数据播种
-      └─ campustest/  测试装配
+   └─ campus/         Campus App 契约夹具（IDs/schema 副本 + demo 播种 + campustest）
+      ├─ specs.go     App/能力稳定标识与契约构造器（main 与测试共用）
+      ├─ demo/        演示数据播种（经 packstore 端口，非权威标记）
+      └─ campustest/  测试装配（guest 源码 testdata 内嵌、测试时现场编译）
 ```
 
-可安装包源码在独立的包仓库（如 `ailuo-packages/campus-bus`），经 `ailuo pack [build]` 交叉编译、`ailuo install` 安装后从安装目录装载。Core 只保留测试固件，不把示例 Package 当作生产组件。
+可安装包源码在独立的包仓库（如 `ailuo-packages/campus-bus`，guest 自包含只依赖标准库），经 `ailuo pack [build]` 交叉编译、`ailuo install` 安装后从安装目录装载。Core 只保留测试固件（generic firmware）与 campustest 的 testdata guest 源码（不提交任何 wasm 工件），不把示例 Package 当作生产组件。
 
-共享规则：Tool 是全局目录，任何 Service 声明 `ToolDependencies` 即可复用同一 handler；可被第二个 Service 复用的原子能力进 `internal/tools`，服务专属装配留在 `internal/services`，工具包绝不反向依赖服务；内置服务的装配入口（如 campus 的 `HostedFunctions`/`ToolSpecs`/`CapabilitySpecs`）由 main 与测试共用，单一来源。
+共享规则：Tool 是全局目录，任何 Service 声明 `ToolDependencies` 即可复用同一 handler；可被第二个 Service 复用的原子能力进 `internal/tools`，服务专属装配留在 `internal/services`，工具包绝不反向依赖服务。有状态包的持久化统一经 `internal/kernel/packstore` 窄端口（`ailuo.store` 宿主函数背后，作用域 = App × 包 namespace）；新增有状态包零内核改动。
 
 ### 调用关系
 
@@ -546,7 +545,7 @@ isolated 扩展由 Go `IsolatedProcessHost` 启动。可执行文件、参数、
 
 2026-08-12 三模式接入基线：三种运行模式已由 Loader 统一接入，**campus 完全重构为 hosted 包（无旧兼容），并已迁出仓库为独立包仓库 `ailuo-packages/campus-bus`，经安装目录装载**：
 
-- **hosted 生产 Backend = wazero 进程内沙箱**（`internal/kernel/loader/wasm_host.go`）。业务扩展包默认形态：wasm32-wasi 工件经线性内存上限（默认 128 MiB）与 WASI 裁剪（无文件系统/网络/环境变量）执行，每次调用独立实例（零共享状态），stdin/stdout JSON 信封 ABI（`{tool_id,payload}` → `{ok,result,code,message}`）。guest 需要内核能力时经宿主函数（host function）投影，线性内存 ABI + 按调用绑定的治理上下文（guest 无法伪造 app_id/权限）；`CapabilitySpec.ToolID` 让 Dispatcher 把 Capability 直接执行的工具注入治理上下文，运行时级 Handler 据此分发。campus 的存储查询即经 `ailuo.bus.query` 宿主函数投影（App 隔离在宿主侧强制），业务治理（数据权威性/新鲜度）留在 guest 复用 `pkg/bus` 中立包。
+- **hosted 生产 Backend = wazero 进程内沙箱**（`internal/kernel/loader/wasm_host.go`）。业务扩展包默认形态：wasm32-wasi 工件经线性内存上限（默认 128 MiB）与 WASI 裁剪（无文件系统/网络/环境变量）执行，每次调用独立实例（零共享状态），stdin/stdout JSON 信封 ABI（`{tool_id,payload}` → `{ok,result,code,message}`）。guest 需要内核能力时经宿主函数（host function）投影，线性内存 ABI + 按调用绑定的治理上下文（guest 无法伪造 app_id/权限）；`CapabilitySpec.ToolID` 让 Dispatcher 把 Capability 直接执行的工具注入治理上下文，运行时级 Handler 据此分发。包的持久化统一经 `ailuo.store` 宿主函数（`internal/kernel/packstore` 端口：作用域 = App × 包 namespace，get/list 响应内嵌单事务一致的快照元数据，快照原子替换仅对可信 Go 侧开放），业务治理（数据权威性/新鲜度校验）留在 guest——campus-bus guest 自包含、只依赖标准库，新增有状态包零内核改动。
 - **embedded 机制**（`embedded_host.go`）：进程内 Runtime，供内核自有组件以包形式纳入统一治理；当前无生产业务包，机制完整并有测试。
 - **isolated 资源限额**：`ProcessSpec.Limits`（RLIMIT_AS/CPU/NOFILE/FSIZE）由锁固定，Linux 用 prlimit 在子进程启动后立即应用，其余平台对非零限额 fail-closed。
 - **Agent 定位（目标结构）**：Python Agent 是独立的 `executor.v1` Package/Service 实现；Go Core 只通过 `internal/kernel/executor` 契约和 `internal/kernel/loader.ExecutorHost` 接入，不 import Agent 实现。child Run 控制能力由 Core 自己注册为 `run.create_child` / `run.get_child_status`，不由 Agent Service 提供。`loader.New(hosts ...Host)` 持有全部运行模式宿主，main.go 只装配一个共享 Manager，不按 Agent/业务包分叉 Loader。
