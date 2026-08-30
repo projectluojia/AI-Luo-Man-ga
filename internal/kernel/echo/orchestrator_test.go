@@ -1075,7 +1075,16 @@ func TestParentCancellationPropagatesAndPersistsChildThenRootTerminalState(t *te
 	}
 	rootDone := make(chan error, 1)
 	go func() {
-		rootDone <- orchestrator.RunExisting(ctx, echoID, kernelecho.RunRequest{}, nil)
+		work, runnableErr := orchestrator.Runnable(ctx, 1)
+		if runnableErr != nil {
+			rootDone <- runnableErr
+			return
+		}
+		if len(work) != 1 || work[0].Run.EchoID != echoID || work[0].Run.ParentRunID != "" {
+			rootDone <- errors.New("root Run 未进入持久队列")
+			return
+		}
+		rootDone <- orchestrator.RunQueued(ctx, work[0], nil)
 	}()
 	var childWork kernelecho.RunWork
 	// CI -race 负载下子 Run 入队可能较慢，放宽轮询窗口（断言语义不变）。
@@ -1175,7 +1184,11 @@ func TestOrchestratorRecoversHistoricalAppConfigRevision(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := orchestrator.RunExisting(t.Context(), echoID, kernelecho.RunRequest{}, nil); err != nil {
+	work, err := orchestrator.Runnable(t.Context(), 1)
+	if err != nil || len(work) != 1 {
+		t.Fatalf("历史配置 Run 未进入持久队列：work=%#v err=%v", work, err)
+	}
+	if err := orchestrator.RunQueued(t.Context(), work[0], nil); err != nil {
 		t.Fatal(err)
 	}
 	start := <-agentServer.starts
@@ -1435,8 +1448,7 @@ func storePorts(store allStorePorts) kernelecho.StorePorts {
 	}
 }
 
-// runOrchestrator 是测试便捷入口：等价于生产链路的 CreateIdempotent +
-// RunExisting 两步（Orchestrator 不再提供合并便捷方法）。
+// runOrchestrator 是测试便捷入口：通过持久队列执行一次新建的 Echo。
 func runOrchestrator(orchestrator *kernelecho.Orchestrator, ctx context.Context, request kernelecho.RunRequest, emit kernelecho.EventEmitter) (string, error) {
 	echoID, created, err := orchestrator.CreateIdempotent(ctx, request)
 	if err != nil {
@@ -1445,7 +1457,14 @@ func runOrchestrator(orchestrator *kernelecho.Orchestrator, ctx context.Context,
 	if !created {
 		return echoID, nil
 	}
-	return echoID, orchestrator.RunExisting(ctx, echoID, request, emit)
+	work, err := orchestrator.Runnable(ctx, 1)
+	if err != nil {
+		return echoID, err
+	}
+	if len(work) != 1 || work[0].Run.EchoID != echoID || work[0].Run.ParentRunID != "" {
+		return echoID, errors.New("新建的 root Run 未进入持久队列")
+	}
+	return echoID, orchestrator.RunQueued(ctx, work[0], emit)
 }
 
 // TestOrchestratorAppendsChannelPromptFromPersistedConfig 验证渠道提示来自
@@ -1563,7 +1582,10 @@ func TestOrchestratorDurablyRetriesOnlyRetryableRunAttempts(t *testing.T) {
 			t.Fatal(listErr)
 		}
 		if len(work) == 1 {
-			if err := orchestrator.RunExisting(context.Background(), echoID, kernelecho.RunRequest{}, nil); err != nil {
+			if work[0].Run.EchoID != echoID || work[0].Run.ParentRunID != "" {
+				t.Fatal("持久队列返回了错误的 Run")
+			}
+			if err := orchestrator.RunQueued(context.Background(), work[0], nil); err != nil {
 				t.Fatal(err)
 			}
 			break
