@@ -45,12 +45,24 @@ type Component struct {
 	// 部署策略要求 executor 包经过签名信任。
 	Role       string `json:"role,omitempty"`
 	Entrypoint string `json:"entrypoint"`
+	// Process 是 isolated 组件的包内相对进程模板；安装时由 packmgr 解析为
+	// lock 中的绝对 ProcessSpec。模板不包含凭据，运行时环境由宿主注入。
+	Process *ProcessTemplate `json:"process,omitempty"`
 	// EnvFrom 声明组件需要的宿主注入环境变量名（声明制特权）：名字进清单，
 	// 值由宿主启动时从部署配置/秘密源供给，绝不写进包或 lock。
 	EnvFrom       []string             `json:"env_from,omitempty"`
 	Exports       []string             `json:"exports,omitempty"`
 	Imports       []string             `json:"imports,omitempty"`
 	HostFunctions []HostedFunctionDecl `json:"host_functions,omitempty"`
+}
+
+// ProcessTemplate 是包作者声明的 isolated 进程启动模板。Path 与 WorkDir
+// 相对组件工件目录，Address 只允许本机地址；安装器负责转换为绝对路径。
+type ProcessTemplate struct {
+	Path    string   `json:"path"`
+	Args    []string `json:"args,omitempty"`
+	WorkDir string   `json:"work_dir,omitempty"`
+	Address string   `json:"address,omitempty"`
 }
 
 // 组件运行角色的闭式取值。
@@ -148,7 +160,15 @@ func ValidateManifest(manifest Manifest) error {
 			component.Entrypoint == "manifest.json" || component.Entrypoint == "lock.json" {
 			return ErrInvalidFormat
 		}
-		if err := validateEnvFrom(component.EnvFrom); err != nil {
+		if component.Mode != ModeIsolated && (component.Process != nil || len(component.EnvFrom) > 0) {
+			return ErrInvalidFormat
+		}
+		if component.Process != nil {
+			if err := ValidateProcessTemplate(*component.Process); err != nil {
+				return ErrInvalidFormat
+			}
+		}
+		if err := ValidateEnvFrom(component.EnvFrom); err != nil {
 			return ErrInvalidFormat
 		}
 		for _, id := range append(append([]string(nil), component.Exports...), component.Imports...) {
@@ -162,6 +182,22 @@ func ValidateManifest(manifest Manifest) error {
 	}
 	if _, err := ComponentOrder(manifest.Components); err != nil {
 		return err
+	}
+	return nil
+}
+
+// ValidateProcessTemplate 校验 isolated 组件的相对启动模板。
+func ValidateProcessTemplate(template ProcessTemplate) error {
+	if !IsPackagePath(template.Path) || template.Path == "." ||
+		(template.WorkDir != "" && !IsPackagePath(template.WorkDir)) ||
+		(template.Address != "" && !IsLocalRuntimeAddress(template.Address)) ||
+		len(template.Args) > 128 {
+		return ErrInvalidFormat
+	}
+	for _, argument := range template.Args {
+		if len(argument) > 4096 || strings.ContainsRune(argument, '\x00') {
+			return ErrInvalidFormat
+		}
 	}
 	return nil
 }
@@ -252,7 +288,7 @@ func ValidateLock(lock Lock, manifest Manifest) error {
 		if !filepath.IsAbs(artifact.Path) || filepath.Clean(artifact.Path) != artifact.Path {
 			return ErrInvalidFormat
 		}
-		// 工件按 basename 平铺安装，lock 的文件名必须与清单声明的 entrypoint 一致：
+		// 工件按 basename 平铺安装，lock 的根路径必须与清单声明的 entrypoint 一致：
 		// 否则 lock 可以把摘要绑到包目录外任意一个绝对路径文件上。
 		if filepath.Base(artifact.Path) != filepath.Base(component.Entrypoint) {
 			return ErrInvalidFormat
@@ -263,7 +299,9 @@ func ValidateLock(lock Lock, manifest Manifest) error {
 				return ErrInvalidFormat
 			}
 		case ModeIsolated:
-			if artifact.Process == nil || artifact.Process.Path != artifact.Path {
+			if artifact.Process == nil ||
+				!processPathBelongsToArtifact(artifact.Path, artifact.Process.Path) ||
+				!pathWithin(filepath.Dir(artifact.Path), artifact.Process.WorkDir) {
 				return ErrInvalidFormat
 			}
 			if err := ValidateProcessSpec(*artifact.Process); err != nil {
@@ -276,6 +314,19 @@ func ValidateLock(lock Lock, manifest Manifest) error {
 	return nil
 }
 
+// processPathBelongsToArtifact 限制 isolated 进程可执行文件在组件工件内；
+// 文件工件要求进程路径就是工件本身，目录工件允许其内部的解释器或启动器。
+func processPathBelongsToArtifact(artifactPath, processPath string) bool {
+	return pathWithin(artifactPath, processPath)
+}
+
+// pathWithin 判断 candidate 是否位于 root 内，包含 root 本身。
+func pathWithin(root, candidate string) bool {
+	relative, err := filepath.Rel(root, candidate)
+	return err == nil && relative != ".." &&
+		!strings.HasPrefix(relative, ".."+string(filepath.Separator))
+}
+
 // IsPackageEntrypoint 校验包根目录下的扁平工件路径。
 func IsPackageEntrypoint(value string) bool {
 	return IsPackagePath(value) && value != "." && !strings.ContainsRune(value, '/')
@@ -284,9 +335,9 @@ func IsPackageEntrypoint(value string) bool {
 // envFromNamePattern 是宿主注入环境变量名的闭式形状。
 var envFromNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,127}$`)
 
-// validateEnvFrom 校验 env_from 声明：名字闭式、去重。值由宿主启动时供给，
+// ValidateEnvFrom 校验 env_from 声明：名字闭式、去重。值由宿主启动时供给，
 // 绝不进包或 lock（凭据不落盘）。
-func validateEnvFrom(names []string) error {
+func ValidateEnvFrom(names []string) error {
 	seen := make(map[string]struct{}, len(names))
 	for _, name := range names {
 		if !envFromNamePattern.MatchString(name) {

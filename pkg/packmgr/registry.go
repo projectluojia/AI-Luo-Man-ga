@@ -104,7 +104,7 @@ func validateTarball(ctx context.Context, tarballPath string) (packagecontract.M
 	if err != nil {
 		return packagecontract.Manifest{}, err
 	}
-	if _, err := readSourceArtifacts(sourceDir, source.Manifest); err != nil {
+	if _, err := readSourceArtifacts(ctx, sourceDir, source.Manifest); err != nil {
 		return packagecontract.Manifest{}, err
 	}
 	lockBytes, err := ReadFileLimited(filepath.Join(sourceDir, "lock.json"), packagecontract.MaxLockBytes)
@@ -120,7 +120,7 @@ func validateTarball(ctx context.Context, tarballPath string) (packagecontract.M
 		return packagecontract.Manifest{}, packagecontract.ErrInvalidFormat
 	}
 	for index := range lock.Artifacts {
-		if !packagecontract.IsPackageEntrypoint(lock.Artifacts[index].Path) {
+		if !packagecontract.IsPackagePath(lock.Artifacts[index].Path) || lock.Artifacts[index].Path == "." {
 			return packagecontract.Manifest{}, packagecontract.ErrInvalidFormat
 		}
 		lock.Artifacts[index].Path = filepath.Join(sourceDir, lock.Artifacts[index].Path)

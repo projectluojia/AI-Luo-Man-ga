@@ -123,6 +123,64 @@ func TestInstallIsolatedWritesProcessSpec(t *testing.T) {
 	}
 }
 
+// 目录工件用于携带解释器、源码和依赖环境；安装必须保留树结构并把进程
+// 模板解析到目录工件内部，而不是把目录当作可执行文件。
+func TestInstallAndPackDirectoryArtifact(t *testing.T) {
+	ctx := context.Background()
+	source := filepath.Join(t.TempDir(), "agent-source")
+	runtimeDir := filepath.Join(source, "runtime")
+	if err := os.MkdirAll(filepath.Join(runtimeDir, "bin"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(runtimeDir, "bin", "runner"), []byte("runner"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(runtimeDir, "module.py"), []byte("print('ok')"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	manifest := packagecontract.Manifest{
+		SchemaVersion: packagecontract.SchemaVersion, ID: "agent", Version: "1.0.0",
+		Components: []packagecontract.Component{{
+			ID: "executor", Mode: packagecontract.ModeIsolated, Role: packagecontract.RoleExecutor,
+			Entrypoint: "runtime", Process: &packagecontract.ProcessTemplate{
+				Path: "bin/runner", WorkDir: ".", Address: "127.0.0.1:50051",
+			},
+		}},
+	}
+	manifestBytes, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "manifest.json"), manifestBytes, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	install := func(root, installSource string) packmgr.InstalledRecord {
+		t.Helper()
+		record, err := packmgr.Install(ctx, root, installSource)
+		if err != nil {
+			t.Fatal(err)
+		}
+		artifact := record.Lock.Artifacts[0]
+		targetDir := filepath.Join(root, "agent")
+		if artifact.Path != filepath.Join(targetDir, "runtime") || artifact.Process == nil ||
+			artifact.Process.Path != filepath.Join(targetDir, "runtime", "bin", "runner") ||
+			artifact.Process.WorkDir != filepath.Join(targetDir, "runtime") {
+			t.Fatalf("directory artifact process = %+v, want resolved template", artifact)
+		}
+		if _, err := os.Stat(filepath.Join(targetDir, "runtime", "module.py")); err != nil {
+			t.Fatalf("directory artifact file missing: %v", err)
+		}
+		return record
+	}
+	install(t.TempDir(), source)
+
+	tarball, err := packmgr.PackFromSource(ctx, source, t.TempDir(), manifest, manifestBytes)
+	if err != nil {
+		t.Fatalf("PackFromSource: %v", err)
+	}
+	install(t.TempDir(), tarball)
+}
+
 func TestInstallRejectsBreakingReverseDependency(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
