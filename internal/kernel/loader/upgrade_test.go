@@ -183,6 +183,35 @@ func TestManagerTracksRetiredLeasesByRuntimeVersion(t *testing.T) {
 	}
 }
 
+func TestManagerUpgradeCancellationDoesNotDisturbCurrentRuntime(t *testing.T) {
+	v1 := &fakeRuntime{description: loader.Description{ID: "extension.test", Version: "1.0.0", Mode: loader.ModeHosted}}
+	v2 := &fakeRuntime{description: loader.Description{ID: "extension.test", Version: "2.0.0", Mode: loader.ModeHosted}}
+	manager, err := loader.New(&versionedHost{runtimes: map[string]*fakeRuntime{"1.0.0": v1, "2.0.0": v2}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := manager.Register(ctx, upgradeManifest("extension.test", "1.0.0")); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.EnsureLoaded(ctx, "extension.test"); err != nil {
+		t.Fatal(err)
+	}
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	if err := manager.Upgrade(cancelled, upgradeManifest("extension.test", "2.0.0")); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled upgrade error=%v", err)
+	}
+	lease, err := manager.Acquire(ctx, "extension.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lease.Release()
+	if lease.ID() != "extension.test" || v1.starts.Load() != 1 || v2.starts.Load() != 0 {
+		t.Fatalf("runtime changed after cancellation: id=%s starts=%d/%d", lease.ID(), v1.starts.Load(), v2.starts.Load())
+	}
+}
+
 func TestManagerUpgradeRejectsInvalidTargets(t *testing.T) {
 	v1 := &fakeRuntime{description: loader.Description{ID: "extension.test", Version: "1.0.0", Mode: loader.ModeHosted}}
 	host := &versionedHost{runtimes: map[string]*fakeRuntime{"1.0.0": v1}}

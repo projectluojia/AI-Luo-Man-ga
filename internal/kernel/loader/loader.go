@@ -135,11 +135,13 @@ type retiredRuntime struct {
 }
 
 type Manager struct {
-	mu        sync.RWMutex
-	entries   map[string]*entry
-	hosts     map[string][]Host
-	accepting bool
-	now       func() time.Time
+	mu             sync.RWMutex
+	entries        map[string]*entry
+	hosts          map[string][]Host
+	accepting      bool
+	activeUpgrades int
+	upgradeDone    chan struct{}
+	now            func() time.Time
 }
 
 // New 构造统一 Loader：一个 Manager 持有全部运行模式的宿主，模式内部允许
@@ -159,12 +161,37 @@ func New(hosts ...Host) (*Manager, error) {
 		}
 		grouped[mode] = append(grouped[mode], host)
 	}
+	upgradeDone := make(chan struct{})
+	close(upgradeDone)
 	return &Manager{
-		entries:   make(map[string]*entry),
-		hosts:     grouped,
-		accepting: true,
-		now:       time.Now,
+		entries:     make(map[string]*entry),
+		hosts:       grouped,
+		accepting:   true,
+		upgradeDone: upgradeDone,
+		now:         time.Now,
 	}, nil
+}
+
+func (m *Manager) beginUpgrade() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.accepting {
+		return ErrShuttingDown
+	}
+	if m.activeUpgrades == 0 {
+		m.upgradeDone = make(chan struct{})
+	}
+	m.activeUpgrades++
+	return nil
+}
+
+func (m *Manager) endUpgrade() {
+	m.mu.Lock()
+	m.activeUpgrades--
+	if m.activeUpgrades == 0 {
+		close(m.upgradeDone)
+	}
+	m.mu.Unlock()
 }
 
 // selectHost 按清单 Verify 绑定唯一宿主：同一模式存在多个宿主时，恰好一个
@@ -260,9 +287,16 @@ func (m *Manager) RegisterBatch(ctx context.Context, manifests []Manifest) error
 // 排空后有界停止；候选加载失败不影响既有运行（fail without touching old）。
 // 同版本升级与未就绪升级被拒绝。
 func (m *Manager) Upgrade(ctx context.Context, candidate Manifest) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if err := validateManifest(candidate); err != nil {
 		return err
 	}
+	if err := m.beginUpgrade(); err != nil {
+		return err
+	}
+	defer m.endUpgrade()
 	item, err := m.resolve(candidate.ID)
 	if err != nil {
 		return err
@@ -288,6 +322,12 @@ func (m *Manager) Upgrade(ctx context.Context, candidate Manifest) error {
 	observe.DefaultMetrics().ObserveRuntimeLoad(loaded.err == nil, m.now().Sub(started))
 	if loaded.err != nil {
 		return errors.Join(ErrLoadFailed, loaded.err)
+	}
+	if err := ctx.Err(); err != nil {
+		stopContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		_ = loaded.runtime.Stop(stopContext)
+		return err
 	}
 	item.mu.Lock()
 	// 候选加载期间条目状态可能变化（并发卸载/关闭）：重新校验后原子切换。
@@ -753,11 +793,19 @@ func (m *Manager) unload(ctx context.Context, item *entry) error {
 func (m *Manager) Shutdown(ctx context.Context) error {
 	m.mu.Lock()
 	m.accepting = false
+	upgradeDone := m.upgradeDone
 	items := make([]*entry, 0, len(m.entries))
 	for _, item := range m.entries {
 		items = append(items, item)
 	}
 	m.mu.Unlock()
+	if upgradeDone != nil {
+		select {
+		case <-upgradeDone:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
 	for {
