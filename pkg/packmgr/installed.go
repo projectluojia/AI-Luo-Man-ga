@@ -69,7 +69,7 @@ func verifyInstalledArtifacts(ctx context.Context, root string, artifacts []pack
 		if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
 			return packagecontract.ErrInvalidFormat
 		}
-		artifactDigest, err := HashFile(ctx, artifact.Path, packagecontract.MaxArtifactBytes)
+		artifactDigest, err := HashArtifact(ctx, artifact.Path, packagecontract.MaxArtifactBytes)
 		if err != nil || artifactDigest != artifact.SHA256 {
 			return packagecontract.ErrInvalidFormat
 		}

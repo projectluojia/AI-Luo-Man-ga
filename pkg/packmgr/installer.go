@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 
@@ -55,7 +56,7 @@ func Install(ctx context.Context, root, sourcePath string) (InstalledRecord, err
 	if err != nil {
 		return InstalledRecord{}, err
 	}
-	artifacts, err := readSourceArtifacts(sourceDir, source.Manifest)
+	artifacts, err := readSourceArtifacts(ctx, sourceDir, source.Manifest)
 	if err != nil {
 		return InstalledRecord{}, err
 	}
@@ -98,15 +99,15 @@ func Install(ctx context.Context, root, sourcePath string) (InstalledRecord, err
 	if err := os.WriteFile(filepath.Join(stageDir, "manifest.json"), source.manifestBytes, 0o640); err != nil {
 		return InstalledRecord{}, err
 	}
-	// 复制每组件工件、计算哈希、为 isolated 组件生成默认进程规格。
+	// 复制每组件工件、计算哈希、为 isolated 组件生成安装期进程规格。
 	lockedArtifacts := make([]packagecontract.LockedArtifact, 0, len(artifacts))
 	for _, artifact := range artifacts {
 		artifactName := filepath.Base(artifact.path)
 		stageArtifact := filepath.Join(stageDir, artifactName)
-		if err := copyFile(artifact.path, stageArtifact); err != nil {
+		if err := copyArtifact(artifact.path, stageArtifact); err != nil {
 			return InstalledRecord{}, err
 		}
-		artifactDigest, err := HashFile(ctx, stageArtifact, packagecontract.MaxArtifactBytes)
+		artifactDigest, err := HashArtifact(ctx, stageArtifact, packagecontract.MaxArtifactBytes)
 		if err != nil {
 			return InstalledRecord{}, err
 		}
@@ -116,7 +117,10 @@ func Install(ctx context.Context, root, sourcePath string) (InstalledRecord, err
 			SHA256:      artifactDigest,
 		}
 		if component, ok := packagecontract.FindComponent(source.Manifest, artifact.componentID); ok && component.Mode == packagecontract.ModeIsolated {
-			locked.Process = defaultProcessSpec(component.ID, filepath.Join(targetDir, artifactName), targetDir)
+			locked.Process, err = defaultProcessSpec(component, filepath.Join(targetDir, artifactName), targetDir, artifact.directory)
+			if err != nil {
+				return InstalledRecord{}, err
+			}
 		}
 		lockedArtifacts = append(lockedArtifacts, locked)
 	}
@@ -207,14 +211,57 @@ func reserveBackupDir(root, targetDir string) (string, error) {
 	return backupDir, nil
 }
 
-// defaultProcessSpec 为 isolated 组件生成默认进程规格：可执行文件为工件、
-// 工作目录为包目录、Unix socket 位于包目录内（与工件同名去后缀）。
-func defaultProcessSpec(componentID, artifactPath, workDir string) *packagecontract.ProcessSpec {
-	base := strings.TrimSuffix(filepath.Base(artifactPath), filepath.Ext(artifactPath))
-	return &packagecontract.ProcessSpec{
-		Path: artifactPath, WorkDir: workDir,
-		Address: "unix:" + filepath.Join(workDir, base+"-"+componentID+".sock"),
+// defaultProcessSpec 把 isolated 组件的相对进程模板解析为安装期绝对规格。
+// 没有模板时保持原有约定：工件本身是可执行文件，工作目录是包目录。
+func defaultProcessSpec(component packagecontract.Component, artifactPath, packageDir string, artifactDirectory bool) (*packagecontract.ProcessSpec, error) {
+	artifactRoot := packageDir
+	if artifactDirectory {
+		artifactRoot = artifactPath
 	}
+	base := strings.TrimSuffix(filepath.Base(artifactPath), filepath.Ext(artifactPath))
+	process := &packagecontract.ProcessSpec{
+		Path: artifactPath, WorkDir: packageDir,
+		Address: "unix:" + filepath.Join(packageDir, base+"-"+component.ID+".sock"),
+	}
+	if component.Process == nil {
+		if artifactDirectory {
+			return nil, packagecontract.ErrInvalidFormat
+		}
+		return process, nil
+	}
+	executable, err := resolveProcessPath(artifactRoot, component.Process.Path)
+	if err != nil {
+		return nil, err
+	}
+	process.Path = executable
+	process.Args = append([]string(nil), component.Process.Args...)
+	process.WorkDir = artifactRoot
+	if component.Process.WorkDir != "" {
+		process.WorkDir = filepath.Join(artifactRoot, filepath.FromSlash(component.Process.WorkDir))
+	}
+	if component.Process.Address != "" {
+		process.Address = component.Process.Address
+	}
+	for index, argument := range process.Args {
+		process.Args[index] = strings.ReplaceAll(argument, "${address}", process.Address)
+	}
+	return process, nil
+}
+
+// resolveProcessPath 解析模板中的包内可执行路径；.venv/python 是跨平台的
+// Python 虚拟环境入口，其他路径按组件工件根目录的普通相对路径处理。
+func resolveProcessPath(artifactRoot, relative string) (string, error) {
+	if relative == ".venv/python" {
+		if runtime.GOOS == "windows" {
+			return filepath.Join(artifactRoot, ".venv", "Scripts", "python.exe"), nil
+		}
+		return filepath.Join(artifactRoot, ".venv", "bin", "python"), nil
+	}
+	path := filepath.Join(artifactRoot, filepath.FromSlash(relative))
+	if !artifactPathWithin(artifactRoot, path) {
+		return "", packagecontract.ErrInvalidFormat
+	}
+	return path, nil
 }
 
 // Upgrade 要求包已安装且源目录版本号不同，然后安装。
@@ -299,6 +346,7 @@ type manifestFile struct {
 type sourceArtifact struct {
 	componentID string
 	path        string
+	directory   bool
 }
 
 // readManifest 读取包目录的 manifest.json 并校验。
@@ -317,10 +365,9 @@ func readManifest(directory string) (manifestFile, error) {
 	return manifestFile{Manifest: manifest, manifestBytes: manifestBytes}, nil
 }
 
-// readSourceArtifacts 校验并收集清单声明的每组件 entrypoint 工件。安装与打包
-// 都按 basename 平铺工件，因此这里拒绝 basename 冲突：否则两个组件的
-// `a/mod.wasm` 与 `b/mod.wasm` 会互相覆盖，且 lock 里两条记录指向同一个文件。
-func readSourceArtifacts(sourceDir string, manifest packagecontract.Manifest) ([]sourceArtifact, error) {
+// readSourceArtifacts 校验并收集清单声明的每组件文件或目录工件。安装与打包
+// 都按 basename 平铺工件，因此这里拒绝 basename 冲突，避免组件互相覆盖。
+func readSourceArtifacts(ctx context.Context, sourceDir string, manifest packagecontract.Manifest) ([]sourceArtifact, error) {
 	artifacts := make([]sourceArtifact, 0, len(manifest.Components))
 	ownerByName := make(map[string]string, len(manifest.Components))
 	for _, component := range manifest.Components {
@@ -329,11 +376,11 @@ func readSourceArtifacts(sourceDir string, manifest packagecontract.Manifest) ([
 		if err != nil {
 			return nil, fmt.Errorf("组件 %s entrypoint 工件不可读: %w", component.ID, err)
 		}
-		if !info.Mode().IsRegular() {
-			return nil, fmt.Errorf("组件 %s entrypoint 工件不是普通文件", component.ID)
+		if info.Mode()&os.ModeSymlink != 0 || (!info.Mode().IsRegular() && !info.IsDir()) {
+			return nil, fmt.Errorf("组件 %s entrypoint 工件类型不受支持", component.ID)
 		}
-		if info.Size() <= 0 || info.Size() > packagecontract.MaxArtifactBytes {
-			return nil, fmt.Errorf("组件 %s entrypoint 工件大小 %d 超出 (0, %d]", component.ID, info.Size(), packagecontract.MaxArtifactBytes)
+		if _, err := HashArtifact(ctx, artifactPath, packagecontract.MaxArtifactBytes); err != nil {
+			return nil, fmt.Errorf("组件 %s entrypoint 工件无效: %w", component.ID, err)
 		}
 		name := filepath.Base(artifactPath)
 		if owner, exists := ownerByName[name]; exists {
@@ -341,7 +388,9 @@ func readSourceArtifacts(sourceDir string, manifest packagecontract.Manifest) ([
 				packagecontract.ErrInvalidFormat, owner, component.ID, name)
 		}
 		ownerByName[name] = component.ID
-		artifacts = append(artifacts, sourceArtifact{componentID: component.ID, path: artifactPath})
+		artifacts = append(artifacts, sourceArtifact{
+			componentID: component.ID, path: artifactPath, directory: info.IsDir(),
+		})
 	}
 	return artifacts, nil
 }
