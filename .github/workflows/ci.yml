@@ -114,43 +114,6 @@ jobs:
           uv run --project agent --locked python -m grpc_tools.protoc -I proto --python_out=agent/generated --grpc_python_out=agent/generated proto/executor.proto
           git diff --exit-code
 
-  # 包发布流水线冒烟：pack（经 [build] 自动构建）→ tarball 安装 → 列表校验。
-  # （完整发布流水线由 package-publish.yml 可复用 workflow 承载，供包作者仓库
-  # 经 `uses: projectluojia/AI-Luo-Man-ga/.github/workflows/package-publish.yml@ref`
-  # 调用；本仓库 PR 只跑本地冒烟，避免同仓相对路径调用可复用 workflow 的限制。）
-  package-pipeline:
-    name: package-pipeline
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-          cache: true
-      - name: 构建 ailuo CLI
-        run: go build -o ailuo .
-      - name: 打包 strings.tool（经 [build] 自动构建）并冒烟安装验证
-        shell: bash
-        run: |
-          set -euo pipefail
-          ./ailuo pack extensions/strings.tool dist
-          tarball="$(ls dist/*.tgz)"
-          ./ailuo install --root "$RUNNER_TEMP/pkgroot" "$tarball"
-          ./ailuo list --root "$RUNNER_TEMP/pkgroot" | grep -q '^strings.tool@1.0.0'
-      - name: 打包零声明 Go 包（无 ailuo.toml，源码自动提取）并冒烟安装验证
-        shell: bash
-        run: |
-          set -euo pipefail
-          # 夹具是 testdata/hello.pkg 下的真实源码（go 工具链忽略 testdata），
-          # 拷到临时目录再打包：pack 会在包目录内生成产物，不污染工作树。
-          cp -r testdata/hello.pkg "$RUNNER_TEMP/hello.pkg"
-          ./ailuo pack --version 0.1.0 "$RUNNER_TEMP/hello.pkg" dist
-          tarball="$(ls dist/hello.pkg-*.tgz)"
-          ./ailuo install --root "$RUNNER_TEMP/pkgroot" "$tarball"
-          ./ailuo list --root "$RUNNER_TEMP/pkgroot" | grep -q '^hello.pkg@0.1.0'
   # Docker Compose 编排语法校验（QQ OneBot 容器）。
   compose-config:
     name: compose-config

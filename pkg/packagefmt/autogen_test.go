@@ -18,21 +18,21 @@ type HelloArgs struct {
 	Name string ` + "`json:\"name\"`" + `
 }
 `)
-	capabilities, err := schemaextract.AnalyzeGo(source, "hello.pkg")
+	capabilities, err := schemaextract.AnalyzeGo(source, "autogen.test")
 	if err != nil {
 		t.Fatal(err)
 	}
-	manifest, manifestBytes, err := ManifestFromCapabilities("hello.pkg", "1.2.3", capabilities)
+	manifest, manifestBytes, err := ManifestFromCapabilities("autogen.test", "1.2.3", capabilities)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if manifest.ID != "hello.pkg" || manifest.Version != "1.2.3" {
+	if manifest.ID != "autogen.test" || manifest.Version != "1.2.3" {
 		t.Fatalf("manifest id/version = %q/%q", manifest.ID, manifest.Version)
 	}
 	if len(manifest.Components) != 1 || manifest.Components[0].Entrypoint != "main.wasm" {
 		t.Fatalf("components = %+v", manifest.Components)
 	}
-	if len(manifest.Components[0].Exports) != 1 || manifest.Components[0].Exports[0] != "hello.pkg.hello" {
+	if len(manifest.Components[0].Exports) != 1 || manifest.Components[0].Exports[0] != "autogen.test.hello" {
 		t.Fatalf("exports = %v", manifest.Components[0].Exports)
 	}
 	// Extensions 必须包含 tool + capability，schema 与提取一致。
@@ -49,7 +49,7 @@ type HelloArgs struct {
 	if err := json.Unmarshal(manifest.Extensions, &extensions); err != nil {
 		t.Fatalf("extensions 解码失败: %v", err)
 	}
-	if len(extensions.Tools) != 1 || extensions.Tools[0].ID != "hello.pkg.hello" {
+	if len(extensions.Tools) != 1 || extensions.Tools[0].ID != "autogen.test.hello" {
 		t.Fatalf("tools = %+v", extensions.Tools)
 	}
 	if extensions.Tools[0].InputSchemaJSON != string(capabilities[0].InputSchema) {
@@ -61,7 +61,7 @@ type HelloArgs struct {
 }
 
 func TestManifestFromCapabilitiesRejectsEmpty(t *testing.T) {
-	if _, _, err := ManifestFromCapabilities("hello.pkg", "1.0.0", nil); err == nil {
+	if _, _, err := ManifestFromCapabilities("autogen.test", "1.0.0", nil); err == nil {
 		t.Fatal("期望拒绝空 capabilities")
 	}
 }
