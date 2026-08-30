@@ -15,13 +15,13 @@ import (
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access/web"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/packstore"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime/runtimetest"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus/campustest"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/memory"
-	"github.com/projectluojia/AI-Luo-Man-ga/pkg/bus"
 	"github.com/projectluojia/AI-Luo-Man-ga/pkg/sdkgen"
 )
 
@@ -139,9 +139,24 @@ func TestInvokeEndpointRejectsUnknownCapability(t *testing.T) {
 	}
 }
 
-// journeyFixture 构造测试行程（与 hosted_test 同形）。
-func journeyFixture(id, origin, destination string, departure time.Time) bus.Journey {
-	return bus.Journey{
+// journeyDoc 是行程文档（campus/bus journeys 集合的领域契约形状）。
+type journeyDoc struct {
+	TripID            string    `json:"trip_id"`
+	RouteID           string    `json:"route_id"`
+	RouteName         string    `json:"route_name"`
+	Direction         string    `json:"direction"`
+	OriginStopID      string    `json:"origin_stop_id"`
+	OriginStopName    string    `json:"origin_stop_name"`
+	DestinationStopID string    `json:"destination_stop_id"`
+	DestinationName   string    `json:"destination_stop_name"`
+	DepartureAt       time.Time `json:"departure_at"`
+	ArrivalAt         time.Time `json:"arrival_at"`
+	SourceRevision    string    `json:"source_revision"`
+}
+
+// journeyFixture 构造测试行程。
+func journeyFixture(id, origin, destination string, departure time.Time) journeyDoc {
+	return journeyDoc{
 		TripID:            id,
 		RouteID:           "route-1",
 		RouteName:         "文理学部-信息学部",
@@ -156,26 +171,37 @@ func journeyFixture(id, origin, destination string, departure time.Time) bus.Jou
 	}
 }
 
-// newCampusE2E 装配多语言端到端共享环境：权威数据 store + 真实 hosted campus
+// newCampusE2E 装配多语言端到端共享环境：权威数据播种 + 真实 hosted campus
 // 注册 + httptest 端点 + campus 权威契约。返回 HTTP 端点与生成 SDK 的契约输入。
-// 全程不 mock 被调函数（campustest 按安装目录路径注册真实 wasm）。
+// 全程不 mock 被调函数（campustest 现场编译真实 wasm 并经 ailuo.store 读取）。
 func newCampusE2E(t *testing.T) (*httptest.Server, json.RawMessage) {
 	t.Helper()
-	// 权威数据 store（必须先设 metadata 再 Replace：Replace 内部以
-	// metadata.Revision 覆写行程 SourceRevision，顺序颠倒会不匹配）。
-	store := memory.NewBusStore()
+	// 权威数据播种：快照元数据与行程文档经 packstore 一次性原子写入。
+	docs := memory.NewDocuments()
 	now := time.Now().UTC()
-	store.SetSnapshotMetadata(campus.AppID, bus.SnapshotMetadata{
-		Revision: "e2e-revision", Source: "zhihui-luojia", Authoritative: true, Complete: true,
-		ImportedAt: now.Add(-time.Hour), ValidUntil: now.Add(time.Hour),
-	})
+	scope := packstore.Scope{AppID: campus.AppID, Namespace: campus.StorageNamespace}
 	baseTime := time.Date(2026, time.July, 24, 8, 0, 0, 0, time.FixedZone("Asia/Shanghai", 8*60*60))
-	store.Replace(campus.AppID, []bus.Journey{
+	revision := "e2e-revision"
+	journeys := []journeyDoc{
 		journeyFixture("trip-early", "stop-a", "stop-b", baseTime.Add(30*time.Minute)),
 		journeyFixture("trip-late", "stop-a", "stop-b", baseTime.Add(90*time.Minute)),
-	})
+	}
+	encoded := make([]packstore.Document, 0, len(journeys))
+	for _, journey := range journeys {
+		payload, err := json.Marshal(journey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		encoded = append(encoded, packstore.Document{ID: journey.TripID, Payload: payload})
+	}
+	if err := docs.ReplaceSnapshot(t.Context(), scope, packstore.SnapshotMeta{
+		Revision: revision, Source: "zhihui-luojia", Authoritative: true, Complete: true,
+		ImportedAt: now.Add(-time.Hour), ValidUntil: now.Add(time.Hour),
+	}, map[string][]packstore.Document{"journeys": encoded}); err != nil {
+		t.Fatal(err)
+	}
 	reg := registry.New()
-	campustest.RegisterHosted(t, reg, store)
+	campustest.RegisterHosted(t, reg, docs)
 	policy := runtimetest.NewStaticAppPolicy()
 	for _, capabilityID := range []string{
 		campus.BusStopSearchCapabilityID, campus.BusRouteListCapabilityID, campus.BusJourneySearchCapabilityID,

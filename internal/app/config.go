@@ -20,6 +20,7 @@ import (
 	controlconfig "github.com/projectluojia/AI-Luo-Man-ga/internal/controlplane/config"
 	kernelecho "github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/packstore"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/promptcatalog"
 	promptservice "github.com/projectluojia/AI-Luo-Man-ga/internal/services/prompt"
@@ -206,8 +207,9 @@ func defaultPythonPath(projectRoot string) string {
 }
 
 // configureInstalledRuntimes 发现安装目录中的 Runtime 包，按声明的运行模式
-// 选择宿主。Loader 只接收已校验的安装记录和通用 Host。
-func configureInstalledRuntimes(ctx context.Context, cfg config, hostFunctions []loader.HostedFunction) (hosts []loader.Host, records []loader.InstalledRecord, err error) {
+// 选择宿主。Loader 只接收已校验的安装记录和通用 Host。宿主函数按清单提供：
+// ailuo.store 通用存储函数绑定到各包声明的 namespace，App 隔离在宿主侧强制。
+func configureInstalledRuntimes(ctx context.Context, cfg config, packageStore packstore.Store) (hosts []loader.Host, records []loader.InstalledRecord, err error) {
 	if cfg.runtimeInstallRoot == "" {
 		return nil, nil, nil
 	}
@@ -247,7 +249,11 @@ func configureInstalledRuntimes(ctx context.Context, cfg config, hostFunctions [
 	hosts = make([]loader.Host, 0, 3)
 	if hostedWithFunctions > 0 {
 		host, hostErr := loader.NewWasmHost(loader.WasmHostConfig{
-			ReadArtifact: catalog.ReadArtifact, HostFunctions: hostFunctions, RequireHostFunctions: true,
+			ReadArtifact: catalog.ReadArtifact,
+			HostFunctionsFor: func(manifest loader.Manifest) ([]loader.HostedFunction, error) {
+				return packstore.ManifestFunctions(packageStore, manifest)
+			},
+			RequireHostFunctions: true,
 		})
 		if hostErr != nil {
 			return nil, nil, fmt.Errorf("configure in-kernel hosted runtime boundary: %w", hostErr)

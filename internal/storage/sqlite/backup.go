@@ -147,11 +147,6 @@ func sqliteFileURI(absolute string) string {
 func validateRequiredSchema(ctx context.Context, db *sql.DB, version int) error {
 	for _, table := range []string{
 		"schema_migrations",
-		"bus_source_revisions",
-		"bus_stops",
-		"bus_routes",
-		"bus_journeys",
-		"bus_current_snapshots",
 		"echoes",
 		"echo_events",
 		"runs",
@@ -161,6 +156,22 @@ func validateRequiredSchema(ctx context.Context, db *sql.DB, version int) error 
 	} {
 		query := "SELECT 1 FROM " + table + " LIMIT 0"
 		rows, err := db.QueryContext(ctx, query)
+		if err != nil {
+			return fmt.Errorf("required database table is unavailable")
+		}
+		if err := rows.Close(); err != nil {
+			return fmt.Errorf("close required schema probe: %w", err)
+		}
+	}
+	// 存储形态按迁移版本分支：v25 起通用包文档表替换 bus 专属关系表。
+	legacyTables := []string{"bus_source_revisions", "bus_stops", "bus_routes", "bus_journeys", "bus_current_snapshots"}
+	currentTables := []string{"package_documents", "package_snapshots"}
+	required := legacyTables
+	if version >= 25 {
+		required = currentTables
+	}
+	for _, table := range required {
+		rows, err := db.QueryContext(ctx, "SELECT 1 FROM "+table+" LIMIT 0")
 		if err != nil {
 			return fmt.Errorf("required database table is unavailable")
 		}

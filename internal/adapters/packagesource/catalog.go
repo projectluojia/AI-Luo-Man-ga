@@ -266,6 +266,7 @@ func (c *Catalog) readPackage(ctx context.Context, directory string) ([]installe
 			Role: loader.RoleCapability, LockedDigest: artifact.SHA256,
 			Pin: neutral.Manifest.Pin, IdleTTL: time.Duration(neutral.Manifest.IdleTTLMS) * time.Millisecond,
 			HostFunctions: slices.Clone(component.HostFunctions),
+			Storage:       cloneStorage(neutral.Manifest.Storage),
 		}
 		if err := loader.ValidateManifest(runtimeManifest); err != nil {
 			return nil, err
@@ -318,6 +319,14 @@ func cloneProcessSpec(spec packagecontract.ProcessSpec) packagecontract.ProcessS
 	spec.Args = slices.Clone(spec.Args)
 	spec.Env = slices.Clone(spec.Env)
 	return spec
+}
+
+func cloneStorage(storage *packagecontract.Storage) *packagecontract.Storage {
+	if storage == nil {
+		return nil
+	}
+	cloned := *storage
+	return &cloned
 }
 
 func cloneToolSpecs(specs []capability.ToolSpec) []capability.ToolSpec {
