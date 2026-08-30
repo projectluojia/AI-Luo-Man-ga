@@ -281,7 +281,7 @@ internal/
       └─ campustest/  测试装配
 ```
 
-可安装包源码在 `extensions/`（如参考包 `strings.tool`）；campus 的 guest 源码在独立包仓库 `ailuo-packages/campus-bus`，经 `ailuo pack [build]` 交叉编译、`ailuo install` 安装后从安装目录装载。`services/campus/builtin` 的 `go:embed` 副本只供 `campustest` 构造测试安装目录，不参与生产装载，也不会自动跟随 guest 更新。
+可安装包源码在独立的包仓库（如 `ailuo-packages/campus-bus`），经 `ailuo pack [build]` 交叉编译、`ailuo install` 安装后从安装目录装载。Core 只保留测试固件，不把示例 Package 当作生产组件。
 
 共享规则：Tool 是全局目录，任何 Service 声明 `ToolDependencies` 即可复用同一 handler；可被第二个 Service 复用的原子能力进 `internal/tools`，服务专属装配留在 `internal/services`，工具包绝不反向依赖服务；内置服务的装配入口（如 campus 的 `HostedFunctions`/`ToolSpecs`/`CapabilitySpecs`）由 main 与测试共用，单一来源。
 
