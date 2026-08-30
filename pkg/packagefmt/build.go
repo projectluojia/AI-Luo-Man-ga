@@ -41,17 +41,26 @@ type BuildSpec struct {
 	Source string `toml:"source,omitempty"`
 }
 
+// BuildToolPythonUV 是内置的 Python→wasm 替代执行形态构建器：在源码目录执行
+// `uv sync --locked`（依赖严格按 uv.lock，离线可复现），产物为包目录内 .venv。
+// 进程组件的 python 解释器路径由安装器按平台解析（.venv/bin/python 或
+// .venv/Scripts/python.exe），写进安装期生成的 lock 进程规格。
+const BuildToolPythonUV = "python-uv"
+
 // Build 执行 [build] 声明的构建：为每个 hosted 组件交叉编译 entrypoint 工件。
-// 支持 go-wasm（Go，内置）与 ts-as（TypeScript，AssemblyScript 编译器）；
-// 未知工具 fail-closed。源码目录相对包目录解析，校验不逃逸包目录。
+// 支持 go-wasm（Go，内置）、python-uv（Python，内置）与 ts-as（TypeScript，
+// AssemblyScript 编译器）；未知工具 fail-closed。源码目录相对包目录解析，
+// 校验不逃逸包目录。
 func Build(ctx context.Context, sourceDir string, manifest packagecontract.Manifest, spec BuildSpec) error {
 	switch spec.Tool {
 	case BuildToolGoWasm:
 		return buildGoWasm(ctx, sourceDir, manifest, spec)
+	case BuildToolPythonUV:
+		return buildPythonUV(ctx, sourceDir, spec)
 	case BuildToolAssemblyScript:
 		return buildAssemblyScript(ctx, sourceDir, manifest, spec)
 	default:
-		return fmt.Errorf("%w: %q（支持：go-wasm、ts-as）", ErrBuildUnsupported, spec.Tool)
+		return fmt.Errorf("%w: %q（支持：go-wasm、python-uv、ts-as）", ErrBuildUnsupported, spec.Tool)
 	}
 }
 
@@ -71,6 +80,30 @@ func buildGoWasm(ctx context.Context, sourceDir string, manifest packagecontract
 			command.Env = append(os.Environ(), "GOOS=wasip1", "GOARCH=wasm")
 			return command.CombinedOutput()
 		})
+}
+
+// buildPythonUV 用 uv 在源码目录创建虚拟环境并按 uv.lock 安装依赖：
+// `uv sync --locked --no-dev`（跨平台 os/exec 设目录，无 shell，不依赖
+// PATH 里的 python）。venv 是包级产物，与组件数量无关，只执行一次。
+func buildPythonUV(ctx context.Context, sourceDir string, spec BuildSpec) error {
+	absoluteSourceDir, err := filepath.Abs(sourceDir)
+	if err != nil {
+		return fmt.Errorf("%w: 解析包目录: %v", ErrBuildFailed, err)
+	}
+	source := spec.Source
+	if source == "" {
+		source = "."
+	}
+	if !packagecontract.IsPackagePath(source) {
+		return fmt.Errorf("%w: 源码目录非法 %q", ErrBuildFailed, source)
+	}
+	command := exec.CommandContext(ctx, "uv", "sync", "--locked", "--no-dev")
+	command.Dir = filepath.Join(absoluteSourceDir, source)
+	command.Env = os.Environ()
+	if output, err := command.CombinedOutput(); err != nil {
+		return fmt.Errorf("%w: uv sync: %v\n%s", ErrBuildFailed, err, output)
+	}
+	return nil
 }
 
 // buildAssemblyScript 用 AssemblyScript 编译器编译每个 hosted 组件：
