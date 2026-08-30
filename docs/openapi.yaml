@@ -156,6 +156,10 @@ paths:
   /api/v1/capabilities:
     get:
       summary: List capabilities enabled for the campus-services App
+      description: >-
+        Returns only capabilities explicitly enabled for this App. Capabilities
+        imported for internal cross-component calls are never added to this public
+        projection; those calls are re-authorized by the Go Dispatcher.
       responses:
         "200":
           description: Capability list

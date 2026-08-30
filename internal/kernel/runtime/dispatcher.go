@@ -26,6 +26,7 @@ var (
 	ErrIdempotencyUnavailable = errors.New("durable idempotency is unavailable")
 	ErrConfirmationRequired   = errors.New("governed confirmation is required")
 	ErrAppPolicyUnavailable   = errors.New("app policy is unavailable")
+	ErrCapabilityNotImported  = errors.New("capability is not imported by caller service")
 )
 
 type AppPolicy interface {
@@ -65,6 +66,8 @@ type Dispatcher struct {
 	maxCallDepth  uint16
 }
 
+type callerServiceContextKey struct{}
+
 func NewDispatcher(reg *registry.Registry, policy AppPolicy, config DispatcherConfig) *Dispatcher {
 	if config.MaxCallDepth == 0 {
 		config.MaxCallDepth = 16
@@ -90,6 +93,23 @@ func (d *Dispatcher) InvokeCapability(ctx context.Context, request contracts.Req
 			if err != nil {
 				return routedTarget{}, err
 			}
+			// Service 间调用必须来自注册表声明的 Capability import。调用方身份
+			// 只信任上一跳 Dispatcher 绑定的 context 私有键；未绑定时携带
+			// ServiceID 的请求一律 fail-closed，防止冒充已导入消费方。外部入口
+			// 不携带 ServiceID；同一 Service 内部调用无需重复声明。
+			callerService, _ := ctx.Value(callerServiceContextKey{}).(string)
+			if callerService == "" && request.ServiceID != "" {
+				return routedTarget{}, fmt.Errorf("%w: unbound caller claims consumer %q", ErrCapabilityNotImported, request.ServiceID)
+			}
+			if callerService != "" && callerService != spec.ServiceID {
+				imported, importErr := d.registry.IsCapabilityImported(callerService, capabilityID)
+				if importErr != nil {
+					return routedTarget{}, importErr
+				}
+				if !imported {
+					return routedTarget{}, fmt.Errorf("%w: consumer=%q capability=%q", ErrCapabilityNotImported, callerService, capabilityID)
+				}
+			}
 			return routedTarget{
 				targetID: capabilityID, version: spec.Version, sideEffect: spec.SideEffect,
 				requiresConfirmation: spec.RequiresConfirmation,
@@ -107,6 +127,20 @@ func (d *Dispatcher) InvokeCapability(ctx context.Context, request contracts.Req
 			}, nil
 		},
 	)
+}
+
+// InvokeImportedCapability 供 Service/组件 handler 在 Dispatcher 内调用另一组件
+// 导出的 Capability。消费方身份只取自上一跳绑定的 context 私有键；consumerServiceID
+// 是调用方的显式声明，必须与绑定身份一致，不能借此冒充其他消费方。目标 Service、
+// 处理器、Schema 与权限仍由 Dispatcher 根据 Capability ID 解析，调用方不能自选路由。
+func (d *Dispatcher) InvokeImportedCapability(ctx context.Context, request contracts.RequestContext, consumerServiceID, capabilityID string, payload json.RawMessage) (json.RawMessage, error) {
+	boundService, _ := ctx.Value(callerServiceContextKey{}).(string)
+	if consumerServiceID == "" || boundService == "" || consumerServiceID != boundService {
+		return nil, fmt.Errorf("%w: consumer=%q not bound in governance context", ErrCapabilityNotImported, consumerServiceID)
+	}
+	request.ServiceID = boundService
+	request.TargetType = registry.TargetTypeCapability
+	return d.InvokeCapability(ctx, request, capabilityID, payload)
 }
 
 func (d *Dispatcher) UseTool(ctx context.Context, request contracts.RequestContext, serviceID, toolID string, payload json.RawMessage) (json.RawMessage, error) {
@@ -220,8 +254,18 @@ func (d *Dispatcher) route(
 	}
 	child = target.fillChild(child)
 	child.TargetType = targetType
+	if targetType == registry.TargetTypeCapability {
+		if projection, projectionErr := d.registry.ImportedCapabilityProjection(child.ServiceID); projectionErr == nil {
+			child.ImportedCapabilities = projection
+		} else if !errors.Is(projectionErr, registry.ErrServiceNotFound) {
+			return nil, projectionErr
+		}
+	}
 	result, replayed, err := d.invokeHandler(ctx, request, targetType, target.targetID, target.version, target.sideEffect, fingerprint, func(executionContext context.Context) (json.RawMessage, error) {
-		return target.handler(executionContext, child, payload)
+		// 调用方身份绑定在不可伪造的 context 私有键中；组件可以修改传入
+		// RequestContext 的公开字段，但不能借此绕过下一跳 import 检查。
+		handlerContext := context.WithValue(executionContext, callerServiceContextKey{}, child.ServiceID)
+		return target.handler(handlerContext, child, payload)
 	})
 	if err != nil {
 		observe.Warn(ctx, "调用处理失败",

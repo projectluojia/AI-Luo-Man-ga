@@ -306,7 +306,7 @@ Agent / 其他 Service
 规则：
 
 1. **对外**默认只暴露 Service 的 Capability（及少数系统 Capability，如 storage 对内核内部的封装）。
-2. **对内** Service 通过 `ctx.tool.use` 使用 Tool，不 import 其他 Service 的内部实现。
+2. **对内** Service 通过 `ctx.tool.use` 使用 Tool；跨 Service 协作只能通过注册表显式声明、按精确版本投影的 Capability import，不得 import 其他 Service 的内部实现。
 3. **逻辑复用走 Tool**；**跨业务协作走 Capability**（`ctx.call`）。
 4. Tool 默认不调用 Service；若必须协作，只能再走 Capability，并计入调用深度。
 5. Agent **不得**直接获得完整 Tool 目录；其行动范围由 Go 下发的 `available_capabilities` 决定，模型侧通过这些 Capability 投影出的原生 tools 发起调用。

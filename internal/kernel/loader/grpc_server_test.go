@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -372,5 +373,51 @@ func TestRuntimeHostEnforcesExecutionBudgetOverProtocol(t *testing.T) {
 	}
 	if elapsed := time.Since(started); elapsed > 5*time.Second {
 		t.Fatalf("预算终止耗时 %v，死循环未被强制终止", elapsed)
+	}
+}
+
+func TestRuntimeHostProtocolServerPreservesImportedCapabilityProjections(t *testing.T) {
+	backend := &fakeRuntimeBackend{mode: loader.ModeHosted}
+	protocolServer := newProtocolServer(t, backend, 1, 1)
+	dialer, _ := startRuntimeHost(t, protocolServer)
+	var verifies atomic.Int32
+	host := newRuntimeGRPCHost(t, loader.ModeHosted, dialer, &verifies)
+	manager, err := loader.New(host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Register(context.Background(), runtimeManifest("hosted.projection", loader.ModeHosted)); err != nil {
+		t.Fatal(err)
+	}
+	request := governedRuntimeRequest()
+	request.ImportedCapabilities = []contracts.CapabilityProjection{
+		{ID: "provider.cap", Version: "1.0.0", InputSchemaJSON: `{"type":"object"}`, RequiredPermissions: []string{"bus.read"}},
+		{ID: "other.cap", Version: "2.0.0", InputSchemaJSON: `{"type":"string"}`},
+	}
+	result, err := manager.Handler("hosted.projection")(context.Background(), request, json.RawMessage(`{}`))
+	if err != nil || string(result) != `{"ok":true}` {
+		t.Fatalf("result=%s err=%v", result, err)
+	}
+	backend.mu.Lock()
+	contexts := append([]contracts.RequestContext(nil), backend.contexts...)
+	backend.mu.Unlock()
+	if len(contexts) != 1 || !reflect.DeepEqual(contexts[0].ImportedCapabilities, request.ImportedCapabilities) {
+		t.Fatalf("backend projections=%#v", contexts[0].ImportedCapabilities)
+	}
+	if err := manager.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRuntimeHostProtocolServerRejectsNilCapabilityProjection(t *testing.T) {
+	backend := &fakeRuntimeBackend{mode: loader.ModeHosted}
+	server := newProtocolServer(t, backend, 1, 1)
+	request := invokeRequest("hosted.projection")
+	request.Context.ImportedCapabilities = []*runtimev1.CapabilityProjection{nil}
+	if _, err := server.Invoke(context.Background(), request); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("nil projection error=%v", err)
+	}
+	if backend.invokes.Load() != 0 {
+		t.Fatalf("rejected invoke reached backend: %d", backend.invokes.Load())
 	}
 }

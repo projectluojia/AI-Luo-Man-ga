@@ -327,6 +327,94 @@ func TestRegistryMetadataSnapshotsAreImmutable(t *testing.T) {
 	}
 }
 
+func TestCapabilityImportsRequireExactProviderVersionAndPermissions(t *testing.T) {
+	t.Parallel()
+	reg := registry.New()
+	register := func(serviceID string, imports []registry.CapabilityImport, permissions []string) error {
+		return reg.RegisterService(registry.ServiceRegistration{
+			Spec: registry.ServiceSpec{ID: serviceID, Version: "1.0.0", RequestedPermissions: permissions, CapabilityImports: imports},
+			Capabilities: map[string]struct {
+				Spec    registry.CapabilitySpec
+				Handler registry.Handler
+			}{serviceID + ".cap": {Spec: registry.CapabilitySpec{ID: serviceID + ".cap", Version: "1.0.0", ServiceID: serviceID, InputSchemaJSON: `{"type":"object","additionalProperties":false}`, SideEffect: registry.SideEffectRead}, Handler: func(context.Context, contracts.RequestContext, json.RawMessage) (json.RawMessage, error) {
+				return json.RawMessage(`{}`), nil
+			}}},
+		})
+	}
+	if err := register("provider", nil, []string{"bus.read"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := register("consumer", []registry.CapabilityImport{{ID: "provider.cap", Version: "1.0.0"}}, []string{"bus.read"}); err != nil {
+		t.Fatal(err)
+	}
+	ok, err := reg.IsCapabilityImported("consumer", "provider.cap")
+	if err != nil || !ok {
+		t.Fatalf("import lookup = %v, %v", ok, err)
+	}
+	if _, err := reg.IsCapabilityImported("consumer", "provider.missing"); !errors.Is(err, registry.ErrCapabilityNotFound) {
+		t.Fatalf("missing provider error = %v", err)
+	}
+}
+
+func TestCapabilityImportsRejectVersionMismatchAndPermissionEscalation(t *testing.T) {
+	t.Parallel()
+	reg := registry.New()
+	if err := reg.RegisterService(registry.ServiceRegistration{
+		Spec: registry.ServiceSpec{ID: "provider", Version: "1.0.0", RequestedPermissions: []string{"bus.read", "bus.admin"}},
+		Capabilities: map[string]struct {
+			Spec    registry.CapabilitySpec
+			Handler registry.Handler
+		}{"provider.cap": {Spec: registry.CapabilitySpec{ID: "provider.cap", Version: "1.0.0", ServiceID: "provider", InputSchemaJSON: `{"type":"object","additionalProperties":false}`, SideEffect: registry.SideEffectRead, RequiredPermissions: []string{"bus.read", "bus.admin"}}, Handler: func(context.Context, contracts.RequestContext, json.RawMessage) (json.RawMessage, error) {
+			return json.RawMessage(`{}`), nil
+		}}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	registerConsumer := func(imports []registry.CapabilityImport, permissions []string) error {
+		return reg.RegisterService(registry.ServiceRegistration{
+			Spec: registry.ServiceSpec{ID: "consumer", Version: "1.0.0", RequestedPermissions: permissions, CapabilityImports: imports},
+			Capabilities: map[string]struct {
+				Spec    registry.CapabilitySpec
+				Handler registry.Handler
+			}{"consumer.cap": {Spec: registry.CapabilitySpec{ID: "consumer.cap", Version: "1.0.0", ServiceID: "consumer", InputSchemaJSON: `{"type":"object","additionalProperties":false}`, SideEffect: registry.SideEffectRead}, Handler: func(context.Context, contracts.RequestContext, json.RawMessage) (json.RawMessage, error) {
+				return json.RawMessage(`{}`), nil
+			}}},
+		})
+	}
+	if err := registerConsumer([]registry.CapabilityImport{{ID: "provider.cap", Version: "2.0.0"}}, []string{"bus.read", "bus.admin"}); !errors.Is(err, registry.ErrInvalidSpec) {
+		t.Fatalf("version-mismatched import error = %v", err)
+	}
+	if err := registerConsumer([]registry.CapabilityImport{{ID: "provider.cap", Version: "1.0.0"}}, []string{"bus.read"}); !errors.Is(err, registry.ErrInvalidSpec) {
+		t.Fatalf("permission escalation import error = %v", err)
+	}
+	if err := registerConsumer([]registry.CapabilityImport{{ID: "provider.cap", Version: "1.0.0"}}, []string{"bus.admin", "bus.read"}); err != nil {
+		t.Fatalf("declared import rejected: %v", err)
+	}
+	projection, err := reg.ImportedCapabilityProjection("consumer")
+	if err != nil {
+		t.Fatalf("import projection: %v", err)
+	}
+	if len(projection) != 1 || projection[0].ID != "provider.cap" || projection[0].Version != "1.0.0" ||
+		projection[0].InputSchemaJSON != `{"type":"object","additionalProperties":false}` ||
+		len(projection[0].RequiredPermissions) != 2 || projection[0].RequiredPermissions[0] != "bus.admin" ||
+		projection[0].RequiredPermissions[1] != "bus.read" {
+		t.Fatalf("projection=%#v", projection)
+	}
+	projection[0].RequiredPermissions[0] = "mutated"
+	again, err := reg.ImportedCapabilityProjection("consumer")
+	if err != nil || again[0].RequiredPermissions[0] != "bus.admin" {
+		t.Fatalf("projection snapshot was mutated: %#v", again)
+	}
+	if _, err := reg.ImportedCapabilityProjection("missing"); !errors.Is(err, registry.ErrServiceNotFound) {
+		t.Fatalf("missing service error = %v", err)
+	}
+	// 自身 Capability 无需声明导入。
+	ok, err := reg.IsCapabilityImported("provider", "provider.cap")
+	if err != nil || !ok {
+		t.Fatalf("self import lookup = %v, %v", ok, err)
+	}
+}
+
 const strictEmptySchema = `{"type":"object","additionalProperties":false}`
 
 var noopHandler registry.Handler = func(context.Context, contracts.RequestContext, json.RawMessage) (json.RawMessage, error) {

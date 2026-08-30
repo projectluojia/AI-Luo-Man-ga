@@ -18,13 +18,14 @@ import (
 )
 
 var (
-	ErrDuplicateID        = errors.New("registry id already exists")
-	ErrInvalidSpec        = errors.New("invalid registry spec")
-	ErrToolNotFound       = errors.New("tool is not registered")
-	ErrServiceNotFound    = errors.New("service is not registered")
-	ErrCapabilityNotFound = errors.New("capability is not registered")
-	ErrSchemaValidation   = errors.New("payload does not satisfy registered JSON Schema")
-	ErrPermissionDenied   = errors.New("required permission is not granted")
+	ErrDuplicateID           = errors.New("registry id already exists")
+	ErrInvalidSpec           = errors.New("invalid registry spec")
+	ErrToolNotFound          = errors.New("tool is not registered")
+	ErrServiceNotFound       = errors.New("service is not registered")
+	ErrCapabilityNotFound    = errors.New("capability is not registered")
+	ErrSchemaValidation      = errors.New("payload does not satisfy registered JSON Schema")
+	ErrPermissionDenied      = errors.New("required permission is not granted")
+	ErrCapabilityNotImported = errors.New("capability is not imported by service")
 )
 
 const (
@@ -67,12 +68,20 @@ type CapabilitySpec struct {
 	ToolID string `json:"tool_id,omitempty"`
 }
 
+// CapabilityImport 声明 Service 对另一组件 Capability 的显式依赖。
+// Version 使用注册表中的精确版本，避免导入者在升级后静默获得不同契约。
+type CapabilityImport struct {
+	ID      string `json:"id"`
+	Version string `json:"version"`
+}
+
 type ServiceSpec struct {
-	ID                   string   `json:"id"`
-	Version              string   `json:"version"`
-	Description          string   `json:"description"`
-	ToolDependencies     []string `json:"tool_dependencies,omitempty"`
-	RequestedPermissions []string `json:"requested_permissions,omitempty"`
+	ID                   string             `json:"id"`
+	Version              string             `json:"version"`
+	Description          string             `json:"description"`
+	ToolDependencies     []string           `json:"tool_dependencies,omitempty"`
+	RequestedPermissions []string           `json:"requested_permissions,omitempty"`
+	CapabilityImports    []CapabilityImport `json:"capability_imports,omitempty"`
 }
 
 type ToolRegistration struct {
@@ -147,6 +156,7 @@ func (r *Registry) RegisterService(registration ServiceRegistration) error {
 	}
 	registration.Spec.ToolDependencies = canonicalStrings(registration.Spec.ToolDependencies)
 	registration.Spec.RequestedPermissions = canonicalStrings(registration.Spec.RequestedPermissions)
+	registration.Spec.CapabilityImports = canonicalImports(registration.Spec.CapabilityImports)
 	compiledSchemas := make(map[string]*jsonschema.Schema, len(registration.Capabilities))
 	for capabilityID, capability := range registration.Capabilities {
 		if err := validateCapabilitySpec(registration.Spec, capabilityID, capability.Spec, capability.Handler); err != nil {
@@ -172,6 +182,9 @@ func (r *Registry) RegisterService(registration ServiceRegistration) error {
 		if !permissionSubset(tool.spec.RequiredPermissions, registration.Spec.RequestedPermissions) {
 			return fmt.Errorf("%w: tool %q permissions exceed service %q requested permissions", ErrInvalidSpec, toolID, registration.Spec.ID)
 		}
+	}
+	if err := r.validateCapabilityImportsLocked(registration.Spec); err != nil {
+		return err
 	}
 	for capabilityID := range registration.Capabilities {
 		if _, exists := r.capabilities[capabilityID]; exists {
@@ -240,6 +253,7 @@ func (r *Registry) RegisterBatch(tools []ToolRegistration, services []ServiceReg
 		serviceIDs[registration.Spec.ID] = struct{}{}
 		registration.Spec.ToolDependencies = canonicalStrings(registration.Spec.ToolDependencies)
 		registration.Spec.RequestedPermissions = canonicalStrings(registration.Spec.RequestedPermissions)
+		registration.Spec.CapabilityImports = canonicalImports(registration.Spec.CapabilityImports)
 		schemas := make(map[string]*jsonschema.Schema, len(registration.Capabilities))
 		for capabilityID, capability := range registration.Capabilities {
 			if _, duplicate := capabilityIDs[capabilityID]; duplicate {
@@ -292,6 +306,26 @@ func (r *Registry) RegisterBatch(tools []ToolRegistration, services []ServiceReg
 			if !permissionSubset(tool.spec.RequiredPermissions, registration.Spec.RequestedPermissions) {
 				r.mu.Unlock()
 				return fmt.Errorf("%w: tool %q permissions exceed service %q requested permissions", ErrInvalidSpec, toolID, registration.Spec.ID)
+			}
+		}
+		// 导入可以引用同一批次中先后注册的 Capability；此处在提交前
+		// 以候选规格构造闭合视图，确保批注册仍保持原子性。
+		for _, imported := range registration.Spec.CapabilityImports {
+			capability, exists := r.capabilities[imported.ID]
+			if !exists {
+				for _, candidate := range preparedServices {
+					if value, ok := candidate.registration.Capabilities[imported.ID]; ok {
+						capability = registeredCapability{spec: value.Spec}
+						exists = true
+						break
+					}
+				}
+			}
+			if !exists || capability.spec.Version != imported.Version ||
+				capability.spec.ServiceID == registration.Spec.ID ||
+				!permissionSubset(capability.spec.RequiredPermissions, registration.Spec.RequestedPermissions) {
+				r.mu.Unlock()
+				return fmt.Errorf("%w: service %q imports capability %q", ErrInvalidSpec, registration.Spec.ID, imported.ID)
 			}
 		}
 	}
@@ -358,6 +392,8 @@ func validateServiceSpec(spec ServiceSpec, capabilityCount int) error {
 		return fmt.Errorf("%w: service %q has invalid tool dependencies", ErrInvalidSpec, spec.ID)
 	case !validPermissionList(spec.RequestedPermissions):
 		return fmt.Errorf("%w: service %q has invalid requested permissions", ErrInvalidSpec, spec.ID)
+	case !validCapabilityImports(spec.CapabilityImports):
+		return fmt.Errorf("%w: service %q has invalid capability imports", ErrInvalidSpec, spec.ID)
 	default:
 		return nil
 	}
@@ -441,6 +477,37 @@ func canonicalStrings(values []string) []string {
 	return copied
 }
 
+func canonicalImports(values []CapabilityImport) []CapabilityImport {
+	copied := append([]CapabilityImport(nil), values...)
+	sort.Slice(copied, func(i, j int) bool { return copied[i].ID < copied[j].ID })
+	return copied
+}
+
+func validCapabilityImports(values []CapabilityImport) bool {
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		if !validStableID(value.ID) || !validVersion(value.Version) {
+			return false
+		}
+		if _, exists := seen[value.ID]; exists {
+			return false
+		}
+		seen[value.ID] = struct{}{}
+	}
+	return true
+}
+
+func (r *Registry) validateCapabilityImportsLocked(service ServiceSpec) error {
+	for _, imported := range service.CapabilityImports {
+		capability, exists := r.capabilities[imported.ID]
+		if !exists || capability.spec.Version != imported.Version ||
+			!permissionSubset(capability.spec.RequiredPermissions, service.RequestedPermissions) {
+			return fmt.Errorf("%w: service %q imports capability %q", ErrInvalidSpec, service.ID, imported.ID)
+		}
+	}
+	return nil
+}
+
 func permissionSubset(required, granted []string) bool {
 	grantedSet := make(map[string]struct{}, len(granted))
 	for _, permission := range granted {
@@ -472,6 +539,53 @@ func (r *Registry) ResolveCapability(id string) (CapabilitySpec, Handler, error)
 		return CapabilitySpec{}, nil, fmt.Errorf("%w: %q", ErrCapabilityNotFound, id)
 	}
 	return cloneCapabilitySpec(capability.spec), capability.handler, nil
+}
+
+// IsCapabilityImported 判断 consumerService 是否显式导入了 provider Capability。
+// 该检查只读取注册表快照，不返回可绕过 Dispatcher 的处理器。
+func (r *Registry) IsCapabilityImported(consumerService, capabilityID string) (bool, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	service, exists := r.services[consumerService]
+	if !exists {
+		return false, fmt.Errorf("%w: %q", ErrServiceNotFound, consumerService)
+	}
+	capability, exists := r.capabilities[capabilityID]
+	if !exists {
+		return false, fmt.Errorf("%w: %q", ErrCapabilityNotFound, capabilityID)
+	}
+	if capability.spec.ServiceID == consumerService {
+		return true, nil
+	}
+	for _, imported := range service.CapabilityImports {
+		if imported.ID == capabilityID && imported.Version == capability.spec.Version {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// ImportedCapabilityProjection 返回 Service 声明的精确导入投影，结果为独立
+// 快照；调用方不能通过它取得 Provider 处理器或修改注册表元数据。
+func (r *Registry) ImportedCapabilityProjection(serviceID string) ([]contracts.CapabilityProjection, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	service, exists := r.services[serviceID]
+	if !exists {
+		return nil, fmt.Errorf("%w: %q", ErrServiceNotFound, serviceID)
+	}
+	projection := make([]contracts.CapabilityProjection, 0, len(service.CapabilityImports))
+	for _, imported := range service.CapabilityImports {
+		capability, exists := r.capabilities[imported.ID]
+		if !exists || capability.spec.Version != imported.Version {
+			return nil, fmt.Errorf("%w: service %q imports capability %q", ErrCapabilityNotImported, serviceID, imported.ID)
+		}
+		projection = append(projection, contracts.CapabilityProjection{
+			ID: imported.ID, Version: imported.Version, InputSchemaJSON: capability.spec.InputSchemaJSON,
+			RequiredPermissions: append([]string(nil), capability.spec.RequiredPermissions...),
+		})
+	}
+	return projection, nil
 }
 
 func (r *Registry) ResolveTool(serviceID, toolID string) (ToolSpec, Handler, error) {
@@ -551,6 +665,7 @@ func (r *Registry) Capabilities() []CapabilitySpec {
 func cloneServiceSpec(spec ServiceSpec) ServiceSpec {
 	spec.ToolDependencies = append([]string(nil), spec.ToolDependencies...)
 	spec.RequestedPermissions = append([]string(nil), spec.RequestedPermissions...)
+	spec.CapabilityImports = append([]CapabilityImport(nil), spec.CapabilityImports...)
 	return spec
 }
 

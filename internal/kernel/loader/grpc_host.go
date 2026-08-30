@@ -304,13 +304,14 @@ func (r *grpcRuntime) Invoke(ctx context.Context, request contracts.RequestConte
 			RunId: request.RunID, ParentRunId: request.ParentRunID, CallDepth: uint32(request.CallDepth),
 			DeadlineUnixMs: deadlineUnixMilli(request.Deadline), IdempotencyKey: request.IdempotencyKey,
 			ConfirmationId: request.ConfirmationID, ProtocolVersion: request.ProtocolVersion,
-			PermissionScope: append([]string(nil), request.PermissionScope...),
-			CallChain:       append([]string(nil), request.CallChain...),
-			CallId:          request.CallID,
-			TargetType:      request.TargetType,
-			CapabilityId:    request.CapabilityID,
-			ServiceId:       request.ServiceID,
-			ToolId:          request.ToolID,
+			PermissionScope:      append([]string(nil), request.PermissionScope...),
+			CallChain:            append([]string(nil), request.CallChain...),
+			CallId:               request.CallID,
+			TargetType:           request.TargetType,
+			CapabilityId:         request.CapabilityID,
+			ServiceId:            request.ServiceID,
+			ToolId:               request.ToolID,
+			ImportedCapabilities: encodeCapabilityProjections(request.ImportedCapabilities),
 		},
 		PayloadJson: append([]byte(nil), payload...),
 	})
@@ -389,7 +390,7 @@ func validateRuntimeInvoke(request contracts.RequestContext, payload json.RawMes
 		return err
 	}
 	if len(payload) == 0 || len(payload) > maxInvokePayloadBytes || !json.Valid(payload) ||
-		request.CallDepth > 64 || len(request.PermissionScope) > maxContextItems || len(request.CallChain) > maxContextItems {
+		request.CallDepth > 64 || len(request.PermissionScope) > maxContextItems || len(request.CallChain) > maxContextItems || len(request.ImportedCapabilities) > maxContextItems {
 		return ErrRuntimeProtocol
 	}
 	values := []string{
@@ -399,6 +400,10 @@ func validateRuntimeInvoke(request contracts.RequestContext, payload json.RawMes
 	}
 	values = append(values, request.PermissionScope...)
 	values = append(values, request.CallChain...)
+	for _, projection := range request.ImportedCapabilities {
+		values = append(values, projection.ID, projection.Version, projection.InputSchemaJSON)
+		values = append(values, projection.RequiredPermissions...)
+	}
 	for _, value := range values {
 		if len(value) > maxContextValueBytes || !utf8.ValidString(value) || strings.ContainsAny(value, "\x00\r\n") {
 			return ErrRuntimeProtocol
@@ -417,6 +422,14 @@ func validateRuntimeInvoke(request contracts.RequestContext, payload json.RawMes
 		return ErrRuntimeProtocol
 	}
 	return nil
+}
+
+func encodeCapabilityProjections(values []contracts.CapabilityProjection) []*runtimev1.CapabilityProjection {
+	result := make([]*runtimev1.CapabilityProjection, 0, len(values))
+	for _, value := range values {
+		result = append(result, &runtimev1.CapabilityProjection{Id: value.ID, Version: value.Version, InputSchemaJson: value.InputSchemaJSON, RequiredPermissions: append([]string(nil), value.RequiredPermissions...)})
+	}
+	return result
 }
 
 func deadlineUnixMilli(deadline time.Time) int64 {

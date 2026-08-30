@@ -179,6 +179,126 @@ func TestDispatcherProjectsClosedTargetIdentityToHandlers(t *testing.T) {
 	}
 }
 
+func TestDispatcherProjectsOnlyDeclaredImportedCapability(t *testing.T) {
+	t.Parallel()
+	reg := registry.New()
+	policy := runtimetest.NewStaticAppPolicy()
+	policy.Enable("app", "provider.cap")
+	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{})
+	called := 0
+	var consumerRequest, providerRequest contracts.RequestContext
+	providerSchema := `{"type":"object","additionalProperties":false}`
+	if err := reg.RegisterService(registry.ServiceRegistration{
+		Spec: registry.ServiceSpec{ID: "provider", Version: "1.0.0"},
+		Capabilities: map[string]struct {
+			Spec    registry.CapabilitySpec
+			Handler registry.Handler
+		}{"provider.cap": {Spec: registry.CapabilitySpec{ID: "provider.cap", Version: "1.0.0", ServiceID: "provider", InputSchemaJSON: providerSchema, SideEffect: registry.SideEffectRead}, Handler: func(_ context.Context, request contracts.RequestContext, _ json.RawMessage) (json.RawMessage, error) {
+			called++
+			providerRequest = request
+			if request.PermissionScope != nil {
+				t.Fatalf("unexpected permission scope: %#v", request.PermissionScope)
+			}
+			return json.RawMessage(`{"ok":true}`), nil
+		}}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.RegisterService(registry.ServiceRegistration{
+		Spec: registry.ServiceSpec{ID: "consumer", Version: "1.0.0", CapabilityImports: []registry.CapabilityImport{{ID: "provider.cap", Version: "1.0.0"}}},
+		Capabilities: map[string]struct {
+			Spec    registry.CapabilitySpec
+			Handler registry.Handler
+		}{"consumer.cap": {Spec: registry.CapabilitySpec{ID: "consumer.cap", Version: "1.0.0", ServiceID: "consumer", InputSchemaJSON: providerSchema, SideEffect: registry.SideEffectRead}, Handler: func(ctx context.Context, request contracts.RequestContext, payload json.RawMessage) (json.RawMessage, error) {
+			consumerRequest = request
+			return dispatcher.InvokeImportedCapability(ctx, request, "consumer", "provider.cap", payload)
+		}}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.RegisterService(registry.ServiceRegistration{
+		Spec: registry.ServiceSpec{ID: "other", Version: "1.0.0"},
+		Capabilities: map[string]struct {
+			Spec    registry.CapabilitySpec
+			Handler registry.Handler
+		}{"other.cap": {Spec: registry.CapabilitySpec{ID: "other.cap", Version: "1.0.0", ServiceID: "other", InputSchemaJSON: providerSchema, SideEffect: registry.SideEffectRead}, Handler: func(context.Context, contracts.RequestContext, json.RawMessage) (json.RawMessage, error) {
+			return json.RawMessage(`{}`), nil
+		}}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	policy.Enable("app", "consumer.cap")
+	if _, err := dispatcher.InvokeCapability(context.Background(), validRequest(), "consumer.cap", json.RawMessage(`{}`)); err != nil {
+		t.Fatalf("imported call failed: %v", err)
+	}
+	if called != 1 {
+		t.Fatalf("provider calls = %d, want 1", called)
+	}
+	if len(consumerRequest.ImportedCapabilities) != 1 ||
+		consumerRequest.ImportedCapabilities[0].ID != "provider.cap" ||
+		consumerRequest.ImportedCapabilities[0].Version != "1.0.0" ||
+		consumerRequest.ImportedCapabilities[0].InputSchemaJSON != providerSchema {
+		t.Fatalf("consumer hop projection=%#v", consumerRequest.ImportedCapabilities)
+	}
+	if len(providerRequest.ImportedCapabilities) != 0 || providerRequest.ServiceID != "provider" ||
+		providerRequest.CapabilityID != "provider.cap" {
+		t.Fatalf("provider hop request=%#v", providerRequest)
+	}
+	request := validRequest()
+	request.TargetType = registry.TargetTypeCapability
+	request.ServiceID = "other"
+	if _, err := dispatcher.InvokeCapability(context.Background(), request, "provider.cap", json.RawMessage(`{}`)); !errors.Is(err, runtime.ErrCapabilityNotImported) {
+		t.Fatalf("undeclared call error = %v", err)
+	}
+}
+
+func TestDispatcherImportIdentityFailsClosedWithoutBoundCaller(t *testing.T) {
+	t.Parallel()
+	reg := registry.New()
+	policy := runtimetest.NewStaticAppPolicy()
+	policy.Enable("app", "provider.cap")
+	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{})
+	if err := reg.RegisterService(registry.ServiceRegistration{
+		Spec: registry.ServiceSpec{ID: "provider", Version: "1.0.0"},
+		Capabilities: map[string]struct {
+			Spec    registry.CapabilitySpec
+			Handler registry.Handler
+		}{"provider.cap": {Spec: registry.CapabilitySpec{ID: "provider.cap", Version: "1.0.0", ServiceID: "provider", InputSchemaJSON: `{"type":"object","additionalProperties":false}`, SideEffect: registry.SideEffectRead}, Handler: func(context.Context, contracts.RequestContext, json.RawMessage) (json.RawMessage, error) {
+			return json.RawMessage(`{"ok":true}`), nil
+		}}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.RegisterService(registry.ServiceRegistration{
+		Spec: registry.ServiceSpec{ID: "consumer", Version: "1.0.0", CapabilityImports: []registry.CapabilityImport{{ID: "provider.cap", Version: "1.0.0"}}},
+		Capabilities: map[string]struct {
+			Spec    registry.CapabilitySpec
+			Handler registry.Handler
+		}{"consumer.cap": {Spec: registry.CapabilitySpec{ID: "consumer.cap", Version: "1.0.0", ServiceID: "consumer", InputSchemaJSON: `{"type":"object","additionalProperties":false}`, SideEffect: registry.SideEffectRead}, Handler: func(ctx context.Context, request contracts.RequestContext, payload json.RawMessage) (json.RawMessage, error) {
+			// handler 身份已绑定为 consumer；显式声明冒充其他消费方必须被拒绝。
+			return dispatcher.InvokeImportedCapability(ctx, request, "other", "provider.cap", payload)
+		}}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	policy.Enable("app", "consumer.cap")
+	// 未绑定身份的调用方即使声称自己是通过导入校验的 consumer 也必须拒绝。
+	spoofed := validRequest()
+	spoofed.TargetType = registry.TargetTypeCapability
+	spoofed.ServiceID = "consumer"
+	if _, err := dispatcher.InvokeCapability(context.Background(), spoofed, "provider.cap", json.RawMessage(`{}`)); !errors.Is(err, runtime.ErrCapabilityNotImported) {
+		t.Fatalf("impersonated import error = %v", err)
+	}
+	// 未绑定身份时显式导入入口必须拒绝。
+	if _, err := dispatcher.InvokeImportedCapability(context.Background(), validRequest(), "consumer", "provider.cap", json.RawMessage(`{}`)); !errors.Is(err, runtime.ErrCapabilityNotImported) {
+		t.Fatalf("unbound imported invoke error = %v", err)
+	}
+	// 绑定身份与显式声明不一致必须拒绝。
+	if _, err := dispatcher.InvokeCapability(context.Background(), validRequest(), "consumer.cap", json.RawMessage(`{}`)); !errors.Is(err, runtime.ErrCapabilityNotImported) {
+		t.Fatalf("mismatched import declaration error = %v", err)
+	}
+}
+
 func TestDispatcherUsesPersistentAppPolicyAndRevalidatesChanges(t *testing.T) {
 	reg := registry.New()
 	called := 0
