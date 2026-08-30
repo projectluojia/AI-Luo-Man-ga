@@ -11,8 +11,6 @@ import (
 	"regexp"
 	"strings"
 	"unicode"
-
-	"github.com/projectluojia/AI-Luo-Man-ga/pkg/sdkgen"
 )
 
 const (
@@ -55,9 +53,6 @@ func analyzeTS(ctx context.Context, source []byte, packageID, workDir string, ru
 		var schema map[string]any
 		if err := json.Unmarshal(output, &schema); err != nil {
 			return nil, fmt.Errorf("schemaextract: schema 输出非法：%w", err)
-		}
-		if err := sdkgen.ValidateSchema(output); err != nil {
-			return nil, fmt.Errorf("schemaextract: capability %s 的 schema 不受支持：%w", name, err)
 		}
 		normalized, err := json.Marshal(schema)
 		if err != nil {
