@@ -109,7 +109,7 @@ func TestIsolatedRuntimeHelper(t *testing.T) {
 	<-serveDone
 }
 
-func TestIsolatedProcessHostRunsOutsideKernelAndShutsDownGracefully(t *testing.T) {
+func TestProcessHostRunsOutsideKernelAndShutsDownGracefully(t *testing.T) {
 	executable, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
@@ -125,8 +125,8 @@ func TestIsolatedProcessHostRunsOutsideKernelAndShutsDownGracefully(t *testing.T
 	}
 	var resolves atomic.Int32
 	var verifies atomic.Int32
-	host, err := loader.NewIsolatedProcessHost(loader.IsolatedProcessHostConfig{
-		ResolveInstalled: func(context.Context, loader.Manifest) (packagecontract.ProcessSpec, error) {
+	host, err := loader.NewProcessHost(loader.ProcessHostConfig{
+		Resolve: func(context.Context, loader.Manifest) (packagecontract.ProcessSpec, error) {
 			resolves.Add(1)
 			return spec, nil
 		},
@@ -179,7 +179,7 @@ func TestIsolatedProcessHostRunsOutsideKernelAndShutsDownGracefully(t *testing.T
 	}
 }
 
-func TestIsolatedProcessHostEnforcesFileSizeLimit(t *testing.T) {
+func TestProcessHostEnforcesFileSizeLimit(t *testing.T) {
 	executable, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
@@ -197,10 +197,10 @@ func TestIsolatedProcessHostEnforcesFileSizeLimit(t *testing.T) {
 		// RLIMIT_FSIZE=1 KiB：helper 写入 8 KiB 必须被限额阻止。
 		Limits: packagecontract.ProcessLimits{MaxFileBytes: 1024},
 	}
-	host, err := loader.NewIsolatedProcessHost(loader.IsolatedProcessHostConfig{
-		ResolveInstalled: func(context.Context, loader.Manifest) (packagecontract.ProcessSpec, error) { return spec, nil },
-		VerifyInstalled:  func(context.Context, loader.Manifest, packagecontract.ProcessSpec) error { return nil },
-		DialTimeout:      3 * time.Second, StopGrace: time.Second, TerminateGrace: time.Second,
+	host, err := loader.NewProcessHost(loader.ProcessHostConfig{
+		Resolve:     func(context.Context, loader.Manifest) (packagecontract.ProcessSpec, error) { return spec, nil },
+		Verify:      func(context.Context, loader.Manifest, packagecontract.ProcessSpec) error { return nil },
+		DialTimeout: 3 * time.Second, StopGrace: time.Second, TerminateGrace: time.Second,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -234,7 +234,7 @@ func TestIsolatedProcessHostEnforcesFileSizeLimit(t *testing.T) {
 	}
 }
 
-func TestIsolatedProcessHostForcesBoundedExitAfterStopGrace(t *testing.T) {
+func TestProcessHostForcesBoundedExitAfterStopGrace(t *testing.T) {
 	executable, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
@@ -249,12 +249,12 @@ func TestIsolatedProcessHostForcesBoundedExitAfterStopGrace(t *testing.T) {
 		},
 		WorkDir: workDir, Address: "unix:" + socketPath,
 	}
-	host, err := loader.NewIsolatedProcessHost(loader.IsolatedProcessHostConfig{
-		ResolveInstalled: func(context.Context, loader.Manifest) (packagecontract.ProcessSpec, error) { return spec, nil },
-		VerifyInstalled:  func(context.Context, loader.Manifest, packagecontract.ProcessSpec) error { return nil },
-		DialTimeout:      3 * time.Second,
-		StopGrace:        100 * time.Millisecond,
-		TerminateGrace:   100 * time.Millisecond,
+	host, err := loader.NewProcessHost(loader.ProcessHostConfig{
+		Resolve:        func(context.Context, loader.Manifest) (packagecontract.ProcessSpec, error) { return spec, nil },
+		Verify:         func(context.Context, loader.Manifest, packagecontract.ProcessSpec) error { return nil },
+		DialTimeout:    3 * time.Second,
+		StopGrace:      100 * time.Millisecond,
+		TerminateGrace: 100 * time.Millisecond,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -280,7 +280,7 @@ func TestIsolatedProcessHostForcesBoundedExitAfterStopGrace(t *testing.T) {
 	}
 }
 
-func TestIsolatedProcessHostRejectsUnsafeLaunchSpecifications(t *testing.T) {
+func TestProcessHostRejectsUnsafeLaunchSpecifications(t *testing.T) {
 	executable, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
@@ -316,9 +316,9 @@ func TestIsolatedProcessHostRejectsUnsafeLaunchSpecifications(t *testing.T) {
 	}
 	for _, spec := range tests {
 		var verifies atomic.Int32
-		host, err := loader.NewIsolatedProcessHost(loader.IsolatedProcessHostConfig{
-			ResolveInstalled: func(context.Context, loader.Manifest) (packagecontract.ProcessSpec, error) { return spec, nil },
-			VerifyInstalled: func(context.Context, loader.Manifest, packagecontract.ProcessSpec) error {
+		host, err := loader.NewProcessHost(loader.ProcessHostConfig{
+			Resolve: func(context.Context, loader.Manifest) (packagecontract.ProcessSpec, error) { return spec, nil },
+			Verify: func(context.Context, loader.Manifest, packagecontract.ProcessSpec) error {
 				verifies.Add(1)
 				return nil
 			},

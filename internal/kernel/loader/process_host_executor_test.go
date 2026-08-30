@@ -26,7 +26,10 @@ func (executorHealthServer) Health(context.Context, *executorv1.HealthRequest) (
 	}, nil
 }
 
-func TestExecutorHostLoadsConnectedRuntime(t *testing.T) {
+// TestProcessHostServesExecutorOverConnectMode 验证统一进程宿主的 executor 面：
+// 连接模式（Spawn=false）只拨号外部已启动的 executor.v1 运行时，并按角色暴露
+// 会话客户端（不暴露能力调用面）。
+func TestProcessHostServesExecutorOverConnectMode(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -40,12 +43,11 @@ func TestExecutorHostLoadsConnectedRuntime(t *testing.T) {
 		ID: "executor.test", Version: "1.0.0", Mode: loader.ModeIsolated,
 		Role: loader.RoleExecutor, LockedDigest: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
 	}
-	host, err := loader.NewExecutorHost(loader.ExecutorHostConfig{
-		Manifest: manifest,
-		Resolve: func(context.Context) (packagecontract.ProcessSpec, error) {
+	host, err := loader.NewProcessHost(loader.ProcessHostConfig{
+		Resolve: func(context.Context, loader.Manifest) (packagecontract.ProcessSpec, error) {
 			return packagecontract.ProcessSpec{Address: listener.Addr().String()}, nil
 		},
-		Model: "test-model", DialTimeout: 5 * time.Second,
+		ExecutorHealthModel: "test-model", DialTimeout: 5 * time.Second,
 		StopGrace: time.Second, TerminateGrace: time.Second,
 	})
 	if err != nil {
@@ -84,13 +86,22 @@ func TestExecutorHostLoadsConnectedRuntime(t *testing.T) {
 	}
 }
 
-func TestExecutorHostRejectsMissingExecutorManifest(t *testing.T) {
-	_, err := loader.NewExecutorHost(loader.ExecutorHostConfig{
-		Manifest: loader.Manifest{ID: "capability.test", Version: "1.0.0", Mode: loader.ModeHosted, Role: loader.RoleCapability, LockedDigest: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"},
-		Resolve:  func(context.Context) (packagecontract.ProcessSpec, error) { return packagecontract.ProcessSpec{}, nil },
-		Model:    "test-model",
+// TestProcessHostRequiresSpawnForCapabilityRole 验证 capability 组件必须由本
+// 宿主启动：连接模式只服务 executor 角色。
+func TestProcessHostRequiresSpawnForCapabilityRole(t *testing.T) {
+	host, err := loader.NewProcessHost(loader.ProcessHostConfig{
+		Resolve: func(context.Context, loader.Manifest) (packagecontract.ProcessSpec, error) {
+			return packagecontract.ProcessSpec{}, nil
+		},
 	})
-	if !errors.Is(err, loader.ErrInvalidManifest) {
-		t.Fatalf("error = %v, want ErrInvalidManifest", err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = host.Verify(t.Context(), loader.Manifest{
+		ID: "capability.test", Version: "1.0.0", Mode: loader.ModeIsolated,
+		Role: loader.RoleCapability, LockedDigest: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+	})
+	if !errors.Is(err, loader.ErrInvalidProcessSpec) {
+		t.Fatalf("verify error = %v, want ErrInvalidProcessSpec", err)
 	}
 }
