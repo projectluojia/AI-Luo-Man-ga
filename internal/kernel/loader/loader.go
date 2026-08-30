@@ -814,7 +814,13 @@ func (m *Manager) Shutdown(ctx context.Context) error {
 	shutdownContext := ctx
 	var cancel context.CancelFunc
 	if errors.Is(ctx.Err(), context.Canceled) {
-		shutdownContext, cancel = context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		timeout := 5 * time.Second
+		if deadline, ok := ctx.Deadline(); ok {
+			if remaining := time.Until(deadline); remaining < timeout {
+				timeout = remaining
+			}
+		}
+		shutdownContext, cancel = context.WithTimeout(context.WithoutCancel(ctx), timeout)
 		defer cancel()
 	}
 	m.mu.Lock()

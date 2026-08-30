@@ -101,6 +101,18 @@ func ListInstalled(ctx context.Context, root string) ([]InstalledRecord, error) 
 	if root == "" {
 		return nil, ErrInvalidFormat
 	}
+	absoluteRoot, err := filepath.Abs(root)
+	if err != nil {
+		return nil, err
+	}
+	if err := waitForMutationUnlock(ctx, absoluteRoot); err != nil {
+		return nil, err
+	}
+	return listInstalled(ctx, absoluteRoot)
+}
+
+// listInstalled 在调用方已持有安装根变更锁时读取包，避免锁内读操作等待自身。
+func listInstalled(ctx context.Context, root string) ([]InstalledRecord, error) {
 	entries, err := os.ReadDir(root)
 	if errors.Is(err, os.ErrNotExist) {
 		return []InstalledRecord{}, nil

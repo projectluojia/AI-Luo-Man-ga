@@ -483,6 +483,36 @@ func TestLoaderShutdownRejectsAdmissionAndHonorsDeadline(t *testing.T) {
 	}
 }
 
+func TestLoaderShutdownCancelledContextPreservesEarlierDeadline(t *testing.T) {
+	runtime := &fakeRuntime{description: loader.Description{ID: "shutdown.deadline", Version: "1.0.0", Mode: loader.ModeHosted}}
+	manager, err := loader.New(&fakeHost{runtime: runtime})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Register(context.Background(), loader.Manifest{
+		ID: "shutdown.deadline", Version: "1.0.0", Mode: loader.ModeHosted, Role: loader.RoleCapability, LockedDigest: digest,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	lease, err := manager.Acquire(context.Background(), "shutdown.deadline")
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadlineContext, cancel := context.WithDeadline(context.Background(), time.Now().Add(30*time.Millisecond))
+	cancel()
+	started := time.Now()
+	if err := manager.Shutdown(deadlineContext); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("cancelled shutdown error=%v, want context.DeadlineExceeded", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("cancelled shutdown exceeded caller deadline by too much: %s", elapsed)
+	}
+	lease.Release()
+	if err := manager.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestLoaderRejectsRemoteAndMalformedLocks(t *testing.T) {
 	if _, err := loader.New(&fakeHost{mode: "remote"}); !errors.Is(err, loader.ErrUnsupportedMode) {
 		t.Fatalf("remote host error=%v", err)

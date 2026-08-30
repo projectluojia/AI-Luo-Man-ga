@@ -239,9 +239,12 @@ func TestManagerUpgradeCancellationDuringLoadStopsCandidate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := lease.Invoke(context.Background(), hostedTestRequest("extension.read"), []byte(`{}`)); err != nil {
+		t.Fatal(err)
+	}
 	lease.Release()
-	if v1.starts.Load() != 1 || v2.starts.Load() != 1 || v2.stops.Load() != 1 {
-		t.Fatalf("runtime counts after load cancellation: v1 starts=%d, v2 starts=%d stops=%d", v1.starts.Load(), v2.starts.Load(), v2.stops.Load())
+	if v1.starts.Load() != 1 || v2.starts.Load() != 1 || v1.invokes.Load() != 1 || v2.invokes.Load() != 0 || v2.stops.Load() != 1 {
+		t.Fatalf("runtime counts after load cancellation: v1 starts=%d invokes=%d, v2 starts=%d invokes=%d stops=%d", v1.starts.Load(), v1.invokes.Load(), v2.starts.Load(), v2.invokes.Load(), v2.stops.Load())
 	}
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()
