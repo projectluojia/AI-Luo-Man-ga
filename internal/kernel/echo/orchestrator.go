@@ -16,6 +16,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/appconfig"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/confirmation"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contextasm"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/executor"
@@ -44,6 +45,20 @@ const (
 	MaxChildRunsPerRoot        = 32
 )
 
+// ConfirmationGateway 是 Echo 编排所需的确认治理窄端口：创建待确认记录、
+// 投影 Echo 的活跃确认、取消时批量撤销。由 confirmation.Service 实现。
+type ConfirmationGateway interface {
+	Request(ctx context.Context, appID, echoID, runID, callID string, spec confirmation.RequestSpec, arguments []byte, expiresAt time.Time) (confirmation.Confirmation, error)
+	ActiveByEcho(ctx context.Context, appID, echoID string) ([]confirmation.Confirmation, error)
+	ActiveBySession(ctx context.Context, appID, sessionID string) ([]confirmation.Confirmation, error)
+	ApprovedForCall(ctx context.Context, appID, echoID, sessionID, targetType, targetID, digest string) (confirmation.Confirmation, error)
+	RevokeEcho(ctx context.Context, appID, echoID string, now time.Time) (int64, error)
+	RevokeRun(ctx context.Context, appID, runID string, now time.Time) (int64, error)
+}
+
+// MaxProjectedConfirmations 限制 StartRun 确认投影的数量上限，防止异常累积。
+const MaxProjectedConfirmations = 16
+
 type EventEmitter func(Event) error
 
 type Config struct {
@@ -61,6 +76,10 @@ type Config struct {
 	// Prompts 是可选的内核系统端口：由 L3 prompt Service 渲染基础提示、渠道提示
 	// 与用户个性化片段。nil 时保留旧的内联拼装路径，仅供存量测试使用。
 	Prompts PromptRenderer
+	// Confirmations 是可选的确认治理端口。配置后，需要确认的高风险调用在
+	// confirmation_required 失败时自动创建持久确认并把公共投影返回给执行者，
+	// Run 启动时投影 Echo 的活跃确认；nil 时保留纯 fail-closed 行为。
+	Confirmations ConfirmationGateway
 }
 
 // PromptRenderRequest 是内核向 L3 提示词 Service 投影的受治理输入。
@@ -79,17 +98,21 @@ type PromptRenderer interface {
 }
 
 type Orchestrator struct {
-	agent       executor.Client
-	registry    *registry.Registry
-	dispatcher  *runtime.Dispatcher
-	policy      runtime.AppPolicy
-	store       Store
-	idempotency *idempotency.Manager
-	context     *contextasm.Assembler
-	config      Config
-	now         func() time.Time
+	agent         executor.Client
+	registry      *registry.Registry
+	dispatcher    *runtime.Dispatcher
+	policy        runtime.AppPolicy
+	store         Store
+	idempotency   *idempotency.Manager
+	context       *contextasm.Assembler
+	confirmations ConfirmationGateway
+	config        Config
+	now           func() time.Time
 }
 
+// NewOrchestrator creates an Echo orchestrator with the supplied dependencies and configuration.
+// It applies default values for omitted settings and panics if the application configuration
+// source, context configuration, or child Run limit is invalid.
 func NewOrchestrator(
 	agent executor.Client,
 	reg *registry.Registry,
@@ -132,15 +155,16 @@ func NewOrchestrator(
 		panic(fmt.Sprintf("orchestrator context assembly misconfigured: %v", err))
 	}
 	return &Orchestrator{
-		agent:       agent,
-		registry:    reg,
-		dispatcher:  dispatcher,
-		policy:      policy,
-		store:       store,
-		idempotency: idempotency.NewManager(store),
-		context:     assembler,
-		config:      config,
-		now:         time.Now,
+		agent:         agent,
+		registry:      reg,
+		dispatcher:    dispatcher,
+		policy:        policy,
+		store:         store,
+		idempotency:   idempotency.NewManager(store),
+		context:       assembler,
+		confirmations: config.Confirmations,
+		config:        config,
+		now:           time.Now,
 	}
 }
 
@@ -389,6 +413,16 @@ func (o *Orchestrator) Cancel(ctx context.Context, echoID string) (bool, error) 
 	if err == nil && cancelled {
 		observe.DefaultMetrics().Cancellation()
 		observe.DefaultMetrics().QueueRemoved()
+		// Echo 取消时 fail-closed 撤销其全部等待/已批准确认，撤销结果不影响取消语义。
+		if o.confirmations != nil {
+			revokeContext, revokeCancel := detachedContext(ctx)
+			if _, revokeErr := o.confirmations.RevokeEcho(revokeContext, o.config.AppID, echoID, o.now().UTC()); revokeErr != nil {
+				observe.Error(ctx, "撤销 Echo 待确认记录失败", revokeErr,
+					observe.StringAttr("echo_id", echoID),
+				)
+			}
+			revokeCancel()
+		}
 	}
 	return cancelled, err
 }
@@ -635,6 +669,7 @@ func (o *Orchestrator) executeClaimedRun(ctx context.Context, request RunRequest
 		return errors.Join(ErrAppDisabled, o.fail(ctx, run, "app_disabled", false))
 	}
 	capabilities := o.projectCapabilities(policy, run)
+	pendingConfirmations := o.pendingConfirmations(runContext, run)
 	// 上下文装配：由 Go 决定模型本次看到的内容（配置系统提示 + 渠道提示 +
 	// 当前标准消息 + 受限会话历史 + 当前 Capability 投影），Python 只接收
 	// 装配完成的系统提示。
@@ -714,24 +749,25 @@ func (o *Orchestrator) executeClaimedRun(ctx context.Context, request RunRequest
 		RunId:    runID,
 		Sequence: 1,
 		Body: &executor.Frame_StartRun{StartRun: &executor.StartRun{
-			AppId:             o.config.AppID,
-			InputMessage:      request.Message,
-			Timezone:          app.Timezone,
-			Capabilities:      capabilities,
-			Model:             run.Model,
-			SystemPrompt:      systemPrompt,
-			MaxSteps:          run.MaxSteps,
-			ProtocolVersion:   executor.Version,
-			MaxToolCalls:      run.MaxToolCalls,
-			MaxInputTokens:    run.MaxInputTokens,
-			MaxOutputTokens:   run.MaxOutputTokens,
-			MaxTotalTokens:    run.MaxTotalTokens,
-			MaxOutputBytes:    run.MaxOutputBytes,
-			MaxCostMicrousd:   run.MaxCostMicrousd,
-			ProviderTimeoutMs: run.ProviderTimeoutMS,
-			TraceId:           observe.String(ctx, "trace_id"),
-			ParentSpanId:      observe.String(ctx, "span_id"),
-			ParentRunId:       run.ParentRunID,
+			AppId:                o.config.AppID,
+			InputMessage:         request.Message,
+			Timezone:             app.Timezone,
+			Capabilities:         capabilities,
+			Model:                run.Model,
+			SystemPrompt:         systemPrompt,
+			MaxSteps:             run.MaxSteps,
+			ProtocolVersion:      executor.Version,
+			MaxToolCalls:         run.MaxToolCalls,
+			MaxInputTokens:       run.MaxInputTokens,
+			MaxOutputTokens:      run.MaxOutputTokens,
+			MaxTotalTokens:       run.MaxTotalTokens,
+			MaxOutputBytes:       run.MaxOutputBytes,
+			MaxCostMicrousd:      run.MaxCostMicrousd,
+			ProviderTimeoutMs:    run.ProviderTimeoutMS,
+			TraceId:              observe.String(ctx, "trace_id"),
+			ParentSpanId:         observe.String(ctx, "span_id"),
+			ParentRunId:          run.ParentRunID,
+			PendingConfirmations: pendingConfirmations,
 		}},
 	}
 	if err := executor.ValidateStartFrame(startFrame); err != nil {
@@ -1023,6 +1059,8 @@ func (o *Orchestrator) executeClaimedRun(ctx context.Context, request RunRequest
 				"call_id":       result.CallId,
 				"capability_id": result.CapabilityId,
 				"success":       result.Success,
+				"error_code":    result.ErrorCode,
+				"confirmation":  result.Confirmation,
 			}); err != nil {
 				// 取消优先于事件持久化失败：追加失败往往是取消导致的存储副作用。
 				if errors.Is(runContext.Err(), context.Canceled) {
@@ -1269,8 +1307,23 @@ func (o *Orchestrator) invokeCapabilityOnce(ctx context.Context, run RunRecord, 
 		CallID:          call.CallId,
 		Deadline:        deadline,
 		IdempotencyKey:  call.CallId,
+		ConfirmationID:  call.ConfirmationId,
 		ProtocolVersion: executor.Version,
 		PermissionScope: permissionScope,
+	}
+	// 公共确认往返：需要确认的目标由内核按（目标、参数摘要、Echo/会话归属）
+	// 自选正确的已批准确认——同一 Capability 存在多个不同参数的批准时，参数
+	// 摘要保证只命中与本次调用一致的一条；执行者附带的 confirmation_id 仅为
+	// 提示，与参数不符的批准不会被采用。
+	if o.confirmations != nil {
+		if spec, _, specErr := o.registry.ResolveCapability(call.CapabilityId); specErr == nil && spec.RequiresConfirmation {
+			if digest, digestErr := confirmation.Digest(call.PayloadJson); digestErr == nil {
+				if resolved, resolveErr := o.confirmations.ApprovedForCall(ctx, o.config.AppID, echoID, run.SessionID,
+					confirmation.TargetTypeCapability, call.CapabilityId, digest); resolveErr == nil {
+					request.ConfirmationID = resolved.ConfirmationID
+				}
+			}
+		}
 	}
 	payload, err := o.dispatcher.InvokeCapability(ctx, request, call.CapabilityId, call.PayloadJson)
 	result := &executor.CapabilityResult{
@@ -1284,6 +1337,9 @@ func (o *Orchestrator) invokeCapabilityOnce(ctx context.Context, run RunRecord, 
 		capabilityFailure = publicerror.Capability(err)
 		result.ErrorCode = capabilityFailure.Code
 		result.ErrorMessage = capabilityFailure.Message
+		if errors.Is(err, runtime.ErrConfirmationRequired) {
+			o.attachConfirmation(ctx, run, call, request, result)
+		}
 	}
 	auditPayload := observe.SanitizeAuditJSON(call.PayloadJson, 8192)
 	auditContext, auditCancel := detachedContext(ctx)
@@ -1312,6 +1368,117 @@ func (o *Orchestrator) invokeCapabilityOnce(ctx context.Context, run RunRecord, 
 		)
 	}
 	return result
+}
+
+// attachConfirmation 在高风险调用因缺少有效确认被拒绝时，为本次调用自动创建
+// 持久确认并把公共投影（ConfirmationInfo）附加到返回给执行者的结果上，补齐
+// "confirmation_required → 用户决策 → 携带确认重试"的公共往返协议。执行者携带
+// 的 confirmation_id 验证失败（不存在、过期、被撤销）时同样走本路径自愈：先复用
+// 同 Echo 同目标同摘要的 waiting 记录，没有才新建——保证 confirmation_required
+// 结果始终携带投影，模型可以引导用户重新决策；副作用在批准前始终不会执行。
+func (o *Orchestrator) attachConfirmation(
+	ctx context.Context,
+	run RunRecord,
+	call *executor.CapabilityCall,
+	request contracts.RequestContext,
+	result *executor.CapabilityResult,
+) {
+	if o.confirmations == nil {
+		return
+	}
+	spec, _, err := o.registry.ResolveCapability(call.CapabilityId)
+	if err != nil || !spec.RequiresConfirmation ||
+		(spec.SideEffect != registry.SideEffectWrite && spec.SideEffect != registry.SideEffectExternal) {
+		// 目标不是需要确认的受治理写入/外部能力：保持纯 confirmation_required 结果。
+		return
+	}
+	// 去重：同一 Echo 内同目标、同参数摘要的活跃确认直接复用，避免模型在
+	// 一个 Run 内多次重试产生重复的等待确认。
+	existing, err := o.confirmations.ActiveByEcho(ctx, o.config.AppID, run.EchoID)
+	if err == nil {
+		digest, digestErr := confirmation.Digest(call.PayloadJson)
+		if digestErr == nil {
+			for index := range existing {
+				candidate := &existing[index]
+				if candidate.Status == confirmation.StatusWaiting &&
+					candidate.TargetID == call.CapabilityId && candidate.ArgumentDigest == digest {
+					result.Confirmation = confirmationInfo(candidate)
+					return
+				}
+			}
+		}
+	}
+	record, err := o.confirmations.Request(ctx, o.config.AppID, run.EchoID, run.ID, call.CallId,
+		confirmation.RequestSpec{
+			CapabilityID:   call.CapabilityId,
+			TargetType:     confirmation.TargetTypeCapability,
+			TargetID:       call.CapabilityId,
+			SideEffect:     spec.SideEffect,
+			IdempotencyKey: request.IdempotencyKey,
+			SessionID:      run.SessionID,
+		},
+		call.PayloadJson, time.Time{})
+	if err != nil {
+		// 创建失败时保持无投影的 confirmation_required：验证边界仍然 fail-closed。
+		observe.Error(ctx, "自动创建 Capability 确认记录失败", err,
+			observe.StringAttr("capability_id", call.CapabilityId),
+		)
+		return
+	}
+	result.Confirmation = confirmationInfo(&record)
+	observe.Info(ctx, "已为高风险 Capability 调用创建待确认记录",
+		observe.StringAttr("confirmation_id", record.ConfirmationID),
+		observe.StringAttr("capability_id", call.CapabilityId),
+		observe.StringAttr("side_effect", record.SideEffect),
+	)
+}
+
+// confirmationInfo 把确认记录映射为面向执行者的公共投影：只含呈现与重试字段，
+// confirmationInfo projects a confirmation record into its public details, excluding parameter data, summaries, and decision-maker information.
+func confirmationInfo(record *confirmation.Confirmation) *executor.ConfirmationInfo {
+	return &executor.ConfirmationInfo{
+		ConfirmationId: record.ConfirmationID,
+		CapabilityId:   record.CapabilityID,
+		TargetType:     record.TargetType,
+		TargetId:       record.TargetID,
+		SideEffect:     record.SideEffect,
+		Status:         record.Status,
+		ExpiresAt:      record.ExpiresAt.UTC().Format(time.RFC3339),
+	}
+}
+
+// pendingConfirmations 投影当前会话（优先）或 Echo 下仍然活跃（waiting/approved
+// 且未过期）的确认，供执行者在重试高风险调用时附带 confirmation_id；会话投影
+// 支持决策后在同一会话的新 Echo 中续跑。投影失败不阻塞 Run（验证边界始终
+// fail-closed），仅记录告警并返回空投影。
+func (o *Orchestrator) pendingConfirmations(ctx context.Context, run RunRecord) []*executor.ConfirmationInfo {
+	if o.confirmations == nil {
+		return nil
+	}
+	var (
+		records []confirmation.Confirmation
+		err     error
+	)
+	if run.SessionID != "" {
+		records, err = o.confirmations.ActiveBySession(ctx, o.config.AppID, run.SessionID)
+	} else {
+		records, err = o.confirmations.ActiveByEcho(ctx, o.config.AppID, run.EchoID)
+	}
+	if err != nil {
+		observe.Warn(ctx, "投影活跃确认失败",
+			observe.StringAttr("echo_id", run.EchoID),
+			observe.StringAttr("error", err.Error()),
+		)
+		return nil
+	}
+	if len(records) > MaxProjectedConfirmations {
+		records = records[len(records)-MaxProjectedConfirmations:]
+	}
+	projected := make([]*executor.ConfirmationInfo, 0, len(records))
+	for index := range records {
+		projected = append(projected, confirmationInfo(&records[index]))
+	}
+	return projected
 }
 
 func (o *Orchestrator) rejectedCapability(ctx context.Context, run RunRecord, call *executor.CapabilityCall, started time.Time, cause error) *executor.CapabilityResult {
@@ -1478,6 +1645,15 @@ func (o *Orchestrator) completeRun(ctx context.Context, run RunRecord, runStatus
 		observe.DefaultMetrics().ObserveRun(runStatus, completedAt.Sub(startedAt))
 		if runStatus == RunStatusCancelled {
 			observe.DefaultMetrics().Cancellation()
+			// Run 取消/终止时 fail-closed 撤销其产生的全部等待/已批准确认。
+			if o.confirmations != nil {
+				if _, revokeErr := o.confirmations.RevokeRun(finishContext, o.config.AppID, run.ID, completedAt); revokeErr != nil {
+					observe.Error(ctx, "撤销 Run 待确认记录失败", revokeErr,
+						observe.StringAttr("echo_id", run.EchoID),
+						observe.StringAttr("run_id", run.ID),
+					)
+				}
+			}
 		}
 	}
 	return err

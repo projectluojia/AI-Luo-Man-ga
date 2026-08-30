@@ -1,0 +1,5 @@
+reviews:
+  pre_merge_checks:
+    docstrings:
+      # 本仓库以中文代码注释和设计文档为准，不使用通用 docstring 覆盖率指标。
+      mode: off

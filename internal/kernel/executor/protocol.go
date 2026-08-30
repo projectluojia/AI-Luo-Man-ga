@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"time"
 	"unicode/utf8"
 
 	"google.golang.org/protobuf/proto"
@@ -62,6 +63,9 @@ func Supports(versions []string) bool {
 	return false
 }
 
+// ValidateStartFrame validates a start frame, including its protocol envelope, run
+// configuration, capability declarations, and pending confirmation metadata.
+// It returns an error when the frame is invalid.
 func ValidateStartFrame(frame *Frame) error {
 	if err := validateEnvelope(frame, frame.GetEchoId(), frame.GetRunId(), 1); err != nil {
 		return err
@@ -91,7 +95,7 @@ func ValidateStartFrame(frame *Frame) error {
 		!spanPattern.MatchString(start.ParentSpanId) ||
 		start.TraceId == "00000000000000000000000000000000" ||
 		start.ParentSpanId == "0000000000000000" ||
-		len(start.Capabilities) > MaxCapabilities {
+		len(start.Capabilities) > MaxCapabilities || len(start.PendingConfirmations) > MaxCapabilities {
 		return ErrInvalidFrame
 	}
 	seen := make(map[string]struct{}, len(start.Capabilities))
@@ -110,9 +114,52 @@ func ValidateStartFrame(frame *Frame) error {
 		}
 		seen[capability.Id] = struct{}{}
 	}
+	seenConfirmations := make(map[string]struct{}, len(start.PendingConfirmations))
+	for _, confirmation := range start.PendingConfirmations {
+		if !ValidConfirmationInfo(confirmation) {
+			return ErrInvalidFrame
+		}
+		if _, exists := seenConfirmations[confirmation.ConfirmationId]; exists {
+			return ErrInvalidFrame
+		}
+		seenConfirmations[confirmation.ConfirmationId] = struct{}{}
+	}
 	return nil
 }
 
+// ValidConfirmationInfo 校验确认公共投影的字段格式：标识为稳定 token，
+// ValidConfirmationInfo validates confirmation metadata and its expiration timestamp.
+// It returns true when all required fields and allowed values are valid.
+func ValidConfirmationInfo(info *ConfirmationInfo) bool {
+	if info == nil ||
+		!validToken(info.ConfirmationId, MaxIdentifierBytes) ||
+		!validText(info.TargetId, 1, MaxIdentifierBytes) {
+		return false
+	}
+	switch info.TargetType {
+	case "capability", "tool":
+	default:
+		return false
+	}
+	switch info.SideEffect {
+	case "write", "external":
+	default:
+		return false
+	}
+	switch info.Status {
+	case "waiting", "approved":
+	default:
+		return false
+	}
+	if info.CapabilityId != "" && !validToken(info.CapabilityId, MaxIdentifierBytes) {
+		return false
+	}
+	expiresAt, err := time.Parse(time.RFC3339, info.ExpiresAt)
+	return err == nil && !expiresAt.IsZero()
+}
+
+// ValidateRunUsage validates cumulative token, cost, and provider-retry usage against protocol and configured limits.
+// It returns ErrInvalidFrame when usage is missing, inconsistent, exceeds a limit, or decreases from previously reported usage.
 func ValidateRunUsage(
 	usage *RunUsage,
 	previousInput uint64,
@@ -162,6 +209,7 @@ func ValidateRunAccepted(frame *Frame) error {
 	return nil
 }
 
+// ValidateCapabilityCall validates a capability call's identifiers, JSON payload, and optional confirmation identifier.
 func ValidateCapabilityCall(call *CapabilityCall) error {
 	if call == nil ||
 		!validToken(call.CallId, MaxIdentifierBytes) ||
@@ -169,6 +217,9 @@ func ValidateCapabilityCall(call *CapabilityCall) error {
 		len(call.PayloadJson) == 0 ||
 		len(call.PayloadJson) > MaxCapabilityPayloadBytes ||
 		!json.Valid(call.PayloadJson) {
+		return ErrInvalidFrame
+	}
+	if call.ConfirmationId != "" && !validToken(call.ConfirmationId, MaxIdentifierBytes) {
 		return ErrInvalidFrame
 	}
 	return nil
@@ -198,6 +249,9 @@ func ValidateRunFailure(failure *RunFailure) error {
 	return nil
 }
 
+// ValidateCapabilityResultFrame validates a capability result frame and its result data.
+// Successful results require a valid JSON payload, while failed results require an error
+// code and message; confirmation metadata is allowed only for confirmation_required errors.
 func ValidateCapabilityResultFrame(frame *Frame, echoID, runID string, expectedSequence uint64) error {
 	if err := validateEnvelope(frame, echoID, runID, expectedSequence); err != nil {
 		return err
@@ -219,6 +273,15 @@ func ValidateCapabilityResultFrame(frame *Frame, echoID, runID string, expectedS
 		!validToken(result.ErrorCode, 64) ||
 		!codePattern.MatchString(result.ErrorCode) ||
 		!validText(result.ErrorMessage, 1, MaxFailureMessageBytes) {
+		return ErrInvalidFrame
+	}
+	// confirmation_required 结果必须携带格式合法的确认公共投影；其余失败结果
+	// 不得携带投影，避免执行者把无关确认与调用错误绑定。
+	if result.ErrorCode == "confirmation_required" {
+		if !ValidConfirmationInfo(result.Confirmation) {
+			return ErrInvalidFrame
+		}
+	} else if result.Confirmation != nil {
 		return ErrInvalidFrame
 	}
 	return nil

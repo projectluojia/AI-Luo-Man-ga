@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0e\x65xecutor.proto\x12\x11\x61iluo.executor.v1\"B\n\rHealthRequest\x12\"\n\x1a\x61\x63\x63\x65pted_protocol_versions\x18\x01 \x03(\t\x12\r\n\x05model\x18\x02 \x01(\t\"k\n\x0eHealthResponse\x12\r\n\x05ready\x18\x01 \x01(\x08\x12\x10\n\x08provider\x18\x02 \x01(\t\x12#\n\x1bsupported_protocol_versions\x18\x03 \x03(\t\x12\x13\n\x0bstatus_code\x18\x04 \x01(\t\"\xc0\x04\n\rExecutorFrame\x12\x0f\n\x07\x65\x63ho_id\x18\x01 \x01(\t\x12\x0e\n\x06run_id\x18\x02 \x01(\t\x12\x10\n\x08sequence\x18\x03 \x01(\x04\x12\x30\n\tstart_run\x18\n \x01(\x0b\x32\x1b.ailuo.executor.v1.StartRunH\x00\x12<\n\x0f\x63\x61pability_call\x18\x0b \x01(\x0b\x32!.ailuo.executor.v1.CapabilityCallH\x00\x12@\n\x11\x63\x61pability_result\x18\x0c \x01(\x0b\x32#.ailuo.executor.v1.CapabilityResultH\x00\x12\x34\n\x0breply_delta\x18\r \x01(\x0b\x32\x1d.ailuo.executor.v1.ReplyDeltaH\x00\x12\x38\n\rfinal_message\x18\x0e \x01(\x0b\x32\x1f.ailuo.executor.v1.FinalMessageH\x00\x12\x34\n\x0brun_failure\x18\x0f \x01(\x0b\x32\x1d.ailuo.executor.v1.RunFailureH\x00\x12\x32\n\ncancel_run\x18\x10 \x01(\x0b\x32\x1c.ailuo.executor.v1.CancelRunH\x00\x12\x36\n\x0crun_accepted\x18\x11 \x01(\x0b\x32\x1e.ailuo.executor.v1.RunAcceptedH\x00\x12\x30\n\trun_usage\x18\x12 \x01(\x0b\x32\x1b.ailuo.executor.v1.RunUsageH\x00\x42\x06\n\x04\x62ody\"\xc5\x03\n\x08StartRun\x12\x0e\n\x06\x61pp_id\x18\x01 \x01(\t\x12\x15\n\rinput_message\x18\x02 \x01(\t\x12\x10\n\x08timezone\x18\x03 \x01(\t\x12\x33\n\x0c\x63\x61pabilities\x18\x04 \x03(\x0b\x32\x1d.ailuo.executor.v1.Capability\x12\r\n\x05model\x18\x05 \x01(\t\x12\x15\n\rsystem_prompt\x18\x06 \x01(\t\x12\x11\n\tmax_steps\x18\x07 \x01(\r\x12\x18\n\x10protocol_version\x18\x08 \x01(\t\x12\x16\n\x0emax_tool_calls\x18\t \x01(\r\x12\x18\n\x10max_input_tokens\x18\n \x01(\x04\x12\x19\n\x11max_output_tokens\x18\x0b \x01(\x04\x12\x18\n\x10max_total_tokens\x18\x0c \x01(\x04\x12\x18\n\x10max_output_bytes\x18\r \x01(\x04\x12\x19\n\x11max_cost_microusd\x18\x0e \x01(\x04\x12\x1b\n\x13provider_timeout_ms\x18\x0f \x01(\r\x12\x10\n\x08trace_id\x18\x10 \x01(\t\x12\x16\n\x0eparent_span_id\x18\x11 \x01(\t\x12\x15\n\rparent_run_id\x18\x12 \x01(\t\"\'\n\x0bRunAccepted\x12\x18\n\x10protocol_version\x18\x01 \x01(\t\"~\n\x08RunUsage\x12\x14\n\x0cinput_tokens\x18\x01 \x01(\x04\x12\x15\n\routput_tokens\x18\x02 \x01(\x04\x12\x14\n\x0ctotal_tokens\x18\x03 \x01(\x04\x12\x15\n\rcost_microusd\x18\x04 \x01(\x04\x12\x18\n\x10provider_retries\x18\x05 \x01(\r\"g\n\nCapability\x12\n\n\x02id\x18\x01 \x01(\t\x12\x0f\n\x07version\x18\x02 \x01(\t\x12\x0c\n\x04name\x18\x03 \x01(\t\x12\x13\n\x0b\x64\x65scription\x18\x04 \x01(\t\x12\x19\n\x11input_schema_json\x18\x05 \x01(\t\"N\n\x0e\x43\x61pabilityCall\x12\x0f\n\x07\x63\x61ll_id\x18\x01 \x01(\t\x12\x15\n\rcapability_id\x18\x02 \x01(\t\x12\x14\n\x0cpayload_json\x18\x03 \x01(\x0c\"\x8c\x01\n\x10\x43\x61pabilityResult\x12\x0f\n\x07\x63\x61ll_id\x18\x01 \x01(\t\x12\x15\n\rcapability_id\x18\x02 \x01(\t\x12\x0f\n\x07success\x18\x03 \x01(\x08\x12\x14\n\x0cpayload_json\x18\x04 \x01(\x0c\x12\x12\n\nerror_code\x18\x05 \x01(\t\x12\x15\n\rerror_message\x18\x06 \x01(\t\"\x1a\n\nReplyDelta\x12\x0c\n\x04text\x18\x01 \x01(\t\"\x1c\n\x0c\x46inalMessage\x12\x0c\n\x04text\x18\x01 \x01(\t\">\n\nRunFailure\x12\x0c\n\x04\x63ode\x18\x01 \x01(\t\x12\x0f\n\x07message\x18\x02 \x01(\t\x12\x11\n\tretryable\x18\x03 \x01(\x08\"\x1b\n\tCancelRun\x12\x0e\n\x06reason\x18\x01 \x01(\t2\xaf\x01\n\x0f\x45xecutorRuntime\x12M\n\x03Run\x12 .ailuo.executor.v1.ExecutorFrame\x1a .ailuo.executor.v1.ExecutorFrame(\x01\x30\x01\x12M\n\x06Health\x12 .ailuo.executor.v1.HealthRequest\x1a!.ailuo.executor.v1.HealthResponseBBZ@github.com/projectluojia/AI-Luo-Man-ga/gen/executorv1;executorv1b\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0e\x65xecutor.proto\x12\x11\x61iluo.executor.v1\"B\n\rHealthRequest\x12\"\n\x1a\x61\x63\x63\x65pted_protocol_versions\x18\x01 \x03(\t\x12\r\n\x05model\x18\x02 \x01(\t\"k\n\x0eHealthResponse\x12\r\n\x05ready\x18\x01 \x01(\x08\x12\x10\n\x08provider\x18\x02 \x01(\t\x12#\n\x1bsupported_protocol_versions\x18\x03 \x03(\t\x12\x13\n\x0bstatus_code\x18\x04 \x01(\t\"\xc0\x04\n\rExecutorFrame\x12\x0f\n\x07\x65\x63ho_id\x18\x01 \x01(\t\x12\x0e\n\x06run_id\x18\x02 \x01(\t\x12\x10\n\x08sequence\x18\x03 \x01(\x04\x12\x30\n\tstart_run\x18\n \x01(\x0b\x32\x1b.ailuo.executor.v1.StartRunH\x00\x12<\n\x0f\x63\x61pability_call\x18\x0b \x01(\x0b\x32!.ailuo.executor.v1.CapabilityCallH\x00\x12@\n\x11\x63\x61pability_result\x18\x0c \x01(\x0b\x32#.ailuo.executor.v1.CapabilityResultH\x00\x12\x34\n\x0breply_delta\x18\r \x01(\x0b\x32\x1d.ailuo.executor.v1.ReplyDeltaH\x00\x12\x38\n\rfinal_message\x18\x0e \x01(\x0b\x32\x1f.ailuo.executor.v1.FinalMessageH\x00\x12\x34\n\x0brun_failure\x18\x0f \x01(\x0b\x32\x1d.ailuo.executor.v1.RunFailureH\x00\x12\x32\n\ncancel_run\x18\x10 \x01(\x0b\x32\x1c.ailuo.executor.v1.CancelRunH\x00\x12\x36\n\x0crun_accepted\x18\x11 \x01(\x0b\x32\x1e.ailuo.executor.v1.RunAcceptedH\x00\x12\x30\n\trun_usage\x18\x12 \x01(\x0b\x32\x1b.ailuo.executor.v1.RunUsageH\x00\x42\x06\n\x04\x62ody\"\x89\x04\n\x08StartRun\x12\x0e\n\x06\x61pp_id\x18\x01 \x01(\t\x12\x15\n\rinput_message\x18\x02 \x01(\t\x12\x10\n\x08timezone\x18\x03 \x01(\t\x12\x33\n\x0c\x63\x61pabilities\x18\x04 \x03(\x0b\x32\x1d.ailuo.executor.v1.Capability\x12\r\n\x05model\x18\x05 \x01(\t\x12\x15\n\rsystem_prompt\x18\x06 \x01(\t\x12\x11\n\tmax_steps\x18\x07 \x01(\r\x12\x18\n\x10protocol_version\x18\x08 \x01(\t\x12\x16\n\x0emax_tool_calls\x18\t \x01(\r\x12\x18\n\x10max_input_tokens\x18\n \x01(\x04\x12\x19\n\x11max_output_tokens\x18\x0b \x01(\x04\x12\x18\n\x10max_total_tokens\x18\x0c \x01(\x04\x12\x18\n\x10max_output_bytes\x18\r \x01(\x04\x12\x19\n\x11max_cost_microusd\x18\x0e \x01(\x04\x12\x1b\n\x13provider_timeout_ms\x18\x0f \x01(\r\x12\x10\n\x08trace_id\x18\x10 \x01(\t\x12\x16\n\x0eparent_span_id\x18\x11 \x01(\t\x12\x15\n\rparent_run_id\x18\x12 \x01(\t\x12\x42\n\x15pending_confirmations\x18\x13 \x03(\x0b\x32#.ailuo.executor.v1.ConfirmationInfo\"\xa3\x01\n\x10\x43onfirmationInfo\x12\x17\n\x0f\x63onfirmation_id\x18\x01 \x01(\t\x12\x15\n\rcapability_id\x18\x02 \x01(\t\x12\x13\n\x0btarget_type\x18\x03 \x01(\t\x12\x11\n\ttarget_id\x18\x04 \x01(\t\x12\x13\n\x0bside_effect\x18\x05 \x01(\t\x12\x0e\n\x06status\x18\x06 \x01(\t\x12\x12\n\nexpires_at\x18\x07 \x01(\t\"\'\n\x0bRunAccepted\x12\x18\n\x10protocol_version\x18\x01 \x01(\t\"~\n\x08RunUsage\x12\x14\n\x0cinput_tokens\x18\x01 \x01(\x04\x12\x15\n\routput_tokens\x18\x02 \x01(\x04\x12\x14\n\x0ctotal_tokens\x18\x03 \x01(\x04\x12\x15\n\rcost_microusd\x18\x04 \x01(\x04\x12\x18\n\x10provider_retries\x18\x05 \x01(\r\"g\n\nCapability\x12\n\n\x02id\x18\x01 \x01(\t\x12\x0f\n\x07version\x18\x02 \x01(\t\x12\x0c\n\x04name\x18\x03 \x01(\t\x12\x13\n\x0b\x64\x65scription\x18\x04 \x01(\t\x12\x19\n\x11input_schema_json\x18\x05 \x01(\t\"g\n\x0e\x43\x61pabilityCall\x12\x0f\n\x07\x63\x61ll_id\x18\x01 \x01(\t\x12\x15\n\rcapability_id\x18\x02 \x01(\t\x12\x14\n\x0cpayload_json\x18\x03 \x01(\x0c\x12\x17\n\x0f\x63onfirmation_id\x18\x04 \x01(\t\"\xc7\x01\n\x10\x43\x61pabilityResult\x12\x0f\n\x07\x63\x61ll_id\x18\x01 \x01(\t\x12\x15\n\rcapability_id\x18\x02 \x01(\t\x12\x0f\n\x07success\x18\x03 \x01(\x08\x12\x14\n\x0cpayload_json\x18\x04 \x01(\x0c\x12\x12\n\nerror_code\x18\x05 \x01(\t\x12\x15\n\rerror_message\x18\x06 \x01(\t\x12\x39\n\x0c\x63onfirmation\x18\x07 \x01(\x0b\x32#.ailuo.executor.v1.ConfirmationInfo\"\x1a\n\nReplyDelta\x12\x0c\n\x04text\x18\x01 \x01(\t\"\x1c\n\x0c\x46inalMessage\x12\x0c\n\x04text\x18\x01 \x01(\t\">\n\nRunFailure\x12\x0c\n\x04\x63ode\x18\x01 \x01(\t\x12\x0f\n\x07message\x18\x02 \x01(\t\x12\x11\n\tretryable\x18\x03 \x01(\x08\"\x1b\n\tCancelRun\x12\x0e\n\x06reason\x18\x01 \x01(\t2\xaf\x01\n\x0f\x45xecutorRuntime\x12M\n\x03Run\x12 .ailuo.executor.v1.ExecutorFrame\x1a .ailuo.executor.v1.ExecutorFrame(\x01\x30\x01\x12M\n\x06Health\x12 .ailuo.executor.v1.HealthRequest\x1a!.ailuo.executor.v1.HealthResponseBBZ@github.com/projectluojia/AI-Luo-Man-ga/gen/executorv1;executorv1b\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -39,25 +39,27 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_EXECUTORFRAME']._serialized_start=215
   _globals['_EXECUTORFRAME']._serialized_end=791
   _globals['_STARTRUN']._serialized_start=794
-  _globals['_STARTRUN']._serialized_end=1247
-  _globals['_RUNACCEPTED']._serialized_start=1249
-  _globals['_RUNACCEPTED']._serialized_end=1288
-  _globals['_RUNUSAGE']._serialized_start=1290
-  _globals['_RUNUSAGE']._serialized_end=1416
-  _globals['_CAPABILITY']._serialized_start=1418
-  _globals['_CAPABILITY']._serialized_end=1521
-  _globals['_CAPABILITYCALL']._serialized_start=1523
-  _globals['_CAPABILITYCALL']._serialized_end=1601
-  _globals['_CAPABILITYRESULT']._serialized_start=1604
-  _globals['_CAPABILITYRESULT']._serialized_end=1744
-  _globals['_REPLYDELTA']._serialized_start=1746
-  _globals['_REPLYDELTA']._serialized_end=1772
-  _globals['_FINALMESSAGE']._serialized_start=1774
-  _globals['_FINALMESSAGE']._serialized_end=1802
-  _globals['_RUNFAILURE']._serialized_start=1804
-  _globals['_RUNFAILURE']._serialized_end=1866
-  _globals['_CANCELRUN']._serialized_start=1868
-  _globals['_CANCELRUN']._serialized_end=1895
-  _globals['_EXECUTORRUNTIME']._serialized_start=1898
-  _globals['_EXECUTORRUNTIME']._serialized_end=2073
+  _globals['_STARTRUN']._serialized_end=1315
+  _globals['_CONFIRMATIONINFO']._serialized_start=1318
+  _globals['_CONFIRMATIONINFO']._serialized_end=1481
+  _globals['_RUNACCEPTED']._serialized_start=1483
+  _globals['_RUNACCEPTED']._serialized_end=1522
+  _globals['_RUNUSAGE']._serialized_start=1524
+  _globals['_RUNUSAGE']._serialized_end=1650
+  _globals['_CAPABILITY']._serialized_start=1652
+  _globals['_CAPABILITY']._serialized_end=1755
+  _globals['_CAPABILITYCALL']._serialized_start=1757
+  _globals['_CAPABILITYCALL']._serialized_end=1860
+  _globals['_CAPABILITYRESULT']._serialized_start=1863
+  _globals['_CAPABILITYRESULT']._serialized_end=2062
+  _globals['_REPLYDELTA']._serialized_start=2064
+  _globals['_REPLYDELTA']._serialized_end=2090
+  _globals['_FINALMESSAGE']._serialized_start=2092
+  _globals['_FINALMESSAGE']._serialized_end=2120
+  _globals['_RUNFAILURE']._serialized_start=2122
+  _globals['_RUNFAILURE']._serialized_end=2184
+  _globals['_CANCELRUN']._serialized_start=2186
+  _globals['_CANCELRUN']._serialized_end=2213
+  _globals['_EXECUTORRUNTIME']._serialized_start=2216
+  _globals['_EXECUTORRUNTIME']._serialized_end=2391
 # @@protoc_insertion_point(module_scope)

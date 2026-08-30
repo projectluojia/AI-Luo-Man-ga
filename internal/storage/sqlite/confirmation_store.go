@@ -11,7 +11,7 @@ import (
 )
 
 // 迁移 17：确认与副作用治理表。所有读写按 (app_id, confirmation_id) 作用域执行，
-// 并通过外键把确认绑定到已存在的 Echo 与 Run。
+// init registers the migration that creates the confirmations table and its indexes.
 func init() {
 	registerMigration(17, `
 CREATE TABLE confirmations (
@@ -42,6 +42,165 @@ CREATE INDEX confirmations_status_expiry_idx ON confirmations(app_id, status, ex
 `)
 }
 
+// init registers database migrations for confirmation lookup indexes and session ownership.
+func init() {
+	registerMigration(25, `
+CREATE INDEX IF NOT EXISTS confirmations_echo_idx ON confirmations(app_id, echo_id, status, expires_at);
+`)
+	// 迁移 26：公共确认往返协议。确认记录补充会话归属（接入层 Intake 权威
+	// 生成），支持决策后在同一会话的新 Echo 中携带确认重试；存量记录会话为空，
+	// 只能在本 Echo 内重试，行为与迁移前一致。
+	registerMigration(26, `
+ALTER TABLE confirmations ADD COLUMN session_id TEXT NOT NULL DEFAULT '';
+CREATE INDEX IF NOT EXISTS confirmations_session_idx ON confirmations(app_id, session_id, status, expires_at);
+`)
+}
+
+func (s *Store) ListActiveByEcho(ctx context.Context, appID, echoID string, now time.Time) (_ []confirmation.Confirmation, resultErr error) {
+	started := time.Now()
+	defer func() { observeStorageOperation(ctx, "list_active_confirmations", started, resultErr) }()
+	if appID == "" || echoID == "" || now.IsZero() {
+		return nil, confirmation.ErrInvalidRequest
+	}
+	rows, err := s.db.QueryContext(ctx, `
+SELECT `+confirmationColumns+`
+FROM confirmations
+WHERE app_id=? AND echo_id=? AND status IN (?,?) AND julianday(expires_at)>julianday(?)
+ORDER BY created_at ASC, confirmation_id ASC`,
+		appID, echoID, confirmation.StatusWaiting, confirmation.StatusApproved, now.UTC().Format(time.RFC3339Nano),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list active confirmations: %w", err)
+	}
+	defer rows.Close()
+	records := []confirmation.Confirmation{}
+	for rows.Next() {
+		record, scanErr := scanConfirmation(rows.Scan)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		records = append(records, record)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate active confirmations: %w", err)
+	}
+	return records, nil
+}
+
+func (s *Store) ListActiveBySession(ctx context.Context, appID, sessionID string, now time.Time) (_ []confirmation.Confirmation, resultErr error) {
+	started := time.Now()
+	defer func() { observeStorageOperation(ctx, "list_session_confirmations", started, resultErr) }()
+	if appID == "" || sessionID == "" || now.IsZero() {
+		return nil, confirmation.ErrInvalidRequest
+	}
+	rows, err := s.db.QueryContext(ctx, `
+SELECT `+confirmationColumns+`
+FROM confirmations
+WHERE app_id=? AND session_id=? AND session_id<>'' AND status IN (?,?) AND julianday(expires_at)>julianday(?)
+ORDER BY created_at ASC, confirmation_id ASC`,
+		appID, sessionID, confirmation.StatusWaiting, confirmation.StatusApproved, now.UTC().Format(time.RFC3339Nano),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list session confirmations: %w", err)
+	}
+	defer rows.Close()
+	records := []confirmation.Confirmation{}
+	for rows.Next() {
+		record, scanErr := scanConfirmation(rows.Scan)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		records = append(records, record)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate active confirmations: %w", err)
+	}
+	return records, nil
+}
+
+func (s *Store) RevokeEcho(ctx context.Context, appID, echoID string, now time.Time) (_ int64, resultErr error) {
+	started := time.Now()
+	defer func() { observeStorageOperation(ctx, "revoke_echo_confirmations", started, resultErr) }()
+	if appID == "" || echoID == "" || now.IsZero() {
+		return 0, confirmation.ErrInvalidRequest
+	}
+	result, err := s.db.ExecContext(ctx, `
+UPDATE confirmations
+SET status=?,decided_at=?
+WHERE app_id=? AND echo_id=? AND status IN (?,?) AND julianday(expires_at)>julianday(?)`,
+		confirmation.StatusRevoked, now.UTC().Format(time.RFC3339Nano),
+		appID, echoID, confirmation.StatusWaiting, confirmation.StatusApproved,
+		now.UTC().Format(time.RFC3339Nano),
+	)
+	if err != nil {
+		return 0, fmt.Errorf("revoke echo confirmations: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("read revoked echo confirmation count: %w", err)
+	}
+	return affected, nil
+}
+
+func (s *Store) FindApproved(ctx context.Context, appID, echoID, sessionID, targetType, targetID, digest string, now time.Time) (_ confirmation.Confirmation, resultErr error) {
+	started := time.Now()
+	defer func() { observeStorageOperation(ctx, "find_approved_confirmation", started, resultErr) }()
+	if appID == "" || (echoID == "" && sessionID == "") || now.IsZero() {
+		return confirmation.Confirmation{}, confirmation.ErrInvalidRequest
+	}
+	record, err := scanConfirmation(s.db.QueryRowContext(ctx, `
+SELECT `+confirmationColumns+`
+FROM confirmations
+WHERE app_id=? AND status=? AND target_type=? AND target_id=? AND argument_digest=?
+  AND julianday(expires_at)>julianday(?)
+  AND ((?<>'' AND echo_id=?) OR (?<>'' AND session_id=? AND session_id<>''))
+ORDER BY created_at DESC, confirmation_id DESC
+LIMIT 1`,
+		appID, confirmation.StatusApproved, targetType, targetID, digest,
+		now.UTC().Format(time.RFC3339Nano),
+		echoID, echoID, sessionID, sessionID,
+	).Scan)
+	if errors.Is(err, sql.ErrNoRows) {
+		return confirmation.Confirmation{}, confirmation.ErrNotFound
+	}
+	if err != nil {
+		return confirmation.Confirmation{}, fmt.Errorf("find approved confirmation: %w", err)
+	}
+	return record, nil
+}
+
+// confirmationColumns 是确认查询的统一列清单，供单行与列表查询复用。
+const confirmationColumns = `app_id,confirmation_id,echo_id,coalesce(session_id,''),run_id,call_id,
+coalesce(capability_id,''),target_type,target_id,
+side_effect,idempotency_key,argument_digest,status,expires_at,coalesce(confirmed_by,''),decided_at,created_at`
+
+// scanConfirmation 把一行确认查询结果映射为记录；scan 由调用方提供
+// scanConfirmation maps a database row to a confirmation record, parsing required and optional timestamps.
+func scanConfirmation(scan func(dest ...any) error) (confirmation.Confirmation, error) {
+	var record confirmation.Confirmation
+	var expiresAt, createdAt string
+	var decidedAt sql.NullString
+	err := scan(
+		&record.AppID, &record.ConfirmationID, &record.EchoID, &record.SessionID, &record.RunID, &record.CallID,
+		&record.CapabilityID, &record.TargetType, &record.TargetID, &record.SideEffect,
+		&record.IdempotencyKey, &record.ArgumentDigest, &record.Status,
+		&expiresAt, &record.ConfirmedBy, &decidedAt, &createdAt,
+	)
+	if err != nil {
+		return confirmation.Confirmation{}, err
+	}
+	if record.ExpiresAt, err = time.Parse(time.RFC3339Nano, expiresAt); err != nil {
+		return confirmation.Confirmation{}, fmt.Errorf("parse confirmation expiry: %w", err)
+	}
+	if record.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt); err != nil {
+		return confirmation.Confirmation{}, fmt.Errorf("parse confirmation creation time: %w", err)
+	}
+	if record.DecidedAt, err = parseOptionalTime(decidedAt); err != nil {
+		return confirmation.Confirmation{}, fmt.Errorf("parse confirmation decision time: %w", err)
+	}
+	return record, nil
+}
+
 func (s *Store) Create(ctx context.Context, record confirmation.Confirmation) (resultErr error) {
 	started := time.Now()
 	defer func() { observeStorageOperation(ctx, "create_confirmation", started, resultErr) }()
@@ -53,10 +212,10 @@ func (s *Store) Create(ctx context.Context, record confirmation.Confirmation) (r
 	}
 	result, err := s.db.ExecContext(ctx, `
 INSERT INTO confirmations(
-  app_id,confirmation_id,echo_id,run_id,call_id,capability_id,target_type,target_id,
+  app_id,confirmation_id,echo_id,session_id,run_id,call_id,capability_id,target_type,target_id,
   side_effect,idempotency_key,argument_digest,status,expires_at,created_at
-) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		record.AppID, record.ConfirmationID, record.EchoID, record.RunID, record.CallID,
+) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		record.AppID, record.ConfirmationID, record.EchoID, record.SessionID, record.RunID, record.CallID,
 		record.CapabilityID, record.TargetType, record.TargetID, record.SideEffect,
 		record.IdempotencyKey, record.ArgumentDigest, record.Status,
 		record.ExpiresAt.UTC().Format(time.RFC3339Nano), record.CreatedAt.UTC().Format(time.RFC3339Nano),
@@ -81,38 +240,17 @@ func (s *Store) Get(ctx context.Context, appID, confirmationID string) (_ confir
 	if appID == "" || confirmationID == "" {
 		return confirmation.Confirmation{}, confirmation.ErrInvalidRequest
 	}
-	var record confirmation.Confirmation
-	var expiresAt, createdAt string
-	var decidedAt sql.NullString
-	err := s.db.QueryRowContext(ctx, `
-SELECT app_id,confirmation_id,echo_id,run_id,call_id,coalesce(capability_id,''),target_type,target_id,
-       side_effect,idempotency_key,argument_digest,status,expires_at,coalesce(confirmed_by,''),decided_at,created_at
+	record, err := scanConfirmation(s.db.QueryRowContext(ctx, `
+SELECT `+confirmationColumns+`
 FROM confirmations
 WHERE app_id=? AND confirmation_id=?`,
 		appID, confirmationID,
-	).Scan(
-		&record.AppID, &record.ConfirmationID, &record.EchoID, &record.RunID, &record.CallID,
-		&record.CapabilityID, &record.TargetType, &record.TargetID, &record.SideEffect,
-		&record.IdempotencyKey, &record.ArgumentDigest, &record.Status,
-		&expiresAt, &record.ConfirmedBy, &decidedAt, &createdAt,
-	)
+	).Scan)
 	if errors.Is(err, sql.ErrNoRows) {
 		return confirmation.Confirmation{}, confirmation.ErrNotFound
 	}
 	if err != nil {
 		return confirmation.Confirmation{}, fmt.Errorf("get confirmation: %w", err)
-	}
-	record.ExpiresAt, err = time.Parse(time.RFC3339Nano, expiresAt)
-	if err != nil {
-		return confirmation.Confirmation{}, fmt.Errorf("parse confirmation expiry: %w", err)
-	}
-	record.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt)
-	if err != nil {
-		return confirmation.Confirmation{}, fmt.Errorf("parse confirmation creation time: %w", err)
-	}
-	record.DecidedAt, err = parseOptionalTime(decidedAt)
-	if err != nil {
-		return confirmation.Confirmation{}, fmt.Errorf("parse confirmation decision time: %w", err)
 	}
 	return record, nil
 }

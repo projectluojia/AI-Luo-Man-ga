@@ -8,6 +8,7 @@ import re
 import secrets
 import signal
 import time
+from datetime import datetime
 from typing import AsyncIterator
 
 import grpc
@@ -95,6 +96,18 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
         )
 
     async def Run(self, request_iterator, context) -> AsyncIterator[executor_pb2.ExecutorFrame]:
+        """
+        Execute an Agent run over a bidirectional gRPC stream.
+        
+        Parameters:
+            request_iterator: Incoming protocol frames containing the run request,
+                capability results, or cancellation.
+            context: gRPC request context.
+        
+        Returns:
+            executor_pb2.ExecutorFrame: Outbound frames reporting run acceptance,
+                capability calls, replies, usage, or failures.
+        """
         started = time.monotonic()
         try:
             first_frame = await anext(request_iterator)
@@ -148,10 +161,23 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
             )
             try:
                 capabilities = self._parse_capabilities(start.capabilities)
+                approved_confirmations = self._parse_pending_confirmations(
+                    start.pending_confirmations,
+                )
                 expected_capabilities: dict[str, str] = {}
                 expected_kernel_sequence = 2
 
                 async def execute(call: ToolCall) -> str:
+                    """
+                    Waits for the result of a capability call and converts it to model-readable JSON.
+                    
+                    Returns:
+                        str: The capability result encoded as JSON.
+                    
+                    Raises:
+                        asyncio.CancelledError: If the run is cancelled while waiting.
+                        ProtocolViolation: If the inbound frames or capability result are invalid.
+                    """
                     nonlocal expected_kernel_sequence
                     expected_capability_id = expected_capabilities.pop(call.id, "")
                     if not expected_capability_id:
@@ -181,6 +207,7 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
                             capability_id=result.capability_id,
                             success=result.success,
                             result_bytes=len(result.payload_json),
+                            confirmation_required=not result.success and result.error_code == "confirmation_required",
                         )
                         return encoded
                     raise ProtocolViolation("等待 Capability 结果时输入流提前结束")
@@ -201,12 +228,15 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
                     max_cost_microusd=start.max_cost_microusd,
                     provider_timeout_seconds=start.provider_timeout_ms / 1000,
                 ):
-                    outbound_sequence += 1
                     if isinstance(event, CapabilityRequested):
                         if event.call.id in expected_capabilities:
                             raise ProtocolViolation("模型返回了重复的 ToolCall ID")
                         self._validate_model_call(event.call.id, event.capability_id, event.call.arguments)
                         expected_capabilities[event.call.id] = event.capability_id
+                        # 公共确认往返：确认判定与去重由 Go 内核权威执行——本进程
+                        # 恒发调用帧（已批准确认随帧携带），waiting 投影不用于本地
+                        # 决策，调用失败时由内核返回 confirmation_required + 投影。
+                        outbound_sequence += 1
                         logger.info(
                             "向 Go 内核请求执行 Capability",
                             sequence=outbound_sequence,
@@ -222,10 +252,12 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
                                 call_id=event.call.id,
                                 capability_id=event.capability_id,
                                 payload_json=event.call.arguments.encode("utf-8"),
+                                confirmation_id=approved_confirmations.get(event.capability_id, ""),
                             ),
                         )
                     elif isinstance(event, ReplyDelta):
                         self._validate_text(event.text, 1, MAX_REPLY_DELTA_BYTES, "回复片段")
+                        outbound_sequence += 1
                         logger.debug(
                             "向 Go 内核发送模型回复片段",
                             sequence=outbound_sequence,
@@ -239,6 +271,7 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
                         )
                     elif isinstance(event, FinalReply):
                         self._validate_text(event.text, 1, MAX_FINAL_MESSAGE_BYTES, "最终回复")
+                        outbound_sequence += 1
                         logger.info(
                             "Agent Run 已生成最终回复",
                             sequence=outbound_sequence,
@@ -252,6 +285,7 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
                             final_message=executor_pb2.FinalMessage(text=event.text),
                         )
                     elif isinstance(event, UsageReported):
+                        outbound_sequence += 1
                         yield _frame(
                             first_frame.echo_id,
                             first_frame.run_id,
@@ -386,6 +420,7 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
 
     @staticmethod
     def _validate_inbound_frame(frame, first_frame, expected_sequence: int) -> None:
+        """Validates an inbound frame's identity, sequence, body, size, and cancellation reason."""
         if (
             frame.ByteSize() > MAX_FRAME_BYTES
             or ExecutorRuntime._has_unknown_fields(frame)
@@ -399,7 +434,58 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
             ExecutorRuntime._validate_text(frame.cancel_run.reason, 1, MAX_FAILURE_MESSAGE_BYTES, "取消原因")
 
     @staticmethod
+    def _parse_pending_confirmations(specifications) -> dict[str, str]:
+        """
+        Validate pending confirmation projections and collect approved confirmations by capability.
+        
+        Parameters:
+        	specifications: Confirmation projections associated with a run.
+        
+        Returns:
+        	dict[str, str]: A mapping from capability IDs to approved confirmation IDs.
+        
+        Raises:
+        	ProtocolViolation: If a projection exceeds protocol limits or contains invalid
+        	identifiers, types, status, expiration, or duplicate confirmation IDs.
+        """
+        if len(specifications) > MAX_CAPABILITIES:
+            raise ProtocolViolation("确认投影数量超过协议限制")
+        approved: dict[str, str] = {}
+        seen: set[str] = set()
+        for confirmation in specifications:
+            ExecutorRuntime._valid_token(confirmation.confirmation_id)
+            if confirmation.confirmation_id in seen:
+                raise ProtocolViolation("确认投影标识重复")
+            seen.add(confirmation.confirmation_id)
+            ExecutorRuntime._valid_token(confirmation.capability_id)
+            if confirmation.target_type not in ("capability", "tool"):
+                raise ProtocolViolation("确认投影目标类型无效")
+            ExecutorRuntime._validate_text(confirmation.target_id, 1, MAX_IDENTIFIER_BYTES, "确认投影目标")
+            if confirmation.side_effect not in ("write", "external"):
+                raise ProtocolViolation("确认投影副作用类型无效")
+            if confirmation.status not in ("waiting", "approved"):
+                raise ProtocolViolation("确认投影状态无效")
+            try:
+                expires_at = datetime.fromisoformat(confirmation.expires_at.replace("Z", "+00:00"))
+            except ValueError as exc:
+                raise ProtocolViolation("确认投影有效期不是有效的 RFC3339 时间") from exc
+            if expires_at.tzinfo is None:
+                raise ProtocolViolation("确认投影有效期必须携带时区")
+            if confirmation.status == "approved":
+                approved[confirmation.capability_id] = confirmation.confirmation_id
+        return approved
+
+    @staticmethod
     def _validate_capability_result(result) -> None:
+        """
+        Validate a capability result and its optional confirmation projection.
+        
+        Parameters:
+        	result: The capability result to validate.
+        
+        Raises:
+        	ProtocolViolation: If the result fields, payload, error details, or confirmation projection are invalid.
+        """
         ExecutorRuntime._valid_token(result.call_id)
         ExecutorRuntime._valid_token(result.capability_id)
         if result.success:
@@ -419,9 +505,43 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
             raise ProtocolViolation("失败 CapabilityResult 字段无效")
         ExecutorRuntime._valid_code(result.error_code)
         ExecutorRuntime._validate_text(result.error_message, 1, MAX_FAILURE_MESSAGE_BYTES, "Capability 错误消息")
+        # confirmation_required 携带投影时必须格式合法（内核常态）；无投影同样
+        # 容忍——确认治理端口未装配或建确认失败时，这仍是可恢复的受治理结果，
+        # 交由模型向用户说明。其余失败结果携带投影即协议违例，避免执行者把
+        # 无关确认与调用错误绑定。
+        has_confirmation = result.HasField("confirmation")
+        if result.error_code == "confirmation_required":
+            if has_confirmation:
+                confirmation = result.confirmation
+                ExecutorRuntime._valid_token(confirmation.confirmation_id)
+                # 投影字段规则与 StartRun 解析一致：能力标识/目标必填、状态取闭式
+                # 值，畸形投影不转发给模型（本协议版本下确认按 capability_id
+                # 索引，缺标识的投影不可用）。
+                ExecutorRuntime._valid_token(confirmation.capability_id)
+                ExecutorRuntime._validate_text(confirmation.target_id, 1, MAX_IDENTIFIER_BYTES, "确认投影目标")
+                if confirmation.status not in ("waiting", "approved"):
+                    raise ProtocolViolation("确认投影状态无效")
+                if confirmation.target_type not in ("capability", "tool") or confirmation.side_effect not in ("write", "external"):
+                    raise ProtocolViolation("确认投影目标或副作用类型无效")
+                try:
+                    expires_at = datetime.fromisoformat(confirmation.expires_at.replace("Z", "+00:00"))
+                except ValueError as exc:
+                    raise ProtocolViolation("确认投影有效期不是有效的 RFC3339 时间") from exc
+                if expires_at.tzinfo is None:
+                    raise ProtocolViolation("确认投影有效期必须携带时区")
+        elif has_confirmation:
+            raise ProtocolViolation("非 confirmation_required 结果携带确认投影")
 
     @staticmethod
     def _validate_model_call(call_id: str, capability_id: str, arguments: str) -> None:
+        """
+        Validate a model capability call's identifiers and argument payload.
+        
+        Parameters:
+        	call_id (str): Identifier of the model call.
+        	capability_id (str): Identifier of the requested capability.
+        	arguments (str): JSON argument payload for the capability.
+        """
         ExecutorRuntime._valid_token(call_id)
         ExecutorRuntime._valid_token(capability_id)
         ExecutorRuntime._validate_text(arguments, 2, MAX_CAPABILITY_PAYLOAD_BYTES, "Capability 参数")
@@ -454,17 +574,45 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
 
     @staticmethod
     def _model_result(result) -> str:
+        """
+        Convert a capability result into model-readable JSON.
+        
+        Parameters:
+        	result: A capability result containing either a JSON payload or structured error details.
+        
+        Returns:
+        	str: The decoded payload JSON for a successful result, or a JSON object containing the error and optional confirmation details.
+        """
         if result.success:
             return result.payload_json.decode("utf-8")
-        return json.dumps({
-            "error": {
-                "code": result.error_code,
-                "message": result.error_message,
-            },
-        }, ensure_ascii=False, separators=(",", ":"))
+        error = {
+            "code": result.error_code,
+            "message": result.error_message,
+        }
+        if result.HasField("confirmation"):
+            confirmation = result.confirmation
+            error["confirmation"] = {
+                "confirmation_id": confirmation.confirmation_id,
+                "capability_id": confirmation.capability_id,
+                "target_type": confirmation.target_type,
+                "target_id": confirmation.target_id,
+                "side_effect": confirmation.side_effect,
+                "status": confirmation.status,
+                "expires_at": confirmation.expires_at,
+            }
+        return json.dumps({"error": error}, ensure_ascii=False, separators=(",", ":"))
 
 
 async def serve(address: str) -> None:
+    """
+    Start the Agent gRPC server, wait for termination, and perform graceful shutdown.
+    
+    Parameters:
+        address (str): Loopback or Unix-socket address on which to listen.
+    
+    Raises:
+        RuntimeError: If the address is not loopback or the server cannot bind to it.
+    """
     if not _is_loopback_address(address):
         raise RuntimeError("Agent gRPC 非回环监听必须配置认证传输")
     server = grpc.aio.server(options=[

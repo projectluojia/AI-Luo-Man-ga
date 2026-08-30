@@ -414,6 +414,8 @@ func waitForConfigurationChange(ctx context.Context, manager *controlconfig.Serv
 	}
 }
 
+// runCore initializes and supervises the service stack, serving requests until
+// cancellation or a server failure, then gracefully shuts down managed services.
 func runCore(ctx context.Context, stop context.CancelFunc, config config, localConfig *controlconfig.Service) (resultErr error) {
 	observe.Info(ctx, "正在启动AI珞（爱珞）内核",
 		observe.StringAttr("http_address", config.httpAddress),
@@ -647,6 +649,7 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 			MaxPromptBytes: config.contextAssembly.MaxPromptBytes,
 		},
 		Prompts:        promptServiceRenderer{promptService},
+		Confirmations:  confirmations,
 		RunTimeout:     secondsDuration(config.orchestration.RunTimeoutSeconds),
 		MaxRunAttempts: config.orchestration.MaxRunAttempts,
 		QueueCapacity:  config.orchestration.QueueCapacity,
@@ -713,6 +716,7 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 	}
 	webAccess := web.NewServer(ctx, orchestrator, store, readiness, reg, policy, campus.AppID, platformHub,
 		web.WithEventHub(qqEvents),
+		web.WithConfirmations(confirmations),
 		web.WithScheduler(config.scheduler.Workers, time.Duration(config.scheduler.PollMs)*time.Millisecond, config.scheduler.BatchSize))
 	// 平台事件入口独立挂载：/api/v1/ingress/{platform} 由平台适配器规范化事件驱动，
 	// 其余路径全部交给 Web Access（健康检查、Echo/SSE、演示页面）。

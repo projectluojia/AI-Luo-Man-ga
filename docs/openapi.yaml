@@ -128,6 +128,113 @@ paths:
                 $ref: "#/components/schemas/Error"
         "500":
           $ref: "#/components/responses/Error"
+  /api/v1/echoes/{echo_id}/confirmations:
+    parameters:
+      - $ref: "#/components/parameters/EchoID"
+    get:
+      summary: List active capability confirmations of an Echo
+      description: >-
+        Returns waiting/approved confirmations that are not expired, in creation order.
+        Only public projection fields are exposed; argument digests and idempotency keys
+        are never returned.
+      responses:
+        "200":
+          description: Active confirmations of the Echo.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [confirmations]
+                properties:
+                  confirmations:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Confirmation"
+        "404":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+  /api/v1/echoes/{echo_id}/confirmations/{confirmation_id}:
+    parameters:
+      - $ref: "#/components/parameters/EchoID"
+      - $ref: "#/components/parameters/ConfirmationID"
+    get:
+      summary: Get one capability confirmation
+      description: >-
+        Cross-Echo identifiers are answered with 404 (fail-closed, existence is not
+        disclosed). A record past its expiry is returned with status "expired" so the
+        UI can present it as no longer actionable.
+      responses:
+        "200":
+          description: The confirmation record.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [confirmation]
+                properties:
+                  confirmation:
+                    $ref: "#/components/schemas/Confirmation"
+        "404":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+  /api/v1/echoes/{echo_id}/confirmations/{confirmation_id}/decision:
+    parameters:
+      - $ref: "#/components/parameters/EchoID"
+      - $ref: "#/components/parameters/ConfirmationID"
+    post:
+      summary: Approve or reject a capability confirmation
+      description: >-
+        Requires a trusted server-side Web login identity. decision is approved or
+        rejected; the decision attribution (confirmed_by) always comes from the
+        authenticated identity and cannot be supplied by clients. Repeated identical
+        decisions are idempotent; conflicting decisions return 409
+        confirmation_already_decided. Only waiting records that are not expired can
+        be decided.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [decision]
+              properties:
+                decision:
+                  type: string
+                  enum: [approved, rejected]
+      responses:
+        "200":
+          description: The decision was applied atomically.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [confirmation]
+                properties:
+                  confirmation:
+                    $ref: "#/components/schemas/Confirmation"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          description: The confirmation expired, was revoked, or was already decided with a conflicting decision.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
   /api/v1/runs/{run_id}:
     get:
       summary: Get an App-scoped root or child Run
@@ -418,6 +525,14 @@ components:
       schema:
         type: string
         format: uuid
+    ConfirmationID:
+      name: confirmation_id
+      in: path
+      required: true
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
   schemas:
     DeploymentConfigUpdate:
       type: object
@@ -933,6 +1048,48 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/EchoEvent"
+    Confirmation:
+      type: object
+      additionalProperties: false
+      required:
+        - confirmation_id
+        - echo_id
+        - capability_id
+        - target_type
+        - target_id
+        - side_effect
+        - status
+        - expires_at
+        - created_at
+      properties:
+        confirmation_id:
+          type: string
+        echo_id:
+          type: string
+        capability_id:
+          type: string
+        target_type:
+          type: string
+          enum: [capability, tool]
+        target_id:
+          type: string
+        side_effect:
+          type: string
+          enum: [write, external]
+        status:
+          type: string
+          enum: [waiting, approved, rejected, expired, revoked]
+        expires_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        confirmed_by:
+          type: string
+        decided_at:
+          type: string
+          format: date-time
     Error:
       type: object
       additionalProperties: false

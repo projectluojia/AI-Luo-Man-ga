@@ -1,9 +1,11 @@
 // Package confirmation 实现"确认与副作用治理"的权威模型与存储端口。
 //
 // 确认（Confirmation）是 Go 内核持有的、针对高风险副作用动作（发送消息、
-// 写入记忆、修改数据、调用外部系统）的持久化授权凭证。确认记录绑定 App、
-// Echo、Run、Call、Capability/Tool、幂等键与参数摘要；只有 approved 状态
-// 且全部绑定维度匹配的记录才能放行副作用执行，其余状态一律 fail-closed。
+// 写入记忆、修改数据、调用外部系统）的持久化授权凭证。确认记录创建时绑定
+// App、Echo、会话、Run、Call、Capability/Tool、幂等键与参数摘要；验证放行
+// 的强制绑定为 App、目标、副作用、参数摘要与会话归属（同 Echo 或同会话，
+// 支持决策后跨 Echo 续跑；Run/Call/幂等键仅作审计溯源），只有 approved 且
+// 全部强制维度匹配的记录才能放行副作用执行，其余状态一律 fail-closed。
 //
 // 本包不拥有任何具体数据库实现：领域与调度代码只依赖 Store 端口，
 // 具体适配器（SQLite 等）在 internal/storage 下实现。
@@ -78,6 +80,7 @@ type Confirmation struct {
 	AppID          string     // 所属 App，App 隔离的第一维度
 	ConfirmationID string     // App 内唯一的确认标识
 	EchoID         string     // 发起确认的 Echo
+	SessionID      string     // 发起确认的会话（接入层 Intake 权威生成）；跨 Echo 重试的范围锚点
 	RunID          string     // 发起确认的 Run
 	CallID         string     // 发起确认的调用
 	CapabilityID   string     // 目标 Capability（tool 目标可为空）
@@ -100,6 +103,7 @@ type RequestSpec struct {
 	TargetID       string // Capability 或 Tool 标识
 	SideEffect     string // write 或 external
 	IdempotencyKey string // 与执行期相同的幂等键
+	SessionID      string // 发起确认的会话标识；非空时决策后的重试可在同会话的新 Echo 中进行
 }
 
 // Store 是确认记录的持久化端口。领域与调度代码只依赖该端口，
@@ -131,6 +135,24 @@ type Store interface {
 	// RevokeRun 撤销指定 App 的 Run 下所有 waiting/approved 确认（Run 取消场景），
 	// 返回受影响行数。
 	RevokeRun(ctx context.Context, appID, runID string, now time.Time) (int64, error)
+
+	// ListActiveByEcho 返回指定 App、Echo 下仍未失效（waiting/approved 且
+	// 有效期未过）的确认记录，按创建时间升序，供 Run 启动投影与状态查询。
+	ListActiveByEcho(ctx context.Context, appID, echoID string, now time.Time) ([]Confirmation, error)
+
+	// RevokeEcho 撤销指定 App、Echo 下所有 waiting/approved 确认（Echo 取消场景），
+	// 返回受影响行数。
+	RevokeEcho(ctx context.Context, appID, echoID string, now time.Time) (int64, error)
+
+	// ListActiveBySession 返回指定 App、会话下仍未失效（waiting/approved 且
+	// 有效期未过）的确认记录，按创建时间升序，供跨 Echo 续跑投影使用。
+	ListActiveBySession(ctx context.Context, appID, sessionID string, now time.Time) ([]Confirmation, error)
+
+	// FindApproved 按（目标类型、目标标识、参数摘要、会话归属）解析唯一可用的
+	// 已批准确认：归属匹配同 Echo 或同会话，有效期未过，取最新一条；不存在
+	// 返回 ErrNotFound。供内核在调用边界按参数自选正确批准，不依赖执行者
+	// 附带的 confirmation_id。
+	FindApproved(ctx context.Context, appID, echoID, sessionID, targetType, targetID, digest string, now time.Time) (Confirmation, error)
 }
 
 // Digest 计算确认参数的规范化摘要：把参数反序列化后重新序列化（JSON 键有序），
@@ -177,7 +199,7 @@ func ValidateSideEffect(value string) error {
 	}
 }
 
-// ValidateArgumentDigest 校验参数摘要格式（64 位十六进制）。
+// ValidateArgumentDigest validates that an argument digest is a 64-character hexadecimal string.
 func ValidateArgumentDigest(value string) error {
 	if len(value) != digestHexLength || !digestPattern.MatchString(value) {
 		return fmt.Errorf("%w: invalid argument digest", ErrInvalidRequest)
@@ -186,6 +208,8 @@ func ValidateArgumentDigest(value string) error {
 }
 
 // ValidateRequest 校验 Dispatcher 注入的确认验证请求字段。
+// ValidateRequest validates the required fields and constraints of a confirmation request.
+// It returns ErrInvalidRequest when validation fails.
 func ValidateRequest(request runtime.ConfirmationRequest) error {
 	switch {
 	case request.AppID == "" || request.EchoID == "" || request.RunID == "" || request.ConfirmationID == "":
@@ -198,18 +222,24 @@ func ValidateRequest(request runtime.ConfirmationRequest) error {
 		return ErrInvalidRequest
 	case idempotency.ValidateKey(request.IdempotencyKey) != nil:
 		return ErrInvalidRequest
+	case ValidateArgumentDigest(request.ArgumentDigest) != nil:
+		return ErrInvalidRequest
 	default:
 		return nil
 	}
 }
 
-// ValidateConfirmation 校验一条完整确认记录的字段、状态一致性与时间约束。
+// ValidateConfirmation validates a complete confirmation record, including its fields, status consistency, and time constraints.
+// It returns ErrInvalidRequest when the record is invalid.
 func ValidateConfirmation(record Confirmation) error {
 	if !validID(record.AppID) || !validID(record.ConfirmationID) || !validID(record.EchoID) ||
 		!validID(record.RunID) || !validID(record.CallID) {
 		return ErrInvalidRequest
 	}
 	if record.CapabilityID != "" && !validID(record.CapabilityID) {
+		return ErrInvalidRequest
+	}
+	if record.SessionID != "" && (len(record.SessionID) > maxIDBytes || !utf8.ValidString(record.SessionID)) {
 		return ErrInvalidRequest
 	}
 	if ValidateTargetType(record.TargetType) != nil || !validID(record.TargetID) {
