@@ -1,6 +1,7 @@
 package loader
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -73,11 +74,12 @@ func TestValidateRuntimeInvokeRejectsMalformedCapabilityProjections(t *testing.T
 			t.Fatalf("%s: malformed projection accepted", test.name)
 		}
 	}
-	// 超过数量上限的投影必须整体拒绝。
+	// 超过数量上限的投影必须整体拒绝；每条 ID 唯一，避免与重复规则混淆。
 	request := validProjectionInvokeRequest()
 	request.ImportedCapabilities = make([]contracts.CapabilityProjection, 0, maxContextItems+1)
 	for i := 0; i <= maxContextItems; i++ {
-		request.ImportedCapabilities = append(request.ImportedCapabilities, valid)
+		request.ImportedCapabilities = append(request.ImportedCapabilities,
+			contracts.CapabilityProjection{ID: fmt.Sprintf("provider.cap.%d", i), Version: "1.0.0", InputSchemaJSON: `{"type":"object"}`})
 	}
 	if err := validateRuntimeInvoke(request, []byte(`{}`), time.Now()); err == nil {
 		t.Fatal("oversized projection list accepted")

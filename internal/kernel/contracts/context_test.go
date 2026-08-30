@@ -2,6 +2,7 @@ package contracts_test
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -43,7 +44,7 @@ func TestValidateRejectsMalformedCapabilityProjections(t *testing.T) {
 	request = validContext()
 	request.ImportedCapabilities = make([]contracts.CapabilityProjection, 65)
 	for i := range request.ImportedCapabilities {
-		request.ImportedCapabilities[i] = contracts.CapabilityProjection{ID: "provider.cap", Version: "1.0.0", InputSchemaJSON: `{"type":"object"}`}
+		request.ImportedCapabilities[i] = contracts.CapabilityProjection{ID: fmt.Sprintf("provider.cap.%d", i), Version: "1.0.0", InputSchemaJSON: `{"type":"object"}`}
 	}
 	if err := request.Validate(time.Now()); !errors.Is(err, contracts.ErrInvalidCapabilityProjection) {
 		t.Fatalf("oversized projections error = %v, want ErrInvalidCapabilityProjection", err)

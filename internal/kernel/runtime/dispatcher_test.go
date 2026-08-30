@@ -252,7 +252,7 @@ func TestDispatcherProjectsOnlyDeclaredImportedCapability(t *testing.T) {
 	}
 }
 
-func TestDispatcherImportIdentityFailsClosedWithoutBoundCaller(t *testing.T) {
+func TestDispatcherImportEnforcementFailsClosed(t *testing.T) {
 	t.Parallel()
 	reg := registry.New()
 	policy := runtimetest.NewStaticAppPolicy()
@@ -281,7 +281,21 @@ func TestDispatcherImportIdentityFailsClosedWithoutBoundCaller(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	if err := reg.RegisterService(registry.ServiceRegistration{
+		Spec: registry.ServiceSpec{ID: "other", Version: "1.0.0"},
+		Capabilities: map[string]struct {
+			Spec    registry.CapabilitySpec
+			Handler registry.Handler
+		}{"other.cap": {Spec: registry.CapabilitySpec{ID: "other.cap", Version: "1.0.0", ServiceID: "other", InputSchemaJSON: `{"type":"object","additionalProperties":false}`, SideEffect: registry.SideEffectRead}, Handler: func(ctx context.Context, request contracts.RequestContext, payload json.RawMessage) (json.RawMessage, error) {
+			// 绑定身份与显式声明一致，但 other 未声明任何 import：
+			// 必须走注册表查询并 fail-closed。
+			return dispatcher.InvokeImportedCapability(ctx, request, "other", "provider.cap", payload)
+		}}},
+	}); err != nil {
+		t.Fatal(err)
+	}
 	policy.Enable("app", "consumer.cap")
+	policy.Enable("app", "other.cap")
 	// 未绑定身份的调用方即使声称自己是通过导入校验的 consumer 也必须拒绝。
 	spoofed := validRequest()
 	spoofed.TargetType = registry.TargetTypeCapability
@@ -296,6 +310,10 @@ func TestDispatcherImportIdentityFailsClosedWithoutBoundCaller(t *testing.T) {
 	// 绑定身份与显式声明不一致必须拒绝。
 	if _, err := dispatcher.InvokeCapability(context.Background(), validRequest(), "consumer.cap", json.RawMessage(`{}`)); !errors.Is(err, runtime.ErrCapabilityNotImported) {
 		t.Fatalf("mismatched import declaration error = %v", err)
+	}
+	// 绑定身份一致的调用方仍需通过注册表 import 查询。
+	if _, err := dispatcher.InvokeCapability(context.Background(), validRequest(), "other.cap", json.RawMessage(`{}`)); !errors.Is(err, runtime.ErrCapabilityNotImported) {
+		t.Fatalf("undeclared bound import error = %v", err)
 	}
 }
 
