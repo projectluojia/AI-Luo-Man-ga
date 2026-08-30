@@ -23,7 +23,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/promptcatalog"
 	promptservice "github.com/projectluojia/AI-Luo-Man-ga/internal/services/prompt"
-	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packagecontract"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
 )
 
 type config struct {
@@ -98,7 +98,7 @@ func loadConfig() (config, error) {
 	}
 	runtimeInstallRoot := os.Getenv("AILUO_RUNTIME_INSTALL_ROOT")
 	if runtimeInstallRoot == "" {
-		if def := packagecontract.DefaultInstallRoot(); def != "" {
+		if def := packmgr.DefaultInstallRoot(); def != "" {
 			if _, err := os.Stat(def); err == nil {
 				runtimeInstallRoot = def
 			}
