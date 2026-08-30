@@ -791,6 +791,14 @@ func (m *Manager) unload(ctx context.Context, item *entry) error {
 }
 
 func (m *Manager) Shutdown(ctx context.Context) error {
+	// 测试或上层请求结束后，清理仍须使用新的有界上下文完成；真实 deadline
+	// 仍然作为关闭上限保留，避免无限等待。
+	shutdownContext := ctx
+	var cancel context.CancelFunc
+	if errors.Is(ctx.Err(), context.Canceled) {
+		shutdownContext, cancel = context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+	}
 	m.mu.Lock()
 	m.accepting = false
 	upgradeDone := m.upgradeDone
@@ -802,8 +810,8 @@ func (m *Manager) Shutdown(ctx context.Context) error {
 	if upgradeDone != nil {
 		select {
 		case <-upgradeDone:
-		case <-ctx.Done():
-			return ctx.Err()
+		case <-shutdownContext.Done():
+			return shutdownContext.Err()
 		}
 	}
 	ticker := time.NewTicker(10 * time.Millisecond)
@@ -819,8 +827,8 @@ func (m *Manager) Shutdown(ctx context.Context) error {
 			break
 		}
 		select {
-		case <-ctx.Done():
-			return ctx.Err()
+		case <-shutdownContext.Done():
+			return shutdownContext.Err()
 		case <-ticker.C:
 		}
 	}
@@ -831,7 +839,7 @@ func (m *Manager) Shutdown(ctx context.Context) error {
 		retired := append([]*retiredRuntime(nil), item.retired...)
 		item.mu.Unlock()
 		if ready {
-			if err := m.unload(ctx, item); err != nil {
+			if err := m.unload(shutdownContext, item); err != nil {
 				result = append(result, err)
 			}
 		}
@@ -854,15 +862,15 @@ func (m *Manager) Shutdown(ctx context.Context) error {
 		for _, old := range retired {
 			select {
 			case <-old.stopped:
-			case <-ctx.Done():
-				return errors.Join(append(result, ctx.Err())...)
+			case <-shutdownContext.Done():
+				return errors.Join(append(result, shutdownContext.Err())...)
 			}
 		}
 	}
 	for _, hosts := range m.hosts {
 		for _, host := range hosts {
 			if closer, ok := host.(HostCloser); ok {
-				if err := closer.Close(ctx); err != nil {
+				if err := closer.Close(shutdownContext); err != nil {
 					result = append(result, err)
 				}
 			}
