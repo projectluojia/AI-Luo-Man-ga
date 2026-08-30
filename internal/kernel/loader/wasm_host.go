@@ -17,7 +17,6 @@ import (
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
-	"github.com/projectluojia/AI-Luo-Man-ga/pkg/bus"
 	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packagecontract"
 )
 
@@ -42,8 +41,6 @@ var (
 	// ErrHostedCallRejected 表示 hosted 包显式拒绝了调用（guest 信封 ok=false）。
 	// guest 提供的错误码与消息只进入内部日志，不进入外部响应。
 	ErrHostedCallRejected = errors.New("hosted package rejected the call")
-	// ErrHostedInvalidArgument 表示 hosted 包拒绝了调用参数（guest 信封 code=invalid_argument）。
-	ErrHostedInvalidArgument = errors.New("hosted package rejected the arguments")
 )
 
 // HostedFunction 是投影给 hosted 包调用的宿主函数：JSON 请求进、JSON 响应出。
@@ -400,16 +397,12 @@ func parseHostedEnvelope(runtimeID string, output []byte) (json.RawMessage, erro
 		observe.StringAttr("reason", envelope.Message),
 	)
 	switch envelope.Code {
-	case "data_unavailable":
-		return nil, errors.Join(ErrHostedCallRejected, bus.ErrDataUnavailable)
-	case "data_incomplete":
-		return nil, errors.Join(ErrHostedCallRejected, bus.ErrDataIncomplete)
+	case "data_unavailable", "data_incomplete", "data_expired":
+		return nil, errors.Join(ErrHostedCallRejected, InvocationError{Code: envelope.Code})
 	case "data_untrusted":
-		return nil, errors.Join(ErrHostedCallRejected, bus.ErrDataUntrusted)
-	case "data_expired":
-		return nil, errors.Join(ErrHostedCallRejected, bus.ErrDataExpired)
+		return nil, errors.Join(ErrHostedCallRejected, InvocationError{Code: "data_non_authoritative"})
 	case "invalid_argument":
-		return nil, errors.Join(ErrHostedCallRejected, ErrHostedInvalidArgument)
+		return nil, errors.Join(ErrHostedCallRejected, InvocationError{Code: "invalid_arguments"})
 	case "internal":
 		return nil, ErrHostedCallRejected
 	default:

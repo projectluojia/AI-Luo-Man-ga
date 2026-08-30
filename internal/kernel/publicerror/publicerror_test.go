@@ -9,7 +9,6 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/publicerror"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime"
-	"github.com/projectluojia/AI-Luo-Man-ga/pkg/bus"
 )
 
 func TestCapabilityErrorDoesNotDiscloseInternalCause(t *testing.T) {
@@ -104,10 +103,10 @@ func TestCapabilityDataGovernanceErrorsAreStableAndSafe(t *testing.T) {
 		code      string
 		retryable bool
 	}{
-		{err: bus.ErrDataUnavailable, code: "data_unavailable", retryable: true},
-		{err: bus.ErrDataIncomplete, code: "data_incomplete"},
-		{err: bus.ErrDataUntrusted, code: "data_non_authoritative"},
-		{err: bus.ErrDataExpired, code: "data_expired", retryable: true},
+		{err: loader.InvocationError{Code: "data_unavailable"}, code: "data_unavailable", retryable: true},
+		{err: loader.InvocationError{Code: "data_incomplete"}, code: "data_incomplete"},
+		{err: loader.InvocationError{Code: "data_non_authoritative"}, code: "data_non_authoritative"},
+		{err: loader.InvocationError{Code: "data_expired"}, code: "data_expired", retryable: true},
 	}
 	for _, test := range tests {
 		value := publicerror.Capability(errors.Join(test.err, errors.New("source=private-copy")))
