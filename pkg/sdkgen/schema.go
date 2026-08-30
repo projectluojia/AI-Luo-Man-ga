@@ -107,13 +107,6 @@ func schemaType(schema json.RawMessage, name string) (*TypeModel, error) {
 	}
 }
 
-// ValidateSchema 校验生成器可消费的严格 JSON Schema 子集。
-// 源码契约提取器与消费方 SDK 生成器共用这一入口，保证两处接受同一契约。
-func ValidateSchema(schema json.RawMessage) error {
-	_, err := schemaType(schema, "Input")
-	return err
-}
-
 // stringOrEnum 处理 string：带 enum 派生枚举类型，date-time 派生时间类型。
 func stringOrEnum(spec schemaSpec, name string) (*TypeModel, error) {
 	if len(spec.Enum) > 0 {

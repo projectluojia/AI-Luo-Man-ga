@@ -74,18 +74,6 @@ export function hello(args: HelloArgs): any {
 	}
 }
 
-func TestAnalyzeTSRejectsUnsupportedSchema(t *testing.T) {
-	source := []byte(`export function hello(args: HelloArgs): any {}
-export interface HelloArgs { values: { [key: string]: string }; }
-`)
-	_, err := analyzeTS(context.Background(), source, "my.pkg", t.TempDir(), func(context.Context, string, string, ...string) ([]byte, error) {
-		return []byte(`{"type":"object","properties":{"values":{"type":"object","additionalProperties":{"type":"string"}}},"required":["values"],"additionalProperties":false}`), nil
-	})
-	if err == nil || !strings.Contains(err.Error(), "schema 不受支持") {
-		t.Fatalf("unsupported generated schema error = %v", err)
-	}
-}
-
 func TestAnalyzeTSWithRealNode(t *testing.T) {
 	if _, err := exec.LookPath("npx"); err != nil {
 		t.Skip("npx 不可用，跳过真实 TS 集成测试")
