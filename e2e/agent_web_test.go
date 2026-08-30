@@ -155,9 +155,8 @@ func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 		Role:         loader.RoleExecutor,
 		LockedDigest: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
 	}
-	executorHost, err := loader.NewExecutorHost(loader.ExecutorHostConfig{
-		Manifest: executorManifest,
-		Resolve: func(context.Context) (packagecontract.ProcessSpec, error) {
+	executorHost, err := loader.NewProcessHost(loader.ProcessHostConfig{
+		Resolve: func(context.Context, loader.Manifest) (packagecontract.ProcessSpec, error) {
 			return packagecontract.ProcessSpec{
 				Path: filepath.Join(root, "agent", ".venv", "bin", "python"),
 				Args: []string{"-m", "agent.runtime", "--listen", address},
@@ -168,13 +167,13 @@ func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 				WorkDir: root, Address: address,
 			}, nil
 		},
-		Spawn: true, Model: "test-model", Stdout: logs, Stderr: logs,
+		Spawn: true, ExecutorHealthModel: "test-model", Stdout: logs, Stderr: logs,
 		DialTimeout:    10 * time.Second,
 		StopGrace:      3 * time.Second,
 		TerminateGrace: 2 * time.Second,
 	})
 	if err != nil {
-		t.Fatalf("NewExecutorHost: %v", err)
+		t.Fatalf("NewProcessHost: %v", err)
 	}
 	executorManager, err := loader.New(executorHost)
 	if err != nil {

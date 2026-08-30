@@ -34,6 +34,7 @@ type config struct {
 	localConfigRoot     string
 	agentAddress        string
 	pythonPath          string
+	projectRoot         string
 	databasePath        string
 	model               string
 	modelBaseURL        string
@@ -128,6 +129,11 @@ func loadConfig() (config, error) {
 		return config{}, fmt.Errorf("configuration error: resolve python path: %w", err)
 	}
 	result.pythonPath = absolutePython
+	projectRoot, err := filepath.Abs(".")
+	if err != nil {
+		return config{}, fmt.Errorf("configuration error: resolve project root: %w", err)
+	}
+	result.projectRoot = projectRoot
 	if !packagecontract.IsLocalRuntimeAddress(result.configUIAddress) {
 		return config{}, fmt.Errorf("configuration error: AILUO_CONFIG_UI_ADDRESS must be loopback")
 	}
@@ -182,21 +188,6 @@ func applyLocalConfig(base config, resolved controlconfig.Resolved) (config, err
 		base.qqToken = strings.TrimSpace(string(content))
 	}
 	return base, nil
-}
-
-func agentEnvironment(config config) []string {
-	return []string{
-		"AILUO_ENVIRONMENT=" + config.environment,
-		"AILUO_MODEL_API_KEY_FILE=" + config.modelAPIKeyFile,
-		"AILUO_MODEL_BASE_URL=" + config.modelBaseURL,
-		"AILUO_MODEL_TIMEOUT_SECONDS=" + strconv.FormatFloat(config.modelRequestTimeout.Seconds(), 'f', -1, 64),
-		"AILUO_MODEL_READINESS_TIMEOUT_SECONDS=" + strconv.FormatFloat(config.modelReadyTimeout.Seconds(), 'f', -1, 64),
-		"AILUO_MODEL_MAX_RETRIES=" + strconv.Itoa(config.modelMaxRetries),
-		"AILUO_MODEL_RETRY_BASE_SECONDS=" + strconv.FormatFloat(config.modelRetryBase.Seconds(), 'f', -1, 64),
-		"AILUO_MODEL_RETRY_MAX_SECONDS=" + strconv.FormatFloat(config.modelRetryMax.Seconds(), 'f', -1, 64),
-		"AILUO_MODEL_REQUESTS_PER_MINUTE=" + strconv.Itoa(config.modelRequestsMinute),
-		"AILUO_MODEL_MAX_CONCURRENCY=" + strconv.Itoa(config.modelMaxConcurrency),
-	}
 }
 
 func defaultPythonPath(projectRoot string) string {
@@ -274,8 +265,8 @@ func configureInstalledRuntimes(ctx context.Context, cfg config, packageStore pa
 		hosts = append(hosts, host)
 	}
 	if isolatedCount > 0 {
-		host, hostErr := loader.NewIsolatedProcessHost(loader.IsolatedProcessHostConfig{
-			ResolveInstalled: catalog.ResolveProcess, VerifyInstalled: catalog.VerifyProcess,
+		host, hostErr := loader.NewProcessHost(loader.ProcessHostConfig{
+			Resolve: catalog.ResolveProcess, Verify: catalog.VerifyProcess, Spawn: true,
 			DialTimeout: 10 * time.Second, StopGrace: 5 * time.Second, TerminateGrace: 2 * time.Second,
 		})
 		if hostErr != nil {
