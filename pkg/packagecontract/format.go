@@ -93,6 +93,14 @@ func ValidateStorage(storage Storage) error {
 	return nil
 }
 
+// EqualStorage 比较持久化契约声明（nil 与缺失等价）。
+func EqualStorage(left, right *Storage) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return *left == *right
+}
+
 // ValidateDependency 校验依赖声明：标识符闭式 + semver 约束可解析。
 func ValidateDependency(dep Dependency) error {
 	if !capability.IsStableID(dep.ID) {

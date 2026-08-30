@@ -27,6 +27,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/health"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/identity"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/packstore"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime/runtimetest"
@@ -36,7 +37,6 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/blob"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/memory"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite"
-	"github.com/projectluojia/AI-Luo-Man-ga/pkg/bus"
 	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packagecontract"
 )
 
@@ -207,13 +207,20 @@ func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 	}()
 	defer executorLease.Release()
 
-	busStore := memory.NewBusStore()
-	busStore.ReplaceCatalog(campus.AppID, nil, []bus.Route{{ID: "r1", Name: "测试线路", Direction: "去程"}})
+	docs := memory.NewDocuments()
+	scope := packstore.Scope{AppID: campus.AppID, Namespace: campus.StorageNamespace}
+	routes := []packstore.Document{{ID: "r", Payload: []byte(`{"id":"r","name":"测试线路","direction":"去程","source_revision":"e2e-revision"}`)}}
+	if err := docs.ReplaceSnapshot(context.Background(), scope, packstore.SnapshotMeta{
+		Revision: "e2e-revision", Source: "zhihui-luojia", Authoritative: true, Complete: true,
+		ImportedAt: time.Now().UTC().Add(-time.Hour), ValidUntil: time.Now().UTC().Add(time.Hour),
+	}, map[string][]packstore.Document{"routes": routes}); err != nil {
+		t.Fatal(err)
+	}
 	policy := runtimetest.NewStaticAppPolicy()
 	policy.Enable(campus.AppID, campus.BusRouteListCapabilityID)
 	policy.Enable(campus.AppID, kernelecho.CreateChildRunCapabilityID)
 	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{IdempotencyStore: store})
-	campustest.RegisterHosted(t, reg, busStore)
+	campustest.RegisterHosted(t, reg, docs)
 	// 上下文装配使用真实会话来源（SQLite 消息存储 + 安全 Blob 存储）。
 	blobStore, err := blob.Open(filepath.Join(t.TempDir(), "blobs"), session.MaxMessageContentBytes)
 	if err != nil {

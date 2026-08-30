@@ -191,7 +191,7 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 		return fmt.Errorf("create session service: %w", err)
 	}
 	if config.loadDemoData {
-		if err := demo.LoadBusData(ctx, store, time.Now()); err != nil {
+		if err := demo.LoadBusData(ctx, store.PackageDocuments(), time.Now()); err != nil {
 			return fmt.Errorf("load demo bus data: %w", err)
 		}
 		observe.Warn(ctx, "已载入非权威校巴演示数据",
@@ -275,8 +275,7 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 	if err != nil {
 		return fmt.Errorf("create executor runtime host: %w", err)
 	}
-	hostFunctions := campus.HostedFunctions(store)
-	installedHosts, installedRecords, err := configureInstalledRuntimes(ctx, config, hostFunctions)
+	installedHosts, installedRecords, err := configureInstalledRuntimes(ctx, config, store.PackageDocuments())
 	if err != nil {
 		return err
 	}

@@ -65,13 +65,17 @@ type Manifest struct {
 	// HostFunctions 是包声明的宿主函数依赖（仅 hosted 有意义）：guest 只可
 	// 调用清单声明且宿主提供的宿主函数，未声明调用在加载期被拒绝。
 	HostFunctions []packagecontract.HostedFunctionDecl
+	// Storage 是包声明的持久化契约（namespace 等）。声明了存储宿主函数的包
+	// 必须同时声明该段；存储函数的 namespace 绑定取自此处，guest 不可选择。
+	Storage *packagecontract.Storage
 }
 
 // Equal 比较运行时清单的完整身份与装载声明。
 func (m Manifest) Equal(other Manifest) bool {
 	return m.ID == other.ID && m.Version == other.Version && m.Mode == other.Mode &&
 		m.Role == other.Role && m.LockedDigest == other.LockedDigest && m.Pin == other.Pin &&
-		m.IdleTTL == other.IdleTTL && packagecontract.EqualHostedFunctions(m.HostFunctions, other.HostFunctions)
+		m.IdleTTL == other.IdleTTL && packagecontract.EqualHostedFunctions(m.HostFunctions, other.HostFunctions) &&
+		packagecontract.EqualStorage(m.Storage, other.Storage)
 }
 
 // SameIdentity 只比较装载工件所需的运行时身份字段。
@@ -869,6 +873,11 @@ func ValidateManifest(manifest Manifest) error {
 	}
 	if err := packagecontract.ValidateHostedFunctions(manifest.HostFunctions); err != nil {
 		return ErrInvalidManifest
+	}
+	if manifest.Storage != nil {
+		if err := packagecontract.ValidateStorage(*manifest.Storage); err != nil {
+			return ErrInvalidManifest
+		}
 	}
 	digest, err := hex.DecodeString(manifest.LockedDigest)
 	if err != nil || len(digest) != 32 {
