@@ -106,6 +106,14 @@ type componentWithOrder struct {
 }
 
 func ValidateInstalledRecord(record InstalledRecord) error {
+	// executor 记录不携带能力面：会话客户端经 executor 契约取用，
+	// 不进 Registry——注册管线对其只校验运行时清单。
+	if record.Runtime.Role == RoleExecutor {
+		if err := ValidateManifest(record.Runtime); err != nil {
+			return errors.Join(ErrInvalidInstalledRecord, err)
+		}
+		return nil
+	}
 	if len(record.Capabilities) == 0 {
 		return ErrInvalidInstalledRecord
 	}

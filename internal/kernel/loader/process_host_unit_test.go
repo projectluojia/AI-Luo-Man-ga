@@ -132,25 +132,20 @@ func TestValidProcessLimits(t *testing.T) {
 	}
 }
 
-func TestIsolatedProcessHostValidatesConfigurationAndMode(t *testing.T) {
+func TestProcessHostValidatesConfigurationAndMode(t *testing.T) {
 	t.Parallel()
 	resolve := func(context.Context, Manifest) (packagecontract.ProcessSpec, error) {
 		return packagecontract.ProcessSpec{}, nil
 	}
-	verify := func(context.Context, Manifest, packagecontract.ProcessSpec) error { return nil }
-	for _, config := range []IsolatedProcessHostConfig{
+	for _, config := range []ProcessHostConfig{
 		{},
-		{ResolveInstalled: resolve},
-		{VerifyInstalled: verify},
-		{ResolveInstalled: resolve, VerifyInstalled: verify, StopGrace: time.Millisecond},
+		{Resolve: resolve, StopGrace: time.Millisecond},
 	} {
-		if _, err := NewIsolatedProcessHost(config); err == nil {
+		if _, err := NewProcessHost(config); err == nil {
 			t.Fatalf("invalid config accepted: %#v", config)
 		}
 	}
-	host, err := NewIsolatedProcessHost(IsolatedProcessHostConfig{
-		ResolveInstalled: resolve, VerifyInstalled: verify,
-	})
+	host, err := NewProcessHost(ProcessHostConfig{Resolve: resolve})
 	if err != nil {
 		t.Fatal(err)
 	}

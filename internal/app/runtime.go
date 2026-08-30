@@ -2,8 +2,6 @@ package app
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
@@ -38,7 +36,6 @@ import (
 	promptservice "github.com/projectluojia/AI-Luo-Man-ga/internal/services/prompt"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/blob"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite"
-	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packagecontract"
 )
 
 // Run 启动配置控制面及其受监督的 Core 运行时。
@@ -133,24 +130,6 @@ func waitForConfigurationChange(ctx context.Context, manager *controlconfig.Serv
 		return err
 	case <-manager.Changes():
 		return nil
-	}
-}
-
-const (
-	builtInExecutorRuntimeID      = "ailuo.agent"
-	builtInExecutorRuntimeVersion = "1.0.0"
-)
-
-var builtInExecutorRuntimeDigest = func() string {
-	sum := sha256.Sum256([]byte("ailuo.agent built-in isolated executor runtime\nprotocol " + executor.Version))
-	return hex.EncodeToString(sum[:])
-}()
-
-func builtInExecutorManifest() loader.Manifest {
-	return loader.Manifest{
-		ID: builtInExecutorRuntimeID, Version: builtInExecutorRuntimeVersion,
-		Mode: loader.ModeIsolated, Role: loader.RoleExecutor,
-		LockedDigest: builtInExecutorRuntimeDigest, Pin: true,
 	}
 }
 
@@ -253,21 +232,16 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 		MaxCallDepth: config.orchestration.MaxCallDepth, IdempotencyStore: store,
 		ConfirmationVerifier: confirmations,
 	})
-	workDir, err := filepath.Abs(".")
+	// 内置 agent 经虚拟包源走与安装目录完全一致的记录/解析/校验/注册管线：
+	// 组合根只提供"这个 App 的 executor 由哪个包充当"的部署知识。
+	builtinAgent, err := newBuiltinAgentSource(config, app.Model)
 	if err != nil {
-		return fmt.Errorf("resolve executor working directory: %w", err)
+		return fmt.Errorf("resolve built-in agent package: %w", err)
 	}
-	executorManifest := builtInExecutorManifest()
-	executorHost, err := loader.NewExecutorHost(loader.ExecutorHostConfig{
-		Manifest: executorManifest,
-		Resolve: func(context.Context) (packagecontract.ProcessSpec, error) {
-			return packagecontract.ProcessSpec{
-				Path: config.pythonPath, Args: []string{"-m", "agent.runtime", "--listen", config.agentAddress},
-				Env: agentEnvironment(config), WorkDir: workDir, Address: config.agentAddress,
-				Limits: packagecontract.ProcessLimits{},
-			}, nil
-		},
-		Spawn: config.manageAgent, Model: app.Model, Stdout: os.Stdout, Stderr: os.Stderr,
+	executorHost, err := loader.NewProcessHost(loader.ProcessHostConfig{
+		Resolve: builtinAgent.ResolveProcess, Verify: builtinAgent.VerifyProcess,
+		Spawn: config.manageAgent, ExecutorHealthModel: app.Model,
+		Stdout: os.Stdout, Stderr: os.Stderr,
 		DialTimeout:    secondsDuration(config.agentProcess.DialTimeoutSeconds),
 		StopGrace:      secondsDuration(config.agentProcess.StopGraceSeconds),
 		TerminateGrace: secondsDuration(config.agentProcess.TerminateGraceSeconds),
@@ -287,13 +261,10 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 		return fmt.Errorf("create runtime loader: %w", err)
 	}
 	lifecycle.runtimeLoader = runtimeLoader
-	if err := runtimeLoader.Register(ctx, executorManifest); err != nil {
-		return fmt.Errorf("register executor runtime: %w", err)
-	}
-	if len(installedRecords) > 0 {
-		if err := loader.RegisterInstalled(ctx, runtimeLoader, reg, installedRecords); err != nil {
-			return fmt.Errorf("register installed runtimes: %w", err)
-		}
+	// 内置 agent 与安装包统一注册：同一发现/校验/注册管线，无第二条路径。
+	allRecords := append([]loader.InstalledRecord{builtinAgent.Record()}, installedRecords...)
+	if err := loader.RegisterInstalled(ctx, runtimeLoader, reg, allRecords); err != nil {
+		return fmt.Errorf("register installed runtimes: %w", err)
 	}
 	campusInstalled := false
 	for _, record := range installedRecords {

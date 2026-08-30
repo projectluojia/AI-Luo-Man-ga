@@ -14,8 +14,13 @@ import (
 	"time"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/executor"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/health"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
 	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packagecontract"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 var (
@@ -25,27 +30,46 @@ var (
 
 var environmentNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,127}$`)
 
-type IsolatedProcessHostConfig struct {
-	ResolveInstalled func(context.Context, Manifest) (packagecontract.ProcessSpec, error)
-	VerifyInstalled  func(context.Context, Manifest, packagecontract.ProcessSpec) error
-	DialTimeout      time.Duration
-	StopGrace        time.Duration
-	TerminateGrace   time.Duration
+// ProcessHostConfig 是统一进程宿主的配置：服务 mode=isolated 的全部组件，
+// role 决定装载后的协议面——capability 走 runtime_host 协议（Invoker），
+// executor 走 executor.v1 协议（ClientProvider + ProcessLifecycle）。内核不
+// 感知任何具体运行时的名字：进程规格由组合根聚合的包源按清单解析。
+type ProcessHostConfig struct {
+	// Resolve 按清单返回进程规格。组合根可在此聚合多个包源（安装目录、
+	// 内置虚拟源）；解析失败的清单即该宿主不服务的清单（Verify fail-closed）。
+	Resolve func(context.Context, Manifest) (packagecontract.ProcessSpec, error)
+	// Verify 对解析出的规格做来源侧二次校验（安装锁、内置身份），可空。
+	Verify func(context.Context, Manifest, packagecontract.ProcessSpec) error
+	// Spawn=false 时 executor 角色只连接外部已启动进程（不监督进程生命周期）；
+	// capability 角色必须 Spawn（构造期校验）。
+	Spawn bool
+	// ExecutorHealthModel 是 executor 角色健康检查使用的模型名
+	// （capability 角色忽略）。
+	ExecutorHealthModel string
+	// Stdout/Stderr 决定子进程输出去向；nil 默认丢弃。
+	Stdout io.Writer
+	Stderr io.Writer
+
+	DialTimeout    time.Duration
+	StopGrace      time.Duration
+	TerminateGrace time.Duration
 }
 
-// IsolatedProcessHost 只启动安装解析器返回且再次通过锁校验的本机进程。
-type IsolatedProcessHost struct {
-	config IsolatedProcessHostConfig
+// ProcessHost 是统一进程宿主：按清单解析并监督本机子进程，role 决定协议面。
+type ProcessHost struct {
+	config ProcessHostConfig
 
 	mu       sync.Mutex
-	runtimes map[*processRuntime]struct{}
+	runtimes map[hostManagedRuntime]struct{}
 	closed   bool
 }
 
-func NewIsolatedProcessHost(config IsolatedProcessHostConfig) (*IsolatedProcessHost, error) {
-	if config.ResolveInstalled == nil || config.VerifyInstalled == nil {
+func NewProcessHost(config ProcessHostConfig) (*ProcessHost, error) {
+	if config.Resolve == nil {
 		return nil, ErrInvalidManifest
 	}
+	// capability 组件必须由本宿主启动（Load 期校验）；executor 组件允许连接
+	// 外部已启动进程（Spawn=false）。
 	if config.DialTimeout == 0 {
 		config.DialTimeout = 10 * time.Second
 	}
@@ -59,29 +83,38 @@ func NewIsolatedProcessHost(config IsolatedProcessHostConfig) (*IsolatedProcessH
 		!ValidProcessDuration(config.TerminateGrace) {
 		return nil, ErrInvalidManifest
 	}
-	return &IsolatedProcessHost{
-		config: config, runtimes: make(map[*processRuntime]struct{}),
+	if config.Stdout == nil {
+		config.Stdout = io.Discard
+	}
+	if config.Stderr == nil {
+		config.Stderr = io.Discard
+	}
+	return &ProcessHost{
+		config: config, runtimes: make(map[hostManagedRuntime]struct{}),
 	}, nil
 }
 
 // Mode 返回宿主服务的运行模式：isolated 本机进程。
-func (h *IsolatedProcessHost) Mode() string { return ModeIsolated }
+func (h *ProcessHost) Mode() string { return ModeIsolated }
 
-func (h *IsolatedProcessHost) Verify(ctx context.Context, manifest Manifest) error {
+func (h *ProcessHost) Verify(ctx context.Context, manifest Manifest) error {
 	if manifest.Mode != ModeIsolated {
 		return ErrUnsupportedMode
 	}
-	spec, err := h.config.ResolveInstalled(ctx, manifest)
+	spec, err := h.config.Resolve(ctx, manifest)
 	if err != nil {
 		return errors.Join(ErrUnavailable, err)
 	}
-	if err := validateProcessSpec(spec); err != nil {
+	if err := h.validateSpec(manifest, spec); err != nil {
 		return err
 	}
-	return h.config.VerifyInstalled(ctx, manifest, spec)
+	if h.config.Verify != nil {
+		return h.config.Verify(ctx, manifest, spec)
+	}
+	return nil
 }
 
-func (h *IsolatedProcessHost) Load(ctx context.Context, manifest Manifest) (Runtime, error) {
+func (h *ProcessHost) Load(ctx context.Context, manifest Manifest) (Runtime, error) {
 	if manifest.Mode != ModeIsolated {
 		return nil, ErrUnsupportedMode
 	}
@@ -93,17 +126,61 @@ func (h *IsolatedProcessHost) Load(ctx context.Context, manifest Manifest) (Runt
 	}
 
 	// Load 再次解析并校验，避免 Verify 与真正执行之间替换安装单元。
-	spec, err := h.config.ResolveInstalled(ctx, manifest)
+	spec, err := h.config.Resolve(ctx, manifest)
 	if err != nil {
 		return nil, errors.Join(ErrUnavailable, err)
 	}
-	if err := validateProcessSpec(spec); err != nil {
+	if err := h.validateSpec(manifest, spec); err != nil {
 		return nil, err
 	}
-	if err := h.config.VerifyInstalled(ctx, manifest, spec); err != nil {
-		return nil, err
+	if h.config.Verify != nil {
+		if err := h.config.Verify(ctx, manifest, spec); err != nil {
+			return nil, err
+		}
 	}
-	process, err := StartProcess(ctx, spec, io.Discard, io.Discard)
+	switch manifest.Role {
+	case RoleExecutor:
+		return h.loadExecutor(ctx, manifest, spec)
+	case RoleCapability:
+		return h.loadCapability(ctx, manifest, spec)
+	default:
+		return nil, ErrInvalidManifest
+	}
+}
+
+// loadExecutor 启动（或连接）executor.v1 运行时进程。
+func (h *ProcessHost) loadExecutor(ctx context.Context, manifest Manifest, spec packagecontract.ProcessSpec) (Runtime, error) {
+	var process *Process
+	if h.config.Spawn {
+		var err error
+		process, err = StartProcess(ctx, spec, h.config.Stdout, h.config.Stderr)
+		if err != nil {
+			return nil, ErrUnavailable
+		}
+	}
+	connection, client, err := dialExecutor(ctx, spec.Address, process, h.config.DialTimeout)
+	if err != nil {
+		if process != nil {
+			err = errors.Join(err, process.Reap(context.Background(), h.config.StopGrace, h.config.TerminateGrace))
+		}
+		return nil, errors.Join(ErrUnavailable, err)
+	}
+	runtime := &executorRuntime{
+		id: manifest.ID, version: manifest.Version, mode: manifest.Mode,
+		process: process, connection: connection, client: client,
+		model: h.config.ExecutorHealthModel, host: h,
+		stopGrace: h.config.StopGrace, terminateGrace: h.config.TerminateGrace,
+	}
+	h.track(runtime)
+	return runtime, nil
+}
+
+// loadCapability 启动 capability 进程并经 runtime_host 协议装载。
+func (h *ProcessHost) loadCapability(ctx context.Context, manifest Manifest, spec packagecontract.ProcessSpec) (Runtime, error) {
+	if !h.config.Spawn {
+		return nil, ErrInvalidProcessSpec
+	}
+	process, err := StartProcess(ctx, spec, h.config.Stdout, h.config.Stderr)
 	if err != nil {
 		return nil, ErrUnavailable
 	}
@@ -111,14 +188,7 @@ func (h *IsolatedProcessHost) Load(ctx context.Context, manifest Manifest) (Runt
 		process: process, host: h, socketPath: strings.TrimPrefix(spec.Address, "unix:"),
 		stopGrace: h.config.StopGrace, terminateGrace: h.config.TerminateGrace,
 	}
-	h.mu.Lock()
-	if h.closed {
-		h.mu.Unlock()
-		cleanupErr := wrapped.cleanupAfterLoad(ctx)
-		return nil, errors.Join(ErrShuttingDown, cleanupErr)
-	}
-	h.runtimes[wrapped] = struct{}{}
-	h.mu.Unlock()
+	h.track(wrapped)
 
 	grpcHost, err := NewGRPCHost(GRPCHostConfig{
 		Mode: ModeIsolated, Address: spec.Address, DialTimeout: h.config.DialTimeout,
@@ -151,17 +221,30 @@ func (h *IsolatedProcessHost) Load(ctx context.Context, manifest Manifest) (Runt
 	return wrapped, nil
 }
 
-func (h *IsolatedProcessHost) Close(ctx context.Context) error {
+func (h *ProcessHost) track(runtime hostManagedRuntime) {
+	h.mu.Lock()
+	h.runtimes[runtime] = struct{}{}
+	h.mu.Unlock()
+}
+
+func (h *ProcessHost) remove(runtime hostManagedRuntime) {
+	h.mu.Lock()
+	delete(h.runtimes, runtime)
+	h.mu.Unlock()
+}
+
+// Close 强制清理本宿主监督的全部运行时（进程回收 + 连接关闭 + socket 清理）。
+func (h *ProcessHost) Close(ctx context.Context) error {
 	h.mu.Lock()
 	h.closed = true
-	runtimes := make([]*processRuntime, 0, len(h.runtimes))
+	runtimes := make([]hostManagedRuntime, 0, len(h.runtimes))
 	for runtime := range h.runtimes {
 		runtimes = append(runtimes, runtime)
 	}
 	h.mu.Unlock()
 	var result []error
 	for _, runtime := range runtimes {
-		if err := runtime.forceCleanup(ctx); err != nil {
+		if err := runtime.hostClose(ctx); err != nil {
 			result = append(result, err)
 		} else {
 			h.remove(runtime)
@@ -170,10 +253,23 @@ func (h *IsolatedProcessHost) Close(ctx context.Context) error {
 	return errors.Join(result...)
 }
 
-func (h *IsolatedProcessHost) remove(runtime *processRuntime) {
-	h.mu.Lock()
-	delete(h.runtimes, runtime)
-	h.mu.Unlock()
+// validateSpec 校验解析出的进程规格：连接模式的 executor 只校验地址与限额，
+// 由本宿主启动的进程叠加文件系统与内容安全校验。
+func (h *ProcessHost) validateSpec(manifest Manifest, spec packagecontract.ProcessSpec) error {
+	if manifest.Role == RoleExecutor && !h.config.Spawn {
+		if !packagecontract.IsLocalRuntimeAddress(spec.Address) || !packagecontract.ValidProcessLimits(spec.Limits) {
+			return ErrInvalidProcessSpec
+		}
+		return nil
+	}
+	return validateProcessSpec(spec)
+}
+
+// hostManagedRuntime 是进程宿主可强制清理的运行时统一面。
+type hostManagedRuntime interface {
+	Runtime
+	// hostClose 强制回收进程与连接（宿主 Close 与装载失败清理用）。
+	hostClose(ctx context.Context) error
 }
 
 // ProcessWatchContext 派生一个在受监督进程退出时自动取消的上下文，供 Spawn
@@ -328,7 +424,7 @@ func (p *Process) Release() {
 type processRuntime struct {
 	runtime        *grpcRuntime
 	process        *Process
-	host           *IsolatedProcessHost
+	host           *ProcessHost
 	socketPath     string
 	stopGrace      time.Duration
 	terminateGrace time.Duration
@@ -389,7 +485,7 @@ func (r *processRuntime) Stop(ctx context.Context) error {
 	return r.finish()
 }
 
-func (r *processRuntime) forceCleanup(ctx context.Context) error {
+func (r *processRuntime) hostClose(ctx context.Context) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.stopped {
@@ -441,7 +537,15 @@ func (r *processRuntime) cleanupAfterLoad(ctx context.Context) error {
 		context.WithoutCancel(ctx), r.stopGrace+r.terminateGrace+time.Second,
 	)
 	defer cancel()
-	return r.forceCleanup(cleanupContext)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.stopped {
+		return nil
+	}
+	if err := r.forceCleanupLocked(cleanupContext); err != nil {
+		return err
+	}
+	return r.finish()
 }
 
 func (r *processRuntime) finish() error {
@@ -470,6 +574,110 @@ func (r *processRuntime) finish() error {
 func (r *processRuntime) releaseProcessLimits() {
 	r.process.Release()
 }
+
+// executorRuntime 是 executor.v1 协议面的运行时：进程监督 + 会话客户端。
+type executorRuntime struct {
+	id, version, mode string
+	process           *Process
+	connection        *grpc.ClientConn
+	client            executor.Client
+	model             string
+	host              *ProcessHost
+	stopGrace         time.Duration
+	terminateGrace    time.Duration
+
+	stopOnce sync.Once
+	stopErr  error
+}
+
+func (r *executorRuntime) Describe(context.Context) (Description, error) {
+	return Description{ID: r.id, Version: r.version, Mode: r.mode}, nil
+}
+
+func (r *executorRuntime) Start(context.Context) error { return nil }
+
+func (r *executorRuntime) Health(ctx context.Context) error {
+	if r.process != nil && r.process.Exited() {
+		return ErrUnavailable
+	}
+	return health.ExecutorChecker{Client: r.client, Model: r.model}.Ping(ctx)
+}
+
+func (r *executorRuntime) Stop(ctx context.Context) error {
+	r.stopOnce.Do(func() {
+		r.stopErr = r.close(ctx)
+	})
+	return r.stopErr
+}
+
+// hostClose 强制回收：与 Stop 同语义（优雅终止 + 连接关闭），幂等。
+func (r *executorRuntime) hostClose(ctx context.Context) error {
+	r.stopOnce.Do(func() {
+		r.stopErr = r.close(ctx)
+	})
+	return r.stopErr
+}
+
+func (r *executorRuntime) close(ctx context.Context) error {
+	var processErr error
+	if r.process != nil {
+		processErr = r.process.Reap(ctx, r.stopGrace, r.terminateGrace)
+	}
+	var connectionErr error
+	if r.connection != nil {
+		connectionErr = r.connection.Close()
+		r.connection = nil
+	}
+	if r.host != nil {
+		r.host.remove(r)
+	}
+	return errors.Join(processErr, connectionErr)
+}
+
+func (r *executorRuntime) Client() executor.Client { return r.client }
+
+func (r *executorRuntime) Done() <-chan struct{} {
+	if r.process == nil {
+		return nil
+	}
+	return r.process.Done()
+}
+
+func (r *executorRuntime) Err() error {
+	if r.process == nil {
+		return nil
+	}
+	return r.process.Err()
+}
+
+func dialExecutor(ctx context.Context, address string, process *Process, dialTimeout time.Duration) (*grpc.ClientConn, executor.Client, error) {
+	watchContext, stopWatch := ProcessWatchContext(ctx, process)
+	defer stopWatch()
+	dialContext, cancel := context.WithTimeout(watchContext, dialTimeout)
+	defer cancel()
+	connection, err := grpc.DialContext(
+		dialContext,
+		address,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithBlock(),
+		grpc.WithDefaultCallOptions(
+			grpc.MaxCallRecvMsgSize(executor.MaxGRPCMessageBytes),
+			grpc.MaxCallSendMsgSize(executor.MaxGRPCMessageBytes),
+		),
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+	return connection, executor.NewClient(connection), nil
+}
+
+var (
+	_ Runtime                   = (*executorRuntime)(nil)
+	_ executor.ClientProvider   = (*executorRuntime)(nil)
+	_ executor.ProcessLifecycle = (*executorRuntime)(nil)
+	_ hostManagedRuntime        = (*executorRuntime)(nil)
+	_ hostManagedRuntime        = (*processRuntime)(nil)
+)
 
 func validateProcessSpec(spec packagecontract.ProcessSpec) error {
 	// 运行时重新校验形状，再叠加装载时刻的文件系统与内容安全校验。
