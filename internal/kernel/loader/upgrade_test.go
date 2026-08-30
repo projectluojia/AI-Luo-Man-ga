@@ -11,8 +11,10 @@ import (
 
 // versionedHost 按清单版本返回对应运行时，未登记版本加载失败。
 type versionedHost struct {
-	runtimes map[string]*fakeRuntime
-	mode     string
+	runtimes        map[string]*fakeRuntime
+	mode            string
+	cancelOnVersion string
+	cancel          context.CancelFunc
 }
 
 func (h *versionedHost) Mode() string {
@@ -28,6 +30,9 @@ func (h *versionedHost) Load(_ context.Context, manifest loader.Manifest) (loade
 	runtime, ok := h.runtimes[manifest.Version]
 	if !ok {
 		return nil, loader.ErrUnavailable
+	}
+	if manifest.Version == h.cancelOnVersion && h.cancel != nil {
+		h.cancel()
 	}
 	return runtime, nil
 }
@@ -209,6 +214,39 @@ func TestManagerUpgradeCancellationDoesNotDisturbCurrentRuntime(t *testing.T) {
 	defer lease.Release()
 	if lease.ID() != "extension.test" || v1.starts.Load() != 1 || v2.starts.Load() != 0 {
 		t.Fatalf("runtime changed after cancellation: id=%s starts=%d/%d", lease.ID(), v1.starts.Load(), v2.starts.Load())
+	}
+}
+
+func TestManagerUpgradeCancellationDuringLoadStopsCandidate(t *testing.T) {
+	v1 := &fakeRuntime{description: loader.Description{ID: "extension.test", Version: "1.0.0", Mode: loader.ModeHosted}}
+	v2 := &fakeRuntime{description: loader.Description{ID: "extension.test", Version: "2.0.0", Mode: loader.ModeHosted}}
+	ctx, cancel := context.WithCancel(context.Background())
+	host := &versionedHost{runtimes: map[string]*fakeRuntime{"1.0.0": v1, "2.0.0": v2}, cancelOnVersion: "2.0.0", cancel: cancel}
+	manager, err := loader.New(host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Register(context.Background(), upgradeManifest("extension.test", "1.0.0")); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.EnsureLoaded(context.Background(), "extension.test"); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Upgrade(ctx, upgradeManifest("extension.test", "2.0.0")); !errors.Is(err, context.Canceled) {
+		t.Fatalf("load-cancelled upgrade error=%v", err)
+	}
+	lease, err := manager.Acquire(context.Background(), "extension.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease.Release()
+	if v1.starts.Load() != 1 || v2.starts.Load() != 1 || v2.stops.Load() != 1 {
+		t.Fatalf("runtime counts after load cancellation: v1 starts=%d, v2 starts=%d stops=%d", v1.starts.Load(), v2.starts.Load(), v2.stops.Load())
+	}
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutdownCancel()
+	if err := manager.Shutdown(shutdownCtx); err != nil {
+		t.Fatal(err)
 	}
 }
 

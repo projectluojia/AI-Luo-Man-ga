@@ -29,7 +29,7 @@ func TestValidateManifestAcceptsNeutralCore(t *testing.T) {
 func TestValidateManifestRejectsInvalidCore(t *testing.T) {
 	valid := packmgr.Manifest{
 		SchemaVersion: packmgr.SchemaVersion, ID: "campus.bus", Version: "1.0.0",
-		Mode: packmgr.ModeHosted,
+		Mode: packmgr.ModeHosted, Entrypoint: "campus.wasm",
 	}
 	validJSON := json.RawMessage(`{"tools":[]}`)
 	cases := []struct {

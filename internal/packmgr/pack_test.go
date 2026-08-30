@@ -47,7 +47,8 @@ func TestPackAndInstallFromTarball(t *testing.T) {
 func TestUnpackTarballRejectsTraversal(t *testing.T) {
 	// 恶意 tarball：路径穿越条目必须被拒绝。
 	payload := &bytes.Buffer{}
-	tarWriter := tar.NewWriter(gzip.NewWriter(payload))
+	gzipWriter := gzip.NewWriter(payload)
+	tarWriter := tar.NewWriter(gzipWriter)
 	evil := []byte("evil")
 	// 直接绝对路径。
 	_ = tarWriter.WriteHeader(&tar.Header{Name: "/etc/passwd", Mode: 0o640, Size: int64(len(evil)), Typeflag: tar.TypeReg})
@@ -58,14 +59,18 @@ func TestUnpackTarballRejectsTraversal(t *testing.T) {
 	// 符号链接条目。
 	_ = tarWriter.WriteHeader(&tar.Header{Name: "link", Mode: 0o777, Typeflag: tar.TypeSymlink, Linkname: "/tmp"})
 	_ = tarWriter.Close()
+	if err := gzipWriter.Close(); err != nil {
+		t.Fatal(err)
+	}
 
 	malicious := filepath.Join(t.TempDir(), "evil.tgz")
 	if err := os.WriteFile(malicious, payload.Bytes(), 0o640); err != nil {
 		t.Fatal(err)
 	}
 	// 恶意 tarball 经 Install 的严格解压被拒绝。
-	if _, err := packmgr.Install(context.Background(), t.TempDir(), malicious); err == nil {
-		t.Fatal("unpack traversal tarball = nil, want error")
+	if _, err := packmgr.Install(context.Background(), t.TempDir(), malicious); err == nil ||
+		!strings.Contains(err.Error(), "条目路径非法") {
+		t.Fatalf("unpack traversal tarball error = %v, want path rejection", err)
 	}
 }
 

@@ -20,8 +20,9 @@ import (
 // 下载。token 来自 GITHUB_TOKEN/GH_TOKEN（发布与私有仓库需要，公开安装可缺省）。
 
 const (
-	githubAPI     = "https://api.github.com"
-	githubUploads = "https://uploads.github.com"
+	githubAPI       = "https://api.github.com"
+	githubUploads   = "https://uploads.github.com"
+	maxReleasePages = 1000
 )
 
 // GitHubClient 是 GitHub Releases 分发后端客户端。
@@ -62,7 +63,7 @@ func (c *GitHubClient) Publish(ctx context.Context, owner, repo, sourceDir strin
 	if err != nil {
 		return "", err
 	}
-	defer os.RemoveAll(tempDir)
+	defer func() { _ = os.RemoveAll(tempDir) }()
 	tarballPath, err := Pack(ctx, sourceDir, tempDir)
 	if err != nil {
 		return "", err
@@ -87,12 +88,17 @@ func (c *GitHubClient) Publish(ctx context.Context, owner, repo, sourceDir strin
 	if err != nil {
 		return "", cleanupRelease(err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
+	info, err := file.Stat()
+	if err != nil {
+		return "", cleanupRelease(err)
+	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, assetURL, file)
 	if err != nil {
 		return "", cleanupRelease(err)
 	}
 	request.Header.Set("Content-Type", "application/octet-stream")
+	request.ContentLength = info.Size()
 	request.Header.Set("Authorization", "Bearer "+c.Token)
 	response, err := c.HTTP.Do(request)
 	if err != nil {
@@ -176,7 +182,7 @@ func (c *GitHubClient) ResolveRelease(ctx context.Context, owner, repo, constrai
 	var bestVersion Version
 	bestURL := ""
 	found := false
-	for page := 1; ; page++ {
+	for page := 1; page <= maxReleasePages; page++ {
 		request, err := http.NewRequestWithContext(ctx, http.MethodGet,
 			fmt.Sprintf("%s/repos/%s/%s/releases?per_page=100&page=%d", c.APIBase, owner, repo, page), nil)
 		if err != nil {
@@ -236,13 +242,30 @@ func (c *GitHubClient) ResolveRelease(ctx context.Context, owner, repo, constrai
 	return "", "", fmt.Errorf("仓库 %s/%s 没有满足约束 %q 的发布包", owner, repo, constraint)
 }
 
+func (c *GitHubClient) trustedAssetHost(host string) bool {
+	if host == "github.com" || host == "api.github.com" || host == "objects.githubusercontent.com" {
+		return true
+	}
+	for _, base := range []string{c.APIBase, c.UploadBase} {
+		parsed, err := url.Parse(base)
+		if err == nil && parsed.Host == host && parsed.Host != "" {
+			return true
+		}
+	}
+	return false
+}
+
 // DownloadRelease 下载发行版 tarball 到目标路径（大小受限）。
 func (c *GitHubClient) DownloadRelease(ctx context.Context, assetURL, dest string) error {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, assetURL, nil)
 	if err != nil {
 		return err
 	}
-	if c.Token != "" {
+	parsedURL, err := url.Parse(assetURL)
+	if err != nil || parsedURL.Host == "" {
+		return ErrInvalidFormat
+	}
+	if c.Token != "" && c.trustedAssetHost(parsedURL.Host) {
 		request.Header.Set("Authorization", "Bearer "+c.Token)
 	}
 	response, err := c.HTTP.Do(request)
@@ -257,7 +280,7 @@ func (c *GitHubClient) DownloadRelease(ctx context.Context, assetURL, dest strin
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	written, err := io.Copy(file, io.LimitReader(response.Body, MaxArtifactBytes+1))
 	if err != nil {
 		return err
@@ -278,7 +301,7 @@ func InstallFromRelease(ctx context.Context, root string, client *GitHubClient, 
 	if err != nil {
 		return InstalledRecord{}, err
 	}
-	defer os.RemoveAll(tempDir)
+	defer func() { _ = os.RemoveAll(tempDir) }()
 	tarball := filepath.Join(tempDir, "package.tgz")
 	if err := client.DownloadRelease(ctx, assetURL, tarball); err != nil {
 		return InstalledRecord{}, err

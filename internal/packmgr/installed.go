@@ -23,6 +23,20 @@ const (
 // 一致性与工件哈希。部署级安全（目录属主/符号链接/权限位）由宿主在发现时
 // 叠加校验，本函数面向 CLI 工具、依赖解析与安装回读验证。
 func ReadInstalled(ctx context.Context, directory string) (InstalledRecord, error) {
+	directory, err := filepath.Abs(directory)
+	if err != nil {
+		return InstalledRecord{}, err
+	}
+	info, err := os.Lstat(directory)
+	if errors.Is(err, os.ErrNotExist) {
+		return InstalledRecord{}, os.ErrNotExist
+	}
+	if err != nil {
+		return InstalledRecord{}, err
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return InstalledRecord{}, ErrInvalidFormat
+	}
 	manifestBytes, err := ReadFileLimited(filepath.Join(directory, "manifest.json"), MaxManifestBytes)
 	if err != nil {
 		return InstalledRecord{}, err
@@ -50,16 +64,24 @@ func ReadInstalled(ctx context.Context, directory string) (InstalledRecord, erro
 		lock.Mode != manifest.Mode || lock.ManifestSHA256 != hex.EncodeToString(manifestDigest[:]) {
 		return InstalledRecord{}, ErrInvalidFormat
 	}
-	artifactDigest, err := HashFile(ctx, lock.ArtifactPath, MaxArtifactBytes)
+	artifactPath, err := filepath.Abs(lock.ArtifactPath)
+	if err != nil || filepath.Clean(artifactPath) != artifactPath {
+		return InstalledRecord{}, ErrInvalidFormat
+	}
+	relative, err := filepath.Rel(directory, artifactPath)
+	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return InstalledRecord{}, ErrInvalidFormat
+	}
+	artifactDigest, err := HashFile(ctx, artifactPath, MaxArtifactBytes)
 	if err != nil || artifactDigest != lock.ArtifactSHA256 {
 		return InstalledRecord{}, ErrInvalidFormat
 	}
 	record := InstalledRecord{
-		Directory: directory, ArtifactPath: lock.ArtifactPath,
+		Directory: directory, ArtifactPath: artifactPath,
 		Manifest: manifest, Process: lock.Process,
 	}
 	if manifest.Mode == ModeIsolated {
-		if lock.Process == nil || lock.Process.Path != lock.ArtifactPath {
+		if lock.Process == nil || lock.Process.Path != artifactPath {
 			return InstalledRecord{}, ErrInvalidFormat
 		}
 		if err := ValidateProcessSpec(*lock.Process); err != nil {
@@ -92,7 +114,7 @@ func ListInstalled(ctx context.Context, root string) ([]InstalledRecord, error) 
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		if strings.HasPrefix(entry.Name(), stagePrefix) || strings.HasPrefix(entry.Name(), backupPrefix) {
+		if entry.Name() == rootMutationLockName || strings.HasPrefix(entry.Name(), stagePrefix) || strings.HasPrefix(entry.Name(), backupPrefix) {
 			continue
 		}
 		if strings.HasPrefix(entry.Name(), ".") || !entry.IsDir() {

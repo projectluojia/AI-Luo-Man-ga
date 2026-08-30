@@ -122,6 +122,7 @@ type entry struct {
 	currentInFlight int
 	transition      chan struct{}
 	// retired 是升级后被替换、仍在 drain 的旧版本运行时；在途调用排空后停止。
+	// retiredRuntime.inFlight 由所属 entry.mu 保护。
 	retired []*retiredRuntime
 }
 
@@ -352,13 +353,13 @@ func (m *Manager) Upgrade(ctx context.Context, candidate Manifest) error {
 		observe.StringAttr("runtime_mode", candidate.Mode),
 	)
 	if stopRetired {
-		stopRetiredRuntime(retired)
+		stopRetiredRuntime(item, retired)
 	}
 	return nil
 }
 
 // stopRetiredRuntime 恰好停止一次旧版本运行时，并在停止后关闭 stopped 通道。
-func stopRetiredRuntime(retired *retiredRuntime) {
+func stopRetiredRuntime(item *entry, retired *retiredRuntime) {
 	retired.stopOnce.Do(func() {
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(context.Background()), 5*time.Second)
 		defer cancel()
@@ -368,6 +369,17 @@ func stopRetiredRuntime(retired *retiredRuntime) {
 			observe.Error(ctx, "升级后旧版本运行时停止失败", stopErr)
 		}
 	})
+	if item != nil {
+		item.mu.Lock()
+		for index, candidate := range item.retired {
+			if candidate == retired {
+				copy(item.retired[index:], item.retired[index+1:])
+				item.retired = item.retired[:len(item.retired)-1]
+				break
+			}
+		}
+		item.mu.Unlock()
+	}
 }
 
 func (m *Manager) rollbackRegistered(manifests []Manifest) error {
@@ -597,12 +609,15 @@ func (l *Lease) Release() {
 		item.mu.Lock()
 		item.inFlight--
 		var retired *retiredRuntime
+		matched := false
 		if l.runtime == item.runtime {
 			item.currentInFlight--
+			matched = true
 		} else {
 			for _, candidate := range item.retired {
 				if candidate.runtime == l.runtime {
 					retired = candidate
+					matched = true
 					break
 				}
 			}
@@ -613,9 +628,12 @@ func (l *Lease) Release() {
 		drained := retired != nil && retired.inFlight <= 0
 		item.mu.Unlock()
 		observe.DefaultMetrics().RuntimeCallStopped()
+		if !matched {
+			observe.Error(context.Background(), "运行时租约未找到对应版本", ErrUnavailable)
+		}
 		if drained {
 			// 升级替换的旧版本在途调用已排空：停止旧版本（恰好一次）。
-			stopRetiredRuntime(retired)
+			go stopRetiredRuntime(item, retired)
 		}
 	})
 }
@@ -850,7 +868,7 @@ func (m *Manager) Shutdown(ctx context.Context) error {
 			drained := old.inFlight <= 0
 			item.mu.Unlock()
 			if drained {
-				stopRetiredRuntime(old)
+				stopRetiredRuntime(item, old)
 			}
 		}
 	}

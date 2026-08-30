@@ -16,6 +16,9 @@ import (
 // 生成 `<id>-<version>.tgz`，条目为扁平布局（manifest.json + 工件），供
 // 注册表发布与 `ailuo install <pkg>.tgz` 安装。
 func Pack(ctx context.Context, sourceDir, outputDir string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	source, err := readSourceManifest(sourceDir)
 	if err != nil {
 		return "", err
@@ -28,29 +31,32 @@ func Pack(ctx context.Context, sourceDir, outputDir string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	gzipWriter := gzip.NewWriter(file)
 	tarWriter := tar.NewWriter(gzipWriter)
-	writeEntry := func(name string, size int64, body io.Reader) error {
-		if err := tarWriter.WriteHeader(&tar.Header{Name: name, Mode: 0o640, Size: size, Typeflag: tar.TypeReg}); err != nil {
+	writeEntry := func(name string, mode int64, size int64, body io.Reader) error {
+		if err := ctx.Err(); err != nil {
 			return err
 		}
-		_, err := io.Copy(tarWriter, body)
+		if err := tarWriter.WriteHeader(&tar.Header{Name: name, Mode: mode, Size: size, Typeflag: tar.TypeReg}); err != nil {
+			return err
+		}
+		_, err := io.CopyN(tarWriter, &contextReader{ctx: ctx, reader: body}, size)
 		return err
 	}
-	if err := writeEntry("manifest.json", int64(len(source.manifestBytes)), bytes.NewReader(source.manifestBytes)); err != nil {
+	if err := writeEntry("manifest.json", 0o640, int64(len(source.manifestBytes)), bytes.NewReader(source.manifestBytes)); err != nil {
 		return "", err
 	}
 	artifact, err := os.Open(source.artifactPath)
 	if err != nil {
 		return "", err
 	}
-	defer artifact.Close()
+	defer func() { _ = artifact.Close() }()
 	info, err := artifact.Stat()
 	if err != nil {
 		return "", err
 	}
-	if err := writeEntry(filepath.Base(source.Manifest.Entrypoint), info.Size(), artifact); err != nil {
+	if err := writeEntry(filepath.Base(source.Manifest.Entrypoint), int64(info.Mode().Perm()), info.Size(), artifact); err != nil {
 		return "", err
 	}
 	// tar 尾 + gzip 尾按序关闭；defer 的 file.Close 只负责文件描述符。
@@ -63,6 +69,18 @@ func Pack(ctx context.Context, sourceDir, outputDir string) (string, error) {
 	return tarballPath, nil
 }
 
+type contextReader struct {
+	ctx    context.Context
+	reader io.Reader
+}
+
+func (r *contextReader) Read(p []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return r.reader.Read(p)
+}
+
 // unpackTarball 严格解压 tarball 到目标目录：拒绝绝对路径、路径穿越、
 // 非普通文件/目录条目与超限大小（tarball 是外部输入，属于信任边界）。
 func unpackTarball(tarball, dest string) error {
@@ -70,17 +88,17 @@ func unpackTarball(tarball, dest string) error {
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	gzipReader, err := gzip.NewReader(file)
 	if err != nil {
 		return ErrInvalidFormat
 	}
-	defer gzipReader.Close()
+	defer func() { _ = gzipReader.Close() }()
 	destination, err := os.OpenRoot(dest)
 	if err != nil {
 		return err
 	}
-	defer destination.Close()
+	defer func() { _ = destination.Close() }()
 	tarReader := tar.NewReader(gzipReader)
 	var total int64
 	entries := 0
@@ -112,13 +130,13 @@ func unpackTarball(tarball, dest string) error {
 			if err := destination.MkdirAll(filepath.Dir(header.Name), 0o750); err != nil {
 				return err
 			}
-			file, err := destination.OpenFile(header.Name, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o640)
+			file, err := destination.OpenFile(header.Name, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(header.Mode).Perm())
 			if err != nil {
 				return err
 			}
 			// tar.Reader 按条目边界供给，超量读不到；不足声明大小（截断）报错。
 			if _, err := io.CopyN(file, tarReader, header.Size); err != nil {
-				file.Close()
+				_ = file.Close()
 				return ErrInvalidFormat
 			}
 			if err := file.Close(); err != nil {
