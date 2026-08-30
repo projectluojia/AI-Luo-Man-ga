@@ -84,7 +84,7 @@ func (c *Catalog) Discover(ctx context.Context) ([]loader.InstalledRecord, error
 		directory := filepath.Join(c.root, entry.Name())
 		info, err := os.Lstat(directory)
 		if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 ||
-			info.Mode().Perm()&0o022 != 0 || !ownerMatchesProcess(info) {
+			groupOrWorldWritable(info) || !ownerMatchesProcess(directory, info) {
 			return nil, ErrInvalidCatalog
 		}
 		packageRecords, err := c.readPackage(ctx, directory)
@@ -211,8 +211,9 @@ func (c *Catalog) readPackage(ctx context.Context, directory string) ([]installe
 	}
 	// 部署级属主/权限校验叠加在格式层读取之上。
 	for _, name := range []string{installManifestName, installLockName} {
-		info, err := os.Lstat(filepath.Join(directory, name))
-		if err != nil || !ownerMatchesProcess(info) || info.Mode().Perm()&0o022 != 0 {
+		filePath := filepath.Join(directory, name)
+		info, err := os.Lstat(filePath)
+		if err != nil || !ownerMatchesProcess(filePath, info) || groupOrWorldWritable(info) {
 			return nil, ErrInvalidCatalog
 		}
 	}
@@ -296,7 +297,7 @@ func (c *Catalog) readPackage(ctx context.Context, directory string) ([]installe
 func validateSecureDirectory(path string) error {
 	info, err := os.Lstat(path)
 	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 ||
-		info.Mode().Perm()&0o022 != 0 || !ownerMatchesProcess(info) {
+		groupOrWorldWritable(info) || !ownerMatchesProcess(path, info) {
 		return ErrInvalidCatalog
 	}
 	return nil

@@ -685,10 +685,10 @@ func validateProcessSpec(spec packagecontract.ProcessSpec) error {
 		return ErrInvalidProcessSpec
 	}
 	info, err := os.Lstat(spec.Path)
-	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 || info.Mode().Perm()&0o022 != 0 {
+	if err != nil || !info.Mode().IsRegular() || !executableFile(info) || unsafePermissions(info) {
 		return ErrInvalidProcessSpec
 	}
-	if info, err = os.Lstat(spec.WorkDir); err != nil || !info.IsDir() || info.Mode().Perm()&0o022 != 0 {
+	if info, err = os.Lstat(spec.WorkDir); err != nil || !info.IsDir() || unsafePermissions(info) {
 		return ErrInvalidProcessSpec
 	}
 	if strings.HasPrefix(spec.Address, "unix:") {

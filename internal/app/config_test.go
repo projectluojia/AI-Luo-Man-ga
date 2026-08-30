@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -73,9 +72,6 @@ func TestDefaultInstallRootIsAbsoluteOrEmpty(t *testing.T) {
 }
 
 func TestConfigureInstalledRuntimesAllowsEmptySecureCatalog(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("非 Unix 平台显式关闭安装目录属主校验")
-	}
 	root := t.TempDir()
 	if err := os.Chmod(root, 0o700); err != nil {
 		t.Fatal(err)
@@ -90,9 +86,6 @@ func TestConfigureInstalledRuntimesAllowsEmptySecureCatalog(t *testing.T) {
 }
 
 func TestConfigureInstalledRuntimesRegistersHostedCatalog(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("非 Unix 平台显式关闭安装目录属主校验")
-	}
 	root := writeInstalledFixture(t)
 	if _, _, err := configureInstalledRuntimes(t.Context(), config{runtimeInstallRoot: root}, nil); err == nil || !strings.Contains(err.Error(), "AILUO_RUNTIME_HOST_ADDRESS") {
 		t.Fatalf("missing hosted address error=%v", err)
