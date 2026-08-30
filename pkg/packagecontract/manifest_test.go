@@ -31,6 +31,25 @@ func TestValidateManifestAcceptsNeutralCore(t *testing.T) {
 	}
 }
 
+func TestValidateManifestAcceptsIsolatedProcessTemplate(t *testing.T) {
+	manifest := packagecontract.Manifest{
+		SchemaVersion: packagecontract.SchemaVersion, ID: "agent", Version: "1.0.0",
+		Components: []packagecontract.Component{{
+			ID: "executor", Mode: packagecontract.ModeIsolated, Role: packagecontract.RoleExecutor,
+			Entrypoint: "runtime", EnvFrom: []string{"MODEL_KEY"},
+			Process: &packagecontract.ProcessTemplate{
+				Path: ".venv/python", WorkDir: ".", Address: "127.0.0.1:50051",
+			},
+		}},
+	}
+	if err := packagecontract.ValidateManifest(manifest); err != nil {
+		t.Fatalf("ValidateManifest: %v", err)
+	}
+	if err := packagecontract.ValidateProcessTemplate(packagecontract.ProcessTemplate{Path: "../python"}); !errors.Is(err, packagecontract.ErrInvalidFormat) {
+		t.Fatalf("invalid process template error = %v, want ErrInvalidFormat", err)
+	}
+}
+
 func TestValidateManifestRejectsInvalidCore(t *testing.T) {
 	// 每个用例独立构造：Manifest 结构体复制不复制 Components 底层数组，
 	// 共用一份会让 `m.Components[0].Mode = ...` 之类的改动污染后续子测试。
@@ -169,7 +188,7 @@ func TestValidateLockMatchesComponents(t *testing.T) {
 			{ComponentID: "bus.adapter", Path: adapterPath,
 				SHA256: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
 				Process: &packagecontract.ProcessSpec{
-					Path: adapterPath, WorkDir: t.TempDir(), Address: "127.0.0.1:9000",
+					Path: adapterPath, WorkDir: installDir, Address: "127.0.0.1:9000",
 				}},
 		},
 	}

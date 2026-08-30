@@ -35,14 +35,22 @@ var environmentNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,127}$`
 // executor 走 executor.v1 协议（ClientProvider + ProcessLifecycle）。内核不
 // 感知任何具体运行时的名字：进程规格由组合根聚合的包源按清单解析。
 type ProcessHostConfig struct {
-	// Resolve 按清单返回进程规格。组合根可在此聚合多个包源（安装目录、
-	// 内置虚拟源）；解析失败的清单即该宿主不服务的清单（Verify fail-closed）。
+	// Resolve 按清单返回锁定的进程规格；解析失败的清单即该宿主不服务的
+	// 清单（Verify fail-closed）。
 	Resolve func(context.Context, Manifest) (packagecontract.ProcessSpec, error)
-	// Verify 对解析出的规格做来源侧二次校验（安装锁、内置身份），可空。
+	// Verify 对解析出的规格做来源侧二次校验（例如安装锁），可空。
 	Verify func(context.Context, Manifest, packagecontract.ProcessSpec) error
-	// Spawn=false 时 executor 角色只连接外部已启动进程（不监督进程生命周期）；
-	// capability 角色必须 Spawn（构造期校验）。
+	// Spawn 是没有 SpawnFor 时的默认进程管理策略。
 	Spawn bool
+	// SpawnFor 按运行角色决定是否由本宿主启动进程；未设置时使用 Spawn。
+	// capability 角色若返回 false 会在加载期 fail-closed。
+	SpawnFor func(Manifest) bool
+	// Environment 返回按清单 EnvFrom 声明允许注入的运行时环境。返回值只
+	// 在启动时合并，不参与来源 Verify，也不会写入 lock。
+	Environment func(context.Context, Manifest) ([]string, error)
+	// Address 可在 Deployment 启动时覆盖锁定的本机地址（例如执行者监听地址）；
+	// 来源身份校验仍针对未覆盖的锁定规格。
+	Address func(context.Context, Manifest, string) (string, error)
 	// ExecutorHealthModel 是 executor 角色健康检查使用的模型名
 	// （capability 角色忽略）。
 	ExecutorHealthModel string
@@ -101,17 +109,8 @@ func (h *ProcessHost) Verify(ctx context.Context, manifest Manifest) error {
 	if manifest.Mode != ModeIsolated {
 		return ErrUnsupportedMode
 	}
-	spec, err := h.config.Resolve(ctx, manifest)
-	if err != nil {
-		return errors.Join(ErrUnavailable, err)
-	}
-	if err := h.validateSpec(manifest, spec); err != nil {
-		return err
-	}
-	if h.config.Verify != nil {
-		return h.config.Verify(ctx, manifest, spec)
-	}
-	return nil
+	_, err := h.resolveVerifiedSpec(ctx, manifest)
+	return err
 }
 
 func (h *ProcessHost) Load(ctx context.Context, manifest Manifest) (Runtime, error) {
@@ -126,17 +125,9 @@ func (h *ProcessHost) Load(ctx context.Context, manifest Manifest) (Runtime, err
 	}
 
 	// Load 再次解析并校验，避免 Verify 与真正执行之间替换安装单元。
-	spec, err := h.config.Resolve(ctx, manifest)
+	spec, err := h.resolveSpec(ctx, manifest)
 	if err != nil {
-		return nil, errors.Join(ErrUnavailable, err)
-	}
-	if err := h.validateSpec(manifest, spec); err != nil {
 		return nil, err
-	}
-	if h.config.Verify != nil {
-		if err := h.config.Verify(ctx, manifest, spec); err != nil {
-			return nil, err
-		}
 	}
 	switch manifest.Role {
 	case RoleExecutor:
@@ -151,7 +142,7 @@ func (h *ProcessHost) Load(ctx context.Context, manifest Manifest) (Runtime, err
 // loadExecutor 启动（或连接）executor.v1 运行时进程。
 func (h *ProcessHost) loadExecutor(ctx context.Context, manifest Manifest, spec packagecontract.ProcessSpec) (Runtime, error) {
 	var process *Process
-	if h.config.Spawn {
+	if h.shouldSpawn(manifest) {
 		var err error
 		process, err = StartProcess(ctx, spec, h.config.Stdout, h.config.Stderr)
 		if err != nil {
@@ -177,7 +168,7 @@ func (h *ProcessHost) loadExecutor(ctx context.Context, manifest Manifest, spec 
 
 // loadCapability 启动 capability 进程并经 runtime_host 协议装载。
 func (h *ProcessHost) loadCapability(ctx context.Context, manifest Manifest, spec packagecontract.ProcessSpec) (Runtime, error) {
-	if !h.config.Spawn {
+	if !h.shouldSpawn(manifest) {
 		return nil, ErrInvalidProcessSpec
 	}
 	process, err := StartProcess(ctx, spec, h.config.Stdout, h.config.Stderr)
@@ -256,13 +247,104 @@ func (h *ProcessHost) Close(ctx context.Context) error {
 // validateSpec 校验解析出的进程规格：连接模式的 executor 只校验地址与限额，
 // 由本宿主启动的进程叠加文件系统与内容安全校验。
 func (h *ProcessHost) validateSpec(manifest Manifest, spec packagecontract.ProcessSpec) error {
-	if manifest.Role == RoleExecutor && !h.config.Spawn {
+	if manifest.Role == RoleExecutor && !h.shouldSpawn(manifest) {
 		if !packagecontract.IsLocalRuntimeAddress(spec.Address) || !packagecontract.ValidProcessLimits(spec.Limits) {
 			return ErrInvalidProcessSpec
 		}
 		return nil
 	}
 	return validateProcessSpec(spec)
+}
+
+// shouldSpawn 返回当前清单的进程管理策略。
+func (h *ProcessHost) shouldSpawn(manifest Manifest) bool {
+	if h.config.SpawnFor != nil {
+		return h.config.SpawnFor(manifest)
+	}
+	return h.config.Spawn
+}
+
+// resolveVerifiedSpec 读取并校验来源锁定的规格；动态环境和地址在来源校验
+// 之后才应用，避免把 Deployment 配置误当成包身份的一部分。
+func (h *ProcessHost) resolveVerifiedSpec(ctx context.Context, manifest Manifest) (packagecontract.ProcessSpec, error) {
+	spec, err := h.config.Resolve(ctx, manifest)
+	if err != nil {
+		return packagecontract.ProcessSpec{}, errors.Join(ErrUnavailable, err)
+	}
+	if err := h.validateSpec(manifest, spec); err != nil {
+		return packagecontract.ProcessSpec{}, err
+	}
+	if h.config.Verify != nil {
+		if err := h.config.Verify(ctx, manifest, spec); err != nil {
+			return packagecontract.ProcessSpec{}, err
+		}
+	}
+	return spec, nil
+}
+
+// resolveSpec 返回可实际启动的规格：来源锁定字段先完成校验，随后按清单声明
+// 合并宿主注入环境和 Deployment 地址覆盖。
+func (h *ProcessHost) resolveSpec(ctx context.Context, manifest Manifest) (packagecontract.ProcessSpec, error) {
+	spec, err := h.resolveVerifiedSpec(ctx, manifest)
+	if err != nil {
+		return packagecontract.ProcessSpec{}, err
+	}
+	if h.shouldSpawn(manifest) && len(manifest.EnvFrom) > 0 && h.config.Environment == nil {
+		return packagecontract.ProcessSpec{}, ErrInvalidProcessSpec
+	}
+	if h.shouldSpawn(manifest) && h.config.Environment != nil {
+		injected, err := h.config.Environment(ctx, manifest)
+		if err != nil {
+			return packagecontract.ProcessSpec{}, errors.Join(ErrInvalidProcessSpec, err)
+		}
+		spec.Env, err = mergeInjectedEnvironment(manifest.EnvFrom, spec.Env, injected)
+		if err != nil {
+			return packagecontract.ProcessSpec{}, err
+		}
+	}
+	if h.config.Address != nil {
+		spec.Address, err = h.config.Address(ctx, manifest, spec.Address)
+		if err != nil {
+			return packagecontract.ProcessSpec{}, errors.Join(ErrInvalidProcessSpec, err)
+		}
+	}
+	if err := h.validateSpec(manifest, spec); err != nil {
+		return packagecontract.ProcessSpec{}, err
+	}
+	return spec, nil
+}
+
+// mergeInjectedEnvironment 只接受清单 EnvFrom 中声明的完整 KEY=VALUE 项，
+// 并拒绝覆盖包模板已有的同名变量。
+func mergeInjectedEnvironment(declared, base, injected []string) ([]string, error) {
+	allowed := make(map[string]struct{}, len(declared))
+	for _, name := range declared {
+		allowed[name] = struct{}{}
+	}
+	seen := make(map[string]struct{}, len(base)+len(injected))
+	result := append([]string(nil), base...)
+	for _, item := range base {
+		name, _, ok := strings.Cut(item, "=")
+		if !ok {
+			return nil, ErrInvalidProcessSpec
+		}
+		seen[name] = struct{}{}
+	}
+	for _, item := range injected {
+		name, _, ok := strings.Cut(item, "=")
+		if !ok || !environmentNamePattern.MatchString(name) {
+			return nil, ErrInvalidProcessSpec
+		}
+		if _, ok := allowed[name]; !ok {
+			return nil, ErrInvalidProcessSpec
+		}
+		if _, duplicate := seen[name]; duplicate {
+			return nil, ErrInvalidProcessSpec
+		}
+		seen[name] = struct{}{}
+		result = append(result, item)
+	}
+	return result, nil
 }
 
 // hostManagedRuntime 是进程宿主可强制清理的运行时统一面。

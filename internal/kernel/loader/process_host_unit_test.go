@@ -107,6 +107,22 @@ func TestValidateProcessSpecRejectsUnsafeExecutionInputs(t *testing.T) {
 	}
 }
 
+func TestMergeInjectedEnvironmentRequiresManifestDeclaration(t *testing.T) {
+	base := []string{"STATIC=1"}
+	if got, err := mergeInjectedEnvironment([]string{"MODEL_KEY"}, base, []string{"MODEL_KEY=secret"}); err != nil || len(got) != 2 {
+		t.Fatalf("valid injected environment = %v, %v", got, err)
+	}
+	for _, injected := range [][]string{
+		{"UNDECLARED=value"},
+		{"MODEL_KEY=one", "MODEL_KEY=two"},
+		{"not a name=value"},
+	} {
+		if _, err := mergeInjectedEnvironment([]string{"MODEL_KEY"}, nil, injected); !errors.Is(err, ErrInvalidProcessSpec) {
+			t.Fatalf("injected environment %v error = %v, want ErrInvalidProcessSpec", injected, err)
+		}
+	}
+}
+
 func TestValidProcessLimits(t *testing.T) {
 	cases := []struct {
 		name   string

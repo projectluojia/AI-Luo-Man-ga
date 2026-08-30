@@ -51,10 +51,20 @@ type sourcePackage struct {
 type sourceComponent struct {
 	ID            string                 `toml:"id"`
 	Mode          string                 `toml:"mode"`
+	Role          string                 `toml:"role,omitempty"`
 	Entrypoint    string                 `toml:"entrypoint"`
+	Process       *sourceProcess         `toml:"process,omitempty"`
+	EnvFrom       []string               `toml:"env_from,omitempty"`
 	Exports       []string               `toml:"exports,omitempty"`
 	Imports       []string               `toml:"imports,omitempty"`
 	HostFunctions []sourceHostedFunction `toml:"host_function,omitempty"`
+}
+
+type sourceProcess struct {
+	Path    string   `toml:"path"`
+	Args    []string `toml:"args,omitempty"`
+	WorkDir string   `toml:"work_dir,omitempty"`
+	Address string   `toml:"address,omitempty"`
 }
 
 type sourceHostedFunction struct {
@@ -170,13 +180,19 @@ func (s sourceManifest) convert() (packagecontract.Manifest, error) {
 				Module: decl.Module, Name: decl.Name, Purpose: decl.Purpose,
 			})
 		}
+		var process *packagecontract.ProcessTemplate
+		if component.Process != nil {
+			process = &packagecontract.ProcessTemplate{
+				Path: component.Process.Path, Args: append([]string(nil), component.Process.Args...),
+				WorkDir: component.Process.WorkDir, Address: component.Process.Address,
+			}
+		}
 		manifest.Components = append(manifest.Components, packagecontract.Component{
-			ID:            component.ID,
-			Mode:          component.Mode,
-			Entrypoint:    component.Entrypoint,
-			Exports:       append([]string(nil), component.Exports...),
-			Imports:       append([]string(nil), component.Imports...),
-			HostFunctions: decls,
+			ID: component.ID, Mode: component.Mode, Role: component.Role,
+			Entrypoint: component.Entrypoint, Process: process,
+			EnvFrom: append([]string(nil), component.EnvFrom...),
+			Exports: append([]string(nil), component.Exports...),
+			Imports: append([]string(nil), component.Imports...), HostFunctions: decls,
 		})
 	}
 	extensions, err := s.buildExtensions()

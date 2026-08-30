@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -65,6 +66,9 @@ type Manifest struct {
 	// HostFunctions 是包声明的宿主函数依赖（仅 hosted 有意义）：guest 只可
 	// 调用清单声明且宿主提供的宿主函数，未声明调用在加载期被拒绝。
 	HostFunctions []packagecontract.HostedFunctionDecl
+	// EnvFrom 是 isolated 组件允许由 Deployment 注入的环境变量名；值不属于
+	// 包清单或 lock，由进程宿主在启动时从受信配置解析。
+	EnvFrom []string
 	// Storage 是包声明的持久化契约（namespace 等）。声明了存储宿主函数的包
 	// 必须同时声明该段；存储函数的 namespace 绑定取自此处，guest 不可选择。
 	Storage *packagecontract.Storage
@@ -74,7 +78,7 @@ type Manifest struct {
 func (m Manifest) Equal(other Manifest) bool {
 	return m.ID == other.ID && m.Version == other.Version && m.Mode == other.Mode &&
 		m.Role == other.Role && m.LockedDigest == other.LockedDigest && m.Pin == other.Pin &&
-		m.IdleTTL == other.IdleTTL && packagecontract.EqualHostedFunctions(m.HostFunctions, other.HostFunctions) &&
+		m.IdleTTL == other.IdleTTL && slices.Equal(m.EnvFrom, other.EnvFrom) && packagecontract.EqualHostedFunctions(m.HostFunctions, other.HostFunctions) &&
 		packagecontract.EqualStorage(m.Storage, other.Storage)
 }
 
@@ -872,6 +876,9 @@ func ValidateManifest(manifest Manifest) error {
 		return ErrInvalidManifest
 	}
 	if err := packagecontract.ValidateHostedFunctions(manifest.HostFunctions); err != nil {
+		return ErrInvalidManifest
+	}
+	if err := packagecontract.ValidateEnvFrom(manifest.EnvFrom); err != nil {
 		return ErrInvalidManifest
 	}
 	if manifest.Storage != nil {

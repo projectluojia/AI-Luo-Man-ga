@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packagecontract"
 	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
 )
 
@@ -83,6 +84,43 @@ tool = "demo.text"
 	}
 	if capability.Description != "字符串长度" {
 		t.Fatalf("capability description 未继承 tool description: %q", capability.Description)
+	}
+}
+
+// isolated 组件的角色、进程模板和宿主环境声明必须完整传入中性清单。
+func TestParseIsolatedProcessTemplate(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, SourceFileName)
+	writeSource(t, path, `
+[package]
+id = "agent"
+version = "1.0.0"
+
+[[component]]
+id = "executor"
+mode = "isolated"
+role = "executor"
+entrypoint = "runtime"
+env_from = ["MODEL_KEY"]
+
+[component.process]
+path = "bin/runner"
+args = ["--listen", "${address}"]
+work_dir = "."
+address = "127.0.0.1:50051"
+`)
+
+	manifest, _, _, err := Parse(path)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	component := manifest.Components[0]
+	if component.Role != packagecontract.RoleExecutor || len(component.EnvFrom) != 1 || component.Process == nil {
+		t.Fatalf("component = %+v, want executor template", component)
+	}
+	if component.Process.Path != "bin/runner" || component.Process.WorkDir != "." ||
+		component.Process.Address != "127.0.0.1:50051" {
+		t.Fatalf("process = %+v, want parsed template", component.Process)
 	}
 }
 

@@ -3,6 +3,7 @@ package packagesource
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -221,6 +222,11 @@ func (c *Catalog) readPackage(ctx context.Context, directory string) ([]installe
 	if err != nil {
 		return nil, errors.Join(ErrInvalidCatalog, err)
 	}
+	for _, artifact := range neutral.Lock.Artifacts {
+		if err := validateSecureArtifact(ctx, artifact.Path); err != nil {
+			return nil, errors.Join(ErrInvalidCatalog, err)
+		}
+	}
 	var extensions aiLuoExtensions
 	if len(neutral.Manifest.Extensions) > 0 {
 		if err := packagecontract.DecodeStrictJSON(neutral.Manifest.Extensions, &extensions); err != nil {
@@ -249,11 +255,16 @@ func (c *Catalog) readPackage(ctx context.Context, directory string) ([]installe
 		if !ok {
 			return nil, ErrInvalidCatalog
 		}
+		role := loader.RoleCapability
+		if component.Role != "" {
+			role = component.Role
+		}
 		runtimeManifest := loader.Manifest{
 			ID: runtimeID, Version: neutral.Manifest.Version, Mode: component.Mode,
-			Role: loader.RoleCapability, LockedDigest: artifact.SHA256,
+			Role: role, LockedDigest: artifact.SHA256,
 			Pin: neutral.Manifest.Pin, IdleTTL: time.Duration(neutral.Manifest.IdleTTLMS) * time.Millisecond,
 			HostFunctions: slices.Clone(component.HostFunctions),
+			EnvFrom:       slices.Clone(component.EnvFrom),
 			Storage:       cloneStorage(neutral.Manifest.Storage),
 		}
 		if err := loader.ValidateManifest(runtimeManifest); err != nil {
@@ -301,6 +312,28 @@ func validateSecureDirectory(path string) error {
 		return ErrInvalidCatalog
 	}
 	return nil
+}
+
+// validateSecureArtifact 复核目录工件中的每个节点。根目录属主一致并不能保护
+// 目录内部被其他账户替换的解释器、源码或依赖文件。
+func validateSecureArtifact(ctx context.Context, path string) error {
+	return filepath.WalkDir(path, func(current string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			return ErrInvalidCatalog
+		}
+		info, err := entry.Info()
+		if err != nil || (!info.IsDir() && !info.Mode().IsRegular()) ||
+			!ownerMatchesProcess(current, info) || groupOrWorldWritable(info) {
+			return ErrInvalidCatalog
+		}
+		return nil
+	})
 }
 
 func cloneProcessSpec(spec packagecontract.ProcessSpec) packagecontract.ProcessSpec {
