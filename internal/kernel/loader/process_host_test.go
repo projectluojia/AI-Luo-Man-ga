@@ -152,8 +152,8 @@ func TestIsolatedProcessHostRunsOutsideKernelAndShutsDownGracefully(t *testing.T
 	result, err := manager.Handler("isolated.real")(
 		context.Background(),
 		contracts.RequestContext{
-			AppID: "campus-services", EchoID: "echo-1", RequestID: "request-1", CallID: "call-1",
-			TargetType: "capability", CapabilityID: "campus.bus.routes.list", ServiceID: "campus",
+			AppID: "app.test", EchoID: "echo-1", RequestID: "request-1", CallID: "call-1",
+			TargetType: "capability", CapabilityID: "test.capability", ServiceID: "test.service",
 		},
 		json.RawMessage(`{"value":1}`),
 	)
@@ -162,7 +162,7 @@ func TestIsolatedProcessHostRunsOutsideKernelAndShutsDownGracefully(t *testing.T
 	}
 	var decoded map[string]string
 	if err := json.Unmarshal(result, &decoded); err != nil ||
-		decoded["app_id"] != "campus-services" || decoded["call_id"] != "call-1" {
+		decoded["app_id"] != "app.test" || decoded["call_id"] != "call-1" {
 		t.Fatalf("result=%s err=%v", result, err)
 	}
 	// 三层校验：注册期 selectHost、加载期 loadRuntime、执行前 Load 内部 TOCTOU 防御各一次。
@@ -215,8 +215,8 @@ func TestIsolatedProcessHostEnforcesFileSizeLimit(t *testing.T) {
 	_, err = manager.Handler("isolated.limit")(
 		context.Background(),
 		contracts.RequestContext{
-			AppID: "campus-services", EchoID: "echo-1", RequestID: "request-1", CallID: "call-1",
-			TargetType: "capability", CapabilityID: "campus.bus.routes.list", ServiceID: "campus",
+			AppID: "app.test", EchoID: "echo-1", RequestID: "request-1", CallID: "call-1",
+			TargetType: "capability", CapabilityID: "test.capability", ServiceID: "test.service",
 		},
 		json.RawMessage(`{"value":1}`),
 	)

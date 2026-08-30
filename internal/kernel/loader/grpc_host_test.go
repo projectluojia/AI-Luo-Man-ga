@@ -141,11 +141,11 @@ func runtimeManifest(id, mode string) loader.Manifest {
 
 func governedRuntimeRequest() contracts.RequestContext {
 	return contracts.RequestContext{
-		AppID: "campus-services", EchoID: "echo-1", RequestID: "request-1", TraceID: "trace-1",
+		AppID: "app.test", EchoID: "echo-1", RequestID: "request-1", TraceID: "trace-1",
 		RunID: "run-1", ParentRunID: "parent-1", CallID: "call-1", CallDepth: 2,
 		IdempotencyKey: "operation-1", ConfirmationID: "confirmation-1", ProtocolVersion: "1.0",
-		TargetType: "capability", CapabilityID: "campus.bus.routes.list", ServiceID: "campus",
-		PermissionScope: []string{"bus.read"}, CallChain: []string{"first"},
+		TargetType: "capability", CapabilityID: "test.capability", ServiceID: "test.service",
+		PermissionScope: []string{"test.read"}, CallChain: []string{"first"},
 	}
 }
 
@@ -195,11 +195,11 @@ func TestHostedGRPCHostSharesConnectionAndPreservesGovernedContext(t *testing.T)
 		t.Fatalf("invoke requests=%d", len(requests))
 	}
 	got := requests[0].Context
-	if got.AppId != "campus-services" || got.EchoId != "echo-1" || got.RunId != "run-1" ||
+	if got.AppId != "app.test" || got.EchoId != "echo-1" || got.RunId != "run-1" ||
 		got.CallId != "call-1" || got.CallDepth != 2 || got.DeadlineUnixMs != 0 ||
-		got.TargetType != "capability" || got.CapabilityId != "campus.bus.routes.list" ||
-		got.ServiceId != "campus" || got.ToolId != "" ||
-		len(got.PermissionScope) != 1 || got.PermissionScope[0] != "bus.read" {
+		got.TargetType != "capability" || got.CapabilityId != "test.capability" ||
+		got.ServiceId != "test.service" || got.ToolId != "" ||
+		len(got.PermissionScope) != 1 || got.PermissionScope[0] != "test.read" {
 		t.Fatalf("governed context=%#v", got)
 	}
 

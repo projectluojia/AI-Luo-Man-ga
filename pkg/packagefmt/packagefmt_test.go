@@ -16,34 +16,34 @@ func TestParseInheritsToolAndService(t *testing.T) {
 	path := filepath.Join(dir, SourceFileName)
 	writeSource(t, path, `
 [package]
-id = "strings.tool"
+id = "demo.pkg"
 version = "1.0.0"
 description = "字符串工具"
 
 [[component]]
 id = "core"
 mode = "hosted"
-entrypoint = "strings.tool.wasm"
-exports = ["strings.len.cap"]
+entrypoint = "demo.pkg.wasm"
+exports = ["demo.text.cap"]
 
-[tool."strings.len"]
+[tool."demo.text"]
 description = "字符串长度"
 schema = """{"type":"object","properties":{"value":{"type":"string"}},"required":["value"]}"""
 side_effect = "read"
 
 [[capability]]
-id = "strings.len.cap"
-tool = "strings.len"
+id = "demo.text.cap"
+tool = "demo.text"
 `)
 
 	manifest, _, _, err := Parse(path)
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
-	if manifest.ID != "strings.tool" || manifest.Version != "1.0.0" {
+	if manifest.ID != "demo.pkg" || manifest.Version != "1.0.0" {
 		t.Fatalf("包标识错误: %+v", manifest)
 	}
-	if len(manifest.Components) != 1 || manifest.Components[0].Entrypoint != "strings.tool.wasm" {
+	if len(manifest.Components) != 1 || manifest.Components[0].Entrypoint != "demo.pkg.wasm" {
 		t.Fatalf("组件错误: %+v", manifest.Components)
 	}
 	extensions := decodeExtensions(t, manifest.Extensions)
@@ -51,24 +51,24 @@ tool = "strings.len"
 		t.Fatalf("tools 数量错误: %d", len(extensions.Tools))
 	}
 	tool := extensions.Tools[0]
-	if tool.ID != "strings.len" || tool.Version != "1.0.0" || tool.SideEffect != "read" {
+	if tool.ID != "demo.text" || tool.Version != "1.0.0" || tool.SideEffect != "read" {
 		t.Fatalf("tool 继承错误: %+v", tool)
 	}
 	// service 自动生成：id/version/description 继承 package，依赖默认全部 tool。
-	if extensions.Service.ID != "strings.tool" || extensions.Service.Version != "1.0.0" {
+	if extensions.Service.ID != "demo.pkg" || extensions.Service.Version != "1.0.0" {
 		t.Fatalf("service 继承错误: %+v", extensions.Service)
 	}
-	if len(extensions.Service.ToolDependencies) != 1 || extensions.Service.ToolDependencies[0] != "strings.len" {
+	if len(extensions.Service.ToolDependencies) != 1 || extensions.Service.ToolDependencies[0] != "demo.text" {
 		t.Fatalf("service 依赖默认错误: %+v", extensions.Service.ToolDependencies)
 	}
 	if len(extensions.Capabilities) != 1 {
 		t.Fatalf("capabilities 数量错误: %d", len(extensions.Capabilities))
 	}
 	capability := extensions.Capabilities[0]
-	if capability.ID != "strings.len.cap" || capability.ToolID != "strings.len" {
+	if capability.ID != "demo.text.cap" || capability.ToolID != "demo.text" {
 		t.Fatalf("capability 标识错误: %+v", capability)
 	}
-	if capability.Version != "1.0.0" || capability.ServiceID != "strings.tool" {
+	if capability.Version != "1.0.0" || capability.ServiceID != "demo.pkg" {
 		t.Fatalf("capability 继承版本/service 错误: %+v", capability)
 	}
 	// capability 继承 tool 的 schema、side_effect、name（= tool description）。
@@ -249,28 +249,28 @@ func TestPackAndInstallFromSourceManifest(t *testing.T) {
 	path := filepath.Join(sourceDir, SourceFileName)
 	writeSource(t, path, `
 [package]
-id = "strings.tool"
+id = "demo.pkg"
 version = "1.0.0"
 description = "字符串工具"
 
 [[component]]
 id = "core"
 mode = "hosted"
-entrypoint = "strings.tool.wasm"
-exports = ["strings.len.cap"]
+entrypoint = "demo.pkg.wasm"
+exports = ["demo.text.cap"]
 
-[tool."strings.len"]
+[tool."demo.text"]
 description = "字符串长度"
 schema = """{"type":"object","properties":{"value":{"type":"string"}},"required":["value"]}"""
 side_effect = "read"
 
 [[capability]]
-id = "strings.len.cap"
-tool = "strings.len"
+id = "demo.text.cap"
+tool = "demo.text"
 `)
 	// 工件必须存在（pack 校验 entrypoint 为常规文件）。
 	artifact := []byte("wasm-bytes")
-	if err := os.WriteFile(filepath.Join(sourceDir, "strings.tool.wasm"), artifact, 0o640); err != nil {
+	if err := os.WriteFile(filepath.Join(sourceDir, "demo.pkg.wasm"), artifact, 0o640); err != nil {
 		t.Fatalf("写工件: %v", err)
 	}
 
@@ -282,21 +282,21 @@ tool = "strings.len"
 	if err != nil {
 		t.Fatalf("PackFromSource: %v", err)
 	}
-	if filepath.Base(tarballPath) != "strings.tool-1.0.0.tgz" {
+	if filepath.Base(tarballPath) != "demo.pkg-1.0.0.tgz" {
 		t.Fatalf("tarball name = %s", filepath.Base(tarballPath))
 	}
 	record, err := packmgr.Install(ctx, t.TempDir(), tarballPath)
 	if err != nil {
 		t.Fatalf("Install: %v", err)
 	}
-	if record.Manifest.ID != "strings.tool" || record.Manifest.Version != "1.0.0" {
+	if record.Manifest.ID != "demo.pkg" || record.Manifest.Version != "1.0.0" {
 		t.Fatalf("安装记录错误: %+v", record.Manifest)
 	}
 	extensions := decodeExtensions(t, record.Manifest.Extensions)
-	if len(extensions.Tools) != 1 || extensions.Tools[0].ID != "strings.len" {
+	if len(extensions.Tools) != 1 || extensions.Tools[0].ID != "demo.text" {
 		t.Fatalf("安装后 tools 错误: %+v", extensions.Tools)
 	}
-	if len(extensions.Capabilities) != 1 || extensions.Capabilities[0].ToolID != "strings.len" {
+	if len(extensions.Capabilities) != 1 || extensions.Capabilities[0].ToolID != "demo.text" {
 		t.Fatalf("安装后 capabilities 错误: %+v", extensions.Capabilities)
 	}
 }
