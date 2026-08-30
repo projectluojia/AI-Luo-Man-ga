@@ -4,8 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/packstore"
 )
 
 func TestMigrationsUpgradeRealV9FixtureThroughV14(t *testing.T) {
@@ -188,6 +191,78 @@ func TestMigrationRegistryVersionOrderAndDuplicateDetection(t *testing.T) {
 	}
 	if _, err := applyRegistry(t, -1); err == nil {
 		t.Fatal("负的最大迁移版本必须失败")
+	}
+}
+
+func TestMigrationV25MigratesBusDataToPackageDocuments(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "upgrade-v24.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &Store{db: db}
+	if err := store.migrateThrough(t.Context(), 24); err != nil {
+		t.Fatal(err)
+	}
+	// 在 v24 形态写入 bus 关系数据（含别名与快照指针），随后升级到 v25。
+	// 时间串固定为毫秒精度：v13 触发器用 julianday 校验，纳秒精度不可解析。
+	const departureAt = "2026-08-30T08:00:00.000Z"
+	const arrivalAt = "2026-08-30T08:20:00.000Z"
+	if _, err := db.ExecContext(t.Context(), `
+INSERT INTO bus_source_revisions(app_id,revision,source,authoritative,imported_at,valid_until,complete)
+VALUES('app','revision-1','zhihui-luojia',1,'2026-08-30T07:00:00.000Z','2026-08-30T09:00:00.000Z',1);
+INSERT INTO bus_stops(app_id,id,name,aliases,latitude,longitude,source_revision)
+VALUES('app','stop-a','文理学部','文理学部站'||char(31)||'本部',30.5,114.3,'revision-1'),
+      ('app','stop-b','信息学部','信息学部站',30.5,114.4,'revision-1');
+INSERT INTO bus_routes(app_id,id,name,direction,origin_stop_id,destination_stop_id,source_revision)
+VALUES('app','route-a','文理—信息','outbound','stop-a','stop-b','revision-1');
+INSERT INTO bus_journeys(app_id,trip_id,route_id,route_name,direction,origin_stop_id,origin_stop_name,destination_stop_id,destination_stop_name,departure_at,arrival_at,source_revision)
+VALUES('app','trip-a','route-a','文理—信息','outbound','stop-a','文理学部','stop-b','信息学部',?,?,'revision-1');
+INSERT INTO bus_current_snapshots(app_id,revision,activated_at)
+VALUES('app','revision-1','2026-08-30T07:00:00.000Z');`,
+		departureAt, arrivalAt,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	upgraded, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer upgraded.Close()
+	ctx := context.Background()
+	docs := upgraded.PackageDocuments()
+	scope := packstore.Scope{AppID: "app", Namespace: "campus/bus"}
+	// 快照元数据随 namespace 迁移并保持 current（经 List 一致性读出）。
+	listed, err := docs.List(ctx, scope, "routes", 10, "")
+	if err != nil || !listed.MetaFound || listed.Meta.Revision != "revision-1" ||
+		!listed.Meta.Authoritative || !listed.Meta.Complete {
+		t.Fatalf("listed=%#v err=%v", listed, err)
+	}
+	// 三张关系表迁为三组文档（两站一线一班）；aliases 由 \x1f 分隔串还原为 JSON 数组。
+	var count int
+	if err := upgraded.db.QueryRowContext(ctx,
+		`SELECT count(*) FROM package_documents WHERE app_id='app' AND namespace='campus/bus'`).Scan(&count); err != nil || count != 4 {
+		t.Fatalf("migrated documents=%d err=%v", count, err)
+	}
+	stop, err := docs.Get(ctx, scope, "stops", "stop-a")
+	if err != nil || !stop.Found {
+		t.Fatalf("read=%#v err=%v", stop, err)
+	}
+	if !strings.Contains(string(stop.Document.Payload), `"aliases":["文理学部站","本部"]`) {
+		t.Fatalf("stop payload aliases not normalized: %s", stop.Document.Payload)
+	}
+	if len(listed.Documents) != 1 || listed.Documents[0].ID != "route-a" {
+		t.Fatalf("routes=%#v", listed.Documents)
+	}
+	// bus 专属表已删除。
+	for _, table := range []string{"bus_stops", "bus_routes", "bus_journeys", "bus_source_revisions", "bus_current_snapshots"} {
+		if err := upgraded.db.QueryRowContext(ctx,
+			`SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&count); err != nil || count != 0 {
+			t.Fatalf("table %s still exists: count=%d err=%v", table, count, err)
+		}
 	}
 }
 
