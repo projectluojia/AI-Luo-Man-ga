@@ -183,7 +183,7 @@ func runPackageCommand(parent context.Context, arguments []string, output io.Wri
 		*root = os.Getenv("AILUO_RUNTIME_INSTALL_ROOT")
 	}
 	if *root == "" {
-		*root = packagecontract.DefaultInstallRoot()
+		*root = packmgr.DefaultInstallRoot()
 	}
 	if *root == "" && command != "pack" && command != "publish" && command != "sdk-go" && command != "sdk-py" && command != "sdk-ts" {
 		return true, fmt.Errorf("configuration error: %s requires --root 或 AILUO_RUNTIME_INSTALL_ROOT", command)

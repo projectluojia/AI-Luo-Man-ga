@@ -17,6 +17,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/pkg/capability"
 	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packagecontract"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
 )
 
 func TestLoadConfigUsesControlPlaneDefaults(t *testing.T) {
@@ -62,7 +63,7 @@ func TestLoadConfigRejectsRelativeRuntimeInstallRoot(t *testing.T) {
 }
 
 func TestDefaultInstallRootIsAbsoluteOrEmpty(t *testing.T) {
-	root := packagecontract.DefaultInstallRoot()
+	root := packmgr.DefaultInstallRoot()
 	if root == "" {
 		return
 	}
