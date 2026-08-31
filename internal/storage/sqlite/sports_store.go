@@ -95,6 +95,8 @@ CREATE TABLE sports_reservations (
   count INTEGER NOT NULL CHECK(count >= 1 AND count <= 16),
   status TEXT NOT NULL CHECK(status IN ('confirmed','cancelled','expired','rejected_over_quota')),
   source_revision TEXT NOT NULL CHECK(length(source_revision) BETWEEN 1 AND 128),
+  start_at TEXT NOT NULL,
+  end_at TEXT NOT NULL,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   cancelled_at TEXT,
@@ -381,6 +383,9 @@ func (s *Store) CreateReservation(ctx context.Context, input sports.CreateReserv
 	if err != nil {
 		return sports.Reservation{}, metadata, err
 	}
+	if input.ExpectedRevision != "" && input.ExpectedRevision != metadata.Revision {
+		return sports.Reservation{}, metadata, contracts.ErrDataIncomplete
+	}
 	slot, venueName, projectName, err := loadSportsSlotForUpdate(ctx, tx, input.AppID, request.VenueID, request.ProjectID, request.SlotID, metadata.Revision)
 	if err != nil {
 		return sports.Reservation{}, metadata, err
@@ -394,10 +399,12 @@ func (s *Store) CreateReservation(ctx context.Context, input sports.CreateReserv
 	reservationID := uuid.NewString()
 	if _, err := tx.ExecContext(ctx, `
 INSERT INTO sports_reservations(
-  app_id,reservation_id,user_id,venue_id,project_id,slot_id,count,status,source_revision,created_at,updated_at
-) VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+  app_id,reservation_id,user_id,venue_id,project_id,slot_id,count,status,source_revision,start_at,end_at,created_at,updated_at
+) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		input.AppID, reservationID, input.UserID, request.VenueID, request.ProjectID, request.SlotID,
-		request.Count, sports.StatusConfirmed, metadata.Revision, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano),
+		request.Count, sports.StatusConfirmed, metadata.Revision,
+		slot.StartAt.UTC().Format(time.RFC3339Nano), slot.EndAt.UTC().Format(time.RFC3339Nano),
+		now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano),
 	); err != nil {
 		if isUniqueConstraint(err) {
 			return sports.Reservation{}, metadata, sports.ErrConflict
@@ -524,11 +531,10 @@ func (s *Store) ListMyReservations(ctx context.Context, appID, userID string, no
 	}
 	rows, err := tx.QueryContext(ctx, `
 SELECT r.reservation_id,r.venue_id,r.project_id,r.slot_id,r.count,r.status,r.source_revision,r.created_at,r.updated_at,r.cancelled_at,
-       COALESCE(v.name,''),COALESCE(p.name,''),COALESCE(s.start_at,''),COALESCE(s.end_at,'')
+       COALESCE(v.name,''),COALESCE(p.name,''),r.start_at,r.end_at
 FROM sports_reservations r
 LEFT JOIN sports_venues v ON v.app_id=r.app_id AND v.venue_id=r.venue_id
 LEFT JOIN sports_projects p ON p.app_id=r.app_id AND p.venue_id=r.venue_id AND p.project_id=r.project_id
-LEFT JOIN sports_slots s ON s.app_id=r.app_id AND s.venue_id=r.venue_id AND s.project_id=r.project_id AND s.slot_id=r.slot_id
 WHERE r.app_id=? AND r.user_id=?
 ORDER BY r.created_at DESC, r.reservation_id`, appID, userID)
 	if err != nil {
@@ -751,14 +757,7 @@ func expireSportsReservations(ctx context.Context, tx *sql.Tx, appID, userID str
 	_, err := tx.ExecContext(ctx, `
 UPDATE sports_reservations
 SET status=?, updated_at=?
-WHERE app_id=? AND user_id=? AND status=? AND EXISTS (
-  SELECT 1 FROM sports_slots s
-  WHERE s.app_id=sports_reservations.app_id
-    AND s.venue_id=sports_reservations.venue_id
-    AND s.project_id=sports_reservations.project_id
-    AND s.slot_id=sports_reservations.slot_id
-    AND julianday(s.end_at) <= julianday(?)
-)`,
+WHERE app_id=? AND user_id=? AND status=? AND julianday(end_at) <= julianday(?)`,
 		sports.StatusExpired, now.Format(time.RFC3339Nano),
 		appID, userID, sports.StatusConfirmed, now.Format(time.RFC3339Nano),
 	)
@@ -768,11 +767,10 @@ WHERE app_id=? AND user_id=? AND status=? AND EXISTS (
 func loadSportsReservation(ctx context.Context, tx *sql.Tx, appID, userID, reservationID string) (sports.Reservation, error) {
 	row := tx.QueryRowContext(ctx, `
 SELECT r.reservation_id,r.venue_id,r.project_id,r.slot_id,r.count,r.status,r.source_revision,r.created_at,r.updated_at,r.cancelled_at,
-       COALESCE(v.name,''),COALESCE(p.name,''),COALESCE(s.start_at,''),COALESCE(s.end_at,'')
+       COALESCE(v.name,''),COALESCE(p.name,''),r.start_at,r.end_at
 FROM sports_reservations r
 LEFT JOIN sports_venues v ON v.app_id=r.app_id AND v.venue_id=r.venue_id
 LEFT JOIN sports_projects p ON p.app_id=r.app_id AND p.venue_id=r.venue_id AND p.project_id=r.project_id
-LEFT JOIN sports_slots s ON s.app_id=r.app_id AND s.venue_id=r.venue_id AND s.project_id=r.project_id AND s.slot_id=r.slot_id
 WHERE r.app_id=? AND r.user_id=? AND r.reservation_id=?`, appID, userID, reservationID)
 	item, err := scanSportsReservation(row, appID, userID)
 	if errors.Is(err, sql.ErrNoRows) {

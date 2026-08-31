@@ -289,16 +289,13 @@ func createReservationHandler(store Store, now func() time.Time) registry.Handle
 		reservation, metadata, err := store.CreateReservation(ctx, CreateReservationInput{
 			AppID: request.AppID, UserID: request.UserID,
 			VenueID: input.VenueID, ProjectID: input.ProjectID, SlotID: input.SlotID,
-			Count: input.Count, Now: now(),
+			Count: input.Count, Now: now(), ExpectedRevision: dataStatus.Revision,
 		})
 		if err != nil {
 			if errors.Is(err, ErrOverQuota) {
 				logRejectedSnapshot(ctx, "reservation_create", metadata, err)
 			}
 			return nil, err
-		}
-		if metadata.Revision != "" && metadata.Revision != dataStatus.Revision {
-			return nil, fmt.Errorf("sports reservation snapshot revision mismatch: %w", contracts.ErrDataIncomplete)
 		}
 		observe.Info(ctx, "运动场馆预约已确认",
 			observe.StringAttr("reservation_id", reservation.ID),

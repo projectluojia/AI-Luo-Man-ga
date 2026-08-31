@@ -226,6 +226,69 @@ func TestSportsStoreCancelAndTimeout(t *testing.T) {
 	}
 }
 
+func TestSportsReservationTimesSurviveSnapshotReplace(t *testing.T) {
+	store, now := openSportsStore(t)
+	mustCreateUser(t, store, "user-1")
+	seedSportsCatalog(t, store, campus.AppID, true, 2, now)
+	created, _, err := store.CreateReservation(context.Background(), sports.CreateReservationInput{
+		AppID: campus.AppID, UserID: "user-1", VenueID: "venue-gym", ProjectID: "project-badminton",
+		SlotID: "slot-morning", Count: 1, Now: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacement := now.Add(time.Minute)
+	start := time.Date(2026, time.September, 2, 10, 0, 0, 0, now.Location())
+	if err := store.ReplaceSportsSnapshot(context.Background(), sports.CatalogSnapshot{
+		AppID: campus.AppID, Revision: "rev-sports-2", Source: "test-fixture",
+		Authoritative: true, Complete: true,
+		ImportedAt: replacement, ValidUntil: replacement.Add(24 * time.Hour),
+		Venues:   []sports.Venue{{ID: "venue-gym", Name: "演示体育馆", SourceRevision: "rev-sports-2"}},
+		Projects: []sports.Project{{ID: "project-badminton", VenueID: "venue-gym", Name: "羽毛球", SourceRevision: "rev-sports-2"}},
+		Slots: []sports.Slot{{
+			ID: "slot-other", VenueID: "venue-gym", ProjectID: "project-badminton", Date: "2026-09-02",
+			StartAt: start, EndAt: start.Add(90 * time.Minute), Capacity: 2, RemainingQuota: 2, SourceRevision: "rev-sports-2",
+		}},
+		WebView: sports.WebViewDescriptor{
+			EntryURL: "https://demo.ailuo.invalid/sports/orders", RequiredUserAgent: "AiluoCampusClient/1.0 (test)",
+			RequiredHeaders: []sports.RequiredHeader{{Name: "X-Requested-With", Purpose: "Identify the governed campus client runtime"}},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	mine, err := store.ListMyReservations(context.Background(), campus.AppID, "user-1", now)
+	if err != nil || len(mine.Reservations) != 1 || mine.Reservations[0].ID != created.ID {
+		t.Fatalf("mine after snapshot replace=%#v err=%v", mine, err)
+	}
+	if mine.Reservations[0].StartAt.IsZero() || mine.Reservations[0].EndAt.IsZero() || mine.Reservations[0].Status != sports.StatusConfirmed {
+		t.Fatalf("lost reservation times after snapshot replace: %#v", mine.Reservations[0])
+	}
+	expired, err := store.ListMyReservations(context.Background(), campus.AppID, "user-1", now.Add(4*time.Hour))
+	if err != nil || len(expired.Reservations) != 1 || expired.Reservations[0].Status != sports.StatusExpired {
+		t.Fatalf("expire without slot row=%#v err=%v", expired, err)
+	}
+}
+
+func TestSportsCreateRejectsStaleRevisionBeforeWrite(t *testing.T) {
+	store, now := openSportsStore(t)
+	mustCreateUser(t, store, "user-1")
+	seedSportsCatalog(t, store, campus.AppID, true, 2, now)
+	_, _, err := store.CreateReservation(context.Background(), sports.CreateReservationInput{
+		AppID: campus.AppID, UserID: "user-1", VenueID: "venue-gym", ProjectID: "project-badminton",
+		SlotID: "slot-morning", Count: 1, Now: now, ExpectedRevision: "rev-stale",
+	})
+	if !errors.Is(err, contracts.ErrDataIncomplete) {
+		t.Fatalf("stale revision err=%v", err)
+	}
+	mine, err := store.ListMyReservations(context.Background(), campus.AppID, "user-1", now)
+	if err != nil || len(mine.Reservations) != 0 {
+		t.Fatalf("stale revision persisted reservation=%#v err=%v", mine, err)
+	}
+	if remaining := remainingSportsQuota(t, store, now); remaining != 2 {
+		t.Fatalf("quota mutated after stale revision remaining=%d", remaining)
+	}
+}
+
 func TestSportsDemoSnapshotIsNonAuthoritative(t *testing.T) {
 	store, _ := openSportsStore(t)
 	if err := demo.LoadSportsData(context.Background(), store, time.Now()); err != nil {

@@ -103,7 +103,7 @@ var capabilityCodeTable = map[string]Error{
 	"data_non_authoritative":       {Code: "data_non_authoritative", Message: "当前数据不是权威来源，不能作为事实返回"},
 	"data_expired":                 {Code: "data_expired", Message: "权威数据已过期，不能作为当前事实返回", Retryable: true},
 	"realtime_unauthorized":        {Code: "realtime_unauthorized", Message: "实时车辆数据尚未获得书面授权"},
-	"quota_exceeded":               {Code: "quota_exceeded", Message: "预约人数超过剩余名额，已拒绝超额请求"},
+	"quota_exceeded":               {Code: "quota_exceeded", Message: "请求数量超过剩余名额，已拒绝超额请求"},
 	"delegated_auth_required":      {Code: "delegated_auth_required", Message: "当前操作需要委托授权，尚未接入真实校园登录"},
 	"invalid_arguments":            {Code: "invalid_arguments", Message: "Capability 参数无效"},
 	"capability_disabled":          {Code: "capability_disabled", Message: "当前 App 未启用该 Capability"},
