@@ -188,7 +188,11 @@ func TestClassroomScheduleRequiresUserConfirmationAndIsIdempotent(t *testing.T) 
 		t.Fatalf("idempotent cancel=%v err=%v", replayCancel, err)
 	}
 	if _, err := harness.invoke(classroomservice.ScheduleCreateCapabilityID, `{"schedule_id":"sched-1","room_id":"room-wenli-jiao5-102","date":"2026-08-31","period":5}`, "user-a", true); !errors.Is(err, classroom.ErrIllegalState) {
-		t.Fatalf("revive err=%v", err)
+		t.Fatalf("revive cancelled id err=%v", err)
+	}
+	rebooked, err := harness.invoke(classroomservice.ScheduleCreateCapabilityID, `{"schedule_id":"sched-2","room_id":"room-wenli-jiao5-102","date":"2026-08-31","period":5,"title":"再约"}`, "user-a", true)
+	if err != nil || rebooked["schedule"].(map[string]any)["schedule_id"] != "sched-2" {
+		t.Fatalf("rebook after cancel=%v err=%v", rebooked, err)
 	}
 
 	deadline, cancel := context.WithTimeout(context.Background(), time.Nanosecond)

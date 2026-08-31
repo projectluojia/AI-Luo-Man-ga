@@ -32,7 +32,11 @@ func TestMigration25UpgradesPreviousSchema(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer upgraded.Close()
+	t.Cleanup(func() {
+		if err := upgraded.Close(); err != nil {
+			t.Errorf("close upgraded store: %v", err)
+		}
+	})
 	var version int
 	if err := upgraded.db.QueryRowContext(t.Context(), `SELECT max(version) FROM schema_migrations`).Scan(&version); err != nil || version != currentSchemaVersion() {
 		t.Fatalf("version=%d current=%d err=%v", version, currentSchemaVersion(), err)
@@ -67,7 +71,11 @@ func TestClassroomIncompleteSnapshotFailsClosedOnRead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("close store: %v", err)
+		}
+	})
 	now := time.Date(2026, time.August, 31, 8, 0, 0, 0, time.UTC)
 	if err := store.ReplaceClassroomSnapshot(t.Context(), ClassroomSnapshot{
 		AppID: "campus-services", Revision: "rev-inc", Source: "test-authoritative-fixture",

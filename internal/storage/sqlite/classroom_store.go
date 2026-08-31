@@ -104,7 +104,7 @@ CREATE TABLE classroom_schedules (
   PRIMARY KEY (app_id, user_id, schedule_id),
   FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE RESTRICT
 );
-CREATE UNIQUE INDEX classroom_schedules_slot_idx ON classroom_schedules(app_id, user_id, room_id, academic_date, period);
+CREATE UNIQUE INDEX classroom_schedules_slot_idx ON classroom_schedules(app_id, user_id, room_id, academic_date, period) WHERE status='scheduled';
 CREATE INDEX classroom_schedules_user_idx ON classroom_schedules(app_id, user_id, academic_date, period, schedule_id);
 CREATE TRIGGER classroom_campus_revision_insert_guard
 BEFORE INSERT ON classroom_campuses
@@ -309,17 +309,21 @@ WHERE app_id=? AND source_revision=? ORDER BY name,id`, appID, metadata.Revision
 	if err != nil {
 		return classroom.CampusSnapshot{}, fmt.Errorf("query classroom campuses: %w", err)
 	}
-	defer rows.Close()
 	campuses := []classroom.Campus{}
 	for rows.Next() {
 		var campus classroom.Campus
 		if err := rows.Scan(&campus.ID, &campus.Name, &campus.SourceRevision); err != nil {
+			rows.Close()
 			return classroom.CampusSnapshot{}, fmt.Errorf("scan classroom campus: %w", err)
 		}
 		campuses = append(campuses, campus)
 	}
 	if err := rows.Err(); err != nil {
+		rows.Close()
 		return classroom.CampusSnapshot{}, err
+	}
+	if err := rows.Close(); err != nil {
+		return classroom.CampusSnapshot{}, fmt.Errorf("close classroom campus rows: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return classroom.CampusSnapshot{}, fmt.Errorf("commit classroom campus snapshot read: %w", err)
@@ -342,17 +346,21 @@ WHERE app_id=? AND source_revision=? AND campus_id=? ORDER BY name,id`,
 	if err != nil {
 		return classroom.BuildingSnapshot{}, fmt.Errorf("query classroom buildings: %w", err)
 	}
-	defer rows.Close()
 	buildings := []classroom.Building{}
 	for rows.Next() {
 		var building classroom.Building
 		if err := rows.Scan(&building.ID, &building.CampusID, &building.Name, &building.SourceRevision); err != nil {
+			rows.Close()
 			return classroom.BuildingSnapshot{}, fmt.Errorf("scan classroom building: %w", err)
 		}
 		buildings = append(buildings, building)
 	}
 	if err := rows.Err(); err != nil {
+		rows.Close()
 		return classroom.BuildingSnapshot{}, err
+	}
+	if err := rows.Close(); err != nil {
+		return classroom.BuildingSnapshot{}, fmt.Errorf("close classroom building rows: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return classroom.BuildingSnapshot{}, fmt.Errorf("commit classroom building snapshot read: %w", err)
@@ -403,15 +411,28 @@ func (s *Store) CreateSchedule(ctx context.Context, item classroom.ScheduleItem)
 		return classroom.ScheduleItem{}, fmt.Errorf("begin classroom schedule create: %w", err)
 	}
 	defer s.finishTx(tx, &resultErr, "create classroom schedule")
+	byID, foundID, err := loadClassroomScheduleByID(ctx, tx, item.AppID, item.UserID, item.ID)
+	if err != nil {
+		return classroom.ScheduleItem{}, err
+	}
+	if foundID {
+		if byID.Status != classroom.ScheduleStatusScheduled {
+			return classroom.ScheduleItem{}, classroom.ErrIllegalState
+		}
+		if byID.RoomID != item.RoomID || byID.AcademicDate != item.AcademicDate || byID.Period != item.Period {
+			return classroom.ScheduleItem{}, classroom.ErrConflict
+		}
+		if err := tx.Commit(); err != nil {
+			return classroom.ScheduleItem{}, fmt.Errorf("commit classroom schedule replay: %w", err)
+		}
+		return byID, nil
+	}
 	existing, found, err := loadClassroomScheduleBySlot(ctx, tx, item.AppID, item.UserID, item.RoomID, item.AcademicDate, item.Period)
 	if err != nil {
 		return classroom.ScheduleItem{}, err
 	}
 	if found {
-		if existing.Status != classroom.ScheduleStatusScheduled {
-			return classroom.ScheduleItem{}, classroom.ErrIllegalState
-		}
-		if item.ID != "" && item.ID != existing.ID {
+		if item.ID != existing.ID {
 			return classroom.ScheduleItem{}, classroom.ErrConflict
 		}
 		if err := tx.Commit(); err != nil {
@@ -681,11 +702,25 @@ func validateScheduleWrite(item classroom.ScheduleItem) error {
 	return nil
 }
 
+func loadClassroomScheduleByID(ctx context.Context, tx *sql.Tx, appID, userID, scheduleID string) (classroom.ScheduleItem, bool, error) {
+	item, err := scanClassroomSchedule(tx.QueryRowContext(ctx, `
+SELECT app_id,user_id,schedule_id,room_id,campus_id,building_id,room_name,academic_date,period,title,status,source_revision,created_at,updated_at,cancelled_at
+FROM classroom_schedules WHERE app_id=? AND user_id=? AND schedule_id=?`,
+		appID, userID, scheduleID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return classroom.ScheduleItem{}, false, nil
+	}
+	if err != nil {
+		return classroom.ScheduleItem{}, false, err
+	}
+	return item, true, nil
+}
+
 func loadClassroomScheduleBySlot(ctx context.Context, tx *sql.Tx, appID, userID, roomID, academicDate string, period int) (classroom.ScheduleItem, bool, error) {
 	item, err := scanClassroomSchedule(tx.QueryRowContext(ctx, `
 SELECT app_id,user_id,schedule_id,room_id,campus_id,building_id,room_name,academic_date,period,title,status,source_revision,created_at,updated_at,cancelled_at
-FROM classroom_schedules WHERE app_id=? AND user_id=? AND room_id=? AND academic_date=? AND period=?`,
-		appID, userID, roomID, academicDate, period))
+FROM classroom_schedules WHERE app_id=? AND user_id=? AND room_id=? AND academic_date=? AND period=? AND status=?`,
+		appID, userID, roomID, academicDate, period, classroom.ScheduleStatusScheduled))
 	if errors.Is(err, sql.ErrNoRows) {
 		return classroom.ScheduleItem{}, false, nil
 	}
