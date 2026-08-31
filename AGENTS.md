@@ -114,6 +114,7 @@ AI珞 V3 是长期维护的生产级项目。功能范围可以窄，但已实�
 
 - 提交信息遵循 Conventional Commits：`feat`、`fix`、`docs`、`style`、`refactor`、`perf`、`test`、`build`、`ci`、`chore`、`revert`。
 - `main` 使用 squash 合并和 required checks；一个提交应是可独立构建、回滚的自洽逻辑单元。
+- CodeRabbit 除审打到 `main` 的 PR 外，也审 base 匹配 `feat/.*` 的堆叠 PR（见 `.coderabbit.yaml`）。
 - 分支使用 `feat/`、`fix/`、`chore/`、`docs/`、`refactor/` 前缀。
 - 依赖升级遵循 `renovate.json5`；Protobuf/grpc 生成工具链升级必须人工重新生成并评审。
 

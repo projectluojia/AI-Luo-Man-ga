@@ -1,0 +1,8 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+reviews:
+  profile: chill
+  auto_review:
+    enabled: true
+    # 默认只审打到仓库默认分支（main）的 PR。堆叠 PR 的 base 是 feat/*，必须显式放行。
+    base_branches:
+      - "feat/.*"
