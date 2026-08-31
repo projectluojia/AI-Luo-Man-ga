@@ -146,7 +146,6 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 	}()
 	observe.Info(ctx, "正在启动AI珞（爱珞）内核",
 		observe.StringAttr("http_address", config.httpAddress),
-		observe.StringAttr("agent_address", config.agentAddress),
 		observe.StringAttr("model", config.model),
 	)
 	if config.databasePath != ":memory:" {
@@ -186,7 +185,7 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 		Timezone: config.agentRun.Timezone, MaxSteps: config.agentRun.MaxSteps,
 		MaxToolCalls: config.agentRun.MaxToolCalls, MaxInputTokens: config.agentRun.MaxInputTokens,
 		MaxOutputTokens: config.agentRun.MaxOutputTokens, MaxTotalTokens: config.agentRun.MaxTotalTokens,
-		MaxOutputBytes: config.agentRun.MaxOutputBytes, ProviderTimeout: config.modelRequestTimeout,
+		MaxOutputBytes: config.agentRun.MaxOutputBytes, ProviderTimeout: config.executorTimeout,
 		EnabledCapabilities: []string{
 			campus.BusStopSearchCapabilityID, campus.BusRouteListCapabilityID,
 			campus.BusJourneySearchCapabilityID, kernelecho.CreateChildRunCapabilityID,
@@ -200,7 +199,7 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 	if !created {
 		replacement := app
 		replacement.Model = config.model
-		replacement.ProviderTimeout = config.modelRequestTimeout
+		replacement.ProviderTimeout = config.executorTimeout
 		replacement.Timezone = config.agentRun.Timezone
 		replacement.MaxSteps = config.agentRun.MaxSteps
 		replacement.MaxToolCalls = config.agentRun.MaxToolCalls
@@ -232,38 +231,20 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 		MaxCallDepth: config.orchestration.MaxCallDepth, IdempotencyStore: store,
 		ConfirmationVerifier: confirmations,
 	})
-	// 内置 agent 经虚拟包源走与安装目录完全一致的记录/解析/校验/注册管线：
-	// 组合根只提供"这个 App 的 executor 由哪个包充当"的部署知识。
-	builtinAgent, err := newBuiltinAgentSource(config, app.Model)
-	if err != nil {
-		return fmt.Errorf("resolve built-in agent package: %w", err)
-	}
-	executorHost, err := loader.NewProcessHost(loader.ProcessHostConfig{
-		Resolve: builtinAgent.ResolveProcess, Verify: builtinAgent.VerifyProcess,
-		Spawn: config.manageAgent, ExecutorHealthModel: app.Model,
-		Stdout: os.Stdout, Stderr: os.Stderr,
-		DialTimeout:    secondsDuration(config.agentProcess.DialTimeoutSeconds),
-		StopGrace:      secondsDuration(config.agentProcess.StopGraceSeconds),
-		TerminateGrace: secondsDuration(config.agentProcess.TerminateGraceSeconds),
-	})
-	if err != nil {
-		return fmt.Errorf("create executor runtime host: %w", err)
-	}
 	installedHosts, installedRecords, err := configureInstalledRuntimes(ctx, config, store.PackageDocuments())
 	if err != nil {
 		return err
 	}
-	hosts := make([]loader.Host, 0, 1+len(installedHosts))
-	hosts = append(hosts, executorHost)
-	hosts = append(hosts, installedHosts...)
+	if len(installedRecords) == 0 {
+		return fmt.Errorf("未发现已安装运行时：请先安装校园服务与 executor 包")
+	}
+	hosts := installedHosts
 	runtimeLoader, err := loader.New(hosts...)
 	if err != nil {
 		return fmt.Errorf("create runtime loader: %w", err)
 	}
 	lifecycle.runtimeLoader = runtimeLoader
-	// 内置 agent 与安装包统一注册：同一发现/校验/注册管线，无第二条路径。
-	allRecords := append([]loader.InstalledRecord{builtinAgent.Record()}, installedRecords...)
-	if err := loader.RegisterInstalled(ctx, runtimeLoader, reg, allRecords); err != nil {
+	if err := loader.RegisterInstalled(ctx, runtimeLoader, reg, installedRecords); err != nil {
 		return fmt.Errorf("register installed runtimes: %w", err)
 	}
 	campusInstalled := false
@@ -291,7 +272,7 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 		return fmt.Errorf("executor runtime does not expose an executor client")
 	}
 	executorClient := clientProvider.Client()
-	if config.manageAgent {
+	if config.manageExecutor {
 		if lifecycle, ok := executorRuntime.(executor.ProcessLifecycle); ok {
 			go func() {
 				<-lifecycle.Done()
@@ -302,9 +283,9 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 			}()
 		}
 	}
-	observe.Info(ctx, "内置 AI 执行者已经就绪",
-		observe.StringAttr("runtime_id", executorLease.ID()), observe.StringAttr("address", config.agentAddress),
-		observe.BoolAttr("managed_process", config.manageAgent),
+	observe.Info(ctx, "AI 执行者已经就绪",
+		observe.StringAttr("runtime_id", executorLease.ID()),
+		observe.BoolAttr("managed_process", config.manageExecutor),
 	)
 
 	orchestrator := kernelecho.NewOrchestrator(executorClient, reg, dispatcher, policy, kernelecho.StorePorts{

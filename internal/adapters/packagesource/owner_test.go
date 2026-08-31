@@ -43,6 +43,10 @@ func TestGroupOrWorldWritableFollowsPlatform(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`{}`), 0o666); err != nil {
 		t.Fatal(err)
 	}
+	// os.WriteFile 的 mode 会受 umask 影响，显式设置后才能测试实际权限位。
+	if err := os.Chmod(path, 0o666); err != nil {
+		t.Fatal(err)
+	}
 	info, err := os.Lstat(path)
 	if err != nil {
 		t.Fatal(err)

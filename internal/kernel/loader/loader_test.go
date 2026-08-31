@@ -539,7 +539,7 @@ func TestLoaderMarksFatalRuntimeFailureAndRecoversExplicitly(t *testing.T) {
 }
 
 // TestManagerPinnedDerivesFromManifests 验证 Pinned() 由各清单的 Pin 声明推导：
-// 内置包与 installed 包统一，装配不再硬编码预热清单。
+// 不同包统一，装配不再硬编码预热清单。
 func TestManagerPinnedDerivesFromManifests(t *testing.T) {
 	host := &fakeHost{mode: loader.ModeHosted, runtime: &fakeRuntime{description: loader.Description{ID: "pinned.test", Version: "1.0.0", Mode: loader.ModeHosted}}}
 	manager, err := loader.New(host)

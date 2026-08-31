@@ -100,7 +100,7 @@ func (s *Server) updateConfig(writer http.ResponseWriter, request *http.Request)
 		case errors.Is(err, config.ErrConflict):
 			access.WriteJSON(writer, http.StatusConflict, map[string]string{"code": "configuration_conflict", "message": "配置已更新，请刷新页面后重试"})
 		case errors.Is(err, config.ErrInvalid):
-			access.WriteJSON(writer, http.StatusBadRequest, map[string]string{"code": "invalid_configuration", "message": "请检查模型、密钥和 QQ 配置"})
+			access.WriteJSON(writer, http.StatusBadRequest, map[string]string{"code": "invalid_configuration", "message": "请检查执行与 QQ 配置"})
 		default:
 			observe.Error(request.Context(), "保存本机配置失败", err)
 			access.WriteJSON(writer, http.StatusInternalServerError, map[string]string{"code": "configuration_write_failed", "message": "配置保存失败"})

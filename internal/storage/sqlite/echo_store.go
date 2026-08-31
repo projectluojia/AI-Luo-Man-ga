@@ -24,7 +24,6 @@ import (
 
 var (
 	runIdentifierPattern = id.StableMixed
-	permissionIDPattern  = id.Permission
 )
 
 func (s *Store) CreateEchoRunIdempotentLimited(
@@ -1182,7 +1181,7 @@ func queryRun(scanner rowScanner) (kernelecho.RunRecord, error) {
 		json.Unmarshal([]byte(capabilityScope), &run.CapabilityScope) != nil ||
 		json.Unmarshal([]byte(permissionScope), &run.PermissionScope) != nil ||
 		!validCanonicalScope(run.CapabilityScope, executor.MaxCapabilities, capability.IsStableID) ||
-		!validCanonicalScope(run.PermissionScope, 256, permissionIDPattern.MatchString) {
+		!validCanonicalScope(run.PermissionScope, 256, id.IsPermission) {
 		return kernelecho.RunRecord{}, kernelecho.ErrInvalidRunRecord
 	}
 	var err error
@@ -1251,7 +1250,7 @@ func validateNewRun(echo kernelecho.Record, run kernelecho.RunRecord) error {
 		run.ContextDigest != "" || // 上下文在执行开始时由 SetRunContext 一次性固化
 		(len(run.ContextSources) != 0 && !json.Valid(run.ContextSources)) ||
 		!validCanonicalScope(run.CapabilityScope, executor.MaxCapabilities, capability.IsStableID) ||
-		!validCanonicalScope(run.PermissionScope, 256, permissionIDPattern.MatchString) {
+		!validCanonicalScope(run.PermissionScope, 256, id.IsPermission) {
 		return kernelecho.ErrInvalidRunRecord
 	}
 	if root {

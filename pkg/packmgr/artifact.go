@@ -53,7 +53,7 @@ func HashArtifact(ctx context.Context, path string, maximum int64) (string, erro
 			return nil
 		}
 		fileInfo, err := entry.Info()
-		if err != nil || !fileInfo.Mode().IsRegular() || fileInfo.Size() <= 0 {
+		if err != nil || !fileInfo.Mode().IsRegular() {
 			return packagecontract.ErrInvalidFormat
 		}
 		hasFile = true

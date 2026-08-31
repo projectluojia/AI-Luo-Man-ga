@@ -20,15 +20,13 @@ const maxSettingsFileBytes = 256 << 10
 
 // Service 持久化本机配置与秘密，并向内核监督循环发布配置修订。
 type Service struct {
-	mu              sync.RWMutex
-	settingsPath    string
-	modelSecretPath string
-	qqSecretPath    string
-	settings        Settings
-	modelKeyPresent bool
-	qqTokenPresent  bool
-	runtime         RuntimeState
-	changes         chan struct{}
+	mu             sync.RWMutex
+	settingsPath   string
+	qqSecretPath   string
+	settings       Settings
+	qqTokenPresent bool
+	runtime        RuntimeState
+	changes        chan struct{}
 }
 
 func NewService(root string) (*Service, error) {
@@ -37,10 +35,9 @@ func NewService(root string) (*Service, error) {
 		return nil, fmt.Errorf("resolve local configuration root: %w", err)
 	}
 	service := &Service{
-		settingsPath:    filepath.Join(absoluteRoot, "ailuo-settings.json"),
-		modelSecretPath: filepath.Join(absoluteRoot, "secrets", "model-api-key"),
-		qqSecretPath:    filepath.Join(absoluteRoot, "secrets", "qq-ws-token"),
-		settings:        DefaultSettings(), runtime: RuntimeState{State: "setup_required", Message: "请完成首次配置"},
+		settingsPath: filepath.Join(absoluteRoot, "ailuo-settings.json"),
+		qqSecretPath: filepath.Join(absoluteRoot, "secrets", "qq-ws-token"),
+		settings:     DefaultSettings(), runtime: RuntimeState{State: "setup_required", Message: "请完成首次配置"},
 		changes: make(chan struct{}, 1),
 	}
 	if err := service.load(); err != nil {
@@ -52,30 +49,18 @@ func NewService(root string) (*Service, error) {
 func (m *Service) Snapshot() Snapshot {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return Snapshot{Settings: cloneSettings(m.settings), ModelAPIKeyConfigured: m.modelKeyPresent, QQWSTokenConfigured: m.qqTokenPresent, Runtime: m.runtime}
+	return Snapshot{Settings: cloneSettings(m.settings), QQWSTokenConfigured: m.qqTokenPresent, Runtime: m.runtime}
 }
 
 func (m *Service) Save(input SaveInput) (Snapshot, error) {
 	settings, err := normalize(input)
-	if err != nil || len(input.ModelAPIKey) > MaxModelAPIKeyBytes || len(input.QQWSToken) > MaxQQTokenBytes {
+	if err != nil || len(input.QQWSToken) > MaxQQTokenBytes {
 		return Snapshot{}, ErrInvalid
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if input.Revision != m.settings.Revision {
 		return Snapshot{}, ErrConflict
-	}
-	if !m.modelKeyPresent && input.ModelAPIKey == "" {
-		return Snapshot{}, ErrInvalid
-	}
-	if err := os.MkdirAll(filepath.Dir(m.modelSecretPath), 0o700); err != nil {
-		return Snapshot{}, fmt.Errorf("create local secret directory: %w", err)
-	}
-	if input.ModelAPIKey != "" {
-		if err := writePrivateFile(m.modelSecretPath, []byte(input.ModelAPIKey)); err != nil {
-			return Snapshot{}, err
-		}
-		m.modelKeyPresent = true
 	}
 	if input.ClearQQWSToken {
 		if err := os.Remove(m.qqSecretPath); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -103,20 +88,20 @@ func (m *Service) Save(input SaveInput) (Snapshot, error) {
 	case m.changes <- struct{}{}:
 	default:
 	}
-	return Snapshot{Settings: cloneSettings(m.settings), ModelAPIKeyConfigured: m.modelKeyPresent, QQWSTokenConfigured: m.qqTokenPresent, Runtime: m.runtime}, nil
+	return Snapshot{Settings: cloneSettings(m.settings), QQWSTokenConfigured: m.qqTokenPresent, Runtime: m.runtime}, nil
 }
 
 func (m *Service) CurrentResolved() (Resolved, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	if m.settings.Revision == 0 || !m.modelKeyPresent {
+	if m.settings.Revision == 0 {
 		return Resolved{}, false
 	}
 	qqTokenFile := ""
 	if m.qqTokenPresent {
 		qqTokenFile = m.qqSecretPath
 	}
-	return Resolved{Settings: cloneSettings(m.settings), ModelAPIKeyFile: m.modelSecretPath, QQWSTokenFile: qqTokenFile}, true
+	return Resolved{Settings: cloneSettings(m.settings), QQWSTokenFile: qqTokenFile}, true
 }
 
 func (m *Service) Changes() <-chan struct{} { return m.changes }
@@ -140,6 +125,48 @@ func (m *Service) WaitReady(ctx context.Context) (Resolved, error) {
 	}
 }
 
+type persistedSettingsAlias Settings
+
+// legacySettingsEnvelope 接受已知旧配置字段，迁移后仍由当前 Settings 严格校验。
+// 旧 Provider 参数已归 Executor Deployment 管理，只兼容读取并丢弃；旧的
+// agent_process 仍映射到语义相同的 runtime_process。
+type legacySettingsEnvelope struct {
+	*persistedSettingsAlias
+	RuntimeProcess               json.RawMessage `json:"runtime_process"`
+	ModelBaseURL                 json.RawMessage `json:"model_base_url"`
+	ModelRequestTimeoutSeconds   json.RawMessage `json:"model_request_timeout_seconds"`
+	ModelReadinessTimeoutSeconds json.RawMessage `json:"model_readiness_timeout_seconds"`
+	ModelMaxRetries              json.RawMessage `json:"model_max_retries"`
+	ModelRetryBaseSeconds        json.RawMessage `json:"model_retry_base_seconds"`
+	ModelRetryMaxSeconds         json.RawMessage `json:"model_retry_max_seconds"`
+	ModelRequestsPerMinute       json.RawMessage `json:"model_requests_per_minute"`
+	ModelMaxConcurrency          json.RawMessage `json:"model_max_concurrency"`
+	AgentProcess                 json.RawMessage `json:"agent_process"`
+}
+
+func decodeStoredSettings(data []byte) (Settings, error) {
+	var settings Settings
+	envelope := legacySettingsEnvelope{persistedSettingsAlias: (*persistedSettingsAlias)(&settings)}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&envelope); err != nil {
+		return Settings{}, err
+	}
+	if err := jsonutil.EnsureEOF(decoder); err != nil {
+		return Settings{}, err
+	}
+	if len(envelope.RuntimeProcess) > 0 {
+		if err := json.Unmarshal(envelope.RuntimeProcess, &settings.RuntimeProcess); err != nil {
+			return Settings{}, err
+		}
+	} else if len(envelope.AgentProcess) > 0 {
+		if err := json.Unmarshal(envelope.AgentProcess, &settings.RuntimeProcess); err != nil {
+			return Settings{}, err
+		}
+	}
+	return settings, nil
+}
+
 func (m *Service) load() error {
 	data, err := os.ReadFile(m.settingsPath)
 	if errors.Is(err, os.ErrNotExist) {
@@ -152,13 +179,8 @@ func (m *Service) load() error {
 	if len(data) == 0 || len(data) > maxSettingsFileBytes {
 		return ErrInvalid
 	}
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	var settings Settings
-	if err := decoder.Decode(&settings); err != nil {
-		return errors.Join(ErrInvalid, err)
-	}
-	if err := jsonutil.EnsureEOF(decoder); err != nil {
+	settings, err := decodeStoredSettings(data)
+	if err != nil {
 		return errors.Join(ErrInvalid, err)
 	}
 	normalized, err := validateStored(settings)
@@ -168,14 +190,13 @@ func (m *Service) load() error {
 	normalized.UpdatedAt = settings.UpdatedAt
 	m.settings = normalized
 	m.refreshSecrets()
-	if m.modelKeyPresent {
+	if m.settings.Revision > 0 {
 		m.runtime = RuntimeState{State: "starting", Message: "等待内核启动", Revision: settings.Revision}
 	}
 	return nil
 }
 
 func (m *Service) refreshSecrets() {
-	m.modelKeyPresent = regularNonEmptyFile(m.modelSecretPath, MaxModelAPIKeyBytes)
 	m.qqTokenPresent = regularNonEmptyFile(m.qqSecretPath, MaxQQTokenBytes)
 }
 

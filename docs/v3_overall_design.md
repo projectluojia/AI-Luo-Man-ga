@@ -264,7 +264,7 @@ storage:
       indexes: [document_id, updated_at]
 ```
 
-上文 `services/`、`tools/` 是**安装包形态**（yaml + 入口，部署到安装根目录）。仓库内**内置实现**按同一角色命名空间镜像：
+上文 `services/`、`tools/` 是**安装包形态**（yaml + 入口，部署到安装根目录）。仓库内的**测试装配与内核机制**按同一角色命名空间组织，生产包实现不进入 `internal`：
 
 ```text
 internal/
@@ -280,7 +280,7 @@ internal/
       └─ campustest/  测试装配（guest 源码 testdata 内嵌、测试时现场编译）
 ```
 
-可安装包源码在独立的包仓库（如 `ailuo-packages/campus-bus`，guest 自包含只依赖标准库），经 `ailuo pack [build]` 交叉编译、`ailuo install` 安装后从安装目录装载。Core 只保留测试固件（generic firmware）与 campustest 的 testdata guest 源码（不提交任何 wasm 工件），不把示例 Package 当作生产组件。
+可安装包源码在包工作区（如 `packages/campus-bus`，guest 自包含只依赖标准库），经 `ailuo pack [build]` 交叉编译、`ailuo install` 安装后从安装目录装载。Core 只保留测试固件（generic firmware）与 campustest 的 testdata guest 源码（不提交任何 wasm 工件），不把示例 Package 当作生产组件。
 
 共享规则：Tool 是全局目录，任何 Service 声明 `ToolDependencies` 即可复用同一 handler；可被第二个 Service 复用的原子能力进 `internal/tools`，服务专属装配留在 `internal/services`，工具包绝不反向依赖服务。有状态包的持久化统一经 `internal/kernel/packstore` 窄端口（`ailuo.store` 宿主函数背后，作用域 = App × 包 namespace）；新增有状态包零内核改动。
 
@@ -537,18 +537,18 @@ Go 侧 `GRPCHost` 只接受绝对 Unix Socket 或 loopback 地址，并给收发
 
 宿主侧 `RuntimeHostProtocolServer` 是同一 Protobuf 契约的生产校验适配器：它再次校验身份、未知字段、上下文、deadline、载荷、生命周期顺序、在途 drain 和容量，并把 Backend 原始错误压缩为固定 gRPC 状态或稳定 Invoke 错误码。宿主 gRPC server 必须使用该包提供的 512 KiB 收发上限选项。
 
-isolated 扩展由 Go `IsolatedProcessHost` 启动。可执行文件、参数、工作目录和 Socket 只能来自受信任的已安装解析器，并在执行前再次按 lock 校验；路径必须绝对、非符号链接且不可被组或其他用户写入，Socket 必须位于该私有工作目录。子进程不继承 Go 环境，敏感凭据名和动态装载注入变量被拒绝，标准输出/错误被抑制，避免第三方明文绕过集中日志。Stop 先走协议宽限期，再有界发送进程组终止和强制结束，并只清理由该规格绑定的 Unix Socket。真实跨进程集成测试覆盖正常退出和忽略 Stop 后的强制清理。
+isolated 扩展由 Go 通用 `ProcessHost` 启动。可执行文件、参数、工作目录和 Socket 只能来自受信任的已安装解析器，并在执行前再次按 lock 校验；路径必须绝对、非符号链接且不可被组或其他用户写入，Socket 必须位于该私有工作目录。子进程不继承 Go 环境，标准输出/错误被抑制，避免第三方明文绕过集中日志。Stop 先走协议宽限期，再有界发送进程组终止和强制结束，并只清理由该规格绑定的 Unix Socket。真实跨进程集成测试覆盖正常退出和忽略 Stop 后的强制清理。
 
 安装目录使用 `ailuo.package.v2` 清单与 lock。内核只接受由有效进程用户持有、目录链和文件均不允许组或其他用户写入、没有符号链接的绝对目录；严格拒绝未知字段、重复 JSON 键、超限文件、非法稳定 ID、跨目录路径和不完整引用。lock 同时固定清单原始字节与实现文件的 SHA-256；isolated 还固定完整进程规格。发现结果先作为一批完成 Runtime、Tool、Service、Capability 全量校验，再分别原子发布到 Loader 与 Registry，Registry 冲突时回滚 Loader 发布。主程序通过 `AILUO_RUNTIME_INSTALL_ROOT` 启用恢复；未显式设置时回退用户配置目录 `ailuo/runtime`（与 `ailuo install` 默认位置一致，目录不存在则视为未配置）。hosted 分两条装载路径：声明宿主函数的包只能在内核进程内由 wazero 执行（宿主函数是内核特权，不出进程）；未声明宿主函数的 hosted 包才经外部 Runtime Host 装载，此时必须提供本机 `AILUO_RUNTIME_HOST_ADDRESS`，否则启动 fail-closed。启动只预热 `pin` 项，失败则整个内核拒绝就绪；非 pin 项保持首次调用懒加载。已注册 Capability 不会自动进入任何 App，仍须通过持久 App 配置显式启用。
 
-上述实现完成了可长期保留的 Runtime Host 协议、Go 客户端/宿主校验器、持久安装目录发现与内核启动重注册、hosted 连接与容量边界，以及 isolated 真进程监管。`NewHostedRuntimeBackend` 已提供 hosted wazero Backend，并由 Runtime Host operator 流程执行 Describe、Start、Health、Invoke、Stop；尚不支持的扩展语言或包格式仍需另行实现 Backend。hosted 共享进程的 CPU、内存和文件系统级资源隔离也需结合最终 Deployment 方案完成。当前安装目录属主校验在非 Unix 平台关闭失败，因此该能力目前只支持 Unix Deployment。内置 Python Agent 通过 `internal/kernel/loader.ExecutorHost` 以 `executor.v1` isolated Runtime 形态纳管；Core 的 child Run 控制能力由 `internal/kernel/echo` 注册。产品链路接入其他扩展 Backend 并完成对应恢复和资源限制验证前，不得把测试夹具描述成已上线扩展。
+上述实现完成了可长期保留的 Runtime Host 协议、Go 客户端/宿主校验器、持久安装目录发现与内核启动重注册、hosted 连接与容量边界，以及 isolated 真进程监管。`NewHostedRuntimeBackend` 已提供 hosted wazero Backend，并由 Runtime Host operator 流程执行 Describe、Start、Health、Invoke、Stop；尚不支持的扩展语言或包格式仍需另行实现 Backend。hosted 共享进程的 CPU、内存和文件系统级资源隔离也需结合最终 Deployment 方案完成。安装目录属主校验已覆盖 Unix 与 Windows，其他平台仍关闭失败。Python Executor 位于 `packages/agent`，通过通用 `ProcessHost` 以 `executor.v1` isolated Runtime 形态纳管；Core 的 child Run 控制能力由 `internal/kernel/echo` 注册。产品链路接入其他扩展 Backend 并完成对应恢复和资源限制验证前，不得把测试夹具描述成已上线扩展。
 
-2026-08-12 三模式接入基线：三种运行模式已由 Loader 统一接入，**campus 完全重构为 hosted 包（无旧兼容），并已迁出仓库为独立包仓库 `ailuo-packages/campus-bus`，经安装目录装载**：
+2026-08-12 三模式接入基线：三种运行模式已由 Loader 统一接入，**campus 完全重构为 hosted 包（无旧兼容），并已迁出 Core 实现目录为 `packages/campus-bus`，经安装目录装载**：
 
 - **hosted 生产 Backend = wazero 进程内沙箱**（`internal/kernel/loader/wasm_host.go`）。业务扩展包默认形态：wasm32-wasi 工件经线性内存上限（默认 128 MiB）与 WASI 裁剪（无文件系统/网络/环境变量）执行，每次调用独立实例（零共享状态），stdin/stdout JSON 信封 ABI（`{tool_id,payload}` → `{ok,result,code,message}`）。guest 需要内核能力时经宿主函数（host function）投影，线性内存 ABI + 按调用绑定的治理上下文（guest 无法伪造 app_id/权限）；`CapabilitySpec.ToolID` 让 Dispatcher 把 Capability 直接执行的工具注入治理上下文，运行时级 Handler 据此分发。包的持久化统一经 `ailuo.store` 宿主函数（`internal/kernel/packstore` 端口：作用域 = App × 包 namespace，get/list 响应内嵌单事务一致的快照元数据，快照原子替换仅对可信 Go 侧开放），业务治理（数据权威性/新鲜度校验）留在 guest——campus-bus guest 自包含、只依赖标准库，新增有状态包零内核改动。
 - **embedded 机制**（`embedded_host.go`）：进程内 Runtime，供内核自有组件以包形式纳入统一治理；当前无生产业务包，机制完整并有测试。
 - **isolated 资源限额**：`ProcessSpec.Limits`（RLIMIT_AS/CPU/NOFILE/FSIZE）由锁固定，Linux 用 prlimit 在子进程启动后立即应用，其余平台对非零限额 fail-closed。
-- **Agent 定位（目标结构）**：Python Agent 是独立的 `executor.v1` Package/Service 实现；Go Core 只通过 `internal/kernel/executor` 契约和 `internal/kernel/loader.ExecutorHost` 接入，不 import Agent 实现。child Run 控制能力由 Core 自己注册为 `run.create_child` / `run.get_child_status`，不由 Agent Service 提供。`loader.New(hosts ...Host)` 持有全部运行模式宿主，main.go 只装配一个共享 Manager，不按 Agent/业务包分叉 Loader。
+- **Agent 定位（目标结构）**：Python Agent 是普通的 `executor.v1` Package/Service 实现；Go Core 只通过 `internal/kernel/executor` 契约和通用 `internal/kernel/loader.ProcessHost` 接入，不 import Agent 实现。child Run 控制能力由 Core 自己注册为 `run.create_child` / `run.get_child_status`，不由 Agent Service 提供。`loader.New(hosts ...Host)` 持有全部运行模式宿主，main.go 只装配一个共享 Manager，不按包分叉 Loader。
 - 安装目录发现仍只支持 Unix Deployment（属主校验 fail-closed），campus 既然经安装目录装载，也随之只在 Unix 可用。hosted 工件 CPU 指令级预算与外部 Runtime Host 进程形态接线保留为后续 P1。
 
 ### 防止微服务化失控
@@ -1196,9 +1196,9 @@ Provider 错误映射为 `provider_timeout`、`rate_limited`、`provider_unavail
 
 ### 生产运维实现基线（2026-07-26）
 
-`/healthz` 只表示 Go 进程存活；`/readyz` 独立检查接单状态、SQLite 和真实模型 Provider。关闭时先停止接单，再关闭 HTTP、持久化取消并有界等待活动 Run，最后优雅停止托管 Python 子进程，所有步骤共享 10 秒上限。Python 同时处理 SIGINT/SIGTERM 并对 gRPC server 使用 5 秒 grace。
+`/healthz` 只表示 Go 进程存活；`/readyz` 独立检查接单状态、SQLite 和已安装 Executor 的真实就绪状态。关闭时先停止接单，再关闭 HTTP、持久化取消并有界等待活动 Run，最后按托管策略停止 Executor 子进程，所有步骤共享 10 秒上限。Executor 包自身处理进程信号并对 gRPC server 使用有界 grace。
 
-不安全 gRPC 只允许 loopback 或 Unix 地址；Go 启动/拨号和 Python 监听均拒绝非 loopback 地址。当前远程 gRPC 没有已实现的认证 TLS 配置，因此跨主机部署明确不受支持。生产模型密钥必须来自不超过 16 KiB、仅属主可访问的常规文件；原始密钥环境变量在 production 配置下默认拒绝。
+不安全 gRPC 只允许 loopback 或 Unix 地址；Go 拨号和 Executor 监听均拒绝非 loopback 地址。当前远程 gRPC 没有已实现的认证 TLS 配置，因此跨主机部署明确不受支持。Executor 包的 Provider 密钥由其 Deployment 的批准秘密源管理；Core 不读取、注入或记录原始密钥。
 
 HTTP 接受并验证 W3C `traceparent`，为入口和 Run 创建 Span，`StartRun` 把 trace ID 与父 Span 传给 Python 并由双方严格校验。`/metrics` 输出固定低基数 Prometheus 指标，包含 HTTP、Run/队列、首 Token、Capability、Tool、存储、Provider 重试、Token 与成本，不使用 App/Echo/Run/call 标识或业务载荷作为标签。日志中的原始 `error`/`reason` 被集中脱敏，Go 错误入口仅输出稳定类别和类型。
 

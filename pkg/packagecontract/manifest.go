@@ -8,7 +8,6 @@ import (
 	"net"
 	"path"
 	"path/filepath"
-	"regexp"
 	"strings"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/pkg/capability"
@@ -46,11 +45,9 @@ type Component struct {
 	Role       string `json:"role,omitempty"`
 	Entrypoint string `json:"entrypoint"`
 	// Process 是 isolated 组件的包内相对进程模板；安装时由 packmgr 解析为
-	// lock 中的绝对 ProcessSpec。模板不包含凭据，运行时环境由宿主注入。
-	Process *ProcessTemplate `json:"process,omitempty"`
-	// EnvFrom 声明组件需要的宿主注入环境变量名（声明制特权）：名字进清单，
-	// 值由宿主启动时从部署配置/秘密源供给，绝不写进包或 lock。
-	EnvFrom       []string             `json:"env_from,omitempty"`
+	// lock 中的绝对 ProcessSpec。模板不包含凭据，Provider 等部署配置不属于
+	// Core 包契约。
+	Process       *ProcessTemplate     `json:"process,omitempty"`
 	Exports       []string             `json:"exports,omitempty"`
 	Imports       []string             `json:"imports,omitempty"`
 	HostFunctions []HostedFunctionDecl `json:"host_functions,omitempty"`
@@ -90,8 +87,9 @@ type LockedArtifact struct {
 
 // ProcessSpec 是进程执行规格（isolated 模式）；Limits 为通用资源上限。
 type ProcessSpec struct {
-	Path    string        `json:"path"`
-	Args    []string      `json:"args"`
+	Path string   `json:"path"`
+	Args []string `json:"args"`
+	// Env 是安装锁定的非秘密环境项；宿主不会从自身环境或部署配置补齐它。
 	Env     []string      `json:"env"`
 	WorkDir string        `json:"work_dir"`
 	Address string        `json:"address"`
@@ -160,16 +158,13 @@ func ValidateManifest(manifest Manifest) error {
 			component.Entrypoint == "manifest.json" || component.Entrypoint == "lock.json" {
 			return ErrInvalidFormat
 		}
-		if component.Mode != ModeIsolated && (component.Process != nil || len(component.EnvFrom) > 0) {
+		if component.Mode != ModeIsolated && component.Process != nil {
 			return ErrInvalidFormat
 		}
 		if component.Process != nil {
 			if err := ValidateProcessTemplate(*component.Process); err != nil {
 				return ErrInvalidFormat
 			}
-		}
-		if err := ValidateEnvFrom(component.EnvFrom); err != nil {
-			return ErrInvalidFormat
 		}
 		for _, id := range append(append([]string(nil), component.Exports...), component.Imports...) {
 			if !capability.IsStableID(id) {
@@ -330,25 +325,6 @@ func pathWithin(root, candidate string) bool {
 // IsPackageEntrypoint 校验包根目录下的扁平工件路径。
 func IsPackageEntrypoint(value string) bool {
 	return IsPackagePath(value) && value != "." && !strings.ContainsRune(value, '/')
-}
-
-// envFromNamePattern 是宿主注入环境变量名的闭式形状。
-var envFromNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,127}$`)
-
-// ValidateEnvFrom 校验 env_from 声明：名字闭式、去重。值由宿主启动时供给，
-// 绝不进包或 lock（凭据不落盘）。
-func ValidateEnvFrom(names []string) error {
-	seen := make(map[string]struct{}, len(names))
-	for _, name := range names {
-		if !envFromNamePattern.MatchString(name) {
-			return ErrInvalidFormat
-		}
-		if _, duplicate := seen[name]; duplicate {
-			return ErrInvalidFormat
-		}
-		seen[name] = struct{}{}
-	}
-	return nil
 }
 
 // isSHA256Hex 判断字符串是否为合法十六进制 SHA-256 摘要。只校验长度会让 64 个

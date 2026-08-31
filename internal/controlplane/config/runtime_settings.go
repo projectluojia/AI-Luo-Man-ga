@@ -51,8 +51,8 @@ type QQConnectionSettings struct {
 	ManagerStopTimeoutSeconds float64 `json:"manager_stop_timeout_seconds"`
 }
 
-// AgentProcessSettings 是 Python Agent 进程监督参数。
-type AgentProcessSettings struct {
+// RuntimeProcessSettings 是 isolated 运行时的进程监督参数。
+type RuntimeProcessSettings struct {
 	DialTimeoutSeconds    float64 `json:"dial_timeout_seconds"`
 	StopGraceSeconds      float64 `json:"stop_grace_seconds"`
 	TerminateGraceSeconds float64 `json:"terminate_grace_seconds"`
@@ -96,8 +96,8 @@ func defaultQQConnectionSettings() QQConnectionSettings {
 	}
 }
 
-func defaultAgentProcessSettings() AgentProcessSettings {
-	return AgentProcessSettings{
+func defaultRuntimeProcessSettings() RuntimeProcessSettings {
+	return RuntimeProcessSettings{
 		DialTimeoutSeconds: 15, StopGraceSeconds: 5, TerminateGraceSeconds: 2,
 	}
 }
@@ -159,11 +159,11 @@ func normalizeQQConnection(value QQConnectionSettings) (QQConnectionSettings, er
 	return value, nil
 }
 
-func normalizeAgentProcess(value AgentProcessSettings) (AgentProcessSettings, error) {
+func normalizeRuntimeProcess(value RuntimeProcessSettings) (RuntimeProcessSettings, error) {
 	if value.DialTimeoutSeconds < 1 || value.DialTimeoutSeconds > 120 ||
 		value.StopGraceSeconds < 1 || value.StopGraceSeconds > 120 ||
 		value.TerminateGraceSeconds < 1 || value.TerminateGraceSeconds > 60 {
-		return AgentProcessSettings{}, ErrInvalid
+		return RuntimeProcessSettings{}, ErrInvalid
 	}
 	return value, nil
 }

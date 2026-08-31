@@ -10,14 +10,14 @@ import (
 const (
 	// testPackageID 是 hosted 测试包的 Package/Runtime 标识。
 	testPackageID = "runtime.test"
+	// testRuntimeID 是测试包内运行组件的稳定标识。
+	testRuntimeID = testPackageID + ".runtime"
 	// testToolID 是 hosted 测试包声明的原子工具标识。
 	testToolID = "runtime.test.echo"
-	// testCapabilityID 是 hosted 测试包导出的 Capability 标识。
+	// testCapabilityID 是测试包对外暴露的能力标识。
 	testCapabilityID = "runtime.test.echo.cap"
 	// testInvokeScope 是 hosted 测试包调用的权限范围。
 	testInvokeScope = "runtime.test.invoke"
-	// testCoreRuntimeID 是安装目录发现产生的 Runtime 标识（<package>.<component>）。
-	testCoreRuntimeID = testPackageID + ".core"
 )
 
 // staticHostFunctions 返回对所有清单提供同一组宿主函数的配置助手。

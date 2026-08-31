@@ -20,7 +20,7 @@ import (
 )
 
 func TestLoadConfigUsesControlPlaneDefaults(t *testing.T) {
-	t.Setenv("AILUO_MANAGE_AGENT", "false")
+	t.Setenv("AILUO_MANAGE_EXECUTOR", "false")
 	config, err := loadConfig()
 	if err != nil || config.configUIAddress != configui.DefaultAddress {
 		t.Fatalf("config=%+v error=%v", config, err)
@@ -28,15 +28,15 @@ func TestLoadConfigUsesControlPlaneDefaults(t *testing.T) {
 }
 
 func TestLoadConfigRejectsInvalidBoolean(t *testing.T) {
-	t.Setenv("AILUO_MANAGE_AGENT", "sometimes")
+	t.Setenv("AILUO_MANAGE_EXECUTOR", "sometimes")
 	_, err := loadConfig()
-	if err == nil || !strings.Contains(err.Error(), "AILUO_MANAGE_AGENT must be a boolean") {
+	if err == nil || !strings.Contains(err.Error(), "AILUO_MANAGE_EXECUTOR must be a boolean") {
 		t.Fatalf("error=%v", err)
 	}
 }
 
 func TestLoadConfigRejectsSourcePathLogging(t *testing.T) {
-	t.Setenv("AILUO_MANAGE_AGENT", "false")
+	t.Setenv("AILUO_MANAGE_EXECUTOR", "false")
 	t.Setenv("AILUO_LOG_SOURCE", "true")
 	if _, err := loadConfig(); err == nil || !strings.Contains(err.Error(), "must be false") {
 		t.Fatalf("error=%v", err)
@@ -44,7 +44,7 @@ func TestLoadConfigRejectsSourcePathLogging(t *testing.T) {
 }
 
 func TestLoadConfigRejectsDemoDataInProduction(t *testing.T) {
-	t.Setenv("AILUO_MANAGE_AGENT", "false")
+	t.Setenv("AILUO_MANAGE_EXECUTOR", "false")
 	t.Setenv("AILUO_ENVIRONMENT", "production")
 	t.Setenv("AILUO_LOAD_DEMO_DATA", "true")
 	_, err := loadConfig()
@@ -54,7 +54,7 @@ func TestLoadConfigRejectsDemoDataInProduction(t *testing.T) {
 }
 
 func TestLoadConfigRejectsRelativeRuntimeInstallRoot(t *testing.T) {
-	t.Setenv("AILUO_MANAGE_AGENT", "false")
+	t.Setenv("AILUO_MANAGE_EXECUTOR", "false")
 	t.Setenv("AILUO_RUNTIME_INSTALL_ROOT", "relative/runtime")
 	if _, err := loadConfig(); err == nil || !strings.Contains(err.Error(), "clean absolute path") {
 		t.Fatalf("error=%v", err)

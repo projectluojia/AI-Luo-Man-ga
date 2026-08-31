@@ -11,7 +11,7 @@ import (
 // hostedRuntimeBackend 实现 RuntimeHostBackend：按 BackendIdentity 装载 hosted 工件，
 // 编译产物复用，每次调用独立实例化并受执行时间预算约束。
 // 外部宿主在独立进程内以 wazero 沙箱执行 hosted 工件；需要宿主函数投影的工件
-// （如内置 campus）只能在内核进程内执行：宿主函数是内核特权，跨进程无法投影
+// （如声明 ailuo.store 的安装包）只能在内核进程内执行：宿主函数是内核特权，跨进程无法投影
 // 权威存储，这是架构契约而非降级路径。
 type hostedRuntimeBackend struct {
 	host     *WasmHost

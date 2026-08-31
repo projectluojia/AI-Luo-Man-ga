@@ -180,18 +180,11 @@ func (c *Catalog) readRecordByID(ctx context.Context, id string) (installedRecor
 	if len(entries) > loader.MaxRegisteredRuntimes {
 		return installedRecord{}, ErrInvalidCatalog
 	}
-	// 先精确匹配包目录（id 等于目录名或以其为前缀），再回退扫描其余目录，
-	// 防止目录名前缀重叠时错误包先命中。
-	for pass := 0; pass < 2; pass++ {
-		for _, entry := range entries {
-			name := entry.Name()
-			if packmgr.IsTransientInstallDirectory(name) {
-				if !entry.IsDir() {
-					return installedRecord{}, ErrInvalidCatalog
-				}
-				continue
-			}
-			if strings.HasPrefix(name, ".") || !entry.IsDir() {
+	var matched installedRecord
+	found := false
+	for _, entry := range entries {
+		if packmgr.IsTransientInstallDirectory(entry.Name()) {
+			if !entry.IsDir() {
 				return installedRecord{}, ErrInvalidCatalog
 			}
 			candidate := id == name || strings.HasPrefix(id, name+".")
@@ -208,10 +201,25 @@ func (c *Catalog) readRecordByID(ctx context.Context, id string) (installedRecor
 				}
 			}
 		}
-	}
-	return installedRecord{}, loader.ErrNotFound
+		if strings.HasPrefix(entry.Name(), ".") || !entry.IsDir() {
+			return installedRecord{}, ErrInvalidCatalog
+		}
+		records, err := c.readPackage(ctx, filepath.Join(c.root, entry.Name()))
+		if err != nil {
+			return installedRecord{}, err
+		}
+		for _, record := range records {
+			if record.record.Runtime.ID == id {
+				if found {
+					return installedRecord{}, ErrInvalidCatalog
+				}
+				matched = record
+				found = true
 			}
 		}
+	}
+	if found {
+		return matched, nil
 	}
 	return installedRecord{}, loader.ErrNotFound
 }
@@ -277,7 +285,6 @@ func (c *Catalog) readPackage(ctx context.Context, directory string) ([]installe
 			Role: role, LockedDigest: artifact.SHA256,
 			Pin: neutral.Manifest.Pin, IdleTTL: time.Duration(neutral.Manifest.IdleTTLMS) * time.Millisecond,
 			HostFunctions: slices.Clone(component.HostFunctions),
-			EnvFrom:       slices.Clone(component.EnvFrom),
 			Storage:       cloneStorage(neutral.Manifest.Storage),
 		}
 		if err := loader.ValidateManifest(runtimeManifest); err != nil {

@@ -78,7 +78,7 @@ func PackFromSource(ctx context.Context, sourceDir, outputDir string, manifest p
 		if info.IsDir() {
 			entries, err := writeArtifactEntries(tarWriter, artifact.path, filepath.Base(artifact.path), maxTarEntries-archiveEntries)
 			if err != nil {
-				return "", err
+				return "", fmt.Errorf("组件 %s 工件打包失败: %w", artifact.componentID, err)
 			}
 			archiveEntries += entries
 		} else {
@@ -147,10 +147,10 @@ func writeArtifactEntries(writer *tar.Writer, sourceRoot, archiveRoot string, li
 		}
 		entries++
 		if entries > limit {
-			return packagecontract.ErrInvalidFormat
+			return fmt.Errorf("%w: 目录工件条目超过上限 %d", packagecontract.ErrInvalidFormat, limit)
 		}
 		if entry.Type()&os.ModeSymlink != 0 {
-			return packagecontract.ErrInvalidFormat
+			return fmt.Errorf("%w: 目录工件包含符号链接", packagecontract.ErrInvalidFormat)
 		}
 		relative, err := filepath.Rel(sourceRoot, current)
 		if err != nil {
@@ -168,7 +168,7 @@ func writeArtifactEntries(writer *tar.Writer, sourceRoot, archiveRoot string, li
 			return writer.WriteHeader(&tar.Header{Name: name + "/", Mode: int64(info.Mode().Perm()), Typeflag: tar.TypeDir})
 		}
 		if !info.Mode().IsRegular() {
-			return packagecontract.ErrInvalidFormat
+			return fmt.Errorf("%w: 目录工件包含非普通文件", packagecontract.ErrInvalidFormat)
 		}
 		file, err := os.Open(current)
 		if err != nil {
