@@ -547,7 +547,7 @@ isolated 扩展由 Go 通用 `ProcessHost` 启动。可执行文件、参数、�
 - **embedded 机制**（`embedded_host.go`）：进程内 Runtime，供内核自有组件以包形式纳入统一治理；当前无生产业务包，机制完整并有测试。
 - **isolated 资源限额**：`ProcessSpec.Limits`（RLIMIT_AS/CPU/NOFILE/FSIZE）由锁固定，Linux 用 prlimit 在子进程启动后立即应用，其余平台对非零限额 fail-closed。
 - **Agent 定位（目标结构）**：Python Agent 是普通的 `executor.v1` Package/Service 实现；Go Core 只通过 `internal/kernel/executor` 契约和通用 `internal/kernel/loader.ProcessHost` 接入，不 import Agent 实现。child Run 控制能力由 Core 自己注册为 `run.create_child` / `run.get_child_status`，不由 Agent Service 提供。`loader.New(hosts ...Host)` 持有全部运行模式宿主，main.go 只装配一个共享 Manager，不按包分叉 Loader。
-- 安装目录发现支持 Unix UID 与 Windows ACL SID 属主校验，其他平台仍关闭失败。hosted 工件 CPU 指令级预算与外部 Runtime Host 进程形态接线保留为后续 P1。
+- 安装目录发现支持 Unix UID 与 Windows ACL SID 属主校验，其他平台仍关闭失败。hosted 工件 CPU 指令级预算与共享 Host 的资源隔离保留为后续 P1。
 
 ### 防止微服务化失控
 
