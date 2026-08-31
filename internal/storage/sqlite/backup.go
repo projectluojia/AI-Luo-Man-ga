@@ -123,14 +123,8 @@ func ValidateBackup(ctx context.Context, path string) (resultErr error) {
 		observeStorageOperation(ctx, "backup_validate", started, err)
 		return errors.Join(ErrInvalidBackup, fmt.Errorf("read backup schema version: %w", err))
 	}
-	expectedCount := 0
-	for registered := range registeredMigrations {
-		if registered <= version {
-			expectedCount++
-		}
-	}
-	// 允许堆叠业务线占用不连续版本号：已应用行数必须等于本二进制中不超过该版本的注册迁移数。
-	if version < minimumRestorableSchemaVersion || version > currentSchemaVersion() || migrationCount != expectedCount {
+	if version < minimumRestorableSchemaVersion || version > currentSchemaVersion() ||
+		migrationCount != registeredMigrationCountThrough(version) {
 		err := fmt.Errorf("schema migration history is outside the supported restore range")
 		observeStorageOperation(ctx, "backup_validate", started, err)
 		return errors.Join(ErrInvalidBackup, err)
@@ -287,6 +281,15 @@ FROM runs LIMIT 0`
 			if err := rows.Close(); err != nil {
 				return fmt.Errorf("close sports reservation schema probe: %w", err)
 			}
+		}
+	}
+	if version >= 32 {
+		rows, err := db.QueryContext(ctx, `SELECT app_id,user_id,kind,nonce,ciphertext,created_at,expires_at,revoked_at FROM ecard_credentials LIMIT 0`)
+		if err != nil {
+			return fmt.Errorf("required ecard credential schema is unavailable")
+		}
+		if err := rows.Close(); err != nil {
+			return fmt.Errorf("close ecard credential schema probe: %w", err)
 		}
 	}
 	rows, err := db.QueryContext(ctx, runColumns)

@@ -63,9 +63,55 @@ func TestLoggerRedactsWeatherProviderSecrets(t *testing.T) {
 	}
 }
 
+func TestLoggerRedactsECardCookiesTicketsAndStudentIDs(t *testing.T) {
+	for _, format := range []string{"console", "json"} {
+		t.Run(format, func(t *testing.T) {
+			buffer := &bytes.Buffer{}
+			logger, err := observe.New(observe.Config{
+				Service: "test", Environment: "test", Format: format, Writer: buffer,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			logger.Log(context.Background(), slog.LevelInfo, "E 卡会话已准备",
+				slog.String("cookie", "CASTGC=TGT-must-not-appear"),
+				slog.String("cas_ticket", "ST-1234567890-raw-ticket"),
+				slog.String("student_id", "202312345678"),
+				slog.String("entry_id", "luojia_ecard"),
+			)
+			output := buffer.String()
+			if strings.Contains(output, "CASTGC=TGT-must-not-appear") ||
+				strings.Contains(output, "ST-1234567890-raw-ticket") ||
+				strings.Contains(output, "202312345678") {
+				t.Fatalf("E 卡秘密进入 %s 日志：%s", format, output)
+			}
+			if !strings.Contains(output, "[已脱敏]") {
+				t.Fatalf("%s 日志未脱敏：%s", format, output)
+			}
+			if format == "json" && !strings.Contains(output, `"entry_id":"luojia_ecard"`) {
+				t.Fatalf("稳定字段被误脱敏：%s", output)
+			}
+		})
+	}
+}
+
 func TestLoggerRejectsSourcePathDisclosure(t *testing.T) {
 	if _, err := observe.New(observe.Config{Service: "test", AddSource: true}); err == nil {
 		t.Fatal("日志器接受了源码路径输出")
+	}
+}
+
+func TestAuditJSONRedactsECardCookiesTicketsAndStudentIDs(t *testing.T) {
+	result := observe.SanitizeAuditJSON([]byte(`{"cookie":"CASTGC=TGT-secret","cas_ticket":"ST-raw-ticket","student_id":"202312345678","entry_id":"luojia_ecard"}`), 2048)
+	var decoded map[string]any
+	if err := json.Unmarshal(result, &decoded); err != nil {
+		t.Fatalf("审计结果不是合法 JSON：%s", result)
+	}
+	if decoded["cookie"] != "[已脱敏]" || decoded["cas_ticket"] != "[已脱敏]" || decoded["student_id"] != "[已脱敏]" || decoded["entry_id"] != "luojia_ecard" {
+		t.Fatalf("E 卡审计脱敏错误：%s", result)
+	}
+	if bytes.Contains(result, []byte("TGT-secret")) || bytes.Contains(result, []byte("ST-raw-ticket")) || bytes.Contains(result, []byte("202312345678")) {
+		t.Fatalf("E 卡秘密进入审计 JSON：%s", result)
 	}
 }
 

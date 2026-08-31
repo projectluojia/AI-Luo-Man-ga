@@ -45,6 +45,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus/demo"
 	classroomservice "github.com/projectluojia/AI-Luo-Man-ga/internal/services/classroom"
+	ecardservice "github.com/projectluojia/AI-Luo-Man-ga/internal/services/ecard"
 	libraryseatservice "github.com/projectluojia/AI-Luo-Man-ga/internal/services/libraryseat"
 	promptservice "github.com/projectluojia/AI-Luo-Man-ga/internal/services/prompt"
 	sportsservice "github.com/projectluojia/AI-Luo-Man-ga/internal/services/sports"
@@ -52,6 +53,7 @@ import (
 	weatherservice "github.com/projectluojia/AI-Luo-Man-ga/internal/services/weather"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/blob"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite"
+	ecardtool "github.com/projectluojia/AI-Luo-Man-ga/internal/tools/ecard"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/tools/weather"
 
 	"github.com/joho/godotenv"
@@ -457,6 +459,9 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 		if err := demo.LoadBusData(ctx, store, time.Now()); err != nil {
 			return fmt.Errorf("load demo bus data: %w", err)
 		}
+		if err := demo.LoadECardData(ctx, time.Now()); err != nil {
+			return fmt.Errorf("load demo ecard data: %w", err)
+		}
 		observe.Warn(ctx, "已载入非权威校巴演示数据",
 			observe.BoolAttr("authoritative", false),
 			observe.StringAttr("source", "demo-fixture-not-zhihui-luojia"),
@@ -550,6 +555,11 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 			sportsservice.ReservationsMineCapabilityID,
 			sportsservice.OrdersWebViewCapabilityID,
 			sportsservice.ScheduleAddCapabilityID,
+			ecardservice.EntriesListCapabilityID,
+			ecardservice.SessionPrepareCapabilityID,
+			ecardservice.CredentialsPutCapabilityID,
+			ecardservice.CredentialsRevokeCapabilityID,
+			ecardservice.CredentialsStatusCapabilityID,
 		},
 	})
 	if err != nil {
@@ -572,7 +582,7 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 		replacement.MaxOutputBytes = config.agentRun.MaxOutputBytes
 		replacement.SystemPrompt = baseSystemPrompt
 		replacement.ChannelPrompts = channelPrompts
-		replacement.EnabledCapabilities = ensureSportsCapabilities(ensurePromptCapabilities(app.EnabledCapabilities))
+		replacement.EnabledCapabilities = ensureEcardCapabilities(ensureSportsCapabilities(ensurePromptCapabilities(app.EnabledCapabilities)))
 		app, err = store.CompareAndSwap(ctx, app.Generation, replacement)
 		if err != nil {
 			return fmt.Errorf("migrate campus App prompt configuration: %w", err)
@@ -626,6 +636,19 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 	if err := sportsservice.Register(reg, sportsservice.NewService(store)); err != nil {
 		return fmt.Errorf("register sports Service: %w", err)
 	}
+	ecardKey, err := loadEcardCredentialKey(config)
+	if err != nil {
+		return err
+	}
+	if err := ecardservice.Register(reg, ecardservice.NewService(ecardtool.Config{
+		Store:      store,
+		Key:        ecardKey,
+		DemoMode:   config.loadDemoData,
+		Production: isProductionEnvironment(config.environment),
+	})); err != nil {
+		return fmt.Errorf("register ecard Service: %w", err)
+	}
+	clearSecretBytes(ecardKey)
 	// 确认与副作用治理：持久确认服务注入 Dispatcher，凡声明 write/external 副作用
 	// 的 Capability 在未获批准前 fail-closed（缺确认标识或验证失败一律拒绝执行）。
 	confirmations := confirmation.NewService(store, confirmation.Config{})
@@ -1423,6 +1446,61 @@ func ensureSportsCapabilities(existing []string) []string {
 		}
 	}
 	return result
+}
+
+func ensureEcardCapabilities(existing []string) []string {
+	result := append([]string(nil), existing...)
+	for _, capabilityID := range ecardservice.CapabilityIDs() {
+		if !slices.Contains(result, capabilityID) {
+			result = append(result, capabilityID)
+		}
+	}
+	return result
+}
+
+func isProductionEnvironment(value string) bool {
+	return strings.EqualFold(value, "production") || strings.EqualFold(value, "prod")
+}
+
+func loadEcardCredentialKey(cfg config) ([]byte, error) {
+	file := strings.TrimSpace(os.Getenv("AILUO_ECARD_CREDENTIAL_KEY_FILE"))
+	raw := strings.TrimSpace(os.Getenv("AILUO_ECARD_CREDENTIAL_KEY"))
+	production := isProductionEnvironment(cfg.environment)
+	if production && raw != "" {
+		return nil, fmt.Errorf("configuration error: production ecard credentials must use AILUO_ECARD_CREDENTIAL_KEY_FILE")
+	}
+	if file == "" {
+		if production {
+			return nil, nil
+		}
+		if raw == "" {
+			return nil, nil
+		}
+		key, err := ecardtool.ParseAES256Key([]byte(raw))
+		if err != nil {
+			return nil, fmt.Errorf("configuration error: AILUO_ECARD_CREDENTIAL_KEY is not a 32-byte AES-256 key")
+		}
+		return key, nil
+	}
+	if err := validateSecretFileNamed(file, "AILUO_ECARD_CREDENTIAL_KEY_FILE"); err != nil {
+		return nil, err
+	}
+	content, err := os.ReadFile(file)
+	if err != nil {
+		return nil, fmt.Errorf("configuration error: cannot read AILUO_ECARD_CREDENTIAL_KEY_FILE")
+	}
+	key, err := ecardtool.ParseAES256Key(content)
+	clearSecretBytes(content)
+	if err != nil {
+		return nil, fmt.Errorf("configuration error: AILUO_ECARD_CREDENTIAL_KEY_FILE is not a 32-byte AES-256 key")
+	}
+	return key, nil
+}
+
+func clearSecretBytes(values []byte) {
+	for i := range values {
+		values[i] = 0
+	}
 }
 
 func secondsDuration(value float64) time.Duration {
