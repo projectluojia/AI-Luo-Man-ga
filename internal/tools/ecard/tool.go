@@ -150,7 +150,7 @@ func prepareSessionHandler(cfg Config) registry.Handler {
 		record, err := cfg.Store.GetActiveECardCredential(ctx, request.AppID, request.UserID, kind)
 		if err != nil {
 			if errors.Is(err, ErrNotFound) {
-				return nil, failClosedUnavailable(cfg, "missing delegated credential")
+				return nil, failClosedUnavailable(ctx, "missing_delegated_credential")
 			}
 			return nil, err
 		}
@@ -160,12 +160,12 @@ func prepareSessionHandler(cfg Config) registry.Handler {
 		}
 		key, err := cfg.aesKey()
 		if err != nil {
-			return nil, failClosedUnavailable(cfg, "credential key missing")
+			return nil, failClosedUnavailable(ctx, "credential_key_missing")
 		}
 		plain, err := decryptMaterial(key, record.Nonce, record.Ciphertext, record.AppID, record.UserID, record.Kind)
 		clearBytes(key)
 		if err != nil {
-			return nil, failClosedUnavailable(cfg, "credential ciphertext is unreadable")
+			return nil, failClosedUnavailable(ctx, "credential_ciphertext_unreadable")
 		}
 		// 仅用于完整性校验，随后立即清零，绝不写入响应。
 		clearBytes(plain)
@@ -209,10 +209,11 @@ func putCredentialHandler(cfg Config) registry.Handler {
 		if err := decode(payload, &input); err != nil {
 			return nil, err
 		}
-		material := input.CredentialMaterial
+		// JSON 字符串本身不可原地覆盖；只清零派生出的明文副本。
+		plain := []byte(input.CredentialMaterial)
 		input.CredentialMaterial = ""
-		if err := validatePutMaterial(input.Kind, material, cfg.DemoMode, cfg.Production); err != nil {
-			clearString(&material)
+		if err := validatePutMaterial(input.Kind, string(plain), cfg.DemoMode, cfg.Production); err != nil {
+			clearBytes(plain)
 			return nil, err
 		}
 		expiresAt, err := time.Parse(time.RFC3339Nano, input.ExpiresAt)
@@ -220,22 +221,20 @@ func putCredentialHandler(cfg Config) registry.Handler {
 			expiresAt, err = time.Parse(time.RFC3339, input.ExpiresAt)
 		}
 		if err != nil {
-			clearString(&material)
+			clearBytes(plain)
 			return nil, errors.Join(registry.ErrSchemaValidation, ErrInvalid)
 		}
 		now := cfg.clock()().UTC()
 		expiresAt = expiresAt.UTC()
 		if !expiresAt.After(now) || expiresAt.Sub(now) > MaxCredentialTTL {
-			clearString(&material)
+			clearBytes(plain)
 			return nil, errors.Join(registry.ErrSchemaValidation, ErrInvalid)
 		}
 		key, err := cfg.aesKey()
 		if err != nil {
-			clearString(&material)
-			return nil, failClosedUnavailable(cfg, "credential key missing")
+			clearBytes(plain)
+			return nil, failClosedUnavailable(ctx, "credential_key_missing")
 		}
-		plain := []byte(material)
-		clearString(&material)
 		nonce, ciphertext, err := encryptMaterial(key, request.AppID, request.UserID, input.Kind, plain)
 		clearBytes(key, plain)
 		if err != nil {
@@ -364,14 +363,9 @@ func ensureStore(store Store) error {
 	return nil
 }
 
-func failClosedUnavailable(_ Config, _ string) error {
+func failClosedUnavailable(ctx context.Context, reason string) error {
+	observe.Warn(ctx, "E 卡会话 fail-closed",
+		observe.StringAttr("fail_closed_reason", reason),
+	)
 	return errors.Join(contracts.ErrDataUnavailable, ErrNotFound)
-}
-
-func clearString(value *string) {
-	if value == nil {
-		return
-	}
-	*value = strings.Repeat("\x00", len(*value))
-	*value = ""
 }

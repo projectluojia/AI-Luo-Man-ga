@@ -144,7 +144,7 @@ func (s *Store) GetECardCredentialMeta(ctx context.Context, appID, userID, kind 
 	if err := validateECardOwner(appID, userID, kind); err != nil {
 		return ecard.CredentialMeta{}, err
 	}
-	var createdAt, expiresAt string
+	var storedKind, createdAt, expiresAt string
 	var revokedAt sql.NullString
 	err := s.db.QueryRowContext(ctx, `
 SELECT kind,created_at,expires_at,revoked_at
@@ -153,7 +153,7 @@ WHERE app_id=? AND user_id=? AND kind=?
 ORDER BY CASE WHEN revoked_at IS NULL THEN 0 ELSE 1 END, created_at DESC
 LIMIT 1`,
 		appID, userID, kind,
-	).Scan(&kind, &createdAt, &expiresAt, &revokedAt)
+	).Scan(&storedKind, &createdAt, &expiresAt, &revokedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ecard.CredentialMeta{}, nil
 	}
@@ -169,8 +169,8 @@ LIMIT 1`,
 		return ecard.CredentialMeta{}, fmt.Errorf("parse ecard credential expires_at: %w", err)
 	}
 	return ecard.CredentialMeta{
-		Kind:      kind,
-		Handle:    kind,
+		Kind:      storedKind,
+		Handle:    storedKind,
 		CreatedAt: created,
 		ExpiresAt: expires,
 		Present:   true,
