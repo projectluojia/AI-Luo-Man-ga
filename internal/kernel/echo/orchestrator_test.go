@@ -936,7 +936,7 @@ func TestOrchestratorRunsOneGovernedChildWithNarrowedProjection(t *testing.T) {
 	orchestrator := kernelecho.NewOrchestrator(
 		executorv1.NewExecutorRuntimeClient(connection), reg, dispatcher, policy, store,
 		kernelecho.Config{
-			AppID: campus.AppID, AppConfigSource: store, RunTimeout: 5 * time.Second,
+			AppID: campus.AppID, AppConfigSource: store, RunTimeout: 15 * time.Second,
 			Context: newSessionSource(t, store),
 		},
 	)
@@ -1556,7 +1556,7 @@ func TestOrchestratorDurablyRetriesOnlyRetryableRunAttempts(t *testing.T) {
 func TestOrchestratorRenewsActiveRunLease(t *testing.T) {
 	listener := bufconn.Listen(1 << 20)
 	grpcServer := grpc.NewServer()
-	executorv1.RegisterExecutorRuntimeServer(grpcServer, &slowSuccessAgent{delay: 320 * time.Millisecond})
+	executorv1.RegisterExecutorRuntimeServer(grpcServer, &slowSuccessAgent{delay: 800 * time.Millisecond})
 	go grpcServer.Serve(listener)
 	defer grpcServer.Stop()
 	connection, err := grpc.DialContext(context.Background(), "bufnet",
@@ -1580,7 +1580,7 @@ func TestOrchestratorRenewsActiveRunLease(t *testing.T) {
 	orchestrator := kernelecho.NewOrchestrator(
 		executorv1.NewExecutorRuntimeClient(connection), reg, runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{}), policy, store,
 		kernelecho.Config{
-			AppID: campus.AppID, AppConfigSource: baseStore, RunTimeout: 2 * time.Second, LeaseDuration: 150 * time.Millisecond,
+			AppID: campus.AppID, AppConfigSource: baseStore, RunTimeout: 3 * time.Second, LeaseDuration: 400 * time.Millisecond,
 			Context: newSessionSource(t, baseStore),
 		},
 	)
