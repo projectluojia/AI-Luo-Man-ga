@@ -30,3 +30,5 @@ jobs:
             ci
             chore
             revert
+          # ship 的 PR 标题在 Conventional Commit 前允许四段版本前缀。
+          headerPattern: '^v[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+ (\\w*)(?:\\((.*)\\))?: (.*)$'
