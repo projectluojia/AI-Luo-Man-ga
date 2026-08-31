@@ -47,7 +47,7 @@ func openTaskStore(t *testing.T) (*sqlite.Store, string) {
 
 func TestTaskMigration18CreatesTasksSchema(t *testing.T) {
 	_, path := openTaskStore(t)
-	// 通过独立连接读取同一数据库文件验证迁移 18 的表与索引。
+	// 通过独立连接读取同一数据库文件验证任务表迁移与索引。
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
 		t.Fatal(err)
@@ -58,8 +58,8 @@ func TestTaskMigration18CreatesTasksSchema(t *testing.T) {
 	if err := db.QueryRowContext(t.Context(), `SELECT max(version) FROM schema_migrations`).Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version < 27 {
-		t.Fatalf("schema 版本=%d，期望至少包含校巴实时迁移 27", version)
+	if version < 28 {
+		t.Fatalf("schema 版本=%d，期望至少包含校历迁移 28", version)
 	}
 	var tables, indexes int
 	if err := db.QueryRowContext(t.Context(), `
