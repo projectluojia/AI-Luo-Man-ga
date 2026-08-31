@@ -39,6 +39,11 @@ func TestGovernRejectsIncompleteExpiredAndUntrusted(t *testing.T) {
 	if status, err := demo.Govern(now); err != nil || status.State != DataStateDemoNonAuthoritative || status.Authoritative {
 		t.Fatalf("demo got %#v err=%v", status, err)
 	}
+	forged := demo
+	forged.Authoritative = true
+	if _, err := forged.Govern(now); !errors.Is(err, contracts.ErrDataUntrusted) {
+		t.Fatalf("demo+authoritative err=%v", err)
+	}
 }
 
 func TestValidateCatalogAcceptsHyphenatedIDs(t *testing.T) {
@@ -52,6 +57,14 @@ func TestValidateCatalogAcceptsHyphenatedIDs(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	forged := CatalogSnapshot{
+		AppID: "campus-services", Revision: "rev-campus-services", Source: DemoSource,
+		Authoritative: true, Complete: true, ImportedAt: now, ValidUntil: now.Add(time.Hour),
+		Spaces: []Space{{ID: "space-a", Name: "演示阅览室", SourceRevision: "rev-campus-services"}},
+	}
+	if err := ValidateCatalog(forged); err == nil {
+		t.Fatal("demo catalog marked authoritative must be rejected")
 	}
 }
 

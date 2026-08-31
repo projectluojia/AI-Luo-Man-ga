@@ -169,14 +169,6 @@ func createReservationHandler(store Store, now func() time.Time) registry.Handle
 			observe.StringAttr("slot_id", input.SlotID),
 			observe.StringAttr("slot_date", input.Date),
 		)
-		snapshot, err := store.SearchSeats(ctx, request.AppID, SlotSearchRequest{SpaceID: input.SpaceID, Date: input.Date, SlotID: input.SlotID, Limit: 1})
-		if err != nil {
-			return nil, err
-		}
-		dataStatus, err := governCatalog(ctx, "create", snapshot.Metadata, now())
-		if err != nil {
-			return nil, err
-		}
 		reservation, err := store.CreateReservation(ctx, CreateReservationInput{
 			AppID: request.AppID, UserID: request.UserID,
 			SpaceID: input.SpaceID, SeatID: input.SeatID, SlotID: input.SlotID, Date: input.Date,
@@ -185,6 +177,7 @@ func createReservationHandler(store Store, now func() time.Time) registry.Handle
 		if err != nil {
 			return nil, err
 		}
+		dataStatus := reservationDataStatus(reservation)
 		observe.Info(ctx, "图书馆座位预约已创建",
 			observe.StringAttr("reservation_status", reservation.Status),
 			observe.StringAttr("source_revision", dataStatus.Revision),
