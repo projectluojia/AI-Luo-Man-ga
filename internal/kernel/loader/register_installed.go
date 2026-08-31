@@ -3,6 +3,7 @@ package loader
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sort"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
@@ -36,6 +37,9 @@ func RegisterInstalled(ctx context.Context, manager *Manager, target *registry.R
 		if err := ValidateInstalledRecord(record); err != nil {
 			return err
 		}
+	}
+	if err := validatePackageGroups(records); err != nil {
+		return err
 	}
 	manifests := make([]Manifest, 0, len(records))
 	tools := make([]registry.ToolRegistration, 0)
@@ -94,6 +98,38 @@ func RegisterInstalled(ctx context.Context, manager *Manager, target *registry.R
 		}
 		if err := manager.RegisterPackage(pkgID, ordered); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// validatePackageGroups 确保包含能力组件的包恰好有一个主 Service 记录。
+// Service 只从 ComponentOrder=0 的记录取出；缺失或重复都会让包的能力面
+// 与运行时注册结果不一致，因此必须在发布 Loader 前拒绝。
+func validatePackageGroups(records []InstalledRecord) error {
+	groups := make(map[string][]InstalledRecord)
+	for _, record := range records {
+		groups[record.PackageID] = append(groups[record.PackageID], record)
+	}
+	for packageID, group := range groups {
+		hasCapabilityComponent := false
+		primaryCount := 0
+		for _, record := range group {
+			if record.Runtime.Role == RoleExecutor {
+				continue
+			}
+			hasCapabilityComponent = true
+			if record.ComponentOrder == 0 {
+				primaryCount++
+				if record.Service.ID == "" {
+					return fmt.Errorf("%w: package %q primary component has no service", ErrInvalidInstalledRecord, packageID)
+				}
+			} else if record.Service.ID != "" {
+				return fmt.Errorf("%w: package %q service is not on primary component", ErrInvalidInstalledRecord, packageID)
+			}
+		}
+		if hasCapabilityComponent && primaryCount != 1 {
+			return fmt.Errorf("%w: package %q must have exactly one primary service component", ErrInvalidInstalledRecord, packageID)
 		}
 	}
 	return nil
