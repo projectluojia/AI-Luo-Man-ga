@@ -539,7 +539,7 @@ isolated 扩展由 Go 通用 `ProcessHost` 启动。可执行文件、参数、�
 
 安装目录使用 `ailuo.package.v2` 清单与 lock。内核只接受由有效进程用户持有、目录链和文件均不允许组或其他用户写入、没有符号链接的绝对目录；严格拒绝未知字段、重复 JSON 键、超限文件、非法稳定 ID、跨目录路径和不完整引用。lock 同时固定清单原始字节与实现文件的 SHA-256；isolated 还固定完整进程规格。发现结果先作为一批完成 Runtime、Tool、Service、Capability 全量校验，再分别原子发布到 Loader 与 Registry，Registry 冲突时回滚 Loader 发布。主程序通过 `AILUO_RUNTIME_INSTALL_ROOT` 启用恢复；未显式设置时回退用户配置目录 `ailuo/runtime`（与 `ailuo install` 默认位置一致，目录不存在则视为未配置）。hosted 分两条装载路径：声明宿主函数的包只能在内核进程内由 wazero 执行（宿主函数是内核特权，不出进程）；未声明宿主函数的 hosted 包才经外部 Runtime Host 装载，此时必须提供本机 `AILUO_RUNTIME_HOST_ADDRESS`，否则启动 fail-closed。启动只预热 `pin` 项，失败则整个内核拒绝就绪；非 pin 项保持首次调用懒加载。已注册 Capability 不会自动进入任何 App，仍须通过持久 App 配置显式启用。
 
-上述实现完成了可长期保留的 Runtime Host 协议、Go 客户端/宿主校验器、持久安装目录发现与内核启动重注册、hosted 连接与容量边界，以及 isolated 真进程监管，但还不等于完整包平台已经交付。仓库尚未提供承载某种扩展语言或包格式的真实 Host Backend；hosted 共享进程的 CPU、内存和文件系统级资源隔离也需结合最终 Deployment 方案完成。安装目录属主校验已覆盖 Unix 与 Windows，其他平台仍关闭失败。Python Executor 位于 `packages/agent`，通过通用 `ProcessHost` 以 `executor.v1` isolated Runtime 形态纳管；Core 的 child Run 控制能力由 `internal/kernel/echo` 注册。产品链路接入真实扩展 Backend 并完成对应恢复和资源限制验证前，不得把测试夹具描述成已上线扩展。
+上述实现完成了可长期保留的 Runtime Host 协议、Go 客户端/宿主校验器、Wazero hosted Backend、`runtime-host` 外部进程形态、持久安装目录发现与内核启动重注册、hosted 连接与容量边界，以及 isolated 真进程监管，但还不等于完整包平台已经交付。仓库尚未提供更多扩展语言或包格式的专用生产 Backend；hosted 共享进程的 CPU、内存和文件系统级资源隔离也需结合最终 Deployment 方案完成。安装目录属主校验已覆盖 Unix 与 Windows，其他平台仍关闭失败。Python Executor 位于 `packages/agent`，通过通用 `ProcessHost` 以 `executor.v1` isolated Runtime 形态纳管；Core 的 child Run 控制能力由 `internal/kernel/echo` 注册。产品链路接入新的扩展 Backend 并完成对应恢复和资源限制验证前，不得把测试夹具描述成已上线扩展。
 
 2026-08-12 三模式接入基线：三种运行模式已由 Loader 统一接入，**campus 完全重构为 hosted 包（无旧兼容），并已迁出 Core 实现目录为 `packages/campus-bus`，经安装目录装载**：
 
@@ -547,7 +547,7 @@ isolated 扩展由 Go 通用 `ProcessHost` 启动。可执行文件、参数、�
 - **embedded 机制**（`embedded_host.go`）：进程内 Runtime，供内核自有组件以包形式纳入统一治理；当前无生产业务包，机制完整并有测试。
 - **isolated 资源限额**：`ProcessSpec.Limits`（RLIMIT_AS/CPU/NOFILE/FSIZE）由锁固定，Linux 用 prlimit 在子进程启动后立即应用，其余平台对非零限额 fail-closed。
 - **Agent 定位（目标结构）**：Python Agent 是普通的 `executor.v1` Package/Service 实现；Go Core 只通过 `internal/kernel/executor` 契约和通用 `internal/kernel/loader.ProcessHost` 接入，不 import Agent 实现。child Run 控制能力由 Core 自己注册为 `run.create_child` / `run.get_child_status`，不由 Agent Service 提供。`loader.New(hosts ...Host)` 持有全部运行模式宿主，main.go 只装配一个共享 Manager，不按包分叉 Loader。
-- 安装目录发现仍只支持 Unix Deployment（属主校验 fail-closed），campus 既然经安装目录装载，也随之只在 Unix 可用。hosted 工件 CPU 指令级预算与外部 Runtime Host 进程形态接线保留为后续 P1。
+- 安装目录发现支持 Unix UID 与 Windows ACL SID 属主校验，其他平台仍关闭失败。hosted 工件 CPU 指令级预算与外部 Runtime Host 进程形态接线保留为后续 P1。
 
 ### 防止微服务化失控
 
