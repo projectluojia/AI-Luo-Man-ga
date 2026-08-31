@@ -1,13 +1,11 @@
 package loader
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -15,19 +13,15 @@ import (
 	"strings"
 	"time"
 
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/jsonutil"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/packmgr"
 )
 
 const (
-	InstallSchemaVersion = "ailuo.install.v2"
 	installManifestName  = "manifest.json"
 	installLockName      = "lock.json"
 	maxInstalledRuntimes = 256
-	maxInstallManifest   = 256 << 10
-	maxInstallLock       = 64 << 10
-	maxInstallArtifact   = int64(1 << 30)
 	maxInstalledSpecs    = 4096
 )
 
@@ -36,40 +30,13 @@ var (
 	ErrInstallChanged        = errors.New("installed runtime changed after discovery")
 )
 
-type InstalledRuntimeSpec struct {
-	ID        string `json:"id"`
-	Version   string `json:"version"`
-	Mode      string `json:"mode"`
-	Pin       bool   `json:"pin"`
-	IdleTTLMS uint64 `json:"idle_ttl_ms"`
-}
-
-type InstalledManifest struct {
-	SchemaVersion string                    `json:"schema_version"`
-	Runtime       InstalledRuntimeSpec      `json:"runtime"`
-	Tools         []registry.ToolSpec       `json:"tools"`
-	Service       registry.ServiceSpec      `json:"service"`
-	Capabilities  []registry.CapabilitySpec `json:"capabilities"`
-}
-
-type InstalledProcessSpec struct {
-	Path    string        `json:"path"`
-	Args    []string      `json:"args"`
-	Env     []string      `json:"env"`
-	WorkDir string        `json:"work_dir"`
-	Address string        `json:"address"`
-	Limits  ProcessLimits `json:"limits,omitempty"`
-}
-
-type InstalledLock struct {
-	SchemaVersion  string                `json:"schema_version"`
-	RuntimeID      string                `json:"runtime_id"`
-	RuntimeVersion string                `json:"runtime_version"`
-	Mode           string                `json:"mode"`
-	ManifestSHA256 string                `json:"manifest_sha256"`
-	ArtifactSHA256 string                `json:"artifact_sha256"`
-	ArtifactPath   string                `json:"artifact_path"`
-	Process        *InstalledProcessSpec `json:"process,omitempty"`
+// aiLuoExtensions 是 AI珞 宿主扩展段（packmgr.Manifest.Extensions）的严格结构：
+// 中性包清单只保留语言/宿主无关的核心字段，Tool/Service/Capability 语义由
+// 内核解释并严格解码，未知字段与重复键一律拒绝。
+type aiLuoExtensions struct {
+	Tools        []registry.ToolSpec       `json:"tools"`
+	Service      registry.ServiceSpec      `json:"service"`
+	Capabilities []registry.CapabilitySpec `json:"capabilities"`
 }
 
 type InstalledRecord struct {
@@ -79,7 +46,8 @@ type InstalledRecord struct {
 	Tools        []registry.ToolSpec
 	Service      registry.ServiceSpec
 	Capabilities []registry.CapabilitySpec
-	Process      *ProcessSpec
+	Process      *packmgr.ProcessSpec
+	Storage      *packmgr.Storage
 }
 
 type Catalog struct {
@@ -148,18 +116,18 @@ func (c *Catalog) VerifyRuntime(ctx context.Context, manifest Manifest) error {
 	return nil
 }
 
-func (c *Catalog) ResolveProcess(ctx context.Context, manifest Manifest) (ProcessSpec, error) {
+func (c *Catalog) ResolveProcess(ctx context.Context, manifest Manifest) (packmgr.ProcessSpec, error) {
 	record, err := c.readRecordByID(ctx, manifest.ID)
 	if err != nil {
-		return ProcessSpec{}, err
+		return packmgr.ProcessSpec{}, err
 	}
 	if !sameRuntimeManifest(record.Runtime, manifest) || record.Process == nil {
-		return ProcessSpec{}, ErrInstallChanged
+		return packmgr.ProcessSpec{}, ErrInstallChanged
 	}
 	return cloneProcessSpec(*record.Process), nil
 }
 
-func (c *Catalog) VerifyProcess(ctx context.Context, manifest Manifest, process ProcessSpec) error {
+func (c *Catalog) VerifyProcess(ctx context.Context, manifest Manifest, process packmgr.ProcessSpec) error {
 	record, err := c.readRecordByID(ctx, manifest.ID)
 	if err != nil {
 		return err
@@ -191,7 +159,7 @@ func (c *Catalog) ReadArtifact(ctx context.Context, manifest Manifest) ([]byte, 
 	if err != nil {
 		return nil, errors.Join(ErrInstallCatalogInvalid, err)
 	}
-	if int64(len(data)) > maxInstallArtifact {
+	if int64(len(data)) > packmgr.MaxArtifactBytes {
 		return nil, ErrInstallCatalogInvalid
 	}
 	return data, nil
@@ -215,42 +183,49 @@ func (c *Catalog) readRecord(ctx context.Context, directory string) (InstalledRe
 	if err := validateSecureDirectory(directory); err != nil {
 		return InstalledRecord{}, errors.Join(ErrInstallCatalogInvalid, err)
 	}
-	manifestBytes, err := readSecureJSONFile(filepath.Join(directory, installManifestName), maxInstallManifest)
+	manifestBytes, err := readSecureJSONFile(filepath.Join(directory, installManifestName), packmgr.MaxManifestBytes)
 	if err != nil {
 		return InstalledRecord{}, errors.Join(ErrInstallCatalogInvalid, err)
 	}
-	lockBytes, err := readSecureJSONFile(filepath.Join(directory, installLockName), maxInstallLock)
+	lockBytes, err := readSecureJSONFile(filepath.Join(directory, installLockName), packmgr.MaxLockBytes)
 	if err != nil {
 		return InstalledRecord{}, errors.Join(ErrInstallCatalogInvalid, err)
 	}
-	var installed InstalledManifest
-	if err := decodeStrictJSON(manifestBytes, &installed); err != nil {
+	// 中性包清单与锁定记录：格式层（packmgr）负责核心字段与声明校验，
+	// AI珞 宿主扩展段在本函数内严格解码为 registry 规格。
+	var installed packmgr.Manifest
+	if err := packmgr.DecodeStrictJSON(manifestBytes, &installed); err != nil {
 		return InstalledRecord{}, errors.Join(ErrInstallCatalogInvalid, err)
 	}
-	var lock InstalledLock
-	if err := decodeStrictJSON(lockBytes, &lock); err != nil {
+	if err := packmgr.ValidateManifest(installed); err != nil {
+		return InstalledRecord{}, errors.Join(ErrInstallCatalogInvalid, err)
+	}
+	var lock packmgr.Lock
+	if err := packmgr.DecodeStrictJSON(lockBytes, &lock); err != nil {
+		return InstalledRecord{}, errors.Join(ErrInstallCatalogInvalid, err)
+	}
+	if err := packmgr.ValidateLock(lock); err != nil {
 		return InstalledRecord{}, errors.Join(ErrInstallCatalogInvalid, err)
 	}
 	manifestDigest := sha256.Sum256(manifestBytes)
-	if installed.SchemaVersion != InstallSchemaVersion || lock.SchemaVersion != InstallSchemaVersion ||
-		lock.RuntimeID != installed.Runtime.ID || lock.RuntimeVersion != installed.Runtime.Version ||
-		lock.Mode != installed.Runtime.Mode ||
-		lock.ManifestSHA256 != hex.EncodeToString(manifestDigest[:]) {
+	if lock.PackageID != installed.ID || lock.PackageVersion != installed.Version ||
+		lock.Mode != installed.Mode || lock.ManifestSHA256 != hex.EncodeToString(manifestDigest[:]) {
 		return InstalledRecord{}, ErrInstallCatalogInvalid
 	}
-	if installed.Runtime.Mode != ModeHosted && installed.Runtime.Mode != ModeIsolated {
-		return InstalledRecord{}, ErrUnsupportedMode
-	}
-	if installed.Runtime.IdleTTLMS > uint64((30*24*time.Hour)/time.Millisecond) {
-		return InstalledRecord{}, ErrInstallCatalogInvalid
+	var extensions aiLuoExtensions
+	if len(installed.Extensions) > 0 {
+		if err := packmgr.DecodeStrictJSON(installed.Extensions, &extensions); err != nil {
+			return InstalledRecord{}, errors.Join(ErrInstallCatalogInvalid, err)
+		}
 	}
 	// installed 包一律是能力提供者角色：其线协议（runtime_host.proto）是
 	// 请求/响应的能力执行协议；执行者角色需要执行者会话协议，由未来
 	// 专门的宿主承载，不允许以 installed 清单伪装。
 	runtimeManifest := Manifest{
-		ID: installed.Runtime.ID, Version: installed.Runtime.Version, Mode: installed.Runtime.Mode,
-		Role: RoleCapability, LockedDigest: lock.ArtifactSHA256, Pin: installed.Runtime.Pin,
-		IdleTTL: time.Duration(installed.Runtime.IdleTTLMS) * time.Millisecond,
+		ID: installed.ID, Version: installed.Version, Mode: installed.Mode,
+		Role: RoleCapability, LockedDigest: lock.ArtifactSHA256, Pin: installed.Pin,
+		IdleTTL:       time.Duration(installed.IdleTTLMS) * time.Millisecond,
+		HostFunctions: packmgr.CloneHostedFunctions(installed.HostFunctions),
 	}
 	if err := validateManifest(runtimeManifest); err != nil {
 		return InstalledRecord{}, err
@@ -259,12 +234,12 @@ func (c *Catalog) readRecord(ctx context.Context, directory string) (InstalledRe
 	if err != nil {
 		return InstalledRecord{}, err
 	}
-	artifactDigest, err := hashInstalledArtifact(ctx, artifactPath)
+	artifactDigest, err := packmgr.HashFile(ctx, artifactPath, packmgr.MaxArtifactBytes)
 	if err != nil || artifactDigest != lock.ArtifactSHA256 {
 		return InstalledRecord{}, errors.Join(ErrInstallCatalogInvalid, err)
 	}
-	var process *ProcessSpec
-	switch installed.Runtime.Mode {
+	var process *packmgr.ProcessSpec
+	switch installed.Mode {
 	case ModeHosted:
 		if lock.Process != nil {
 			return InstalledRecord{}, ErrInstallCatalogInvalid
@@ -277,7 +252,7 @@ func (c *Catalog) readRecord(ctx context.Context, directory string) (InstalledRe
 		if err != nil {
 			return InstalledRecord{}, err
 		}
-		spec := ProcessSpec{
+		spec := packmgr.ProcessSpec{
 			Path: artifactPath, Args: append([]string(nil), lock.Process.Args...),
 			Env: append([]string(nil), lock.Process.Env...), WorkDir: workDir, Address: lock.Process.Address,
 			Limits: lock.Process.Limits,
@@ -289,8 +264,9 @@ func (c *Catalog) readRecord(ctx context.Context, directory string) (InstalledRe
 	}
 	record := InstalledRecord{
 		Directory: directory, ArtifactPath: artifactPath, Runtime: runtimeManifest,
-		Tools: cloneToolSpecs(installed.Tools), Service: cloneInstalledService(installed.Service),
-		Capabilities: cloneCapabilitySpecs(installed.Capabilities), Process: process,
+		Tools: cloneToolSpecs(extensions.Tools), Service: cloneInstalledService(extensions.Service),
+		Capabilities: cloneCapabilitySpecs(extensions.Capabilities), Process: process,
+		Storage: cloneInstalledStorage(installed.Storage),
 	}
 	if err := validateInstalledRecord(record); err != nil {
 		return InstalledRecord{}, err
@@ -301,6 +277,14 @@ func (c *Catalog) readRecord(ctx context.Context, directory string) (InstalledRe
 func RegisterInstalled(ctx context.Context, manager *Manager, target *registry.Registry, records []InstalledRecord) error {
 	if manager == nil || target == nil || len(records) == 0 || len(records) > maxInstalledRuntimes {
 		return ErrInstallCatalogInvalid
+	}
+	// 内置包与 installed 包统一校验：同一规格契约（运行时清单、宿主函数声明、
+	// storage 声明与 Tool/Service/Capability 一致性），builtin 与安装目录记录
+	// 都不允许携带未校验的规格进入 Loader/Registry。
+	for _, record := range records {
+		if err := validateRecordSpecs(record); err != nil {
+			return errors.Join(ErrInstallCatalogInvalid, err)
+		}
 	}
 	manifests := make([]Manifest, 0, len(records))
 	tools := make([]registry.ToolRegistration, 0)
@@ -386,10 +370,39 @@ func validateInstalledRecords(records []InstalledRecord) error {
 }
 
 func validateInstalledRecord(record InstalledRecord) error {
-	if err := validateManifest(record.Runtime); err != nil ||
-		record.Directory == "" || record.Service.Version != record.Runtime.Version ||
+	if record.Directory == "" || record.Service.Version != record.Runtime.Version ||
 		len(record.Capabilities) == 0 {
+		return ErrInstallCatalogInvalid
+	}
+	if record.Runtime.Mode == ModeIsolated && record.Process == nil {
+		return ErrInstallCatalogInvalid
+	}
+	if record.Runtime.Mode == ModeHosted && record.Process != nil {
+		return ErrInstallCatalogInvalid
+	}
+	return validateRecordSpecs(record)
+}
+
+// validateRecordSpecs 校验内置包与 installed 包共用的规格契约：运行时清单、
+// 宿主函数声明、storage 声明，以及 Tool/Service/Capability 与运行时版本一致。
+// 运行时专用记录（如内置 agent）不携带 Service 规格，只校验运行时清单与声明。
+func validateRecordSpecs(record InstalledRecord) error {
+	if err := validateManifest(record.Runtime); err != nil {
 		return errors.Join(ErrInstallCatalogInvalid, err)
+	}
+	if record.Storage != nil {
+		if err := packmgr.ValidateStorage(*record.Storage); err != nil {
+			return err
+		}
+	}
+	if record.Service.ID == "" {
+		if len(record.Tools) != 0 || len(record.Capabilities) != 0 {
+			return ErrInstallCatalogInvalid
+		}
+		return nil
+	}
+	if record.Service.Version != record.Runtime.Version || len(record.Capabilities) == 0 {
+		return ErrInstallCatalogInvalid
 	}
 	for _, tool := range record.Tools {
 		if tool.Version != record.Runtime.Version {
@@ -401,111 +414,20 @@ func validateInstalledRecord(record InstalledRecord) error {
 			return ErrInstallCatalogInvalid
 		}
 	}
-	if record.Runtime.Mode == ModeIsolated && record.Process == nil {
-		return ErrInstallCatalogInvalid
-	}
-	if record.Runtime.Mode == ModeHosted && record.Process != nil {
-		return ErrInstallCatalogInvalid
-	}
 	return nil
 }
 
 func readSecureJSONFile(path string, maximum int64) ([]byte, error) {
+	// 部署级安全（属主 + 组/其他不可写）叠加在格式层的受限读取之上。
 	info, err := os.Lstat(path)
-	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 ||
-		info.Mode().Perm()&0o022 != 0 || !ownerMatchesProcess(info) ||
-		info.Size() <= 0 || info.Size() > maximum {
+	if err != nil || !ownerMatchesProcess(info) || info.Mode().Perm()&0o022 != 0 {
 		return nil, ErrInstallCatalogInvalid
 	}
-	file, err := os.Open(path)
+	payload, err := packmgr.ReadFileLimited(path, maximum)
 	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-	opened, err := file.Stat()
-	if err != nil || !os.SameFile(info, opened) {
-		return nil, ErrInstallChanged
-	}
-	payload, err := io.ReadAll(io.LimitReader(file, maximum+1))
-	if err != nil || int64(len(payload)) > maximum {
 		return nil, errors.Join(ErrInstallCatalogInvalid, err)
 	}
 	return payload, nil
-}
-
-func decodeStrictJSON(payload []byte, target any) error {
-	if err := rejectDuplicateJSONKeys(payload); err != nil {
-		return err
-	}
-	decoder := json.NewDecoder(bytes.NewReader(payload))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(target); err != nil {
-		return err
-	}
-	if err := jsonutil.EnsureEOF(decoder); err != nil {
-		return errors.Join(ErrInstallCatalogInvalid, err)
-	}
-	return nil
-}
-
-func rejectDuplicateJSONKeys(payload []byte) error {
-	decoder := json.NewDecoder(bytes.NewReader(payload))
-	var walk func() error
-	walk = func() error {
-		token, err := decoder.Token()
-		if err != nil {
-			return err
-		}
-		delimiter, composite := token.(json.Delim)
-		if !composite {
-			return nil
-		}
-		switch delimiter {
-		case '{':
-			keys := make(map[string]struct{})
-			for decoder.More() {
-				keyToken, err := decoder.Token()
-				if err != nil {
-					return err
-				}
-				key, ok := keyToken.(string)
-				if !ok {
-					return ErrInstallCatalogInvalid
-				}
-				if _, duplicate := keys[key]; duplicate {
-					return ErrInstallCatalogInvalid
-				}
-				keys[key] = struct{}{}
-				if err := walk(); err != nil {
-					return err
-				}
-			}
-			end, err := decoder.Token()
-			if err != nil || end != json.Delim('}') {
-				return ErrInstallCatalogInvalid
-			}
-		case '[':
-			for decoder.More() {
-				if err := walk(); err != nil {
-					return err
-				}
-			}
-			end, err := decoder.Token()
-			if err != nil || end != json.Delim(']') {
-				return ErrInstallCatalogInvalid
-			}
-		default:
-			return ErrInstallCatalogInvalid
-		}
-		return nil
-	}
-	if err := walk(); err != nil {
-		return err
-	}
-	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
-		return ErrInstallCatalogInvalid
-	}
-	return nil
 }
 
 func validateSecureDirectory(path string) error {
@@ -549,51 +471,11 @@ func validateInstalledPath(root, path string, directory bool) (string, error) {
 	return path, nil
 }
 
-func hashInstalledArtifact(ctx context.Context, path string) (string, error) {
-	info, err := os.Lstat(path)
-	if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > maxInstallArtifact {
-		return "", ErrInstallCatalogInvalid
-	}
-	file, err := os.Open(path)
-	if err != nil {
-		return "", err
-	}
-	defer file.Close()
-	opened, err := file.Stat()
-	if err != nil || !os.SameFile(info, opened) {
-		return "", ErrInstallChanged
-	}
-	digest := sha256.New()
-	buffer := make([]byte, 128<<10)
-	var total int64
-	for {
-		if err := ctx.Err(); err != nil {
-			return "", err
-		}
-		count, readErr := file.Read(buffer)
-		if count > 0 {
-			total += int64(count)
-			if total > maxInstallArtifact {
-				return "", ErrInstallCatalogInvalid
-			}
-			if _, err := digest.Write(buffer[:count]); err != nil {
-				return "", err
-			}
-		}
-		if errors.Is(readErr, io.EOF) {
-			break
-		}
-		if readErr != nil {
-			return "", readErr
-		}
-	}
-	return hex.EncodeToString(digest.Sum(nil)), nil
-}
-
 func sameRuntimeManifest(left, right Manifest) bool {
 	return left.ID == right.ID && left.Version == right.Version && left.Mode == right.Mode &&
 		left.Role == right.Role && left.LockedDigest == right.LockedDigest &&
-		left.Pin == right.Pin && left.IdleTTL == right.IdleTTL
+		left.Pin == right.Pin && left.IdleTTL == right.IdleTTL &&
+		packmgr.EqualHostedFunctions(left.HostFunctions, right.HostFunctions)
 }
 
 // sameRuntimeIdentity 只比较运行时身份字段（ID/Version/Mode），供 ReadArtifact
@@ -603,7 +485,7 @@ func sameRuntimeIdentity(left, right Manifest) bool {
 	return left.ID == right.ID && left.Version == right.Version && left.Mode == right.Mode
 }
 
-func cloneProcessSpec(spec ProcessSpec) ProcessSpec {
+func cloneProcessSpec(spec packmgr.ProcessSpec) packmgr.ProcessSpec {
 	spec.Args = append([]string(nil), spec.Args...)
 	spec.Env = append([]string(nil), spec.Env...)
 	return spec
@@ -629,6 +511,14 @@ func cloneInstalledService(spec registry.ServiceSpec) registry.ServiceSpec {
 	spec.ToolDependencies = append([]string(nil), spec.ToolDependencies...)
 	spec.RequestedPermissions = append([]string(nil), spec.RequestedPermissions...)
 	return spec
+}
+
+func cloneInstalledStorage(storage *packmgr.Storage) *packmgr.Storage {
+	if storage == nil {
+		return nil
+	}
+	cloned := *storage
+	return &cloned
 }
 
 var noopInstalledHandler registry.Handler = func(context.Context, contracts.RequestContext, json.RawMessage) (json.RawMessage, error) {

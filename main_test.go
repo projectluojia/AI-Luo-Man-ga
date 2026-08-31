@@ -15,6 +15,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/identity"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/packmgr"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite"
 )
 
@@ -241,20 +242,23 @@ func writeMainInstalledFixture(t *testing.T) string {
 	if err := os.WriteFile(artifact, artifactBody, 0o640); err != nil {
 		t.Fatal(err)
 	}
-	installed := loader.InstalledManifest{
-		SchemaVersion: loader.InstallSchemaVersion,
-		Runtime: loader.InstalledRuntimeSpec{
-			ID: "main.extension", Version: "1.0.0", Mode: loader.ModeHosted, Pin: true,
-		},
-		Service: registry.ServiceSpec{
+	extensions, err := json.Marshal(map[string]any{
+		"service": registry.ServiceSpec{
 			ID: "main.extension", Version: "1.0.0", Description: "主程序扩展接线测试",
 		},
-		Capabilities: []registry.CapabilitySpec{{
+		"capabilities": []registry.CapabilitySpec{{
 			ID: "main.extension.query", Version: "1.0.0", Name: "扩展查询",
 			Description: "查询测试扩展", ServiceID: "main.extension",
 			InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
 			SideEffect:      registry.SideEffectRead,
 		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	installed := packmgr.Manifest{
+		SchemaVersion: packmgr.SchemaVersion, ID: "main.extension", Version: "1.0.0",
+		Mode: loader.ModeHosted, Entrypoint: "runtime-artifact", Pin: true, Extensions: extensions,
 	}
 	manifest, err := json.Marshal(installed)
 	if err != nil {
@@ -265,9 +269,9 @@ func writeMainInstalledFixture(t *testing.T) string {
 	}
 	manifestDigest := sha256.Sum256(manifest)
 	artifactDigest := sha256.Sum256(artifactBody)
-	lockBytes, err := json.Marshal(loader.InstalledLock{
-		SchemaVersion: loader.InstallSchemaVersion,
-		RuntimeID:     "main.extension", RuntimeVersion: "1.0.0", Mode: loader.ModeHosted,
+	lockBytes, err := json.Marshal(packmgr.Lock{
+		SchemaVersion: packmgr.SchemaVersion,
+		PackageID:     "main.extension", PackageVersion: "1.0.0", Mode: loader.ModeHosted,
 		ManifestSHA256: hex.EncodeToString(manifestDigest[:]),
 		ArtifactSHA256: hex.EncodeToString(artifactDigest[:]),
 		ArtifactPath:   artifact,

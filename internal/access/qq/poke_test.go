@@ -22,8 +22,15 @@ func newPokeAdapter(t *testing.T, bot *fakeOneBot) *Adapter {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	go func() { _ = adapter.Run(ctx) }()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = adapter.Run(ctx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
 	select {
 	case <-bot.authHeader:
 	case <-time.After(5 * time.Second):
@@ -224,8 +231,15 @@ func TestQQAdapterHandlesGroupMessageWithMention(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go func() { _ = adapter.Run(ctx) }()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = adapter.Run(ctx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
 	select {
 	case <-bot.authHeader:
 	case <-time.After(5 * time.Second):
