@@ -333,7 +333,7 @@ type Store interface {
 	ReplaceCatalog(context.Context, CatalogSnapshot) error
 	ListSpaces(context.Context, string, SpaceListRequest) (SpaceSnapshot, error)
 	SearchSeats(context.Context, string, SlotSearchRequest) (SeatSnapshot, error)
-	CreateReservation(context.Context, CreateReservationInput, time.Time) (Reservation, error)
+	CreateReservation(context.Context, CreateReservationInput, time.Time) (Reservation, DataStatus, error)
 	CancelReservation(context.Context, CancelReservationInput, time.Time) (Reservation, error)
 	ListMyReservations(context.Context, string, string, MineRequest, time.Time) ([]Reservation, SnapshotMetadata, error)
 }
