@@ -56,10 +56,14 @@ type DataStatus struct {
 	SnapshotMetadata
 }
 
+func (m SnapshotMetadata) incomplete(now time.Time) bool {
+	return m.Revision == "" || m.Source == "" || !m.Complete || m.ImportedAt.IsZero() || m.ValidUntil.IsZero() ||
+		!m.ValidUntil.After(m.ImportedAt) || now.Before(m.ImportedAt)
+}
+
 // Govern 按校巴同一规则 fail-closed：不完整、非权威或过期数据不得当作当前事实。
 func (m SnapshotMetadata) Govern(now time.Time) (DataStatus, error) {
-	if m.Revision == "" || m.Source == "" || !m.Complete || m.ImportedAt.IsZero() || m.ValidUntil.IsZero() ||
-		!m.ValidUntil.After(m.ImportedAt) || now.Before(m.ImportedAt) {
+	if m.incomplete(now) {
 		return DataStatus{}, contracts.ErrDataIncomplete
 	}
 	if !m.Authoritative {
@@ -73,8 +77,7 @@ func (m SnapshotMetadata) Govern(now time.Time) (DataStatus, error) {
 
 // DemoStatus 允许返回显式非权威的演示状态：完整性/有效期仍 fail-closed。
 func (m SnapshotMetadata) DemoStatus(now time.Time) (DataStatus, error) {
-	if m.Revision == "" || m.Source == "" || !m.Complete || m.ImportedAt.IsZero() || m.ValidUntil.IsZero() ||
-		!m.ValidUntil.After(m.ImportedAt) || now.Before(m.ImportedAt) {
+	if m.incomplete(now) {
 		return DataStatus{}, contracts.ErrDataIncomplete
 	}
 	if !now.Before(m.ValidUntil) {
@@ -295,13 +298,14 @@ type ScheduleResult struct {
 }
 
 type CreateReservationInput struct {
-	AppID     string
-	UserID    string
-	VenueID   string
-	ProjectID string
-	SlotID    string
-	Count     int
-	Now       time.Time
+	AppID            string
+	UserID           string
+	VenueID          string
+	ProjectID        string
+	SlotID           string
+	Count            int
+	Now              time.Time
+	ExpectedRevision string
 }
 
 type CancelReservationInput struct {
