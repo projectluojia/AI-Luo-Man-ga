@@ -180,6 +180,8 @@ func (c *Catalog) readRecordByID(ctx context.Context, id string) (installedRecor
 	if len(entries) > loader.MaxRegisteredRuntimes {
 		return installedRecord{}, ErrInvalidCatalog
 	}
+	var matched installedRecord
+	found := false
 	for _, entry := range entries {
 		if packmgr.IsTransientInstallDirectory(entry.Name()) {
 			if !entry.IsDir() {
@@ -196,9 +198,16 @@ func (c *Catalog) readRecordByID(ctx context.Context, id string) (installedRecor
 		}
 		for _, record := range records {
 			if record.record.Runtime.ID == id {
-				return record, nil
+				if found {
+					return installedRecord{}, ErrInvalidCatalog
+				}
+				matched = record
+				found = true
 			}
 		}
+	}
+	if found {
+		return matched, nil
 	}
 	return installedRecord{}, loader.ErrNotFound
 }
@@ -264,7 +273,6 @@ func (c *Catalog) readPackage(ctx context.Context, directory string) ([]installe
 			Role: role, LockedDigest: artifact.SHA256,
 			Pin: neutral.Manifest.Pin, IdleTTL: time.Duration(neutral.Manifest.IdleTTLMS) * time.Millisecond,
 			HostFunctions: slices.Clone(component.HostFunctions),
-			EnvFrom:       slices.Clone(component.EnvFrom),
 			Storage:       cloneStorage(neutral.Manifest.Storage),
 		}
 		if err := loader.ValidateManifest(runtimeManifest); err != nil {

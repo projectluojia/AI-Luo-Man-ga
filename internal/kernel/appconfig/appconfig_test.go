@@ -60,6 +60,11 @@ func TestNormalizeRejectsUnsafeOrUnboundedConfiguration(t *testing.T) {
 		}(),
 		func() appconfig.Config {
 			value := validConfig()
+			value.PermissionScope = []string{strings.Repeat("a", 129)}
+			return value
+		}(),
+		func() appconfig.Config {
+			value := validConfig()
 			value.ChannelPrompts = map[string]string{"Bad/Key": "提示"}
 			return value
 		}(),

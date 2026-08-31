@@ -84,6 +84,43 @@ func TestInstalledCatalogReverificationRejectsUnexpectedRootEntry(t *testing.T) 
 	}
 }
 
+// versionedExecutorHost 按候选清单回显版本，覆盖执行者包的注册与升级路径。
+type versionedExecutorHost struct{}
+
+func (versionedExecutorHost) Mode() string { return loader.ModeIsolated }
+
+func (versionedExecutorHost) Verify(context.Context, loader.Manifest) error { return nil }
+
+func (versionedExecutorHost) Load(_ context.Context, manifest loader.Manifest) (loader.Runtime, error) {
+	return &fakeExecutorRuntime{description: loader.Description{
+		ID: manifest.ID, Version: manifest.Version, Mode: manifest.Mode,
+	}}, nil
+}
+
+func TestRegisterInstalledKeepsExecutorOnlyPackageGroup(t *testing.T) {
+	manifest := runtimeManifest("executor.test", loader.ModeIsolated)
+	manifest.Role = loader.RoleExecutor
+	manager, err := loader.New(versionedExecutorHost{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := registry.New()
+	if err := loader.RegisterInstalled(t.Context(), manager, target, []loader.InstalledRecord{{
+		Runtime: manifest, PackageID: "executor.test", ComponentID: "runtime",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.EnsureLoaded(t.Context(), manifest.ID); err != nil {
+		t.Fatalf("load registered executor: %v", err)
+	}
+	manifest.Version = "2.0.0"
+	if err := manager.UpgradePackage(t.Context(), loader.PackageSpec{
+		ID: "executor.test", Components: []loader.ComponentSpec{{Runtime: manifest}},
+	}); err != nil {
+		t.Fatalf("executor-only package was not registered: %v", err)
+	}
+}
+
 func TestInstalledCatalogResolvesIsolatedProcessAndRejectsCatalogTampering(t *testing.T) {
 	root := t.TempDir()
 	writeInstalledFixture(t, root, "isolated.test", loader.ModeIsolated, false)
@@ -469,7 +506,7 @@ func TestInstalledCatalogRejectsInvalidDeclarations(t *testing.T) {
 				}
 				return
 			}
-			// 通过 RegisterInstalled 路径校验内置包（无目录记录）。
+			// 通过 RegisterInstalled 路径校验手工构造的包记录。
 			manager, err := loader.New(&fakeHost{})
 			if err != nil {
 				t.Fatal(err)
@@ -477,7 +514,7 @@ func TestInstalledCatalogRejectsInvalidDeclarations(t *testing.T) {
 			reg := registry.New()
 			record := loader.InstalledRecord{
 				Runtime: loader.Manifest{
-					ID: "extension.builtin", Version: "1.0.0", Mode: loader.ModeHosted,
+					ID: "extension.local", Version: "1.0.0", Mode: loader.ModeHosted,
 					Role: loader.RoleCapability, LockedDigest: digest,
 					HostFunctions: tc.decls,
 				},

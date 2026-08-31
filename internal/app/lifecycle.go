@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access/ingress"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access/qq"
@@ -31,6 +32,8 @@ type coreLifecycle struct {
 	store         *sqlite.Store
 }
 
+const httpShutdownTimeout = 3 * time.Second
+
 func (l *coreLifecycle) Shutdown(ctx context.Context) error {
 	var shutdownErrors []error
 	if l.webAccess != nil {
@@ -54,7 +57,12 @@ func (l *coreLifecycle) Shutdown(ctx context.Context) error {
 		shutdownErrors = append(shutdownErrors, <-admissionDone, <-admissionDone)
 	}
 	if l.server != nil {
-		shutdownErrors = append(shutdownErrors, l.server.Shutdown(ctx))
+		httpContext, cancel := context.WithTimeout(ctx, httpShutdownTimeout)
+		httpShutdownErr := l.server.Shutdown(httpContext)
+		cancel()
+		if httpShutdownErr != nil {
+			shutdownErrors = append(shutdownErrors, httpShutdownErr, l.server.Close())
+		}
 	}
 	if l.qqManager != nil {
 		shutdownErrors = append(shutdownErrors, l.qqManager.Shutdown(ctx))

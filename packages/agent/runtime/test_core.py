@@ -62,6 +62,24 @@ class AgentKernelTest(unittest.IsolatedAsyncioTestCase):
             input_schema={"type": "object", "properties": {}, "additionalProperties": False},
         )
 
+    def test_model_tool_normalizes_optional_fields_for_strict_provider_schema(self) -> None:
+        capability = Capability(
+            id="test.optional",
+            name="可选字段",
+            description="Optional fields",
+            input_schema={
+                "type": "object",
+                "properties": {"name": {"type": "string"}, "count": {"type": "integer"}},
+                "required": ["name"],
+                "additionalProperties": False,
+            },
+        )
+        parameters = capability.as_model_tool()["function"]["parameters"]
+        self.assertEqual(parameters["required"], ["name", "count"])
+        self.assertEqual(parameters["properties"]["count"], {
+            "anyOf": [{"type": "integer"}, {"type": "null"}],
+        })
+
     @staticmethod
     async def execute(call: ToolCall) -> str:
         return "{}"

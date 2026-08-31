@@ -23,9 +23,8 @@ var (
 )
 
 var (
-	stableIDPattern   = id.AppID
-	permissionPattern = id.Permission
-	modelPattern      = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$`)
+	stableIDPattern = id.AppID
+	modelPattern    = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$`)
 )
 
 type Config struct {
@@ -75,7 +74,7 @@ func (s PolicySnapshot) Verify(expectedAppID string) error {
 		!stableIDPattern.MatchString(s.Revision) || s.Generation == 0 ||
 		len(s.EnabledCapabilities) > 256 || len(s.PermissionScope) > 256 ||
 		!validValues(s.EnabledCapabilities, capability.IsStableID) ||
-		!validValues(s.PermissionScope, permissionPattern.MatchString) {
+		!validValues(s.PermissionScope, id.IsPermission) {
 		return ErrInvalid
 	}
 	return nil
@@ -173,7 +172,7 @@ func Validate(config Config) error {
 		config.ProviderTimeout < 100*time.Millisecond || config.ProviderTimeout > 5*time.Minute ||
 		len(config.EnabledCapabilities) > 256 || len(config.PermissionScope) > 256 ||
 		!validValues(config.EnabledCapabilities, capability.IsStableID) ||
-		!validValues(config.PermissionScope, permissionPattern.MatchString) {
+		!validValues(config.PermissionScope, id.IsPermission) {
 		return ErrInvalid
 	}
 	for channel, prompt := range config.ChannelPrompts {

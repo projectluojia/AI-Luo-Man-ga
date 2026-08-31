@@ -74,11 +74,10 @@ func RegisterInstalled(ctx context.Context, manager *Manager, target *registry.R
 			services = append(services, service)
 		}
 	}
-	if len(tools) == 0 && len(services) == 0 {
-		return nil
-	}
-	if err := target.RegisterBatch(tools, services); err != nil {
-		return errors.Join(err, manager.rollbackRegistered(manifests))
+	if len(tools) > 0 || len(services) > 0 {
+		if err := target.RegisterBatch(tools, services); err != nil {
+			return errors.Join(err, manager.rollbackRegistered(manifests))
+		}
 	}
 	// 记录包分组（组件已注册）：按 PackageID 分组，按依赖拓扑序排序。
 	orderByPackage := make(map[string][]componentWithOrder)
@@ -120,9 +119,9 @@ func ValidateInstalledRecord(record InstalledRecord) error {
 	return validateRecordSpecs(record)
 }
 
-// validateRecordSpecs 校验内置包与 installed 包共用的规格契约：运行时清单、
+// validateRecordSpecs 校验所有安装记录共用的规格契约：运行时清单、
 // 宿主函数声明，以及 Tool/Service/Capability 与运行时版本一致。
-// 运行时专用记录（如内置 agent）不携带 Service 规格，只校验运行时清单与声明。
+// 运行时专用记录不携带 Service 规格，只校验运行时清单与声明。
 func validateRecordSpecs(record InstalledRecord) error {
 	if err := ValidateManifest(record.Runtime); err != nil {
 		return errors.Join(ErrInvalidInstalledRecord, err)

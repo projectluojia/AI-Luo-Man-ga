@@ -11,7 +11,7 @@ import (
 	controlconfig "github.com/projectluojia/AI-Luo-Man-ga/internal/controlplane/config"
 )
 
-func TestConfigAPIStoresSecretsWithoutReturningThem(t *testing.T) {
+func TestConfigAPIStoresQQSecretWithoutReturningIt(t *testing.T) {
 	manager, err := controlconfig.NewService(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -22,19 +22,17 @@ func TestConfigAPIStoresSecretsWithoutReturningThem(t *testing.T) {
 	}
 	defaults := controlconfig.DefaultSettings()
 	payload := controlconfig.SaveInput{
-		Model: "test-model", ModelAPIKey: "never-return-this", ModelRequestTimeoutSeconds: 30,
-		PromptCatalog:                defaults.PromptCatalog,
-		BaseSystemPrompt:             "自定义基础系统提示",
-		ChannelPrompts:               map[string]string{"web": "自定义 web", "qq_group": "自定义群", "qq_private": "自定义私聊"},
-		ModelReadinessTimeoutSeconds: 3, ModelMaxRetries: 2, ModelRetryBaseSeconds: 0.25,
-		ModelRetryMaxSeconds: 2, ModelRequestsPerMinute: 60, ModelMaxConcurrency: 4,
-		QQEnabled: true, QQWSURL: "ws://127.0.0.1:3001", QQWSToken: "qq-never-return-this",
+		Model: "test-model", ExecutorTimeoutSeconds: 30,
+		PromptCatalog:    defaults.PromptCatalog,
+		BaseSystemPrompt: "自定义基础系统提示",
+		ChannelPrompts:   map[string]string{"web": "自定义 web", "qq_group": "自定义群", "qq_private": "自定义私聊"},
+		QQEnabled:        true, QQWSURL: "ws://127.0.0.1:3001", QQWSToken: "qq-never-return-this",
 		QQBotID: "2647414417", QQAllowedGroupIDs: []string{"123456"},
 		QQQuickReplies: []controlconfig.QQQuickReply{{Trigger: "ping", Reply: "pong"}},
 		QQPokeReplies:  []string{"在呢"},
 		AgentRun:       defaults.AgentRun, Orchestration: defaults.Orchestration,
 		ContextAssembly: defaults.ContextAssembly, Scheduler: defaults.Scheduler,
-		QQConnection: defaults.QQConnection, AgentProcess: defaults.AgentProcess,
+		QQConnection: defaults.QQConnection, RuntimeProcess: defaults.RuntimeProcess,
 		Governance: defaults.Governance,
 	}
 	body, err := json.Marshal(payload)
@@ -51,7 +49,7 @@ func TestConfigAPIStoresSecretsWithoutReturningThem(t *testing.T) {
 	if strings.Contains(recorder.Body.String(), "never-return-this") {
 		t.Fatal("secret leaked in configuration response")
 	}
-	if !strings.Contains(recorder.Body.String(), `"model_api_key_configured":true`) || !strings.Contains(recorder.Body.String(), `"qq_ws_token_configured":true`) {
+	if !strings.Contains(recorder.Body.String(), `"qq_ws_token_configured":true`) {
 		t.Fatalf("body=%s", recorder.Body.String())
 	}
 	var snapshot controlconfig.Snapshot

@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -31,7 +32,7 @@ func registerGovernanceTaskTypes(types *task.TypeRegistry, confirmations *confir
 		return fmt.Errorf("invalid confirmation sweep interval %s", interval)
 	}
 	return types.Register(task.TypeSpec{
-		TypeID: confirmationSweepType, ParamsSchema: sweepParamsSchema, AllowRetry: false,
+		TypeID: confirmationSweepType, ParamsSchema: sweepParamsSchema, AllowRetry: true,
 		Handler: func(ctx context.Context, value task.Task) error {
 			affected, sweepErr := confirmations.ExpireDue(ctx, value.AppID, time.Now().UTC())
 			if sweepErr != nil {
@@ -44,7 +45,7 @@ func registerGovernanceTaskTypes(types *task.TypeRegistry, confirmations *confir
 			if scheduleErr != nil {
 				observe.Error(ctx, "安排下一轮确认过期清扫失败", scheduleErr, observe.StringAttr("app_id", value.AppID))
 			}
-			return sweepErr
+			return errors.Join(sweepErr, task.Retryable(scheduleErr))
 		},
 	})
 }

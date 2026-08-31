@@ -8,7 +8,6 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -32,21 +31,10 @@ type config struct {
 	httpAddress         string
 	configUIAddress     string
 	localConfigRoot     string
-	agentAddress        string
-	pythonPath          string
-	projectRoot         string
 	databasePath        string
 	model               string
-	modelBaseURL        string
-	modelAPIKeyFile     string
-	modelRequestTimeout time.Duration
-	modelReadyTimeout   time.Duration
-	modelMaxRetries     int
-	modelRetryBase      time.Duration
-	modelRetryMax       time.Duration
-	modelRequestsMinute int
-	modelMaxConcurrency int
-	manageAgent         bool
+	executorTimeout     time.Duration
+	manageExecutor      bool
 	loadDemoData        bool
 	environment         string
 	logLevel            slog.Level
@@ -71,12 +59,12 @@ type config struct {
 	contextAssembly     controlconfig.ContextAssemblySettings
 	scheduler           controlconfig.SchedulerSettings
 	qqConnection        controlconfig.QQConnectionSettings
-	agentProcess        controlconfig.AgentProcessSettings
+	runtimeProcess      controlconfig.RuntimeProcessSettings
 	governance          controlconfig.GovernanceSettings
 }
 
 func loadConfig() (config, error) {
-	manageAgent, err := envBool("AILUO_MANAGE_AGENT", true)
+	manageExecutor, err := envBool("AILUO_MANAGE_EXECUTOR", false)
 	if err != nil {
 		return config{}, err
 	}
@@ -111,10 +99,8 @@ func loadConfig() (config, error) {
 		httpAddress:        envOr("AILUO_HTTP_ADDRESS", "127.0.0.1:8080"),
 		configUIAddress:    envOr("AILUO_CONFIG_UI_ADDRESS", configui.DefaultAddress),
 		localConfigRoot:    envOr("AILUO_CONFIG_DIR", "var"),
-		agentAddress:       envOr("AILUO_AGENT_ADDRESS", "127.0.0.1:50051"),
-		pythonPath:         envOr("AILUO_PYTHON", defaultPythonPath(".")),
 		databasePath:       envOr("AILUO_DATABASE_PATH", "var/ailuo.db"),
-		manageAgent:        manageAgent,
+		manageExecutor:     manageExecutor,
 		loadDemoData:       loadDemoData,
 		environment:        envOr("AILUO_ENVIRONMENT", "development"),
 		logLevel:           logLevel,
@@ -124,16 +110,6 @@ func loadConfig() (config, error) {
 		runtimeInstallRoot: runtimeInstallRoot,
 		runtimeHostAddress: os.Getenv("AILUO_RUNTIME_HOST_ADDRESS"),
 	}
-	absolutePython, err := filepath.Abs(result.pythonPath)
-	if err != nil {
-		return config{}, fmt.Errorf("configuration error: resolve python path: %w", err)
-	}
-	result.pythonPath = absolutePython
-	projectRoot, err := filepath.Abs(".")
-	if err != nil {
-		return config{}, fmt.Errorf("configuration error: resolve project root: %w", err)
-	}
-	result.projectRoot = projectRoot
 	if !packagecontract.IsLocalRuntimeAddress(result.configUIAddress) {
 		return config{}, fmt.Errorf("configuration error: AILUO_CONFIG_UI_ADDRESS must be loopback")
 	}
@@ -150,15 +126,7 @@ func loadConfig() (config, error) {
 func applyLocalConfig(base config, resolved controlconfig.Resolved) (config, error) {
 	settings := resolved.Settings
 	base.model = settings.Model
-	base.modelBaseURL = settings.ModelBaseURL
-	base.modelAPIKeyFile = resolved.ModelAPIKeyFile
-	base.modelRequestTimeout = time.Duration(settings.ModelRequestTimeoutSeconds * float64(time.Second))
-	base.modelReadyTimeout = time.Duration(settings.ModelReadinessTimeoutSeconds * float64(time.Second))
-	base.modelMaxRetries = settings.ModelMaxRetries
-	base.modelRetryBase = time.Duration(settings.ModelRetryBaseSeconds * float64(time.Second))
-	base.modelRetryMax = time.Duration(settings.ModelRetryMaxSeconds * float64(time.Second))
-	base.modelRequestsMinute = settings.ModelRequestsPerMinute
-	base.modelMaxConcurrency = settings.ModelMaxConcurrency
+	base.executorTimeout = time.Duration(settings.ExecutorTimeoutSeconds * float64(time.Second))
 	base.qqWSURL = settings.QQWSURL
 	base.qqEnabled = settings.QQEnabled
 	base.qqBotID = settings.QQBotID
@@ -177,7 +145,7 @@ func applyLocalConfig(base config, resolved controlconfig.Resolved) (config, err
 	base.contextAssembly = settings.ContextAssembly
 	base.scheduler = settings.Scheduler
 	base.qqConnection = settings.QQConnection
-	base.agentProcess = settings.AgentProcess
+	base.runtimeProcess = settings.RuntimeProcess
 	base.governance = settings.Governance
 	base.qqToken = ""
 	if resolved.QQWSTokenFile != "" {
@@ -188,13 +156,6 @@ func applyLocalConfig(base config, resolved controlconfig.Resolved) (config, err
 		base.qqToken = strings.TrimSpace(string(content))
 	}
 	return base, nil
-}
-
-func defaultPythonPath(projectRoot string) string {
-	if runtime.GOOS == "windows" {
-		return filepath.Join(projectRoot, "agent", ".venv", "Scripts", "python.exe")
-	}
-	return filepath.Join(projectRoot, "agent", ".venv", "bin", "python")
 }
 
 // configureInstalledRuntimes 发现安装目录中的 Runtime 包，按声明的运行模式
@@ -267,7 +228,12 @@ func configureInstalledRuntimes(ctx context.Context, cfg config, packageStore pa
 	if isolatedCount > 0 {
 		host, hostErr := loader.NewProcessHost(loader.ProcessHostConfig{
 			Resolve: catalog.ResolveProcess, Verify: catalog.VerifyProcess, Spawn: true,
-			DialTimeout: 10 * time.Second, StopGrace: 5 * time.Second, TerminateGrace: 2 * time.Second,
+			SpawnFor: func(manifest loader.Manifest) bool {
+				return manifest.Role != loader.RoleExecutor || cfg.manageExecutor
+			},
+			DialTimeout:    secondsDuration(cfg.runtimeProcess.DialTimeoutSeconds),
+			StopGrace:      secondsDuration(cfg.runtimeProcess.StopGraceSeconds),
+			TerminateGrace: secondsDuration(cfg.runtimeProcess.TerminateGraceSeconds),
 		})
 		if hostErr != nil {
 			return nil, nil, fmt.Errorf("configure isolated runtime boundary: %w", hostErr)

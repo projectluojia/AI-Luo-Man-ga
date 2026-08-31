@@ -7,7 +7,7 @@ import (
 )
 
 // campus App 的部署常量与包契约标识。业务实现已迁至独立包仓库
-// ailuo-packages/campus-bus（guest 自包含，经 ailuo pack/install 分发）；
+// packages/campus-bus（guest 自包含，经 ailuo pack/install 分发）；
 // 本文件保留内核侧需要的稳定标识与契约夹具构造器：App 配置按 ID 启用能力，
 // campustest 装配与 SDK 生成测试共用同一权威契约副本。工具 schema 的权威
 // 来源是包仓库的 ailuo.toml。
@@ -26,7 +26,7 @@ const (
 	BusJourneySearchCapabilityID = "campus.bus.journeys.search"
 )
 
-// 包内工具的稳定 ID 与输入 schema（与 ailuo-packages/campus-bus 的 ailuo.toml
+// 包内工具的稳定 ID 与输入 schema（与 packages/campus-bus 的 ailuo.toml
 // 保持一致的测试/部署夹具副本）。
 const (
 	BusStopSearchToolID    = "campus.bus.stops.search"

@@ -212,10 +212,6 @@ func (r *Registry) RegisterBatch(tools []ToolRegistration, services []ServiceReg
 	return nil
 }
 
-var (
-	permissionPattern = id.Permission
-)
-
 func validateToolSpec(spec capability.ToolSpec, handler Handler) error {
 	switch {
 	case !validStableID(spec.ID):
@@ -314,7 +310,7 @@ func validIDList(values []string) bool {
 func validPermissionList(values []string) bool {
 	seen := make(map[string]struct{}, len(values))
 	for _, value := range values {
-		if !permissionPattern.MatchString(value) {
+		if !id.IsPermission(value) {
 			return false
 		}
 		if _, exists := seen[value]; exists {

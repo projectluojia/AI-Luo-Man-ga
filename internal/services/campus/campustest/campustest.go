@@ -1,7 +1,7 @@
 // Package campustest 提供校园 App hosted 装配的共享测试辅助。
 //
-// guest 源码是本包 testdata 下的真实 Go 文件（testdata/guest/main.go），经
-// go:embed 读入并由 packagefmt go-wasm 构建器在测试时现场编译——仓库不保存
+// guest 源码是本包 testdata 下的真实 Go 文件（testdata/guest/main.go），读入后
+// 由 packagefmt go-wasm 构建器在测试时现场编译——仓库不保存
 // 任何测试用 wasm 包工件。guest 实现校园三工具（站点/线路/行程）并通过通用
 // ailuo.store 宿主函数读取宿主存储，与生产形态一致：业务逻辑在 guest，状态
 // 经 packstore 端口留在宿主。数据由测试经 packstore.Store 播种，App 隔离在

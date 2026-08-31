@@ -68,6 +68,9 @@ func (s *Server) chatStream(writer http.ResponseWriter, request *http.Request) {
 	if err != nil {
 		observe.Error(request.Context(), "聊天流建立后读取 Echo 事件失败", err,
 			observe.StringAttr("app_id", s.appID), observe.StringAttr("echo_id", echoID))
+		access.WriteJSON(writer, http.StatusInternalServerError, map[string]string{
+			"code": "internal_error", "message": "Echo 状态读取失败",
+		})
 		return
 	}
 	writer.Header().Set("Content-Type", "text/event-stream")

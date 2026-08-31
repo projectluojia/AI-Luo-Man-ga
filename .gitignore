@@ -2,8 +2,6 @@
 .env.*
 .agents/
 .co?ex/
-agent/.venv/
-agent/.venv-stale/
 **/__pycache__/
 *.py[cod]
 var/

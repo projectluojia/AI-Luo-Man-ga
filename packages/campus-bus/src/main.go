@@ -1,10 +1,10 @@
 //go:build wasip1
 
-// campus 测试 guest：实现校园三工具（站点搜索/线路列表/行程查询），经通用
-// ailuo.store 宿主函数读取宿主托管的权威存储。仅用于 campustest 测试装配
-// （现场编译，不提交工件）；生产 guest 在 packages/campus-bus。
-// 数据新鲜度/权威性治理在本侧完成：快照元数据不完整、非权威或过期时返回
-// 稳定数据治理错误码。
+// campus 是校园服务的 hosted 包 guest：实现校园三工具（站点搜索/线路列表/
+// 行程查询）。业务数据经通用 ailuo.store 宿主函数读取宿主托管的权威存储
+// （App 隔离由宿主治理上下文强制，namespace 绑定为清单 [storage] 声明值，
+// guest 无法选择作用域）。数据新鲜度/权威性治理在本侧完成：快照元数据
+// 不完整、非权威或过期时返回稳定数据治理错误码。本包只依赖标准库。
 package main
 
 import (
@@ -174,6 +174,7 @@ type collectionSnapshot[T any] struct {
 }
 
 func main() {
+	// 无日志初始化：wasm guest 的 stdout 只承载结果信封，日志由宿主侧丢弃。
 	run(os.Stdin, os.Stdout)
 }
 
@@ -228,7 +229,7 @@ func invokeStopSearch(output io.Writer, payload json.RawMessage) {
 	matches := make([]stop, 0, len(snapshot.Documents))
 	query := strings.ToLower(strings.TrimSpace(request.Query))
 	for _, item := range snapshot.Documents {
-		if revisionOf(item.SourceRevision, status.SourceRevision) && matchesStop(item, query) {
+		if item.SourceRevision == status.SourceRevision && matchesStop(item, query) {
 			matches = append(matches, item)
 		}
 	}
@@ -267,7 +268,7 @@ func invokeRouteList(output io.Writer, payload json.RawMessage) {
 	}
 	routes := make([]route, 0, len(snapshot.Documents))
 	for _, item := range snapshot.Documents {
-		if revisionOf(item.SourceRevision, status.SourceRevision) {
+		if item.SourceRevision == status.SourceRevision {
 			routes = append(routes, item)
 		}
 	}
@@ -313,7 +314,7 @@ func invokeJourneySearch(output io.Writer, payload json.RawMessage) {
 	}
 	matches := make([]journey, 0, len(snapshot.Documents))
 	for _, item := range snapshot.Documents {
-		if revisionOf(item.SourceRevision, status.SourceRevision) &&
+		if item.SourceRevision == status.SourceRevision &&
 			item.OriginStopID == request.OriginStopID && item.DestinationStopID == request.DestinationStopID &&
 			!item.DepartureAt.Before(request.DepartAfter) {
 			matches = append(matches, item)
@@ -351,11 +352,6 @@ func governedStatus[T any](snapshot collectionSnapshot[T]) (dataStatus, error) {
 		return dataStatus{}, errors.New(codeDataUnavailable)
 	}
 	return govern(snapshot.Meta)
-}
-
-// revisionOf 校验文档归属的快照修订；空修订视为缺失（数据不完整）。
-func revisionOf(documentRevision, snapshotRevision string) bool {
-	return documentRevision == snapshotRevision
 }
 
 func matchesStop(item stop, query string) bool {

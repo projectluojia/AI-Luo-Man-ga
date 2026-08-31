@@ -1,0 +1,23 @@
+# AI珞 executor.v1 包的作者侧清单；Core 只按 role=executor 发现它。
+
+[package]
+id = "agent"
+version = "1.0.0"
+description = "AI Luo executor runtime."
+pin = true
+
+[[component]]
+id = "executor"
+mode = "isolated"
+role = "executor"
+entrypoint = "runtime"
+
+[component.process]
+path = ".venv/python"
+args = ["-m", "agent.runtime", "--listen", "${address}"]
+work_dir = "."
+address = "127.0.0.1:50051"
+
+[build]
+tool = "python-uv"
+source = "runtime"

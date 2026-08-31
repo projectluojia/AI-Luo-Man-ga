@@ -130,13 +130,14 @@ func TestProcessHostRunsOutsideKernelAndShutsDownGracefully(t *testing.T) {
 			resolves.Add(1)
 			return spec, nil
 		},
-		VerifyInstalled: func(_ context.Context, manifest loader.Manifest, resolved packagecontract.ProcessSpec) error {
+		Verify: func(_ context.Context, manifest loader.Manifest, resolved packagecontract.ProcessSpec) error {
 			verifies.Add(1)
 			if manifest.LockedDigest != digest || resolved.Path != executable {
 				t.Fatalf("manifest=%#v spec=%#v", manifest, resolved)
 			}
 			return nil
 		},
+		Spawn:       true,
 		DialTimeout: 3 * time.Second, StopGrace: time.Second, TerminateGrace: time.Second,
 	})
 	if err != nil {
@@ -200,6 +201,7 @@ func TestProcessHostEnforcesFileSizeLimit(t *testing.T) {
 	host, err := loader.NewProcessHost(loader.ProcessHostConfig{
 		Resolve:     func(context.Context, loader.Manifest) (packagecontract.ProcessSpec, error) { return spec, nil },
 		Verify:      func(context.Context, loader.Manifest, packagecontract.ProcessSpec) error { return nil },
+		Spawn:       true,
 		DialTimeout: 3 * time.Second, StopGrace: time.Second, TerminateGrace: time.Second,
 	})
 	if err != nil {
@@ -252,6 +254,7 @@ func TestProcessHostForcesBoundedExitAfterStopGrace(t *testing.T) {
 	host, err := loader.NewProcessHost(loader.ProcessHostConfig{
 		Resolve:        func(context.Context, loader.Manifest) (packagecontract.ProcessSpec, error) { return spec, nil },
 		Verify:         func(context.Context, loader.Manifest, packagecontract.ProcessSpec) error { return nil },
+		Spawn:          true,
 		DialTimeout:    3 * time.Second,
 		StopGrace:      100 * time.Millisecond,
 		TerminateGrace: 100 * time.Millisecond,
@@ -318,6 +321,7 @@ func TestProcessHostRejectsUnsafeLaunchSpecifications(t *testing.T) {
 		var verifies atomic.Int32
 		host, err := loader.NewProcessHost(loader.ProcessHostConfig{
 			Resolve: func(context.Context, loader.Manifest) (packagecontract.ProcessSpec, error) { return spec, nil },
+			Spawn:   true,
 			Verify: func(context.Context, loader.Manifest, packagecontract.ProcessSpec) error {
 				verifies.Add(1)
 				return nil
