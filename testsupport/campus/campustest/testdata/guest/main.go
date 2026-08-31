@@ -46,6 +46,8 @@ const (
 	codeDataExpired     = "data_expired"
 )
 
+var errDataUnavailable = errors.New(codeDataUnavailable)
+
 // requestEnvelope 与宿主约定的 stdin 调用信封。
 type requestEnvelope struct {
 	ToolID  string          `json:"tool_id"`
@@ -217,7 +219,7 @@ func invokeStopSearch(output io.Writer, payload json.RawMessage) {
 	}
 	snapshot, err := fetchCollection[stop](stopsCollection)
 	if err != nil {
-		writeEnvelope(output, resultEnvelope{Code: codeInternal, Message: err.Error()})
+		writeEnvelope(output, resultEnvelope{Code: errorCode(err), Message: err.Error()})
 		return
 	}
 	status, statusErr := governedStatus(snapshot)
@@ -257,7 +259,7 @@ func invokeRouteList(output io.Writer, payload json.RawMessage) {
 	}
 	snapshot, err := fetchCollection[route](routesCollection)
 	if err != nil {
-		writeEnvelope(output, resultEnvelope{Code: codeInternal, Message: err.Error()})
+		writeEnvelope(output, resultEnvelope{Code: errorCode(err), Message: err.Error()})
 		return
 	}
 	status, statusErr := governedStatus(snapshot)
@@ -303,7 +305,7 @@ func invokeJourneySearch(output io.Writer, payload json.RawMessage) {
 	}
 	snapshot, err := fetchCollection[journey](journeysCollection)
 	if err != nil {
-		writeEnvelope(output, resultEnvelope{Code: codeInternal, Message: err.Error()})
+		writeEnvelope(output, resultEnvelope{Code: errorCode(err), Message: err.Error()})
 		return
 	}
 	status, statusErr := governedStatus(snapshot)
@@ -348,9 +350,17 @@ func govern(meta snapshotMeta) (dataStatus, error) {
 // governedStatus 先治理元数据再返回状态；文档修订一致性由调用方逐项校验。
 func governedStatus[T any](snapshot collectionSnapshot[T]) (dataStatus, error) {
 	if !snapshot.MetaFound {
-		return dataStatus{}, errors.New(codeDataUnavailable)
+		return dataStatus{}, errDataUnavailable
 	}
 	return govern(snapshot.Meta)
+}
+
+// errorCode 保留可对外暴露的数据治理错误，其余错误统一归类为内部错误。
+func errorCode(err error) string {
+	if errors.Is(err, errDataUnavailable) {
+		return codeDataUnavailable
+	}
+	return codeInternal
 }
 
 // revisionOf 校验文档归属的快照修订；空修订视为缺失（数据不完整）。
@@ -410,7 +420,7 @@ func fetchCollection[T any](collection string) (collectionSnapshot[T], error) {
 			return snapshot, err
 		}
 		if hasSourceRevision && decoded.Meta.SourceRevision != sourceRevision {
-			return snapshot, errors.New(codeDataUnavailable)
+			return snapshot, errDataUnavailable
 		}
 		if !hasSourceRevision {
 			sourceRevision = decoded.Meta.SourceRevision
