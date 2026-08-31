@@ -358,12 +358,15 @@ func (s *Store) RenewRunLease(ctx context.Context, run kernelecho.RunRecord, ren
 		run.Status != kernelecho.RunStatusRunning || renewedAt.IsZero() || !leaseExpiresAt.After(renewedAt) {
 		return kernelecho.ErrInvalidRunRecord
 	}
+	currentAt := time.Now().UTC()
 	result, err := s.db.ExecContext(ctx, `
 UPDATE runs SET lease_expires_at=?
-WHERE app_id=? AND run_id=? AND echo_id=? AND status=? AND lease_token=? AND julianday(lease_expires_at)>=julianday(?)`,
+WHERE app_id=? AND run_id=? AND echo_id=? AND status=? AND lease_token=?
+  AND julianday(lease_expires_at)>=julianday(?) AND julianday(lease_expires_at)>=julianday(?)`,
 		leaseExpiresAt.UTC().Format(time.RFC3339Nano),
 		run.AppID, run.ID, run.EchoID, kernelecho.RunStatusRunning, run.LeaseToken,
 		renewedAt.UTC().Format(time.RFC3339Nano),
+		currentAt.Format(time.RFC3339Nano),
 	)
 	if err != nil {
 		return fmt.Errorf("renew Run lease: %w", err)
