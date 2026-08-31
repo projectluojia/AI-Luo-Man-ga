@@ -156,6 +156,7 @@ paths:
   /api/v1/capabilities:
     get:
       summary: List capabilities enabled for the campus-services App
+      description: Includes the read-only `campus.calendar.events.list` Capability when explicitly enabled by the persisted App policy. Calendar results are returned through governed Echo/Run execution and carry source/data_status metadata; non-authoritative or expired snapshots fail closed.
       responses:
         "200":
           description: Capability list

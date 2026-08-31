@@ -1,0 +1,124 @@
+// Package academiccalendar 提供武大校历查询 Tool 的模型与存储端口。
+package academiccalendar
+
+import (
+	"context"
+	"errors"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
+	"strings"
+	"time"
+	"unicode/utf8"
+)
+
+var (
+	ErrInvalid        = errors.New("invalid academic calendar input")
+	ErrQueryRequired  = errors.New("academic calendar query requires a date range")
+	ErrDataIncomplete = contracts.ErrDataIncomplete
+	ErrDataUntrusted  = contracts.ErrDataUntrusted
+	ErrDataExpired    = contracts.ErrDataExpired
+)
+
+const (
+	DataStateAuthoritativeFresh = "authoritative_fresh"
+	MaxEvents                   = 5000
+	SourceWUDA                  = "zhihui-luojia"
+	SourceDemo                  = "demo-fixture-not-zhihui-luojia"
+)
+
+type SnapshotMetadata struct {
+	Revision      string    `json:"source_revision"`
+	Source        string    `json:"source"`
+	Authoritative bool      `json:"authoritative"`
+	Complete      bool      `json:"complete"`
+	ImportedAt    time.Time `json:"imported_at"`
+	ValidUntil    time.Time `json:"valid_until"`
+}
+
+type DataStatus struct {
+	State string `json:"state"`
+	SnapshotMetadata
+}
+
+func (m SnapshotMetadata) Govern(now time.Time) (DataStatus, error) {
+	if m.Revision == "" || m.Source == "" || !m.Complete || m.ImportedAt.IsZero() || m.ValidUntil.IsZero() || !m.ValidUntil.After(m.ImportedAt) || now.Before(m.ImportedAt) {
+		return DataStatus{}, ErrDataIncomplete
+	}
+	if !m.Authoritative {
+		return DataStatus{}, ErrDataUntrusted
+	}
+	if !now.Before(m.ValidUntil) {
+		return DataStatus{}, ErrDataExpired
+	}
+	return DataStatus{State: DataStateAuthoritativeFresh, SnapshotMetadata: m}, nil
+}
+
+type Event struct {
+	ID             string    `json:"id"`
+	Title          string    `json:"title"`
+	Type           string    `json:"type"`
+	StartAt        time.Time `json:"start_at"`
+	EndAt          time.Time `json:"end_at"`
+	Description    string    `json:"description,omitempty"`
+	SourceRevision string    `json:"source_revision"`
+}
+
+type QueryRequest struct {
+	From  time.Time `json:"from"`
+	To    time.Time `json:"to"`
+	Limit int       `json:"limit,omitempty"`
+}
+
+func (r *QueryRequest) NormalizeAndValidate() error {
+	if r.From.IsZero() || r.To.IsZero() || !r.To.After(r.From) || r.To.Sub(r.From) > 366*24*time.Hour {
+		return ErrQueryRequired
+	}
+	if r.Limit == 0 {
+		r.Limit = 100
+	}
+	if r.Limit < 1 || r.Limit > MaxEvents {
+		return ErrInvalid
+	}
+	return nil
+}
+
+type Snapshot struct {
+	Metadata SnapshotMetadata
+	Events   []Event
+}
+
+type Store interface {
+	Search(context.Context, string, QueryRequest) (Snapshot, error)
+}
+
+// SnapshotWriter 由 Go 托管存储实现，用于经授权的数据接入或显式 demo 导入。
+type SnapshotWriter interface {
+	ReplaceSnapshot(context.Context, SnapshotInput) error
+}
+
+type SnapshotInput struct {
+	AppID         string
+	Revision      string
+	Source        string
+	Authoritative bool
+	Complete      bool
+	ImportedAt    time.Time
+	ValidUntil    time.Time
+	Events        []Event
+}
+
+func normalizeText(value string, max int) string {
+	clean := strings.TrimSpace(strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, value))
+	if utf8.RuneCountInString(clean) <= max {
+		return clean
+	}
+	return string([]rune(clean)[:max])
+}
+
+func validText(value string, max int) bool {
+	return value != "" && utf8.ValidString(value) && utf8.RuneCountInString(value) <= max
+}
