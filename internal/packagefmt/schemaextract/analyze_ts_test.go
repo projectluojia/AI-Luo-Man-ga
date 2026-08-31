@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -86,8 +87,8 @@ export interface HelloArgs { values: { [key: string]: string }; }
 }
 
 func TestAnalyzeTSWithRealNode(t *testing.T) {
-	if _, err := execCommand(context.Background(), ".", "node", "--version"); err != nil {
-		t.Skip("node 不可用，跳过真实 TS 集成测试")
+	if _, err := exec.LookPath("npx"); err != nil {
+		t.Skip("npx 不可用，跳过真实 TS 集成测试")
 	}
 	source := []byte(`// hello 说你好。
 export function hello(args: HelloArgs): any {

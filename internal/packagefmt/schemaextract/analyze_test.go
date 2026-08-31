@@ -181,3 +181,27 @@ type Node struct {
 		t.Fatalf("recursive struct error = %v, want explicit rejection", err)
 	}
 }
+
+func TestAnalyzeGoRejectsMultipleHandlerParameters(t *testing.T) {
+	source := []byte(`package main
+func hello(args Hello, token string) {}
+type Hello struct { Name string ` + "`json:\"name\"`" + ` }
+`)
+	capabilities, err := AnalyzeGo(source, "x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(capabilities) != 0 {
+		t.Fatalf("capabilities = %d, want multi-parameter handler rejected", len(capabilities))
+	}
+}
+
+func TestAnalyzeGoRejectsByteSlice(t *testing.T) {
+	source := []byte(`package main
+func hello(args Hello) {}
+type Hello struct { Data []byte ` + "`json:\"data\"`" + ` }
+`)
+	if _, err := AnalyzeGo(source, "x"); err == nil || !strings.Contains(err.Error(), "[]byte") {
+		t.Fatalf("byte slice error = %v, want explicit rejection", err)
+	}
+}

@@ -105,6 +105,10 @@ func fieldSchemaWithTypes(expr ast.Expr, types map[string]*ast.StructType, resol
 		}
 		return nil, fmt.Errorf("不支持的标识类型 %s.%s", pkgName(t.X), t.Sel.Name)
 	case *ast.ArrayType:
+		// []byte 与 []uint8 经 encoding/json 编码为 base64 字符串，不能按整数数组发布契约。
+		if element, ok := t.Elt.(*ast.Ident); ok && (element.Name == "byte" || element.Name == "uint8") {
+			return nil, fmt.Errorf("不支持 []%s 字段：JSON 编码语义不是整数数组", element.Name)
+		}
 		items, err := fieldSchemaWithTypes(t.Elt, types, resolving)
 		if err != nil {
 			return nil, err

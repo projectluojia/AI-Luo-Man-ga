@@ -40,7 +40,7 @@ func AnalyzeGo(source []byte, packageID string) ([]Capability, error) {
 			continue
 		}
 		name := function.Name.Name
-		if !goArgsPattern.MatchString(name) || len(function.Type.Params.List) == 0 {
+		if !goArgsPattern.MatchString(name) || len(function.Type.Params.List) != 1 || len(function.Type.Params.List[0].Names) > 1 {
 			continue
 		}
 		structType, found := paramStruct(function.Type.Params.List[0], types)
