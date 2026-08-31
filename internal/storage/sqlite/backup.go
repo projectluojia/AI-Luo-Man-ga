@@ -123,7 +123,14 @@ func ValidateBackup(ctx context.Context, path string) (resultErr error) {
 		observeStorageOperation(ctx, "backup_validate", started, err)
 		return errors.Join(ErrInvalidBackup, fmt.Errorf("read backup schema version: %w", err))
 	}
-	if version < minimumRestorableSchemaVersion || version > currentSchemaVersion() || migrationCount != version {
+	expectedCount := 0
+	for registered := range registeredMigrations {
+		if registered <= version {
+			expectedCount++
+		}
+	}
+	// 允许并行业务线占用不连续版本号（例如 26，而 25/27/28 由其他模块注册）。
+	if version < minimumRestorableSchemaVersion || version > currentSchemaVersion() || migrationCount != expectedCount {
 		err := fmt.Errorf("schema migration history is outside the supported restore range")
 		observeStorageOperation(ctx, "backup_validate", started, err)
 		return errors.Join(ErrInvalidBackup, err)
@@ -243,6 +250,24 @@ SELECT app_id,run_id,run_group_id,echo_id,parent_run_id,origin_call_id,attempt,s
        used_provider_retries,available_at,capability_scope,permission_scope,result_message,
        task_message,last_agent_sequence
 FROM runs LIMIT 0`
+	}
+	if version >= 26 {
+		for _, table := range []string{
+			"library_seat_source_revisions",
+			"library_seat_current_snapshots",
+			"library_seat_spaces",
+			"library_seat_seats",
+			"library_seat_slots",
+			"library_seat_reservations",
+		} {
+			rows, err := db.QueryContext(ctx, "SELECT 1 FROM "+table+" LIMIT 0")
+			if err != nil {
+				return fmt.Errorf("required library seat table is unavailable")
+			}
+			if err := rows.Close(); err != nil {
+				return fmt.Errorf("close library seat schema probe: %w", err)
+			}
+		}
 	}
 	rows, err := db.QueryContext(ctx, runColumns)
 	if err != nil {

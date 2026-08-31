@@ -45,6 +45,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus/demo"
 	classroomservice "github.com/projectluojia/AI-Luo-Man-ga/internal/services/classroom"
+	libraryseatservice "github.com/projectluojia/AI-Luo-Man-ga/internal/services/libraryseat"
 	promptservice "github.com/projectluojia/AI-Luo-Man-ga/internal/services/prompt"
 	timetableservice "github.com/projectluojia/AI-Luo-Man-ga/internal/services/timetable"
 	weatherservice "github.com/projectluojia/AI-Luo-Man-ga/internal/services/weather"
@@ -466,6 +467,13 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 			observe.BoolAttr("authoritative", false),
 			observe.StringAttr("source", "demo-fixture-not-zhihui-luojia"),
 		)
+		if err := demo.LoadLibrarySeatData(ctx, store, time.Now()); err != nil {
+			return fmt.Errorf("load demo library seat data: %w", err)
+		}
+		observe.Warn(ctx, "已载入非权威图书馆座位演示目录",
+			observe.BoolAttr("authoritative", false),
+			observe.StringAttr("source", "demo-fixture-not-zhihui-luojia"),
+		)
 	}
 
 	baseSystemPrompt := config.baseSystemPrompt
@@ -500,6 +508,11 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 			classroomservice.ScheduleCreateCapabilityID,
 			classroomservice.ScheduleListCapabilityID,
 			classroomservice.ScheduleCancelCapabilityID,
+			libraryseatservice.SpacesListCapabilityID,
+			libraryseatservice.SlotsSearchCapabilityID,
+			libraryseatservice.ReservationsCreateCapabilityID,
+			libraryseatservice.ReservationsCancelCapabilityID,
+			libraryseatservice.ReservationsMineCapabilityID,
 			agent.CapabilityID,
 			agent.StatusCapabilityID,
 			promptservice.PreferenceGetID,
@@ -590,6 +603,9 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 	}
 	if err := classroomservice.Register(reg, classroomservice.NewService(store)); err != nil {
 		return fmt.Errorf("register classroom Service: %w", err)
+	}
+	if err := libraryseatservice.Register(reg, libraryseatservice.NewService(store)); err != nil {
+		return fmt.Errorf("register library seat Service: %w", err)
 	}
 	// 确认与副作用治理：持久确认服务注入 Dispatcher，凡声明 write/external 副作用
 	// 的 Capability 在未获批准前 fail-closed（缺确认标识或验证失败一律拒绝执行）。
@@ -1359,6 +1375,11 @@ func ensurePromptCapabilities(existing []string) []string {
 		classroomservice.ScheduleCreateCapabilityID,
 		classroomservice.ScheduleListCapabilityID,
 		classroomservice.ScheduleCancelCapabilityID,
+		libraryseatservice.SpacesListCapabilityID,
+		libraryseatservice.SlotsSearchCapabilityID,
+		libraryseatservice.ReservationsCreateCapabilityID,
+		libraryseatservice.ReservationsCancelCapabilityID,
+		libraryseatservice.ReservationsMineCapabilityID,
 	} {
 		if !slices.Contains(result, capabilityID) {
 			result = append(result, capabilityID)
