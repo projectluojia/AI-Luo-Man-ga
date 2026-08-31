@@ -11,7 +11,13 @@ import (
 )
 
 // ParseAES256Key 接受 32 字节原始密钥或 64 字符 hex；失败时不把输入写入错误。
+// 恰好 32 字节的输入按原始密钥处理，即使边界字节是空白也不裁剪。
 func ParseAES256Key(raw []byte) ([]byte, error) {
+	if len(raw) == AES256KeySize {
+		key := make([]byte, AES256KeySize)
+		copy(key, raw)
+		return key, nil
+	}
 	trimmed := bytesTrimSpace(raw)
 	if len(trimmed) == AES256KeySize {
 		key := make([]byte, AES256KeySize)

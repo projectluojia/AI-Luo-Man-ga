@@ -281,7 +281,7 @@ func (h *harness) invoke(request contracts.RequestContext, capabilityID, payload
 	if err := json.Unmarshal(raw, &decoded); err != nil {
 		h.t.Fatal(err)
 	}
-	if strings.Contains(string(raw), "CASTGC=") && capabilityID != ecardservice.CredentialsPutCapabilityID {
+	if strings.Contains(string(raw), "CASTGC=") {
 		h.t.Fatalf("secret leaked in %s result: %s", capabilityID, raw)
 	}
 	return decoded, nil

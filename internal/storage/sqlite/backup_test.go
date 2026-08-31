@@ -236,3 +236,31 @@ SELECT value,'2026-07-26T00:00:00Z' FROM versions;`); err != nil {
 		t.Fatalf("伪造迁移历史错误=%v", err)
 	}
 }
+
+func TestValidateBackupRejectsUnregisteredMigrationVersion(t *testing.T) {
+	directory := t.TempDir()
+	path := filepath.Join(directory, "source.db")
+	store, err := sqlite.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`DELETE FROM schema_migrations WHERE version=18`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO schema_migrations(version,applied_at) VALUES(26,'2026-08-31T00:00:00Z')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := sqlite.ValidateBackup(t.Context(), path); !errors.Is(err, sqlite.ErrInvalidBackup) {
+		t.Fatalf("替换为未注册迁移版本后校验错误=%v", err)
+	}
+}

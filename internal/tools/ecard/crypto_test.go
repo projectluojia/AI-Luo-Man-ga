@@ -34,6 +34,11 @@ func TestParseAndRoundTripAES256GCM(t *testing.T) {
 	if _, err := ParseAES256Key([]byte("too-short")); err != ErrKeyInvalid {
 		t.Fatalf("short key err=%v", err)
 	}
+	spaced := append([]byte{' '}, bytes.Repeat([]byte{0x3c}, AES256KeySize-1)...)
+	parsed, err := ParseAES256Key(spaced)
+	if err != nil || !bytes.Equal(parsed, spaced) {
+		t.Fatalf("raw key with leading space was altered err=%v", err)
+	}
 }
 
 func TestEncryptRejectsOversizedMaterial(t *testing.T) {

@@ -159,6 +159,9 @@ func TestECardStoreHonorsContextCancel(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer sqlitetest.CloseAndWait(t, store, dir)
+	if _, err := store.CreateUser(context.Background(), identity.User{UserID: "user-1", Status: identity.UserStatusActive}); err != nil {
+		t.Fatal(err)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	now := time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC)
@@ -167,7 +170,7 @@ func TestECardStoreHonorsContextCancel(t *testing.T) {
 		Nonce: bytes.Repeat([]byte{0x01}, ecard.GCMNonceSize), Ciphertext: bytes.Repeat([]byte{0x02}, 32),
 		CreatedAt: now, ExpiresAt: now.Add(time.Hour),
 	})
-	if err == nil {
-		t.Fatal("canceled context succeeded")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled context err=%v", err)
 	}
 }
