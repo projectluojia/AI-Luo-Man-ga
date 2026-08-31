@@ -155,10 +155,10 @@ paths:
           $ref: "#/components/responses/Error"
   /api/v1/capabilities:
     get:
-      summary: List capabilities enabled for the campus-services App
+      summary: List capabilities enabled for the campus-services App (including governed bus queries)
       responses:
         "200":
-          description: Capability list
+          description: Capability list. The `campus.bus.vehicles.realtime` capability is only usable when the active source revision explicitly carries written-authority metadata; otherwise it fails closed without returning coordinates.
           content:
             application/json:
               schema:

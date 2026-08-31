@@ -791,16 +791,18 @@ func (s *Store) applyMigration(ctx context.Context, version int, migration strin
 }
 
 type BusSnapshot struct {
-	AppID         string
-	Revision      string
-	Source        string
-	Authoritative bool
-	Complete      bool
-	ImportedAt    time.Time
-	ValidUntil    time.Time
-	Stops         []bus.Stop
-	Routes        []bus.Route
-	Journeys      []bus.Journey
+	AppID              string
+	Revision           string
+	Source             string
+	Authoritative      bool
+	Complete           bool
+	ImportedAt         time.Time
+	ValidUntil         time.Time
+	RealtimeAuthorized bool
+	Stops              []bus.Stop
+	Routes             []bus.Route
+	Journeys           []bus.Journey
+	Positions          []bus.VehiclePosition
 }
 
 func (s *Store) ReplaceBusSnapshot(ctx context.Context, snapshot BusSnapshot) (resultErr error) {
@@ -814,21 +816,22 @@ func (s *Store) ReplaceBusSnapshot(ctx context.Context, snapshot BusSnapshot) (r
 		return fmt.Errorf("begin bus snapshot transaction: %w", err)
 	}
 	defer s.finishTx(tx, &resultErr, "replace bus snapshot")
-	for _, table := range []string{"bus_journeys", "bus_routes", "bus_stops"} {
+	for _, table := range []string{"bus_vehicle_positions", "bus_journeys", "bus_routes", "bus_stops"} {
 		if _, err := tx.ExecContext(ctx, "DELETE FROM "+table+" WHERE app_id = ?", snapshot.AppID); err != nil {
 			return fmt.Errorf("clear %s: %w", table, err)
 		}
 	}
 	validUntil := nullableTime(snapshot.ValidUntil)
 	if _, err := tx.ExecContext(ctx, `
-INSERT INTO bus_source_revisions(app_id,revision,source,authoritative,imported_at,valid_until,complete)
-VALUES(?,?,?,?,?,?,?)
+INSERT INTO bus_source_revisions(app_id,revision,source,authoritative,imported_at,valid_until,complete,realtime_authorized)
+VALUES(?,?,?,?,?,?,?,?)
 ON CONFLICT(app_id,revision) DO UPDATE SET
   source=excluded.source,
   authoritative=excluded.authoritative,
   imported_at=excluded.imported_at,
   valid_until=excluded.valid_until,
-  complete=excluded.complete`,
+  complete=excluded.complete,
+  realtime_authorized=excluded.realtime_authorized`,
 		snapshot.AppID,
 		snapshot.Revision,
 		snapshot.Source,
@@ -836,6 +839,7 @@ ON CONFLICT(app_id,revision) DO UPDATE SET
 		snapshot.ImportedAt.UTC().Format(time.RFC3339Nano),
 		validUntil,
 		boolInt(snapshot.Complete),
+		boolInt(snapshot.RealtimeAuthorized),
 	); err != nil {
 		return fmt.Errorf("write source revision: %w", err)
 	}
@@ -852,6 +856,11 @@ ON CONFLICT(app_id,revision) DO UPDATE SET
 	for _, journey := range snapshot.Journeys {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO bus_journeys(app_id,trip_id,route_id,route_name,direction,origin_stop_id,origin_stop_name,destination_stop_id,destination_stop_name,departure_at,arrival_at,source_revision) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, snapshot.AppID, journey.TripID, journey.RouteID, journey.RouteName, journey.Direction, journey.OriginStopID, journey.OriginStopName, journey.DestinationStopID, journey.DestinationName, journey.DepartureAt.UTC().Format(time.RFC3339Nano), journey.ArrivalAt.UTC().Format(time.RFC3339Nano), snapshot.Revision); err != nil {
 			return fmt.Errorf("insert journey %q: %w", journey.TripID, err)
+		}
+	}
+	for _, position := range snapshot.Positions {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO bus_vehicle_positions(app_id,vehicle_id,route_id,latitude,longitude,recorded_at,source_revision) VALUES(?,?,?,?,?,?,?)`, snapshot.AppID, position.VehicleID, position.RouteID, position.Latitude, position.Longitude, position.RecordedAt.UTC().Format(time.RFC3339Nano), snapshot.Revision); err != nil {
+			return fmt.Errorf("insert vehicle position %q: %w", position.VehicleID, err)
 		}
 	}
 	if _, err := tx.ExecContext(ctx, `
@@ -882,7 +891,7 @@ func validateBusSnapshot(ctx context.Context, snapshot BusSnapshot) error {
 	if !validBusStableID(snapshot.AppID) || !validBusStableID(snapshot.Revision) ||
 		!validBusText(snapshot.Source, 256) || !snapshot.Complete || snapshot.ImportedAt.IsZero() ||
 		snapshot.ValidUntil.IsZero() || !snapshot.ValidUntil.After(snapshot.ImportedAt) ||
-		len(snapshot.Stops) > 100_000 || len(snapshot.Routes) > 100_000 || len(snapshot.Journeys) > 1_000_000 {
+		len(snapshot.Stops) > 100_000 || len(snapshot.Routes) > 100_000 || len(snapshot.Journeys) > 1_000_000 || len(snapshot.Positions) > 100_000 {
 		return fmt.Errorf("invalid bus snapshot metadata")
 	}
 	stopIDs := make(map[string]struct{}, len(snapshot.Stops))
@@ -949,6 +958,19 @@ func validateBusSnapshot(ctx context.Context, snapshot BusSnapshot) error {
 			return fmt.Errorf("duplicate bus journey %q", journey.TripID)
 		}
 		tripIDs[journey.TripID] = struct{}{}
+	}
+	positionIDs := make(map[string]struct{}, len(snapshot.Positions))
+	for _, position := range snapshot.Positions {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if !validBusStableID(position.VehicleID) || !validBusStableID(position.RouteID) || position.SourceRevision != "" && position.SourceRevision != snapshot.Revision || position.RecordedAt.IsZero() || position.Latitude < -90 || position.Latitude > 90 || position.Longitude < -180 || position.Longitude > 180 {
+			return fmt.Errorf("invalid bus vehicle position %q", position.VehicleID)
+		}
+		if _, duplicate := positionIDs[position.VehicleID]; duplicate {
+			return fmt.Errorf("duplicate bus vehicle position %q", position.VehicleID)
+		}
+		positionIDs[position.VehicleID] = struct{}{}
 	}
 	return nil
 }
@@ -1099,6 +1121,54 @@ func (s *Store) SearchJourneys(ctx context.Context, appID string, request bus.Se
 	return bus.JourneySnapshot{Metadata: metadata, Journeys: result}, nil
 }
 
+func (s *Store) SearchVehiclePositions(ctx context.Context, appID string, request bus.RealtimePositionRequest) (_ bus.RealtimePositionSnapshot, resultErr error) {
+	metricStarted := time.Now()
+	defer func() { observeStorageOperation(ctx, "search_bus_vehicle_positions", metricStarted, resultErr) }()
+	tx, metadata, err := s.beginBusSnapshotRead(ctx, appID)
+	if err != nil {
+		return bus.RealtimePositionSnapshot{}, err
+	}
+	defer s.finishTx(tx, &resultErr, "search bus vehicle positions")
+	query := `SELECT vehicle_id,route_id,latitude,longitude,recorded_at,source_revision FROM bus_vehicle_positions WHERE app_id=? AND source_revision=?`
+	args := []any{appID, metadata.Revision}
+	if request.RouteID != "" {
+		query += " AND route_id=?"
+		args = append(args, request.RouteID)
+	}
+	query += " ORDER BY recorded_at DESC, vehicle_id LIMIT ?"
+	args = append(args, request.Limit)
+	rows, err := tx.QueryContext(ctx, query, args...)
+	if err != nil {
+		return bus.RealtimePositionSnapshot{}, fmt.Errorf("query vehicle positions: %w", err)
+	}
+	positions := []bus.VehiclePosition{}
+	for rows.Next() {
+		var p bus.VehiclePosition
+		var recorded string
+		if err := rows.Scan(&p.VehicleID, &p.RouteID, &p.Latitude, &p.Longitude, &recorded, &p.SourceRevision); err != nil {
+			rows.Close()
+			return bus.RealtimePositionSnapshot{}, fmt.Errorf("scan vehicle position: %w", err)
+		}
+		p.RecordedAt, err = time.Parse(time.RFC3339Nano, recorded)
+		if err != nil {
+			rows.Close()
+			return bus.RealtimePositionSnapshot{}, fmt.Errorf("parse vehicle position time: %w", err)
+		}
+		positions = append(positions, p)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return bus.RealtimePositionSnapshot{}, err
+	}
+	if err := rows.Close(); err != nil {
+		return bus.RealtimePositionSnapshot{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return bus.RealtimePositionSnapshot{}, err
+	}
+	return bus.RealtimePositionSnapshot{Metadata: metadata, Positions: positions}, nil
+}
+
 func (s *Store) beginBusSnapshotRead(ctx context.Context, appID string) (*sql.Tx, bus.SnapshotMetadata, error) {
 	if !validBusStableID(appID) {
 		return nil, bus.SnapshotMetadata{}, contracts.ErrDataUnavailable
@@ -1112,8 +1182,9 @@ func (s *Store) beginBusSnapshotRead(ctx context.Context, appID string) (*sql.Tx
 	var complete int
 	var importedAt string
 	var validUntil sql.NullString
+	var realtimeAuthorized int
 	err = tx.QueryRowContext(ctx, `
-SELECT source.revision,source.source,source.authoritative,source.complete,source.imported_at,source.valid_until
+SELECT source.revision,source.source,source.authoritative,source.complete,source.imported_at,source.valid_until,source.realtime_authorized
 FROM bus_current_snapshots current
 JOIN bus_source_revisions source
   ON source.app_id=current.app_id AND source.revision=current.revision
@@ -1124,6 +1195,7 @@ WHERE current.app_id=?`, appID).Scan(
 		&complete,
 		&importedAt,
 		&validUntil,
+		&realtimeAuthorized,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, bus.SnapshotMetadata{}, s.rollbackTx(tx, contracts.ErrDataUnavailable, "read bus snapshot")
@@ -1133,6 +1205,7 @@ WHERE current.app_id=?`, appID).Scan(
 	}
 	metadata.Authoritative = authoritative == 1
 	metadata.Complete = complete == 1
+	metadata.RealtimeAuthorized = realtimeAuthorized == 1
 	metadata.ImportedAt, err = time.Parse(time.RFC3339Nano, importedAt)
 	if err != nil {
 		return nil, bus.SnapshotMetadata{}, s.rollbackTx(tx, fmt.Errorf("parse bus snapshot import time: %w", err), "read bus snapshot")

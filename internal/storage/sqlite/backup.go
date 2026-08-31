@@ -168,6 +168,15 @@ func validateRequiredSchema(ctx context.Context, db *sql.DB, version int) error 
 			return fmt.Errorf("close required schema probe: %w", err)
 		}
 	}
+	if version >= 27 {
+		rows, err := db.QueryContext(ctx, "SELECT 1 FROM bus_vehicle_positions LIMIT 0")
+		if err != nil {
+			return fmt.Errorf("required real-time vehicle position schema is unavailable")
+		}
+		if err := rows.Close(); err != nil {
+			return fmt.Errorf("close real-time schema probe: %w", err)
+		}
+	}
 	if version >= 13 {
 		for _, table := range []string{"app_config_revisions", "app_config_heads"} {
 			rows, err := db.QueryContext(ctx, "SELECT 1 FROM "+table+" LIMIT 0")

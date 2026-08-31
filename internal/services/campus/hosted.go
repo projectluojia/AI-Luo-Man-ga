@@ -64,6 +64,12 @@ func busQueryHandler(store bus.Store) func(context.Context, contracts.RequestCon
 				return nil, fmt.Errorf("decode journey search args: %w", err)
 			}
 			result, queryErr = store.SearchJourneys(ctx, request.AppID, args)
+		case "search_vehicle_positions":
+			var args bus.RealtimePositionRequest
+			if err := json.Unmarshal(query.Args, &args); err != nil {
+				return nil, fmt.Errorf("decode vehicle position args: %w", err)
+			}
+			result, queryErr = store.SearchVehiclePositions(ctx, request.AppID, args)
 		default:
 			return nil, fmt.Errorf("unknown bus query op: %s", query.Op)
 		}
@@ -90,6 +96,8 @@ func busHostErrorCode(err error) string {
 		return "data_untrusted"
 	case errors.Is(err, contracts.ErrDataExpired):
 		return "data_expired"
+	case errors.Is(err, contracts.ErrRealtimeUnauthorized):
+		return "realtime_unauthorized"
 	default:
 		return "internal"
 	}

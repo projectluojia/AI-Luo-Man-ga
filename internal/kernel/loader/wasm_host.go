@@ -341,6 +341,8 @@ func parseHostedEnvelope(runtimeID string, output []byte) (json.RawMessage, erro
 		return nil, errors.Join(ErrHostedCallRejected, contracts.ErrDataUntrusted)
 	case "data_expired":
 		return nil, errors.Join(ErrHostedCallRejected, contracts.ErrDataExpired)
+	case "realtime_unauthorized":
+		return nil, errors.Join(ErrHostedCallRejected, contracts.ErrRealtimeUnauthorized)
 	case "invalid_argument":
 		return nil, errors.Join(ErrHostedCallRejected, ErrHostedInvalidArgument)
 	case "internal":
