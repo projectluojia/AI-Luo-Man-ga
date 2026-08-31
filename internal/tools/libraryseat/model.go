@@ -100,11 +100,14 @@ func (m SnapshotMetadata) Govern(now time.Time) (DataStatus, error) {
 	if !now.Before(m.ValidUntil) {
 		return DataStatus{}, contracts.ErrDataExpired
 	}
+	if m.Source == DemoSource {
+		if m.Authoritative {
+			return DataStatus{}, contracts.ErrDataUntrusted
+		}
+		return DataStatus{State: DataStateDemoNonAuthoritative, SnapshotMetadata: m}, nil
+	}
 	if m.Authoritative {
 		return DataStatus{State: DataStateAuthoritativeFresh, SnapshotMetadata: m}, nil
-	}
-	if m.Source == DemoSource {
-		return DataStatus{State: DataStateDemoNonAuthoritative, SnapshotMetadata: m}, nil
 	}
 	return DataStatus{}, contracts.ErrDataUntrusted
 }
@@ -400,7 +403,8 @@ func ValidateCatalog(snapshot CatalogSnapshot) error {
 	}
 	if !validStableID(snapshot.Revision) || !validText(snapshot.Source, MaxNameLength) || !snapshot.Complete ||
 		snapshot.ImportedAt.IsZero() || snapshot.ValidUntil.IsZero() || !snapshot.ValidUntil.After(snapshot.ImportedAt) ||
-		len(snapshot.Spaces) > 10_000 || len(snapshot.Seats) > 100_000 || len(snapshot.Slots) > 1_000 {
+		len(snapshot.Spaces) > 10_000 || len(snapshot.Seats) > 100_000 || len(snapshot.Slots) > 1_000 ||
+		(snapshot.Source == DemoSource && snapshot.Authoritative) {
 		return fmt.Errorf("invalid library seat snapshot metadata")
 	}
 	spaceIDs := make(map[string]struct{}, len(snapshot.Spaces))

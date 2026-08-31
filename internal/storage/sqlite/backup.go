@@ -251,7 +251,7 @@ SELECT app_id,run_id,run_group_id,echo_id,parent_run_id,origin_call_id,attempt,s
        task_message,last_agent_sequence
 FROM runs LIMIT 0`
 	}
-	if version >= 26 {
+	if version >= 30 {
 		for _, table := range []string{
 			"library_seat_source_revisions",
 			"library_seat_current_snapshots",

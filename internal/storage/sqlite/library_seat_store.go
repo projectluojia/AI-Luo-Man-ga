@@ -19,7 +19,7 @@ import (
 var _ libraryseat.Store = (*Store)(nil)
 
 func init() {
-	// 迁移 26：图书馆座位目录快照与预约状态机。25/27/28 留给并行业务线。
+	// 迁移 30：图书馆座位目录快照与预约状态机（堆叠在教室 29 之后）。
 	registerMigration(30, `
 CREATE TABLE library_seat_source_revisions (
   app_id TEXT NOT NULL CHECK(length(app_id) BETWEEN 1 AND 128),
@@ -285,6 +285,9 @@ func (s *Store) CreateReservation(ctx context.Context, input libraryseat.CreateR
 	if err := expireLibrarySeatReservations(ctx, tx, input.AppID, now); err != nil {
 		return libraryseat.Reservation{}, err
 	}
+	if _, err := metadata.Govern(now); err != nil {
+		return libraryseat.Reservation{}, err
+	}
 	if input.IdempotencyKey != "" {
 		existing, found, err := loadReservationByCreateKey(ctx, tx, input.AppID, input.IdempotencyKey)
 		if err != nil {
@@ -340,9 +343,15 @@ VALUES(?,?,?,?,?,?,?,?,?,'confirmed',?,?,?,?,?,?,NULL)`,
 					return libraryseat.Reservation{}, loadErr
 				}
 				if found {
+					if existing.UserID == input.UserID && existing.SpaceID == input.SpaceID &&
+						existing.SeatID == input.SeatID && existing.SlotID == input.SlotID && existing.Date == input.Date {
+						if err := tx.Commit(); err != nil {
+							return libraryseat.Reservation{}, err
+						}
+						return existing, nil
+					}
 					return libraryseat.Reservation{}, libraryseat.ErrIdempotencyConflict
 				}
-				_ = existing
 			}
 			return libraryseat.Reservation{}, libraryseat.ErrConflict
 		}
@@ -587,14 +596,12 @@ FROM library_seat_slots WHERE app_id=? AND source_revision=?`
 	for slotRows.Next() {
 		var slot libraryseat.Slot
 		if err := slotRows.Scan(&slot.ID, &slot.Name, &slot.StartMinute, &slot.EndMinute, &slot.SourceRevision); err != nil {
-			slotRows.Close()
-			return libraryseat.SeatSnapshot{}, err
+			return libraryseat.SeatSnapshot{}, errors.Join(err, slotRows.Close())
 		}
 		slots = append(slots, slot)
 	}
 	if err := slotRows.Err(); err != nil {
-		slotRows.Close()
-		return libraryseat.SeatSnapshot{}, err
+		return libraryseat.SeatSnapshot{}, errors.Join(err, slotRows.Close())
 	}
 	if err := slotRows.Close(); err != nil {
 		return libraryseat.SeatSnapshot{}, err
@@ -610,14 +617,12 @@ ORDER BY label, seat_id`, appID, request.SpaceID, metadata.Revision)
 	for seatRows.Next() {
 		var seat libraryseat.Seat
 		if err := seatRows.Scan(&seat.ID, &seat.SpaceID, &seat.Label, &seat.Area, &seat.SourceRevision); err != nil {
-			seatRows.Close()
-			return libraryseat.SeatSnapshot{}, err
+			return libraryseat.SeatSnapshot{}, errors.Join(err, seatRows.Close())
 		}
 		seats = append(seats, seat)
 	}
 	if err := seatRows.Err(); err != nil {
-		seatRows.Close()
-		return libraryseat.SeatSnapshot{}, err
+		return libraryseat.SeatSnapshot{}, errors.Join(err, seatRows.Close())
 	}
 	if err := seatRows.Close(); err != nil {
 		return libraryseat.SeatSnapshot{}, err
@@ -633,14 +638,12 @@ WHERE app_id=? AND space_id=? AND slot_date=? AND status IN ('pending_confirm','
 	for occRows.Next() {
 		var seatID, slotID string
 		if err := occRows.Scan(&seatID, &slotID); err != nil {
-			occRows.Close()
-			return libraryseat.SeatSnapshot{}, err
+			return libraryseat.SeatSnapshot{}, errors.Join(err, occRows.Close())
 		}
 		occupied[libraryseat.OccupancyKey(seatID, slotID)] = seatID
 	}
 	if err := occRows.Err(); err != nil {
-		occRows.Close()
-		return libraryseat.SeatSnapshot{}, err
+		return libraryseat.SeatSnapshot{}, errors.Join(err, occRows.Close())
 	}
 	if err := occRows.Close(); err != nil {
 		return libraryseat.SeatSnapshot{}, err

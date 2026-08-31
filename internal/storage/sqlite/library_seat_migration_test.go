@@ -26,7 +26,11 @@ func TestMigration26UpgradesFromPreviousVersion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer upgraded.Close()
+	defer func() {
+		if err := upgraded.Close(); err != nil {
+			t.Errorf("close upgraded store: %v", err)
+		}
+	}()
 	var version int
 	if err := upgraded.db.QueryRowContext(t.Context(), `SELECT max(version) FROM schema_migrations`).Scan(&version); err != nil {
 		t.Fatal(err)
