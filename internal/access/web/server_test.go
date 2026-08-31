@@ -31,7 +31,6 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/session"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite/sqlitetest"
 )
 
 type fakeOrchestrator struct {
@@ -703,12 +702,11 @@ func TestMetricsEndpointUsesPrometheusFormatWithoutBusinessIdentifiers(t *testin
 }
 
 func TestWebAccessShutdownStopsAdmissionAndDrainsActiveRuns(t *testing.T) {
-	tempDir := t.TempDir()
-	store, err := sqlite.Open(filepath.Join(tempDir, "shutdown.db"))
+	store, err := sqlite.Open(":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer sqlitetest.CloseAndWait(t, store, tempDir)
+	defer store.Close()
 	backend := &fakeOrchestrator{store: store, block: true}
 	server := newAuthenticatedServer(
 		context.Background(),
@@ -806,12 +804,11 @@ func TestPersistentSchedulerBoundsConcurrentRuns(t *testing.T) {
 }
 
 func TestShutdownWaitsForAdmittedCreationBeforeCancellingRun(t *testing.T) {
-	tempDir := t.TempDir()
-	store, err := sqlite.Open(filepath.Join(tempDir, "admission.db"))
+	store, err := sqlite.Open(":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer sqlitetest.CloseAndWait(t, store, tempDir)
+	defer store.Close()
 	backend := &fakeOrchestrator{
 		store:         store,
 		block:         true,
@@ -867,7 +864,6 @@ func TestShutdownWaitsForAdmittedCreationBeforeCancellingRun(t *testing.T) {
 	if err != nil || record.Status != kernelecho.StatusCancelled {
 		t.Fatalf("record=%#v err=%v", record, err)
 	}
-	sqlitetest.CloseAndWait(t, store, tempDir)
 }
 
 func newTestServer(t *testing.T, block bool) (http.Handler, *sqlite.Store) {
