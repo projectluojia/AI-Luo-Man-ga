@@ -13,22 +13,19 @@ jobs:
     name: 校验 Conventional Commits 标题
     runs-on: ubuntu-latest
     steps:
-      - uses: amannn/action-semantic-pull-request@48f256284bd46cdaab1048c3721360e808335d50 # v6.1.1
+      - name: 校验版本前缀与 Conventional Commits 类型
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          # 类型白名单对齐 AGENTS.md「提交与工程规范」。
-          types: |
-            feat
-            fix
-            docs
-            style
-            refactor
-            perf
-            test
-            build
-            ci
-            chore
-            revert
-          # ship 的 PR 标题在 Conventional Commit 前允许四段版本前缀。
-          headerPattern: '^v[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+ (\\w*)(?:\\((.*)\\))?: (.*)$'
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          set -euo pipefail
+          title="$PR_TITLE"
+          if [[ "$title" =~ ^v[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\ (.*)$ ]]; then
+            title="${BASH_REMATCH[1]}"
+          else
+            echo "PR 标题必须以 vMAJOR.MINOR.PATCH.MICRO 开头" >&2
+            exit 1
+          fi
+          if [[ ! "$title" =~ ^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([^()]+\))?:\ .+ ]]; then
+            echo "PR 标题不是允许的 Conventional Commit 格式: $PR_TITLE" >&2
+            exit 1
+          fi
