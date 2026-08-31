@@ -7,7 +7,7 @@ import (
 	kernelecho "github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
 )
 
-// AgentRunSettings 是 campus App Agent 的运行预算与时区。它们会写入 App 配置，
+// AgentRunSettings 是当前 App 的执行预算与时区。它们会写入 App 配置，
 // 因此校验边界与 internal/kernel/appconfig 保持一致。
 type AgentRunSettings struct {
 	Timezone        string `json:"timezone"`

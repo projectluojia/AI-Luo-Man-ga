@@ -12,9 +12,10 @@ import (
 	kernelecho "github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/idempotency"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/task"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite"
 )
+
+const testAppID = "test-app"
 
 func openSweepFixture(t *testing.T) (*sqlite.Store, *confirmation.Service, *task.Scheduler, *task.TypeRegistry) {
 	t.Helper()
@@ -26,9 +27,9 @@ func openSweepFixture(t *testing.T) (*sqlite.Store, *confirmation.Service, *task
 	ctx := context.Background()
 	now := time.Now().UTC()
 	if _, created, err := store.CreateEchoRunIdempotentLimited(ctx, "governance-echo", idempotency.Fingerprint([]byte("test-input")), kernelecho.Record{
-		ID: "echo-1", AppID: campus.AppID, InputMessage: "test-input", Status: kernelecho.StatusRunning, CreatedAt: now,
+		ID: "echo-1", AppID: testAppID, InputMessage: "test-input", Status: kernelecho.StatusRunning, CreatedAt: now,
 	}, kernelecho.RunRecord{
-		ID: "run-1", RunGroupID: "run-1", AppID: campus.AppID, EchoID: "echo-1", Attempt: 1, Status: kernelecho.RunStatusQueued,
+		ID: "run-1", RunGroupID: "run-1", AppID: testAppID, EchoID: "echo-1", Attempt: 1, Status: kernelecho.RunStatusQueued,
 		Model: "test-model", ModelConfigVersion: "v1", ProtocolVersion: "1.0", MaxSteps: 8, MaxToolCalls: 4,
 		MaxInputTokens: 4096, MaxOutputTokens: 2048, MaxTotalTokens: 8192, MaxOutputBytes: 65536,
 		ProviderTimeoutMS: 5000, Deadline: now.Add(time.Hour), AvailableAt: now, CreatedAt: now,
@@ -53,8 +54,8 @@ func insertExpiredConfirmation(t *testing.T, store *sqlite.Store) {
 		t.Fatal(err)
 	}
 	if err := store.Create(context.Background(), confirmation.Confirmation{
-		AppID: campus.AppID, ConfirmationID: "confirmation-1", EchoID: "echo-1", RunID: "run-1", CallID: "call-1",
-		CapabilityID: "campus.bus.notify", TargetType: confirmation.TargetTypeCapability, TargetID: "campus.bus.notify",
+		AppID: testAppID, ConfirmationID: "confirmation-1", EchoID: "echo-1", RunID: "run-1", CallID: "call-1",
+		CapabilityID: "test.notify", TargetType: confirmation.TargetTypeCapability, TargetID: "test.notify",
 		SideEffect: confirmation.SideEffectExternal, IdempotencyKey: "operation-1", ArgumentDigest: digest,
 		Status: confirmation.StatusWaiting, ExpiresAt: created.Add(time.Minute), CreatedAt: created,
 	}); err != nil {
@@ -71,17 +72,17 @@ func TestConfirmationSweepExpiresDueAndReschedules(t *testing.T) {
 	}
 	now := time.Now().UTC()
 	execution := task.Task{
-		AppID: campus.AppID, TaskID: "sweep-1", Type: confirmationSweepType, Status: task.StatusRunning,
+		AppID: testAppID, TaskID: "sweep-1", Type: confirmationSweepType, Status: task.StatusRunning,
 		Attempt: 1, MaxAttempts: 3, Deadline: now.Add(time.Hour), AvailableAt: now,
 		IdempotencyKey: "confirmation.expiry.test", Params: sweepParams, CreatedAt: now, UpdatedAt: now,
 	}
 	if err := spec.Handler(context.Background(), execution); err != nil {
 		t.Fatalf("清扫处理器执行失败: %v", err)
 	}
-	if _, err := confirmations.Resolve(context.Background(), campus.AppID, "confirmation-1"); !errors.Is(err, confirmation.ErrExpired) {
+	if _, err := confirmations.Resolve(context.Background(), testAppID, "confirmation-1"); !errors.Is(err, confirmation.ErrExpired) {
 		t.Fatalf("清扫后 Resolve 得到 %v, want ErrExpired", err)
 	}
-	queued, err := store.ListTasks(context.Background(), campus.AppID, 10)
+	queued, err := store.ListTasks(context.Background(), testAppID, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,10 +97,10 @@ func TestConfirmationSweepExpiresDueAndReschedules(t *testing.T) {
 func TestSeedConfirmationSweep(t *testing.T) {
 	store, _, scheduler, _ := openSweepFixture(t)
 	interval := 5 * time.Minute
-	if err := seedConfirmationSweep(context.Background(), scheduler, campus.AppID, interval); err != nil {
+	if err := seedConfirmationSweep(context.Background(), scheduler, testAppID, interval); err != nil {
 		t.Fatalf("播种清扫任务: %v", err)
 	}
-	queued, err := store.ListTasks(context.Background(), campus.AppID, 10)
+	queued, err := store.ListTasks(context.Background(), testAppID, 10)
 	if err != nil {
 		t.Fatal(err)
 	}

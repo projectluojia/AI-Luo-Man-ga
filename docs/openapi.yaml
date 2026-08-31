@@ -525,6 +525,7 @@ components:
       additionalProperties: false
       required:
         - revision
+        - app_id
         - model
         - executor_timeout_seconds
         - qq_enabled
@@ -538,6 +539,11 @@ components:
         revision:
           type: integer
           minimum: 0
+        app_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: "^[a-z0-9][a-z0-9._-]{0,127}$"
         model:
           type: string
           minLength: 1
@@ -610,6 +616,7 @@ components:
           additionalProperties: false
           required:
             - revision
+            - app_id
             - model
             - executor_timeout_seconds
             - qq_enabled
@@ -624,6 +631,11 @@ components:
             revision:
               type: integer
               minimum: 0
+            app_id:
+              type: string
+              maxLength: 128
+              pattern: "^(?:[a-z0-9][a-z0-9._-]{0,127})?$"
+              description: Empty only before the first local configuration is saved.
             model:
               type: string
             executor_timeout_seconds:

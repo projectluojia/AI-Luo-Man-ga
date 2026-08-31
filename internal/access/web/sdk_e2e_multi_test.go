@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus"
 	"github.com/projectluojia/AI-Luo-Man-ga/pkg/sdkgen"
+	"github.com/projectluojia/AI-Luo-Man-ga/testsupport/campus"
 )
 
 // assertJourneysResult 解析 SDK 返回的行程结果并断言顺序（多语言共用）。

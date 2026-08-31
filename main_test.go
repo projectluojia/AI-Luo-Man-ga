@@ -95,7 +95,7 @@ func TestMaintenanceIdentityBindIsIdempotent(t *testing.T) {
 		"identity-bind",
 		"--database", database,
 		"--user", "user-qq-1",
-		"--app", "campus-services",
+		"--app", "test-app",
 		"--platform", "qq",
 		"--space", "space-qq-1",
 		"--platform-user", "openid-qq-1",
@@ -116,7 +116,7 @@ func TestMaintenanceIdentityBindIsIdempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	resolved, err := identity.NewService(store).ResolveIdentity(t.Context(), "campus-services", "qq", "space-qq-1", "openid-qq-1")
+	resolved, err := identity.NewService(store).ResolveIdentity(t.Context(), "test-app", "qq", "space-qq-1", "openid-qq-1")
 	if err != nil {
 		t.Fatalf("resolve bound identity: %v", err)
 	}
@@ -141,11 +141,11 @@ func TestMaintenanceIdentityBindRejectsInvalidArguments(t *testing.T) {
 
 func TestMaintenanceIdentityUnbind(t *testing.T) {
 	database := filepath.Join(t.TempDir(), "identity.db")
-	bind := []string{"identity-bind", "--database", database, "--user", "user-qq-1", "--platform", "qq", "--space", "private", "--platform-user", "openid-qq-1"}
+	bind := []string{"identity-bind", "--database", database, "--user", "user-qq-1", "--app", "test-app", "--platform", "qq", "--space", "private", "--platform-user", "openid-qq-1"}
 	if handled, err := runMaintenanceCommand(bind, &bytes.Buffer{}); err != nil || !handled {
 		t.Fatalf("bind handled=%t err=%v", handled, err)
 	}
-	unbind := []string{"identity-unbind", "--database", database, "--platform", "qq", "--space", "private", "--platform-user", "openid-qq-1"}
+	unbind := []string{"identity-unbind", "--database", database, "--app", "test-app", "--platform", "qq", "--space", "private", "--platform-user", "openid-qq-1"}
 	output := &bytes.Buffer{}
 	if handled, err := runMaintenanceCommand(unbind, output); err != nil || !handled || !strings.Contains(output.String(), "身份解绑完成") {
 		t.Fatalf("unbind handled=%t output=%q err=%v", handled, output.String(), err)
@@ -155,7 +155,7 @@ func TestMaintenanceIdentityUnbind(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	if _, err := identity.NewService(store).ResolveIdentity(t.Context(), "campus-services", "qq", "private", "openid-qq-1"); !errors.Is(err, identity.ErrNotFound) {
+	if _, err := identity.NewService(store).ResolveIdentity(t.Context(), "test-app", "qq", "private", "openid-qq-1"); !errors.Is(err, identity.ErrNotFound) {
 		t.Fatalf("resolve after unbind error=%v, want ErrNotFound", err)
 	}
 	// 再次解绑：身份不存在返回 ErrNotFound，命令仍明确报错。
@@ -167,7 +167,7 @@ func TestMaintenanceIdentityUnbind(t *testing.T) {
 
 func TestMaintenanceIdentityBindRejectsConflictingBinding(t *testing.T) {
 	database := filepath.Join(t.TempDir(), "identity.db")
-	base := []string{"identity-bind", "--database", database, "--platform", "qq", "--space", "space-qq-1", "--platform-user", "openid-qq-1"}
+	base := []string{"identity-bind", "--database", database, "--app", "test-app", "--platform", "qq", "--space", "space-qq-1", "--platform-user", "openid-qq-1"}
 	if handled, err := runMaintenanceCommand(append(append([]string{}, base...), "--user", "user-qq-1"), &bytes.Buffer{}); err != nil || !handled {
 		t.Fatalf("first bind handled=%t err=%v", handled, err)
 	}

@@ -49,7 +49,7 @@ func TestManagerStartsInSetupModeAndPersistsQQSecretPrivately(t *testing.T) {
 		t.Fatal(err)
 	}
 	resolved, ready := reloaded.CurrentResolved()
-	if !ready || resolved.Settings.Model != "test-model" || resolved.Settings.QQBotID != "2647414417" {
+	if !ready || resolved.Settings.AppID != "test-app" || resolved.Settings.Model != "test-model" || resolved.Settings.QQBotID != "2647414417" {
 		t.Fatalf("resolved=%+v ready=%v", resolved.Settings, ready)
 	}
 	if len(resolved.Settings.QQQuickReplies) != 1 || resolved.Settings.QQQuickReplies[0] != (QQQuickReply{Trigger: "ping", Reply: "pong"}) {
@@ -141,6 +141,18 @@ func TestManagerRejectsIncompleteSettings(t *testing.T) {
 	}
 }
 
+func TestManagerRejectsMissingAppID(t *testing.T) {
+	manager, err := NewService(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := validInput()
+	input.AppID = ""
+	if _, err := manager.Save(input); err != ErrInvalid {
+		t.Fatalf("missing AppID error=%v", err)
+	}
+}
+
 func TestManagerUsesRevisionCASAndPreservesBlankSecrets(t *testing.T) {
 	manager, err := NewService(t.TempDir())
 	if err != nil {
@@ -171,7 +183,7 @@ func TestManagerUsesRevisionCASAndPreservesBlankSecrets(t *testing.T) {
 func validInput() SaveInput {
 	defaults := DefaultSettings()
 	return SaveInput{
-		Model: "test-model", ExecutorTimeoutSeconds: 30,
+		AppID: "test-app", Model: "test-model", ExecutorTimeoutSeconds: 30,
 		QQEnabled: true, QQWSURL: "ws://127.0.0.1:3001", QQWSToken: "qq-secret", QQBotID: "2647414417",
 		QQAllowedGroupIDs: []string{"123456"}, QQAllowedPrivateUserIDs: []string{"654321"},
 		QQQuickReplies: []QQQuickReply{{Trigger: " ping ", Reply: " pong "}}, QQPokeReplies: []string{" 在呢 "},
