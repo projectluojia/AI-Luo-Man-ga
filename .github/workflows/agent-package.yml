@@ -1,0 +1,64 @@
+name: Agent executor package
+
+# 过渡期包仍在本仓库，但拥有独立的 CI 边界；迁移到 packages/agent 独立仓库时
+# 可直接携带本文件。Core→Executor 的 e2e 也只依赖 Agent 包，不捆绑其他业务包。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agent-package-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  package:
+    name: Agent executor package
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.7"
+          enable-cache: true
+          cache-dependency-glob: packages/agent/runtime/uv.lock
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: 构建 Core CLI
+        run: go build -o ailuo .
+      - name: 打包 Agent Executor
+        run: ./ailuo pack packages/agent "$RUNNER_TEMP/agent-package-dist"
+      - name: 同步 Executor 包测试环境
+        run: uv sync --project packages/agent/runtime --locked
+      - name: 编译 Executor 包
+        run: uv run --project packages/agent/runtime --locked python -m compileall -q packages/agent/runtime
+      - name: 检查 Executor 包代码
+        working-directory: packages/agent/runtime
+        run: uv run --project . --locked ruff check .
+      - name: 运行 Executor 包单元测试
+        run: uv run --project packages/agent/runtime --locked python -m unittest discover -s packages/agent/runtime -p "test_*.py" -v
+      - name: 安装并验证 Agent 发布物
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t agent_tarballs < <(find "$RUNNER_TEMP/agent-package-dist" -maxdepth 1 -type f -name 'agent-*.tgz' -print)
+          test "${#agent_tarballs[@]}" -eq 1
+          agent_tgz="${agent_tarballs[0]}"
+          agent_version="$(tar -xzOf "$agent_tgz" manifest.json | jq -er .version)"
+          ./ailuo install --root "$RUNNER_TEMP/agent-package-root" "$agent_tgz"
+          ./ailuo list --root "$RUNNER_TEMP/agent-package-root" | grep -q "^agent@${agent_version}"
+      - name: 运行 Core→Executor 安装后 e2e
+        shell: bash
+        run: |
+          AILUO_EXECUTOR_PACKAGE_DIR="$RUNNER_TEMP/agent-package-root/agent" \
+            go test -tags=integration ./e2e -v -timeout=60s

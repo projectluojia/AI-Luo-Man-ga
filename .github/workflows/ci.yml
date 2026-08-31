@@ -10,12 +10,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # 三平台核心测试：Go 覆盖 Windows/Linux/macOS 可构建可测试契约。
-  # job 名即 required status check 上下文（main 规则集），改名必须同步更新规则集。
+  # 合并门禁统一使用末尾的 ci-required，单个 job 名称可独立演进。
   test:
     name: 核心测试 (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -37,7 +37,7 @@ jobs:
       - name: 运行 Go 单元测试
         run: go test ./...
 
-  # Linux 完整质量门禁：PR 跑静态分析与集成测试，main/手动运行额外跑 race。
+  # Linux 完整质量门禁：只在 Linux 执行一次全量 race，避免三平台重复开销。
   quality-linux:
     name: Linux 完整质量门禁
     runs-on: ubuntu-latest
@@ -65,7 +65,6 @@ jobs:
         # grpc.NewClient 涉及内核拨号语义与 15 处测试同步，作为独立重构任务跟进。
         run: go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 '-checks=inherit,-SA1019' ./...
       - name: 运行 Go race 测试
-        if: github.event_name != 'pull_request'
         run: go test -race ./...
       - name: 运行 Runtime Host 集成测试
         run: go test -tags=integration ./internal/kernel/loader -v -timeout=30s
@@ -87,6 +86,7 @@ jobs:
           cache: true
       - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
+          version: "0.12.7"
           enable-cache: true
           cache-dependency-glob: packages/agent/runtime/uv.lock
       - name: 同步协议生成工具环境
@@ -114,3 +114,49 @@ jobs:
           persist-credentials: false
       - name: 校验 Docker Compose 配置
         run: docker compose -f docker/qq-onebot.compose.yaml config --quiet
+
+  workflow-lint:
+    name: Workflow lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: 检查 GitHub Actions workflow
+        shell: bash
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/*.yml
+
+  ci-required:
+    name: ci-required
+    if: ${{ always() }}
+    needs:
+      - test
+      - quality-linux
+      - proto-drift
+      - compose-config
+      - workflow-lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: 汇总 CI 门禁
+        env:
+          TEST_RESULT: ${{ needs.test.result }}
+          QUALITY_RESULT: ${{ needs.quality-linux.result }}
+          PROTO_RESULT: ${{ needs.proto-drift.result }}
+          COMPOSE_RESULT: ${{ needs.compose-config.result }}
+          WORKFLOW_RESULT: ${{ needs.workflow-lint.result }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for result in "$TEST_RESULT" "$QUALITY_RESULT" "$PROTO_RESULT" "$COMPOSE_RESULT" "$WORKFLOW_RESULT"; do
+            if [[ "$result" != success ]]; then
+              echo "CI job result: $result" >&2
+              exit 1
+            fi
+          done
