@@ -313,14 +313,12 @@ WHERE app_id=? AND source_revision=? ORDER BY name,id`, appID, metadata.Revision
 	for rows.Next() {
 		var campus classroom.Campus
 		if err := rows.Scan(&campus.ID, &campus.Name, &campus.SourceRevision); err != nil {
-			rows.Close()
-			return classroom.CampusSnapshot{}, fmt.Errorf("scan classroom campus: %w", err)
+			return classroom.CampusSnapshot{}, closeSQLRows(rows, fmt.Errorf("scan classroom campus: %w", err))
 		}
 		campuses = append(campuses, campus)
 	}
 	if err := rows.Err(); err != nil {
-		rows.Close()
-		return classroom.CampusSnapshot{}, err
+		return classroom.CampusSnapshot{}, closeSQLRows(rows, err)
 	}
 	if err := rows.Close(); err != nil {
 		return classroom.CampusSnapshot{}, fmt.Errorf("close classroom campus rows: %w", err)
@@ -350,14 +348,12 @@ WHERE app_id=? AND source_revision=? AND campus_id=? ORDER BY name,id`,
 	for rows.Next() {
 		var building classroom.Building
 		if err := rows.Scan(&building.ID, &building.CampusID, &building.Name, &building.SourceRevision); err != nil {
-			rows.Close()
-			return classroom.BuildingSnapshot{}, fmt.Errorf("scan classroom building: %w", err)
+			return classroom.BuildingSnapshot{}, closeSQLRows(rows, fmt.Errorf("scan classroom building: %w", err))
 		}
 		buildings = append(buildings, building)
 	}
 	if err := rows.Err(); err != nil {
-		rows.Close()
-		return classroom.BuildingSnapshot{}, err
+		return classroom.BuildingSnapshot{}, closeSQLRows(rows, err)
 	}
 	if err := rows.Close(); err != nil {
 		return classroom.BuildingSnapshot{}, fmt.Errorf("close classroom building rows: %w", err)
@@ -485,16 +481,21 @@ ORDER BY academic_date, period, schedule_id`,
 	if err != nil {
 		return nil, fmt.Errorf("query classroom schedules: %w", err)
 	}
-	defer rows.Close()
 	items := []classroom.ScheduleItem{}
 	for rows.Next() {
 		item, err := scanClassroomSchedule(rows)
 		if err != nil {
-			return nil, err
+			return nil, closeSQLRows(rows, err)
 		}
 		items = append(items, item)
 	}
-	return items, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, closeSQLRows(rows, err)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("close classroom schedule rows: %w", err)
+	}
+	return items, nil
 }
 
 func (s *Store) CancelSchedule(ctx context.Context, appID, userID, scheduleID string, now time.Time) (result classroom.ScheduleItem, resultErr error) {
@@ -765,19 +766,25 @@ func scanClassroomSchedule(row classroomScheduleScanner) (classroom.ScheduleItem
 }
 
 func scanClassroomRooms(rows *sql.Rows) ([]classroom.Room, error) {
-	defer rows.Close()
 	rooms := []classroom.Room{}
 	for rows.Next() {
 		room, err := scanClassroomRoom(rows)
 		if err != nil {
-			return nil, err
+			return nil, closeSQLRows(rows, err)
 		}
 		rooms = append(rooms, room)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return nil, closeSQLRows(rows, err)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("close classroom room rows: %w", err)
 	}
 	return rooms, nil
+}
+
+func closeSQLRows(rows *sql.Rows, primary error) error {
+	return errors.Join(primary, rows.Close())
 }
 
 func scanClassroomRoom(row classroomScheduleScanner) (classroom.Room, error) {
