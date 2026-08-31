@@ -10,7 +10,7 @@ import (
 )
 
 func TestValidateManifestAcceptsNeutralCore(t *testing.T) {
-	extensions := json.RawMessage(`{"tools":[],"service":{},"capabilities":[]}`)
+	extensions := json.RawMessage(`{"tools":[],"service":{"id":"campus","version":"1.2.3","description":"校巴"},"capabilities":[{"id":"campus.query","version":"1.2.3","name":"查询","description":"查询","service_id":"campus","input_schema_json":"{\"type\":\"object\"}","side_effect":"read"}]}`)
 	manifest := packmgr.Manifest{
 		SchemaVersion: packmgr.SchemaVersion, ID: "campus.bus", Version: "1.2.3",
 		Mode: packmgr.ModeHosted, Entrypoint: "campus.wasm", Pin: true, IdleTTLMS: 1000, Extensions: extensions,
@@ -60,6 +60,7 @@ func TestValidateManifestRejectsInvalidCore(t *testing.T) {
 			m.Dependencies = []packmgr.Dependency{{ID: "bus.query", Constraint: "^"}}
 		}},
 		{name: "invalid extensions json", mutate: func(m *packmgr.Manifest) { m.Extensions = json.RawMessage(`{`) }},
+		{name: "invalid extensions shape", mutate: func(m *packmgr.Manifest) { m.Extensions = json.RawMessage(`{}`) }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -103,6 +104,12 @@ func TestValidateLockAndProcessSpec(t *testing.T) {
 	}
 	if err := packmgr.ValidateProcessSpec(packmgr.ProcessSpec{Address: "192.0.2.1:9000"}); err == nil {
 		t.Fatal("ValidateProcessSpec accepted non-loopback address")
+	}
+	if err := packmgr.ValidateProcessSpec(packmgr.ProcessSpec{Path: artifactPath, WorkDir: workDir, Address: "127.0.0.1:0"}); err == nil {
+		t.Fatal("ValidateProcessSpec accepted zero port")
+	}
+	if err := packmgr.ValidateProcessSpec(packmgr.ProcessSpec{Path: artifactPath, WorkDir: workDir, Address: "127.0.0.1:65536"}); err == nil {
+		t.Fatal("ValidateProcessSpec accepted out-of-range port")
 	}
 }
 
