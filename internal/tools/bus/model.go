@@ -45,6 +45,9 @@ type RealtimePositionRequest struct {
 }
 
 func (r *RealtimePositionRequest) NormalizeAndValidate() error {
+	if r.RouteID != "" && strings.TrimSpace(r.RouteID) == "" {
+		return ErrQueryRequired
+	}
 	r.RouteID = strings.TrimSpace(r.RouteID)
 	if r.Limit == 0 {
 		r.Limit = 50

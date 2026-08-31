@@ -176,6 +176,13 @@ func validateRequiredSchema(ctx context.Context, db *sql.DB, version int) error 
 		if err := rows.Close(); err != nil {
 			return fmt.Errorf("close real-time schema probe: %w", err)
 		}
+		rows, err = db.QueryContext(ctx, "SELECT realtime_authorized FROM bus_source_revisions LIMIT 0")
+		if err != nil {
+			return fmt.Errorf("required real-time authorization column is unavailable")
+		}
+		if err := rows.Close(); err != nil {
+			return fmt.Errorf("close real-time authorization schema probe: %w", err)
+		}
 	}
 	if version >= 13 {
 		for _, table := range []string{"app_config_revisions", "app_config_heads"} {
