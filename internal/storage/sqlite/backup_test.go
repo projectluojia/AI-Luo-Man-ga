@@ -254,7 +254,7 @@ func TestValidateBackupRejectsUnregisteredMigrationVersion(t *testing.T) {
 	if _, err := db.Exec(`DELETE FROM schema_migrations WHERE version=18`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`INSERT INTO schema_migrations(version,applied_at) VALUES(26,'2026-08-31T00:00:00Z')`); err != nil {
+	if _, err := db.Exec(`INSERT INTO schema_migrations(version,applied_at) VALUES(99,'2026-08-31T00:00:00Z')`); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Close(); err != nil {
