@@ -1226,3 +1226,16 @@ NapCat 保持独立运行、独立登录和独立 WebUI；AI珞只连接 NapCat 
 QQ 白名单是 `internal/access/qq` 的 Access admission，不是 Kernel、Service、Tool 或 Capability 权限：群聊先要求 @机器人，再检查群号；私聊检查 QQ 号；戳一戳使用同一准入规则。空白名单 fail-closed，未允许来源在进入 `Hub`、Message、Echo 之前被静默丢弃。允许来源由 QQ Access 幂等创建稳定内部用户、AppMembership 和空间绑定后再进入统一 `Hub.Intake`，不需要手工 `identity-bind`；身份事实仍由 Go 管理的 identity Store 持久化。
 
 精确快速回复和戳一戳属于 QQ 平台行为，直接读取 OneBot 事件并向同一平台回发，因此实现留在 `internal/access/qq`，不注册为 Service、Capability 或 Tool。白名单群内的快速回复无需 @机器人；命中后在身份开通、`Hub.Intake`、Message、Echo 和 Agent 之前短路，固定文本不 @发送人。未命中规则的普通群消息仍需明确 @机器人。戳一戳随机文本也使用不带 @ 的纯文本发送；群聊可继续执行 OneBot `group_poke` 戳回动作。两类文本由 9178 本机控制台配置，戳一戳文案为空时只关闭文字，不关闭群内戳回。
+
+### 课程表能力实现边界（issue #8）
+
+课表数据属于 App 内用户数据，使用 `(app_id,user_id,timetable_id)` 与
+`(app_id,user_id,timetable_id,course_id)` 复合键持久化。`timetable` Service 只经
+统一 Dispatcher 注册的 Capability 调用 `timetable.*` Tool 与 Go-managed SQLite；
+课表数量、单表课程数量、字段长度和单一 active 课表均由模型校验、事务逻辑和
+数据库约束共同限制。
+
+当前实现接受用户提供的 WuDa 教务 `kbList` JSON，以及公开 WakeUp 解析契约的
+`{format,content,fileName}` CSV/legacy envelope，兼容字段别名、中文星期、单双周、
+节次范围、quoted CSV 和显示文本清洗。仓库没有智慧珞珈登录或后端 API；真实机构
+数据 ingestion 仍须书面授权，不能把 Luotopia 的 Astro/热更新脚本当作服务端接口。

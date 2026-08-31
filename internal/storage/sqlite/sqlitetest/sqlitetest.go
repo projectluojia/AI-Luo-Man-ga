@@ -13,13 +13,15 @@ import (
 )
 
 // CloseAndWait 关闭测试存储并等待文件句柄释放，随后删除临时目录：
-// 反复 GC + 重试直到目录可删（上限 1 秒），避免 Windows 上 TempDir 清理失败。
+// 反复 GC + 重试直到目录可删（上限 6 秒）。modernc SQLite 依赖 finalizer
+// 延迟释放句柄，高负载 runner 上 1 秒窗口不足以覆盖 GC 调度与实时防护扫描，
+// 曾导致 Windows CI 上 TempDir 清理偶发失败；窗口只在句柄未释放时才有等待成本。
 func CloseAndWait(t *testing.T, store *sqlite.Store, dir string) {
 	t.Helper()
 	if err := store.Close(); err != nil {
 		t.Errorf("close store: %v", err)
 	}
-	deadline := time.Now().Add(time.Second)
+	deadline := time.Now().Add(6 * time.Second)
 	for {
 		if err := os.RemoveAll(dir); err == nil {
 			return
