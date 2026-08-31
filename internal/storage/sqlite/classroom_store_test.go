@@ -135,7 +135,13 @@ func TestClassroomStoreScheduleIsolationAndStateMachine(t *testing.T) {
 		t.Fatalf("idempotent cancel=%#v err=%v", replayCancel, err)
 	}
 	if _, err := store.CreateSchedule(ctx, item); !errors.Is(err, classroom.ErrIllegalState) {
-		t.Fatalf("revive cancelled err=%v", err)
+		t.Fatalf("revive cancelled id err=%v", err)
+	}
+	rebook := item
+	rebook.ID = "sched-1-rebook"
+	booked, err := store.CreateSchedule(ctx, rebook)
+	if err != nil || booked.ID != "sched-1-rebook" || booked.Status != classroom.ScheduleStatusScheduled {
+		t.Fatalf("rebook after cancel=%#v err=%v", booked, err)
 	}
 	if _, err := store.CancelSchedule(ctx, "campus-services", "user-a", "missing", now); !errors.Is(err, classroom.ErrNotFound) {
 		t.Fatalf("cancel missing err=%v", err)
@@ -148,8 +154,12 @@ func TestClassroomStoreScheduleIsolationAndStateMachine(t *testing.T) {
 		t.Fatal(err)
 	}
 	listed, err := store.ListSchedules(ctx, "campus-services", "user-a", classroom.ScheduleListRequest{})
-	if err != nil || len(listed) != 1 || listed[0].ID != "sched-1" {
+	if err != nil || len(listed) != 2 {
 		t.Fatalf("list user-a=%#v err=%v", listed, err)
+	}
+	scheduled, err := store.ListSchedules(ctx, "campus-services", "user-a", classroom.ScheduleListRequest{Status: classroom.ScheduleStatusScheduled})
+	if err != nil || len(scheduled) != 1 || scheduled[0].ID != "sched-1-rebook" {
+		t.Fatalf("list scheduled user-a=%#v err=%v", scheduled, err)
 	}
 	crossUser, err := store.ListSchedules(ctx, "campus-services", "user-b", classroom.ScheduleListRequest{})
 	if err != nil || len(crossUser) != 0 {
