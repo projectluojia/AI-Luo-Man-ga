@@ -867,7 +867,6 @@ func TestShutdownWaitsForAdmittedCreationBeforeCancellingRun(t *testing.T) {
 	if err != nil || record.Status != kernelecho.StatusCancelled {
 		t.Fatalf("record=%#v err=%v", record, err)
 	}
-	sqlitetest.CloseAndWait(t, store, tempDir)
 }
 
 func newTestServer(t *testing.T, block bool) (http.Handler, *sqlite.Store) {
