@@ -108,6 +108,8 @@ func TestCapabilityDataGovernanceErrorsAreStableAndSafe(t *testing.T) {
 		{err: contracts.ErrDataIncomplete, code: "data_incomplete"},
 		{err: contracts.ErrDataUntrusted, code: "data_non_authoritative"},
 		{err: contracts.ErrDataExpired, code: "data_expired", retryable: true},
+		{err: contracts.ErrQuotaExceeded, code: "quota_exceeded"},
+		{err: contracts.ErrDelegatedAuthRequired, code: "delegated_auth_required"},
 	}
 	for _, test := range tests {
 		value := publicerror.Capability(errors.Join(test.err, errors.New("source=private-copy")))

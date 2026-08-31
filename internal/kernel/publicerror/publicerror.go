@@ -39,6 +39,10 @@ func Capability(err error) Error {
 		return capabilityCodeTable["data_non_authoritative"]
 	case errors.Is(err, contracts.ErrDataExpired):
 		return capabilityCodeTable["data_expired"]
+	case errors.Is(err, contracts.ErrQuotaExceeded):
+		return capabilityCodeTable["quota_exceeded"]
+	case errors.Is(err, contracts.ErrDelegatedAuthRequired):
+		return capabilityCodeTable["delegated_auth_required"]
 	case errors.Is(err, runtime.ErrCapabilityDisabled):
 		return capabilityCodeTable["capability_disabled"]
 	case errors.Is(err, runtime.ErrAppPolicyUnavailable):
@@ -96,6 +100,8 @@ var capabilityCodeTable = map[string]Error{
 	"data_incomplete":              {Code: "data_incomplete", Message: "数据新鲜度信息不完整"},
 	"data_non_authoritative":       {Code: "data_non_authoritative", Message: "当前数据不是权威来源，不能作为事实返回"},
 	"data_expired":                 {Code: "data_expired", Message: "权威数据已过期，不能作为当前事实返回", Retryable: true},
+	"quota_exceeded":               {Code: "quota_exceeded", Message: "预约人数超过剩余名额，已拒绝超额请求"},
+	"delegated_auth_required":      {Code: "delegated_auth_required", Message: "当前操作需要委托授权，尚未接入真实校园登录"},
 	"invalid_arguments":            {Code: "invalid_arguments", Message: "Capability 参数无效"},
 	"capability_disabled":          {Code: "capability_disabled", Message: "当前 App 未启用该 Capability"},
 	"app_policy_unavailable":       {Code: "app_policy_unavailable", Message: "当前 App 策略暂时不可用", Retryable: true},
