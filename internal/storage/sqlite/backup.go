@@ -129,7 +129,7 @@ func ValidateBackup(ctx context.Context, path string) (resultErr error) {
 			expectedCount++
 		}
 	}
-	// 允许并行业务线占用不连续版本号（例如 26，而 25/27/28 由其他模块注册）。
+	// 允许堆叠业务线占用不连续版本号：已应用行数必须等于本二进制中不超过该版本的注册迁移数。
 	if version < minimumRestorableSchemaVersion || version > currentSchemaVersion() || migrationCount != expectedCount {
 		err := fmt.Errorf("schema migration history is outside the supported restore range")
 		observeStorageOperation(ctx, "backup_validate", started, err)
@@ -266,6 +266,26 @@ FROM runs LIMIT 0`
 			}
 			if err := rows.Close(); err != nil {
 				return fmt.Errorf("close library seat schema probe: %w", err)
+			}
+		}
+	}
+	if version >= 31 {
+		for _, table := range []string{
+			"sports_source_revisions",
+			"sports_current_snapshots",
+			"sports_venues",
+			"sports_projects",
+			"sports_slots",
+			"sports_webview_descriptors",
+			"sports_reservations",
+			"sports_schedule_items",
+		} {
+			rows, err := db.QueryContext(ctx, "SELECT 1 FROM "+table+" LIMIT 0")
+			if err != nil {
+				return fmt.Errorf("required sports reservation table is unavailable")
+			}
+			if err := rows.Close(); err != nil {
+				return fmt.Errorf("close sports reservation schema probe: %w", err)
 			}
 		}
 	}
