@@ -43,6 +43,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/agent"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus/demo"
+	classroomservice "github.com/projectluojia/AI-Luo-Man-ga/internal/services/classroom"
 	promptservice "github.com/projectluojia/AI-Luo-Man-ga/internal/services/prompt"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/blob"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite"
@@ -454,6 +455,13 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 			observe.BoolAttr("authoritative", false),
 			observe.StringAttr("source", "demo-fixture-not-zhihui-luojia"),
 		)
+		if err := demo.LoadClassroomData(ctx, store, time.Now()); err != nil {
+			return fmt.Errorf("load demo classroom data: %w", err)
+		}
+		observe.Warn(ctx, "已载入非权威空闲教室演示数据",
+			observe.BoolAttr("authoritative", false),
+			observe.StringAttr("source", "demo-fixture-not-zhihui-luojia"),
+		)
 	}
 
 	baseSystemPrompt := config.baseSystemPrompt
@@ -481,6 +489,12 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 			campus.BusStopSearchCapabilityID,
 			campus.BusRouteListCapabilityID,
 			campus.BusJourneySearchCapabilityID,
+			classroomservice.RoomsSearchCapabilityID,
+			classroomservice.CampusesListCapabilityID,
+			classroomservice.BuildingsListCapabilityID,
+			classroomservice.ScheduleCreateCapabilityID,
+			classroomservice.ScheduleListCapabilityID,
+			classroomservice.ScheduleCancelCapabilityID,
 			agent.CapabilityID,
 			agent.StatusCapabilityID,
 			promptservice.PreferenceGetID,
@@ -529,6 +543,9 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 	promptService := promptservice.NewService(promptCatalog, store)
 	if err := promptservice.Register(reg, promptService); err != nil {
 		return fmt.Errorf("register prompt Service: %w", err)
+	}
+	if err := classroomservice.Register(reg, classroomservice.NewService(store)); err != nil {
+		return fmt.Errorf("register classroom Service: %w", err)
 	}
 	// 确认与副作用治理：持久确认服务注入 Dispatcher，凡声明 write/external 副作用
 	// 的 Capability 在未获批准前 fail-closed（缺确认标识或验证失败一律拒绝执行）。
@@ -1235,6 +1252,12 @@ func ensurePromptCapabilities(existing []string) []string {
 		promptservice.PreferenceGetID,
 		promptservice.PreferenceSetID,
 		promptservice.PreferenceResetID,
+		classroomservice.RoomsSearchCapabilityID,
+		classroomservice.CampusesListCapabilityID,
+		classroomservice.BuildingsListCapabilityID,
+		classroomservice.ScheduleCreateCapabilityID,
+		classroomservice.ScheduleListCapabilityID,
+		classroomservice.ScheduleCancelCapabilityID,
 	} {
 		if !slices.Contains(result, capabilityID) {
 			result = append(result, capabilityID)
