@@ -16,14 +16,25 @@ type CalendarStore struct {
 func NewCalendarStore() *CalendarStore {
 	return &CalendarStore{snapshots: make(map[string]cal.Snapshot)}
 }
-func (s *CalendarStore) ReplaceSnapshot(_ context.Context, in cal.SnapshotInput) error {
-	if in.AppID == "" || in.Revision == "" || in.Source == "" || !in.Complete || in.ImportedAt.IsZero() || in.ValidUntil.IsZero() || !in.ValidUntil.After(in.ImportedAt) || len(in.Events) > cal.MaxEvents {
-		return cal.ErrInvalid
+func (s *CalendarStore) ReplaceSnapshot(ctx context.Context, in cal.SnapshotInput) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := cal.ValidateSnapshotInput(in); err != nil {
+		return err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	ev := append([]cal.Event(nil), in.Events...)
-	sort.Slice(ev, func(i, j int) bool { return ev[i].StartAt.Before(ev[j].StartAt) })
+	sort.Slice(ev, func(i, j int) bool {
+		if ev[i].StartAt.Equal(ev[j].StartAt) {
+			return ev[i].ID < ev[j].ID
+		}
+		return ev[i].StartAt.Before(ev[j].StartAt)
+	})
 	seen := make(map[string]struct{}, len(ev))
 	for i := range ev {
 		if ev[i].ID == "" || ev[i].Title == "" || ev[i].StartAt.IsZero() || !ev[i].EndAt.After(ev[i].StartAt) || !ev[i].StartAt.Before(in.ValidUntil) || ev[i].EndAt.After(in.ValidUntil) {
@@ -50,6 +61,9 @@ func (s *CalendarStore) Search(ctx context.Context, appID string, req cal.QueryR
 	}
 	out := make([]cal.Event, 0, req.Limit)
 	for _, e := range snap.Events {
+		if err := ctx.Err(); err != nil {
+			return cal.Snapshot{}, err
+		}
 		if e.EndAt.After(req.From) && e.StartAt.Before(req.To) {
 			out = append(out, e)
 			if len(out) == req.Limit {

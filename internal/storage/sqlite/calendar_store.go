@@ -46,8 +46,8 @@ CREATE INDEX IF NOT EXISTS calendar_events_range_idx ON calendar_events(app_id, 
 }
 
 func (s *Store) ReplaceCalendarSnapshot(ctx context.Context, in cal.SnapshotInput) error {
-	if in.AppID == "" || in.Revision == "" || in.Source == "" || !in.Complete || in.ImportedAt.IsZero() || in.ValidUntil.IsZero() || !in.ValidUntil.After(in.ImportedAt) || len(in.Events) > cal.MaxEvents {
-		return cal.ErrInvalid
+	if err := cal.ValidateSnapshotInput(in); err != nil {
+		return err
 	}
 	tx, err := s.beginTx(ctx, nil)
 	if err != nil {
@@ -63,7 +63,7 @@ func (s *Store) ReplaceCalendarSnapshot(ctx context.Context, in cal.SnapshotInpu
 	}
 	seen := map[string]bool{}
 	for _, e := range in.Events {
-		if e.ID == "" || e.Title == "" || e.StartAt.IsZero() || !e.EndAt.After(e.StartAt) || !e.StartAt.Before(in.ValidUntil) || e.EndAt.After(in.ValidUntil) || seen[e.ID] {
+		if seen[e.ID] {
 			return cal.ErrInvalid
 		}
 		seen[e.ID] = true
@@ -130,11 +130,23 @@ func (s *Store) Search(ctx context.Context, appID string, req cal.QueryRequest) 
 		events = append(events, e)
 	}
 	rows.Close()
-	sort.Slice(events, func(i, j int) bool { return events[i].StartAt.Before(events[j].StartAt) })
+	if err := rows.Err(); err != nil {
+		return cal.Snapshot{}, err
+	}
+	sort.Slice(events, func(i, j int) bool {
+		if events[i].StartAt.Equal(events[j].StartAt) {
+			return events[i].ID < events[j].ID
+		}
+		return events[i].StartAt.Before(events[j].StartAt)
+	})
 	if err := tx.Commit(); err != nil {
 		return cal.Snapshot{}, fmt.Errorf("commit calendar read: %w", err)
 	}
 	return cal.Snapshot{Metadata: m, Events: events}, nil
+}
+
+func (s *Store) ReplaceSnapshot(ctx context.Context, in cal.SnapshotInput) error {
+	return s.ReplaceCalendarSnapshot(ctx, in)
 }
 
 var _ cal.Store = (*Store)(nil)

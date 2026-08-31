@@ -17,7 +17,7 @@ import (
 func TestDispatcherCalendarAppIsolationAndGovernance(t *testing.T) {
 	s := memory.NewCalendarStore()
 	now := time.Now().UTC()
-	if err := s.ReplaceSnapshot(context.Background(), cal.SnapshotInput{AppID: "campus-services", Revision: "r1", Source: "demo", Authoritative: false, Complete: true, ImportedAt: now.Add(-time.Hour), ValidUntil: now.Add(time.Hour), Events: []cal.Event{{ID: "e", Title: "开学", StartAt: now, EndAt: now.Add(time.Hour)}}}); err != nil {
+	if err := s.ReplaceSnapshot(context.Background(), cal.SnapshotInput{AppID: "campus-services", Revision: "r1", Source: cal.SourceDemo, Authoritative: false, Complete: true, ImportedAt: now.Add(-time.Hour), ValidUntil: now.Add(time.Hour), Events: []cal.Event{{ID: "e", Title: "开学", StartAt: now, EndAt: now.Add(time.Hour)}}}); err != nil {
 		t.Fatal(err)
 	}
 	r := registry.New()
