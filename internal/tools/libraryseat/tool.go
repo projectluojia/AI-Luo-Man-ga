@@ -169,7 +169,7 @@ func createReservationHandler(store Store, now func() time.Time) registry.Handle
 			observe.StringAttr("slot_id", input.SlotID),
 			observe.StringAttr("slot_date", input.Date),
 		)
-		reservation, err := store.CreateReservation(ctx, CreateReservationInput{
+		reservation, dataStatus, err := store.CreateReservation(ctx, CreateReservationInput{
 			AppID: request.AppID, UserID: request.UserID,
 			SpaceID: input.SpaceID, SeatID: input.SeatID, SlotID: input.SlotID, Date: input.Date,
 			IdempotencyKey: request.IdempotencyKey,
@@ -177,7 +177,6 @@ func createReservationHandler(store Store, now func() time.Time) registry.Handle
 		if err != nil {
 			return nil, err
 		}
-		dataStatus := reservationDataStatus(reservation)
 		observe.Info(ctx, "图书馆座位预约已创建",
 			observe.StringAttr("reservation_status", reservation.Status),
 			observe.StringAttr("source_revision", dataStatus.Revision),

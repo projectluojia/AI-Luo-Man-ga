@@ -260,21 +260,21 @@ func (s *Store) SearchSeats(ctx context.Context, appID string, request libraryse
 	return snapshot, nil
 }
 
-func (s *Store) CreateReservation(ctx context.Context, input libraryseat.CreateReservationInput, now time.Time) (_ libraryseat.Reservation, resultErr error) {
+func (s *Store) CreateReservation(ctx context.Context, input libraryseat.CreateReservationInput, now time.Time) (_ libraryseat.Reservation, _ libraryseat.DataStatus, resultErr error) {
 	started := time.Now()
 	defer func() { observeStorageOperation(ctx, "create_library_seat_reservation", started, resultErr) }()
 	if err := libraryseat.RequireApp(input.AppID); err != nil {
-		return libraryseat.Reservation{}, err
+		return libraryseat.Reservation{}, libraryseat.DataStatus{}, err
 	}
 	if err := libraryseat.RequireUser(input.UserID); err != nil {
-		return libraryseat.Reservation{}, err
+		return libraryseat.Reservation{}, libraryseat.DataStatus{}, err
 	}
 	if input.IdempotencyKey != "" && (utf8.RuneCountInString(input.IdempotencyKey) > 256 || !utf8.ValidString(input.IdempotencyKey)) {
-		return libraryseat.Reservation{}, libraryseat.ErrInvalid
+		return libraryseat.Reservation{}, libraryseat.DataStatus{}, libraryseat.ErrInvalid
 	}
 	tx, metadata, err := s.beginLibrarySeatSnapshotWrite(ctx, input.AppID)
 	if err != nil {
-		return libraryseat.Reservation{}, err
+		return libraryseat.Reservation{}, libraryseat.DataStatus{}, err
 	}
 	defer s.finishTx(tx, &resultErr, "create library seat reservation")
 	if now.IsZero() {
@@ -283,47 +283,48 @@ func (s *Store) CreateReservation(ctx context.Context, input libraryseat.CreateR
 		now = now.UTC()
 	}
 	if err := expireLibrarySeatReservations(ctx, tx, input.AppID, now); err != nil {
-		return libraryseat.Reservation{}, err
+		return libraryseat.Reservation{}, libraryseat.DataStatus{}, err
 	}
-	if _, err := metadata.Govern(now); err != nil {
-		return libraryseat.Reservation{}, err
+	dataStatus, err := metadata.Govern(now)
+	if err != nil {
+		return libraryseat.Reservation{}, libraryseat.DataStatus{}, err
 	}
 	if input.IdempotencyKey != "" {
 		existing, found, err := loadReservationByCreateKey(ctx, tx, input.AppID, input.IdempotencyKey)
 		if err != nil {
-			return libraryseat.Reservation{}, err
+			return libraryseat.Reservation{}, libraryseat.DataStatus{}, err
 		}
 		if found {
 			if existing.UserID == input.UserID && existing.SpaceID == input.SpaceID &&
 				existing.SeatID == input.SeatID && existing.SlotID == input.SlotID && existing.Date == input.Date {
 				if err := tx.Commit(); err != nil {
-					return libraryseat.Reservation{}, err
+					return libraryseat.Reservation{}, libraryseat.DataStatus{}, err
 				}
-				return existing, nil
+				return existing, dataStatus, nil
 			}
-			return libraryseat.Reservation{}, libraryseat.ErrIdempotencyConflict
+			return libraryseat.Reservation{}, libraryseat.DataStatus{}, libraryseat.ErrIdempotencyConflict
 		}
 	}
 	space, seat, slot, err := loadCatalogRefs(ctx, tx, input.AppID, metadata.Revision, input.SpaceID, input.SeatID, input.SlotID)
 	if err != nil {
-		return libraryseat.Reservation{}, err
+		return libraryseat.Reservation{}, libraryseat.DataStatus{}, err
 	}
 	startsAt, endsAt, err := libraryseat.SlotBounds(input.Date, slot.StartMinute, slot.EndMinute)
 	if err != nil {
-		return libraryseat.Reservation{}, err
+		return libraryseat.Reservation{}, libraryseat.DataStatus{}, err
 	}
 	if !endsAt.After(now) {
-		return libraryseat.Reservation{}, libraryseat.ErrSlotInPast
+		return libraryseat.Reservation{}, libraryseat.DataStatus{}, libraryseat.ErrSlotInPast
 	}
 	var active int
 	if err := tx.QueryRowContext(ctx, `
 SELECT count(*) FROM library_seat_reservations
 WHERE app_id=? AND user_id=? AND status IN ('pending_confirm','confirmed')`,
 		input.AppID, input.UserID).Scan(&active); err != nil {
-		return libraryseat.Reservation{}, err
+		return libraryseat.Reservation{}, libraryseat.DataStatus{}, err
 	}
 	if active >= libraryseat.MaxActiveReservationsPerUser {
-		return libraryseat.Reservation{}, libraryseat.ErrQuotaExceeded
+		return libraryseat.Reservation{}, libraryseat.DataStatus{}, libraryseat.ErrQuotaExceeded
 	}
 	reservationID := uuid.NewString()
 	createdAt := now.Format(time.RFC3339Nano)
@@ -340,25 +341,25 @@ VALUES(?,?,?,?,?,?,?,?,?,'confirmed',?,?,?,?,?,?,NULL)`,
 			if input.IdempotencyKey != "" {
 				existing, found, loadErr := loadReservationByCreateKey(ctx, tx, input.AppID, input.IdempotencyKey)
 				if loadErr != nil {
-					return libraryseat.Reservation{}, loadErr
+					return libraryseat.Reservation{}, libraryseat.DataStatus{}, loadErr
 				}
 				if found {
 					if existing.UserID == input.UserID && existing.SpaceID == input.SpaceID &&
 						existing.SeatID == input.SeatID && existing.SlotID == input.SlotID && existing.Date == input.Date {
 						if err := tx.Commit(); err != nil {
-							return libraryseat.Reservation{}, err
+							return libraryseat.Reservation{}, libraryseat.DataStatus{}, err
 						}
-						return existing, nil
+						return existing, dataStatus, nil
 					}
-					return libraryseat.Reservation{}, libraryseat.ErrIdempotencyConflict
+					return libraryseat.Reservation{}, libraryseat.DataStatus{}, libraryseat.ErrIdempotencyConflict
 				}
 			}
-			return libraryseat.Reservation{}, libraryseat.ErrConflict
+			return libraryseat.Reservation{}, libraryseat.DataStatus{}, libraryseat.ErrConflict
 		}
-		return libraryseat.Reservation{}, fmt.Errorf("insert library seat reservation: %w", err)
+		return libraryseat.Reservation{}, libraryseat.DataStatus{}, fmt.Errorf("insert library seat reservation: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
-		return libraryseat.Reservation{}, err
+		return libraryseat.Reservation{}, libraryseat.DataStatus{}, err
 	}
 	return libraryseat.Reservation{
 		ID: reservationID, AppID: input.AppID, UserID: input.UserID,
@@ -367,7 +368,7 @@ VALUES(?,?,?,?,?,?,?,?,?,'confirmed',?,?,?,?,?,?,NULL)`,
 		Status: libraryseat.ReservationConfirmed, CatalogRevision: metadata.Revision,
 		CatalogSource: metadata.Source, CatalogAuthoritative: metadata.Authoritative,
 		CreateIdempotencyKey: input.IdempotencyKey, CreatedAt: now, UpdatedAt: now,
-	}, nil
+	}, dataStatus, nil
 }
 
 func (s *Store) CancelReservation(ctx context.Context, input libraryseat.CancelReservationInput, now time.Time) (_ libraryseat.Reservation, resultErr error) {

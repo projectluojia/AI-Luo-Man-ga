@@ -52,21 +52,21 @@ func TestLibrarySeatStoreIsolationRaceAndStateMachine(t *testing.T) {
 		t.Fatalf("missing snapshot=%#v err=%v", missing, err)
 	}
 
-	first, err := store.CreateReservation(ctx, libraryseat.CreateReservationInput{
+	first, _, err := store.CreateReservation(ctx, libraryseat.CreateReservationInput{
 		AppID: "campus-services", UserID: "user-a", SpaceID: "space-a", SeatID: "seat-1",
 		SlotID: "slot-morning", Date: "2026-09-02", IdempotencyKey: "key-a",
 	}, now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	replay, err := store.CreateReservation(ctx, libraryseat.CreateReservationInput{
+	replay, _, err := store.CreateReservation(ctx, libraryseat.CreateReservationInput{
 		AppID: "campus-services", UserID: "user-a", SpaceID: "space-a", SeatID: "seat-1",
 		SlotID: "slot-morning", Date: "2026-09-02", IdempotencyKey: "key-a",
 	}, now)
 	if err != nil || replay.ID != first.ID {
 		t.Fatalf("replay=%#v err=%v", replay, err)
 	}
-	if _, err := store.CreateReservation(ctx, libraryseat.CreateReservationInput{
+	if _, _, err := store.CreateReservation(ctx, libraryseat.CreateReservationInput{
 		AppID: "campus-services", UserID: "user-a", SpaceID: "space-a", SeatID: "seat-2",
 		SlotID: "slot-morning", Date: "2026-09-02", IdempotencyKey: "key-a",
 	}, now); !errors.Is(err, libraryseat.ErrIdempotencyConflict) {
@@ -83,7 +83,7 @@ func TestLibrarySeatStoreIsolationRaceAndStateMachine(t *testing.T) {
 		}
 		go func(userID, key string) {
 			defer wg.Done()
-			_, err := store.CreateReservation(ctx, libraryseat.CreateReservationInput{
+			_, _, err := store.CreateReservation(ctx, libraryseat.CreateReservationInput{
 				AppID: "campus-services", UserID: userID, SpaceID: "space-a", SeatID: "seat-2",
 				SlotID: "slot-morning", Date: "2026-09-02", IdempotencyKey: key,
 			}, now)
