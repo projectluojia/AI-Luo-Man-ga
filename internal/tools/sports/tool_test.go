@@ -79,8 +79,7 @@ func TestSportsReservationOverQuotaAndIdempotentCancel(t *testing.T) {
 	}
 
 	payload, _ := json.Marshal(map[string]string{"reservation_id": created.Reservation.ID})
-	raw, err = handlers[sports.ReservationCancelToolID](ctx, request, payload)
-	if err != nil {
+	if _, err = handlers[sports.ReservationCancelToolID](ctx, request, payload); err != nil {
 		t.Fatal(err)
 	}
 	raw, err = handlers[sports.ReservationCancelToolID](ctx, request, payload)
