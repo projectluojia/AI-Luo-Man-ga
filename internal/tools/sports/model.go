@@ -343,9 +343,9 @@ type Store interface {
 	ListVenues(context.Context, string) (VenueSnapshot, error)
 	ListProjects(context.Context, string, ProjectListRequest) (ProjectSnapshot, error)
 	SearchSlots(context.Context, string, SlotSearchRequest) (SlotSnapshot, error)
-	CreateReservation(context.Context, CreateReservationInput) (Reservation, SnapshotMetadata, error)
-	CancelReservation(context.Context, CancelReservationInput) (Reservation, SnapshotMetadata, error)
-	ListMyReservations(context.Context, string, string, time.Time) (ReservationListSnapshot, error)
+	CreateSportsReservation(context.Context, CreateReservationInput) (Reservation, SnapshotMetadata, error)
+	CancelSportsReservation(context.Context, CancelReservationInput) (Reservation, SnapshotMetadata, error)
+	ListMySportsReservations(context.Context, string, string, time.Time) (ReservationListSnapshot, error)
 	GetWebViewDescriptor(context.Context, string) (WebViewSnapshot, error)
 	AddScheduleItem(context.Context, AddScheduleInput) (ScheduleItem, SnapshotMetadata, error)
 }

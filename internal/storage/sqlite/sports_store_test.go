@@ -83,7 +83,7 @@ func TestSportsStoreCreateCancelQuotaAndSchedule(t *testing.T) {
 	mustCreateUser(t, store, "user-1")
 	seedSportsCatalog(t, store, campus.AppID, true, 2, now)
 
-	created, _, err := store.CreateReservation(ctx, sports.CreateReservationInput{
+	created, _, err := store.CreateSportsReservation(ctx, sports.CreateReservationInput{
 		AppID: campus.AppID, UserID: "user-1", VenueID: "venue-gym", ProjectID: "project-badminton",
 		SlotID: "slot-morning", Count: 2, Now: now,
 	})
@@ -94,7 +94,7 @@ func TestSportsStoreCreateCancelQuotaAndSchedule(t *testing.T) {
 		t.Fatalf("remaining after exact quota=%d", remaining)
 	}
 
-	mine, err := store.ListMyReservations(ctx, campus.AppID, "user-1", now)
+	mine, err := store.ListMySportsReservations(ctx, campus.AppID, "user-1", now)
 	if err != nil || len(mine.Reservations) != 1 || mine.Reservations[0].ID != created.ID {
 		t.Fatalf("mine=%#v err=%v", mine, err)
 	}
@@ -112,7 +112,7 @@ func TestSportsStoreCreateCancelQuotaAndSchedule(t *testing.T) {
 		t.Fatalf("schedule replay=%#v err=%v", replay, err)
 	}
 
-	cancelled, _, err := store.CancelReservation(ctx, sports.CancelReservationInput{
+	cancelled, _, err := store.CancelSportsReservation(ctx, sports.CancelReservationInput{
 		AppID: campus.AppID, UserID: "user-1", ReservationID: created.ID, Now: now,
 	})
 	if err != nil || cancelled.Status != sports.StatusCancelled {
@@ -121,7 +121,7 @@ func TestSportsStoreCreateCancelQuotaAndSchedule(t *testing.T) {
 	if remaining := remainingSportsQuota(t, store, now); remaining != 2 {
 		t.Fatalf("remaining after cancel=%d", remaining)
 	}
-	again, _, err := store.CancelReservation(ctx, sports.CancelReservationInput{
+	again, _, err := store.CancelSportsReservation(ctx, sports.CancelReservationInput{
 		AppID: campus.AppID, UserID: "user-1", ReservationID: created.ID, Now: now,
 	})
 	if err != nil || again.Status != sports.StatusCancelled {
@@ -135,7 +135,7 @@ func TestSportsStoreRejectsOverQuotaWithoutPersist(t *testing.T) {
 	mustCreateUser(t, store, "user-1")
 	seedSportsCatalog(t, store, campus.AppID, true, 2, now)
 
-	_, _, err := store.CreateReservation(ctx, sports.CreateReservationInput{
+	_, _, err := store.CreateSportsReservation(ctx, sports.CreateReservationInput{
 		AppID: campus.AppID, UserID: "user-1", VenueID: "venue-gym", ProjectID: "project-badminton",
 		SlotID: "slot-morning", Count: 3, Now: now,
 	})
@@ -145,7 +145,7 @@ func TestSportsStoreRejectsOverQuotaWithoutPersist(t *testing.T) {
 	if remaining := remainingSportsQuota(t, store, now); remaining != 2 {
 		t.Fatalf("quota mutated after over-quota remaining=%d", remaining)
 	}
-	mine, err := store.ListMyReservations(ctx, campus.AppID, "user-1", now)
+	mine, err := store.ListMySportsReservations(ctx, campus.AppID, "user-1", now)
 	if err != nil || len(mine.Reservations) != 0 {
 		t.Fatalf("over-quota persisted reservation=%#v err=%v", mine, err)
 	}
@@ -165,7 +165,7 @@ func TestSportsStoreConcurrentOverbook(t *testing.T) {
 	for i := 1; i <= 8; i++ {
 		go func(userID string) {
 			defer group.Done()
-			_, _, err := store.CreateReservation(ctx, sports.CreateReservationInput{
+			_, _, err := store.CreateSportsReservation(ctx, sports.CreateReservationInput{
 				AppID: campus.AppID, UserID: userID, VenueID: "venue-gym", ProjectID: "project-badminton",
 				SlotID: "slot-morning", Count: 1, Now: now,
 			})
@@ -195,7 +195,7 @@ func TestSportsStoreCancelAndTimeout(t *testing.T) {
 
 	cancelled, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, _, err := store.CreateReservation(cancelled, sports.CreateReservationInput{
+	_, _, err := store.CreateSportsReservation(cancelled, sports.CreateReservationInput{
 		AppID: campus.AppID, UserID: "user-1", VenueID: "venue-gym", ProjectID: "project-badminton",
 		SlotID: "slot-morning", Count: 1, Now: now,
 	})
@@ -206,7 +206,7 @@ func TestSportsStoreCancelAndTimeout(t *testing.T) {
 		t.Fatalf("quota mutated after cancel remaining=%d", remaining)
 	}
 
-	created, _, err := store.CreateReservation(context.Background(), sports.CreateReservationInput{
+	created, _, err := store.CreateSportsReservation(context.Background(), sports.CreateReservationInput{
 		AppID: campus.AppID, UserID: "user-1", VenueID: "venue-gym", ProjectID: "project-badminton",
 		SlotID: "slot-morning", Count: 1, Now: now,
 	})
@@ -214,11 +214,11 @@ func TestSportsStoreCancelAndTimeout(t *testing.T) {
 		t.Fatal(err)
 	}
 	expiredAt := now.Add(4 * time.Hour)
-	mine, err := store.ListMyReservations(context.Background(), campus.AppID, "user-1", expiredAt)
+	mine, err := store.ListMySportsReservations(context.Background(), campus.AppID, "user-1", expiredAt)
 	if err != nil || len(mine.Reservations) != 1 || mine.Reservations[0].Status != sports.StatusExpired {
 		t.Fatalf("expired listing=%#v err=%v", mine, err)
 	}
-	_, _, err = store.CancelReservation(context.Background(), sports.CancelReservationInput{
+	_, _, err = store.CancelSportsReservation(context.Background(), sports.CancelReservationInput{
 		AppID: campus.AppID, UserID: "user-1", ReservationID: created.ID, Now: expiredAt,
 	})
 	if !errors.Is(err, sports.ErrNotCancellable) {
@@ -230,7 +230,7 @@ func TestSportsReservationTimesSurviveSnapshotReplace(t *testing.T) {
 	store, now := openSportsStore(t)
 	mustCreateUser(t, store, "user-1")
 	seedSportsCatalog(t, store, campus.AppID, true, 2, now)
-	created, _, err := store.CreateReservation(context.Background(), sports.CreateReservationInput{
+	created, _, err := store.CreateSportsReservation(context.Background(), sports.CreateReservationInput{
 		AppID: campus.AppID, UserID: "user-1", VenueID: "venue-gym", ProjectID: "project-badminton",
 		SlotID: "slot-morning", Count: 1, Now: now,
 	})
@@ -256,14 +256,14 @@ func TestSportsReservationTimesSurviveSnapshotReplace(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	mine, err := store.ListMyReservations(context.Background(), campus.AppID, "user-1", now)
+	mine, err := store.ListMySportsReservations(context.Background(), campus.AppID, "user-1", now)
 	if err != nil || len(mine.Reservations) != 1 || mine.Reservations[0].ID != created.ID {
 		t.Fatalf("mine after snapshot replace=%#v err=%v", mine, err)
 	}
 	if mine.Reservations[0].StartAt.IsZero() || mine.Reservations[0].EndAt.IsZero() || mine.Reservations[0].Status != sports.StatusConfirmed {
 		t.Fatalf("lost reservation times after snapshot replace: %#v", mine.Reservations[0])
 	}
-	expired, err := store.ListMyReservations(context.Background(), campus.AppID, "user-1", now.Add(4*time.Hour))
+	expired, err := store.ListMySportsReservations(context.Background(), campus.AppID, "user-1", now.Add(4*time.Hour))
 	if err != nil || len(expired.Reservations) != 1 || expired.Reservations[0].Status != sports.StatusExpired {
 		t.Fatalf("expire without slot row=%#v err=%v", expired, err)
 	}
@@ -273,14 +273,14 @@ func TestSportsCreateRejectsStaleRevisionBeforeWrite(t *testing.T) {
 	store, now := openSportsStore(t)
 	mustCreateUser(t, store, "user-1")
 	seedSportsCatalog(t, store, campus.AppID, true, 2, now)
-	_, _, err := store.CreateReservation(context.Background(), sports.CreateReservationInput{
+	_, _, err := store.CreateSportsReservation(context.Background(), sports.CreateReservationInput{
 		AppID: campus.AppID, UserID: "user-1", VenueID: "venue-gym", ProjectID: "project-badminton",
 		SlotID: "slot-morning", Count: 1, Now: now, ExpectedRevision: "rev-stale",
 	})
 	if !errors.Is(err, contracts.ErrDataIncomplete) {
 		t.Fatalf("stale revision err=%v", err)
 	}
-	mine, err := store.ListMyReservations(context.Background(), campus.AppID, "user-1", now)
+	mine, err := store.ListMySportsReservations(context.Background(), campus.AppID, "user-1", now)
 	if err != nil || len(mine.Reservations) != 0 {
 		t.Fatalf("stale revision persisted reservation=%#v err=%v", mine, err)
 	}

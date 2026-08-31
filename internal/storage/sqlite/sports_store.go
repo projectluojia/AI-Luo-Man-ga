@@ -357,7 +357,7 @@ ORDER BY start_at,slot_id`,
 	return sports.SlotSnapshot{Metadata: metadata, Slots: slots}, nil
 }
 
-func (s *Store) CreateReservation(ctx context.Context, input sports.CreateReservationInput) (_ sports.Reservation, _ sports.SnapshotMetadata, resultErr error) {
+func (s *Store) CreateSportsReservation(ctx context.Context, input sports.CreateReservationInput) (_ sports.Reservation, _ sports.SnapshotMetadata, resultErr error) {
 	started := time.Now()
 	defer func() { observeStorageOperation(ctx, "create_sports_reservation", started, resultErr) }()
 	if err := identity.ValidateAppID(input.AppID); err != nil {
@@ -437,7 +437,7 @@ WHERE app_id=? AND venue_id=? AND project_id=? AND slot_id=? AND source_revision
 	}, metadata, nil
 }
 
-func (s *Store) CancelReservation(ctx context.Context, input sports.CancelReservationInput) (_ sports.Reservation, _ sports.SnapshotMetadata, resultErr error) {
+func (s *Store) CancelSportsReservation(ctx context.Context, input sports.CancelReservationInput) (_ sports.Reservation, _ sports.SnapshotMetadata, resultErr error) {
 	started := time.Now()
 	defer func() { observeStorageOperation(ctx, "cancel_sports_reservation", started, resultErr) }()
 	if err := identity.ValidateAppID(input.AppID); err != nil {
@@ -503,7 +503,7 @@ WHERE app_id=? AND venue_id=? AND project_id=? AND slot_id=?`,
 	return item, metadata, nil
 }
 
-func (s *Store) ListMyReservations(ctx context.Context, appID, userID string, now time.Time) (_ sports.ReservationListSnapshot, resultErr error) {
+func (s *Store) ListMySportsReservations(ctx context.Context, appID, userID string, now time.Time) (_ sports.ReservationListSnapshot, resultErr error) {
 	started := time.Now()
 	defer func() { observeStorageOperation(ctx, "list_sports_reservations", started, resultErr) }()
 	if err := identity.ValidateAppID(appID); err != nil {

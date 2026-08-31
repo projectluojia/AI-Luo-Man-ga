@@ -286,7 +286,7 @@ func createReservationHandler(store Store, now func() time.Time) registry.Handle
 			observe.StringAttr("slot_id", input.SlotID),
 			observe.IntAttr("count", input.Count),
 		)
-		reservation, metadata, err := store.CreateReservation(ctx, CreateReservationInput{
+		reservation, metadata, err := store.CreateSportsReservation(ctx, CreateReservationInput{
 			AppID: request.AppID, UserID: request.UserID,
 			VenueID: input.VenueID, ProjectID: input.ProjectID, SlotID: input.SlotID,
 			Count: input.Count, Now: now(), ExpectedRevision: dataStatus.Revision,
@@ -332,7 +332,7 @@ func cancelReservationHandler(store Store, now func() time.Time) registry.Handle
 			observe.StringAttr("app_id", request.AppID),
 			observe.StringAttr("reservation_id", input.ReservationID),
 		)
-		reservation, _, err := store.CancelReservation(ctx, CancelReservationInput{
+		reservation, _, err := store.CancelSportsReservation(ctx, CancelReservationInput{
 			AppID: request.AppID, UserID: request.UserID, ReservationID: input.ReservationID, Now: now(),
 		})
 		if err != nil {
@@ -364,7 +364,7 @@ func mineReservationsHandler(store Store, now func() time.Time) registry.Handler
 		if err != nil {
 			return nil, err
 		}
-		snapshot, err := store.ListMyReservations(ctx, request.AppID, request.UserID, now())
+		snapshot, err := store.ListMySportsReservations(ctx, request.AppID, request.UserID, now())
 		if err != nil {
 			return nil, err
 		}
