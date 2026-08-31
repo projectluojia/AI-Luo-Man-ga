@@ -118,19 +118,18 @@ func ValidateBackup(ctx context.Context, path string) (resultErr error) {
 		observeStorageOperation(ctx, "backup_validate", started, err)
 		return errors.Join(ErrInvalidBackup, fmt.Errorf("backup foreign keys are invalid: %w", err))
 	}
-	var version, migrationCount int
-	if err := db.QueryRowContext(ctx, `SELECT coalesce(max(version), 0), count(*) FROM schema_migrations`).Scan(&version, &migrationCount); err != nil {
+	var version int
+	if err := db.QueryRowContext(ctx, `SELECT coalesce(max(version), 0) FROM schema_migrations`).Scan(&version); err != nil {
 		observeStorageOperation(ctx, "backup_validate", started, err)
 		return errors.Join(ErrInvalidBackup, fmt.Errorf("read backup schema version: %w", err))
 	}
-	expectedCount := 0
-	for registered := range registeredMigrations {
-		if registered <= version {
-			expectedCount++
-		}
+	applied, err := readAppliedMigrationVersions(ctx, db)
+	if err != nil {
+		observeStorageOperation(ctx, "backup_validate", started, err)
+		return errors.Join(ErrInvalidBackup, err)
 	}
-	// 允许堆叠业务线占用不连续版本号：已应用行数必须等于本二进制中不超过该版本的注册迁移数。
-	if version < minimumRestorableSchemaVersion || version > currentSchemaVersion() || migrationCount != expectedCount {
+	if version < minimumRestorableSchemaVersion || version > currentSchemaVersion() ||
+		!migrationSetsEqual(applied, registeredVersionsThrough(version)) {
 		err := fmt.Errorf("schema migration history is outside the supported restore range")
 		observeStorageOperation(ctx, "backup_validate", started, err)
 		return errors.Join(ErrInvalidBackup, err)
@@ -289,6 +288,15 @@ FROM runs LIMIT 0`
 			}
 		}
 	}
+	if version >= 32 {
+		rows, err := db.QueryContext(ctx, `SELECT app_id,user_id,kind,nonce,ciphertext,created_at,expires_at,revoked_at FROM ecard_credentials LIMIT 0`)
+		if err != nil {
+			return fmt.Errorf("required ecard credential schema is unavailable")
+		}
+		if err := rows.Close(); err != nil {
+			return fmt.Errorf("close ecard credential schema probe: %w", err)
+		}
+	}
 	rows, err := db.QueryContext(ctx, runColumns)
 	if err != nil {
 		return fmt.Errorf("required Run schema is unavailable")
@@ -297,6 +305,38 @@ FROM runs LIMIT 0`
 		return fmt.Errorf("close Run schema probe: %w", err)
 	}
 	return nil
+}
+
+func readAppliedMigrationVersions(ctx context.Context, db *sql.DB) (map[int]struct{}, error) {
+	rows, err := db.QueryContext(ctx, `SELECT version FROM schema_migrations`)
+	if err != nil {
+		return nil, fmt.Errorf("list backup schema versions: %w", err)
+	}
+	defer rows.Close()
+	applied := make(map[int]struct{})
+	for rows.Next() {
+		var version int
+		if err := rows.Scan(&version); err != nil {
+			return nil, fmt.Errorf("scan backup schema version: %w", err)
+		}
+		applied[version] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate backup schema versions: %w", err)
+	}
+	return applied, nil
+}
+
+func migrationSetsEqual(left, right map[int]struct{}) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for version := range left {
+		if _, ok := right[version]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // RestoreBackup 在目标不存在时恢复数据库；调用方必须确保目标数据库未被任何进程打开。

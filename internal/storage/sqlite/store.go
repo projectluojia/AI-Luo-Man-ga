@@ -115,6 +115,18 @@ func currentSchemaVersion() int {
 	return maximum
 }
 
+// registeredVersionsThrough 返回不超过指定版本的已注册迁移集合。
+// 独立模块可并行注册非连续版本号，备份校验必须比对完整版本集合。
+func registeredVersionsThrough(maximum int) map[int]struct{} {
+	versions := make(map[int]struct{})
+	for version := range registeredMigrations {
+		if version > 0 && version <= maximum {
+			versions[version] = struct{}{}
+		}
+	}
+	return versions
+}
+
 func init() {
 	baseMigrations := []string{`
 CREATE TABLE IF NOT EXISTS bus_source_revisions (
