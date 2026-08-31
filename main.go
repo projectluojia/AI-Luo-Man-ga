@@ -47,6 +47,7 @@ import (
 	classroomservice "github.com/projectluojia/AI-Luo-Man-ga/internal/services/classroom"
 	libraryseatservice "github.com/projectluojia/AI-Luo-Man-ga/internal/services/libraryseat"
 	promptservice "github.com/projectluojia/AI-Luo-Man-ga/internal/services/prompt"
+	sportsservice "github.com/projectluojia/AI-Luo-Man-ga/internal/services/sports"
 	timetableservice "github.com/projectluojia/AI-Luo-Man-ga/internal/services/timetable"
 	weatherservice "github.com/projectluojia/AI-Luo-Man-ga/internal/services/weather"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/blob"
@@ -474,6 +475,13 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 			observe.BoolAttr("authoritative", false),
 			observe.StringAttr("source", "demo-fixture-not-zhihui-luojia"),
 		)
+		if err := demo.LoadSportsData(ctx, store, time.Now()); err != nil {
+			return fmt.Errorf("load demo sports data: %w", err)
+		}
+		observe.Warn(ctx, "已载入非权威运动场馆演示数据",
+			observe.BoolAttr("authoritative", false),
+			observe.StringAttr("source", "demo-fixture-not-zhihui-luojia"),
+		)
 	}
 
 	baseSystemPrompt := config.baseSystemPrompt
@@ -534,6 +542,14 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 			timetableservice.CourseUpdateCapabilityID,
 			timetableservice.CourseDeleteCapabilityID,
 			timetableservice.ImportCapabilityID,
+			sportsservice.VenuesListCapabilityID,
+			sportsservice.ProjectsListCapabilityID,
+			sportsservice.SlotsSearchCapabilityID,
+			sportsservice.ReservationsCreateCapabilityID,
+			sportsservice.ReservationsCancelCapabilityID,
+			sportsservice.ReservationsMineCapabilityID,
+			sportsservice.OrdersWebViewCapabilityID,
+			sportsservice.ScheduleAddCapabilityID,
 		},
 	})
 	if err != nil {
@@ -556,7 +572,7 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 		replacement.MaxOutputBytes = config.agentRun.MaxOutputBytes
 		replacement.SystemPrompt = baseSystemPrompt
 		replacement.ChannelPrompts = channelPrompts
-		replacement.EnabledCapabilities = ensurePromptCapabilities(app.EnabledCapabilities)
+		replacement.EnabledCapabilities = ensureSportsCapabilities(ensurePromptCapabilities(app.EnabledCapabilities))
 		app, err = store.CompareAndSwap(ctx, app.Generation, replacement)
 		if err != nil {
 			return fmt.Errorf("migrate campus App prompt configuration: %w", err)
@@ -606,6 +622,9 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 	}
 	if err := libraryseatservice.Register(reg, libraryseatservice.NewService(store)); err != nil {
 		return fmt.Errorf("register library seat Service: %w", err)
+	}
+	if err := sportsservice.Register(reg, sportsservice.NewService(store)); err != nil {
+		return fmt.Errorf("register sports Service: %w", err)
 	}
 	// 确认与副作用治理：持久确认服务注入 Dispatcher，凡声明 write/external 副作用
 	// 的 Capability 在未获批准前 fail-closed（缺确认标识或验证失败一律拒绝执行）。
@@ -1380,7 +1399,25 @@ func ensurePromptCapabilities(existing []string) []string {
 		libraryseatservice.ReservationsCreateCapabilityID,
 		libraryseatservice.ReservationsCancelCapabilityID,
 		libraryseatservice.ReservationsMineCapabilityID,
+		sportsservice.VenuesListCapabilityID,
+		sportsservice.ProjectsListCapabilityID,
+		sportsservice.SlotsSearchCapabilityID,
+		sportsservice.ReservationsCreateCapabilityID,
+		sportsservice.ReservationsCancelCapabilityID,
+		sportsservice.ReservationsMineCapabilityID,
+		sportsservice.OrdersWebViewCapabilityID,
+		sportsservice.ScheduleAddCapabilityID,
 	} {
+		if !slices.Contains(result, capabilityID) {
+			result = append(result, capabilityID)
+		}
+	}
+	return result
+}
+
+func ensureSportsCapabilities(existing []string) []string {
+	result := append([]string(nil), existing...)
+	for _, capabilityID := range sportsservice.CapabilityIDs() {
 		if !slices.Contains(result, capabilityID) {
 			result = append(result, capabilityID)
 		}

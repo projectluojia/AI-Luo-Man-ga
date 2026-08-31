@@ -6,15 +6,17 @@ import (
 )
 
 var (
-	ErrMissingAppID         = errors.New("request context is missing app_id")
-	ErrMissingEchoID        = errors.New("request context is missing echo_id")
-	ErrMissingRequestID     = errors.New("request context is missing request_id")
-	ErrDeadlineExceeded     = errors.New("request deadline has already expired")
-	ErrDataUnavailable      = errors.New("authoritative data is unavailable")
-	ErrDataIncomplete       = errors.New("data freshness metadata is incomplete")
-	ErrDataUntrusted        = errors.New("data source is not authoritative")
-	ErrDataExpired          = errors.New("authoritative data has expired")
-	ErrRealtimeUnauthorized = errors.New("real-time vehicle data is not authorized")
+	ErrMissingAppID          = errors.New("request context is missing app_id")
+	ErrMissingEchoID         = errors.New("request context is missing echo_id")
+	ErrMissingRequestID      = errors.New("request context is missing request_id")
+	ErrDeadlineExceeded      = errors.New("request deadline has already expired")
+	ErrDataUnavailable       = errors.New("authoritative data is unavailable")
+	ErrDataIncomplete        = errors.New("data freshness metadata is incomplete")
+	ErrDataUntrusted         = errors.New("data source is not authoritative")
+	ErrDataExpired           = errors.New("authoritative data has expired")
+	ErrRealtimeUnauthorized  = errors.New("real-time vehicle data is not authorized")
+	ErrQuotaExceeded         = errors.New("requested quantity exceeds remaining quota")
+	ErrDelegatedAuthRequired = errors.New("delegated authentication is required")
 )
 
 // RequestContext 是所有内核治理调用必须传递的安全与可观测上下文。
