@@ -6,11 +6,9 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/pkg/capability"
 )
 
-// campus App 的部署常量与包契约标识。业务实现已迁至独立包仓库
-// packages/campus-bus（guest 自包含，经 ailuo pack/install 分发）；
-// 本文件保留内核侧需要的稳定标识与契约夹具构造器：App 配置按 ID 启用能力，
-// campustest 装配与 SDK 生成测试共用同一权威契约副本。工具 schema 的权威
-// 来源是包仓库的 ailuo.toml。
+// campus 测试夹具使用的 App 与包契约标识。业务实现位于 packages/campus-bus；
+// 本目录只供测试装配与 SDK 生成测试使用，工具 schema 的权威来源是包仓库的
+// ailuo.toml。
 const (
 	AppID     = "campus-services"
 	ServiceID = "campus"
@@ -38,7 +36,7 @@ const (
 	BusJourneySearchInputSchemaJSON = `{"type":"object","properties":{"origin_stop_id":{"type":"string","minLength":1},"destination_stop_id":{"type":"string","minLength":1},"depart_after":{"type":"string","format":"date-time"},"limit":{"type":"integer","minimum":1,"maximum":50}},"required":["origin_stop_id","destination_stop_id"],"additionalProperties":false}`
 )
 
-// ToolSpecs 返回校巴工具规格（campustest 装配与 SDK 生成测试用）。
+// ToolSpecs 返回校巴工具规格（测试装配与 SDK 生成测试用）。
 func ToolSpecs() []capability.ToolSpec {
 	return []capability.ToolSpec{
 		{
@@ -96,7 +94,7 @@ func CapabilitySpecs() []capability.CapabilitySpec {
 const PackageVersion = "1.0.0"
 
 // Extensions 返回 campus 的 extensions 段（tools/service/capabilities JSON），
-// 供 campustest 装配与 SDK 生成测试共用同一契约副本。
+// 供测试装配与 SDK 生成测试共用同一契约副本。
 func Extensions() (json.RawMessage, error) {
 	extensions, err := json.Marshal(struct {
 		Tools        []capability.ToolSpec       `json:"tools"`

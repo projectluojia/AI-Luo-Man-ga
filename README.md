@@ -1,6 +1,6 @@
 # AI珞（爱珞） V3
 
-当前仓库实现了“校园综合服务 App”的窄范围、可长期保留的校巴纵向切片。Go 是唯一内核；Python AI Agent 只负责真实模型推理和原生 ToolCall 闭环。2026-07-26 审计列出的 P0 已按仓库证据关闭，但完整平台仍有 `AGENTS.md` 所列 P1 阻断项，不能据此描述为整体生产就绪。
+当前仓库实现了“校园综合服务 App”的窄范围、可长期保留的校巴纵向切片。Go 是唯一内核；Python Executor 只负责真实模型推理和原生 ToolCall 闭环。2026-07-26 审计列出的 P0 已按仓库证据关闭，但完整平台仍有 `AGENTS.md` 所列 P1 阻断项，不能据此描述为整体生产就绪。
 
 ## 品牌与升级契约
 
@@ -38,10 +38,10 @@ make run
 ```
 
 默认 Core 连接已由 `packages/agent` 自己启动的 Executor；启动命令和 Provider
-秘密配置见该包的 README。只有 Deployment 明确提供了托管进程所需环境时，才设置
-`AILUO_MANAGE_EXECUTOR=true`。
+秘密配置见该包的 README。Core 只连接或按安装锁启动已声明的进程，不继承自身环境，
+Provider 配置始终由 Executor 包的 Deployment 管理。
 
-Go 主进程会立即在 `http://127.0.0.1:9178` 提供本机配置控制台。页面只配置 App 的模型标识、Executor 调用超时、Run/提示词和 QQ 接入参数；Executor 包的 Provider URL、密钥、重试和限流配置由包自己的 Deployment 管理。默认 `AILUO_MANAGE_EXECUTOR=false`，Core 连接已由包部署启动的 loopback Executor；需要 Core 托管时显式打开该选项。再次保存会有界关闭旧内核并按新修订重新启动，9178 控制台在整个过程中保持可用。普通 Web Access 仍监听 `http://127.0.0.1:8080`。
+Go 主进程会立即在 `http://127.0.0.1:9178` 提供本机配置控制台。页面配置当前 App 标识、模型标识、Executor 调用超时、Run/提示词和 QQ 接入参数；Executor 包的 Provider URL、密钥、重试和限流配置由包自己的 Deployment 管理。再次保存会有界关闭旧内核并按新修订重新启动，9178 控制台在整个过程中保持可用。普通 Web Access 仍监听 `http://127.0.0.1:8080`。
 
 非秘密配置写入 `var/ailuo-settings.json`；Core 只保存 QQ WebSocket Token 的受限秘密文件，GET API、页面、日志和普通配置文件都不返回 Token 正文。Executor 的模型秘密不由 Core 读取或注入。
 
@@ -53,7 +53,7 @@ Go Run 调度使用 SQLite 持久队列和固定 4 个 worker，默认每个 App
 
 App 的启停状态、模型、系统提示、时区、运行预算、Capability 集合和权限上界保存在 SQLite 不可变配置修订中，当前 head 以 generation CAS 更新。新 Run 固化创建时的配置修订用于确定性恢复；停用和 Capability/权限撤销在每次调用边界读取当前策略并立即生效。系统提示不会进入普通日志或公共 API。当前没有公开配置管理 API；在多入口管理员身份边界实现前，只允许受信 Go 控制面使用该 CAS 合同，不能直接修改数据库。
 
-`AILUO_LOAD_DEMO_DATA=true` 会把明确标记为非权威的演示快照写入统一数据库。生产环境设置该值会拒绝启动；开发环境查询该快照也会得到 `data_non_authoritative`，不会把演示线路或班次作为当前事实返回。真实智慧珞珈数据必须通过校方授权适配器写入同一个 Storage Port，业务层不读取来源接口或文件。
+Core 不再内置或自动播种业务演示数据；测试夹具通过通用 Storage Port 写入显式的测试快照。真实智慧珞珈数据必须通过校方授权适配器写入同一个 Storage Port，业务层不读取来源接口或文件。
 
 ## API
 
@@ -104,6 +104,6 @@ Web 请求会验证并继承 W3C `traceparent`（兼容合法的 32 位十六进
 - 智慧珞珈是校巴数据的唯一权威来源。
 - 当前不实现用户登录或用户态业务数据。
 - Service/Tool 不持有数据库凭据，只依赖 Go 注入的 Storage Port。
-- 演示数据带 `authoritative=false` 和独立 `source_revision`，不得被描述为真实班次。
+- 测试夹具中的演示数据带 `authoritative=false` 和独立 `source_revision`，不得进入生产启动路径或被描述为真实班次。
 - 成功校巴结果携带权威修订、完整性、导入时间和有效截止时间；缺失、不完整、非权威或过期快照不返回业务行。
 - 真实数据接入前必须完成 `docs/数据需求与授权清单.md` 中的校方审批项。

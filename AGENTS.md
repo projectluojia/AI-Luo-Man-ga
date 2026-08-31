@@ -41,6 +41,7 @@ AI珞 V3 是长期维护的生产级项目。功能范围可以窄，但已实�
 - Tool 是可复用原子能力；Service 是薄业务组合并暴露 Capability。Agent 和外部调用方只看 Capability，不看内部 Tool 目录。
 - 所有 Capability、Service、Tool 调用经过内核 Dispatcher，并携带受治理上下文。权限和数据范围只能收窄，内部调用不得提权。
 - `Deployment` 是物理安全边界；`App` 是业务、数据、权限、Agent 配置和会话边界。
+- Core 不硬编码具体 App、Service、Tool 或 Executor 标识；当前活动 App 由 Deployment 配置选择，已安装能力只通过清单发现。
 - 跨进程通信使用版本化 gRPC/Protobuf，不引入私有传输协议。
 - 逻辑边界不等于一组件一进程、一端口、一队列或一数据库。
 - 可变业务状态不得只存在内存。Go 在 Agent、Tool Host、客户端或进程崩溃后仍保持权威。
@@ -112,6 +113,7 @@ AI珞 V3 是长期维护的生产级项目。功能范围可以窄，但已实�
 - 新敏感字段必须加入净化并有 console/JSON 负向测试。
 - 优先标准库；仅在维护良好的依赖显著降低风险时引入，并有意锁定版本。
 - 所有阻塞或外部 Go 操作传递 `context.Context`；Python async 保留取消和 deadline。
+- Isolated Runtime 只使用安装锁中的进程规格；Core 不继承自身环境，也不向包注入 Provider 或其他业务环境变量。
 - 生产请求路径不 panic；启动不变量失败返回明确可行动错误。
 - 保留 dirty worktree 中的用户改动，不改无关代码；不提交凭据、`.env`、本地数据库、真实校方数据、缓存、虚拟环境或临时输出。
 

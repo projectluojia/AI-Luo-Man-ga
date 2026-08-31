@@ -19,10 +19,10 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime/runtimetest"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus/campustest"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/memory"
 	"github.com/projectluojia/AI-Luo-Man-ga/pkg/sdkgen"
+	"github.com/projectluojia/AI-Luo-Man-ga/testsupport/campus"
+	"github.com/projectluojia/AI-Luo-Man-ga/testsupport/campus/campustest"
 )
 
 type sdkTestWebAuthenticator struct{}

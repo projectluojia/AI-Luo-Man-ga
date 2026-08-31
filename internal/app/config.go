@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -20,6 +21,7 @@ import (
 	kernelecho "github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/packstore"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/promptcatalog"
 	promptservice "github.com/projectluojia/AI-Luo-Man-ga/internal/services/prompt"
@@ -32,10 +34,10 @@ type config struct {
 	configUIAddress     string
 	localConfigRoot     string
 	databasePath        string
+	appID               string
 	model               string
 	executorTimeout     time.Duration
 	manageExecutor      bool
-	loadDemoData        bool
 	environment         string
 	logLevel            slog.Level
 	logFormat           string
@@ -68,10 +70,6 @@ func loadConfig() (config, error) {
 	if err != nil {
 		return config{}, err
 	}
-	loadDemoData, err := envBool("AILUO_LOAD_DEMO_DATA", false)
-	if err != nil {
-		return config{}, err
-	}
 	logSource, err := envBool("AILUO_LOG_SOURCE", false)
 	if err != nil {
 		return config{}, err
@@ -101,7 +99,6 @@ func loadConfig() (config, error) {
 		localConfigRoot:    envOr("AILUO_CONFIG_DIR", "var"),
 		databasePath:       envOr("AILUO_DATABASE_PATH", "var/ailuo.db"),
 		manageExecutor:     manageExecutor,
-		loadDemoData:       loadDemoData,
 		environment:        envOr("AILUO_ENVIRONMENT", "development"),
 		logLevel:           logLevel,
 		logFormat:          envOr("AILUO_LOG_FORMAT", "console"),
@@ -113,9 +110,6 @@ func loadConfig() (config, error) {
 	if !packagecontract.IsLocalRuntimeAddress(result.configUIAddress) {
 		return config{}, fmt.Errorf("configuration error: AILUO_CONFIG_UI_ADDRESS must be loopback")
 	}
-	if result.loadDemoData && (strings.EqualFold(result.environment, "production") || strings.EqualFold(result.environment, "prod")) {
-		return config{}, fmt.Errorf("configuration error: AILUO_LOAD_DEMO_DATA must be false in production")
-	}
 	if result.runtimeInstallRoot != "" &&
 		(!filepath.IsAbs(result.runtimeInstallRoot) || filepath.Clean(result.runtimeInstallRoot) != result.runtimeInstallRoot) {
 		return config{}, fmt.Errorf("configuration error: AILUO_RUNTIME_INSTALL_ROOT must be a clean absolute path")
@@ -125,6 +119,7 @@ func loadConfig() (config, error) {
 
 func applyLocalConfig(base config, resolved controlconfig.Resolved) (config, error) {
 	settings := resolved.Settings
+	base.appID = settings.AppID
 	base.model = settings.Model
 	base.executorTimeout = time.Duration(settings.ExecutorTimeoutSeconds * float64(time.Second))
 	base.qqWSURL = settings.QQWSURL
@@ -156,6 +151,29 @@ func applyLocalConfig(base config, resolved controlconfig.Resolved) (config, err
 		base.qqToken = strings.TrimSpace(string(content))
 	}
 	return base, nil
+}
+
+// initialCapabilityIDs 为新 App 生成首次能力集合：内核能力、已注册的内核服务
+// 能力和安装包清单声明的能力。已有 App 的集合由持久化配置保留，不在启动时扩张。
+func initialCapabilityIDs(reg *registry.Registry, records []loader.InstalledRecord) []string {
+	ids := map[string]struct{}{
+		kernelecho.CreateChildRunCapabilityID: {},
+		kernelecho.GetChildStatusCapabilityID: {},
+	}
+	for _, spec := range reg.Capabilities() {
+		ids[spec.ID] = struct{}{}
+	}
+	for _, record := range records {
+		for _, spec := range record.Capabilities {
+			ids[spec.ID] = struct{}{}
+		}
+	}
+	result := make([]string, 0, len(ids))
+	for id := range ids {
+		result = append(result, id)
+	}
+	sort.Strings(result)
+	return result
 }
 
 // configureInstalledRuntimes 发现安装目录中的 Runtime 包，按声明的运行模式

@@ -23,7 +23,6 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/identity"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite"
 	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packagecontract"
 	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packagefmt"
@@ -107,12 +106,12 @@ func runMaintenanceCommand(arguments []string, output io.Writer) (bool, error) {
 		flags.SetOutput(io.Discard)
 		database := flags.String("database", "", "SQLite 数据库绝对路径")
 		userID := flags.String("user", "", "Deployment 级内部用户 user_id")
-		appID := flags.String("app", campus.AppID, "App 标识")
+		appID := flags.String("app", "", "App 标识（必填）")
 		platform := flags.String("platform", "", "外部平台标识")
 		space := flags.String("space", "", "外部平台空间标识")
 		platformUser := flags.String("platform-user", "", "外部平台用户标识")
-		if err := flags.Parse(arguments[1:]); err != nil || flags.NArg() != 0 || *database == "" || *userID == "" {
-			return true, fmt.Errorf("configuration error: identity-bind requires --database and --user")
+		if err := flags.Parse(arguments[1:]); err != nil || flags.NArg() != 0 || *database == "" || *userID == "" || *appID == "" {
+			return true, fmt.Errorf("configuration error: identity-bind requires --database, --user and --app")
 		}
 		if !filepath.IsAbs(*database) {
 			return true, fmt.Errorf("configuration error: identity-bind requires an absolute --database path")
@@ -139,11 +138,11 @@ func runMaintenanceCommand(arguments []string, output io.Writer) (bool, error) {
 		flags := flag.NewFlagSet("identity-unbind", flag.ContinueOnError)
 		flags.SetOutput(io.Discard)
 		database := flags.String("database", "", "SQLite 数据库绝对路径")
-		appID := flags.String("app", campus.AppID, "App 标识")
+		appID := flags.String("app", "", "App 标识（必填）")
 		platform := flags.String("platform", "", "外部平台标识")
 		space := flags.String("space", "", "外部平台空间标识")
 		platformUser := flags.String("platform-user", "", "外部平台用户标识")
-		if err := flags.Parse(arguments[1:]); err != nil || flags.NArg() != 0 || *database == "" || *platform == "" || *space == "" || *platformUser == "" {
+		if err := flags.Parse(arguments[1:]); err != nil || flags.NArg() != 0 || *database == "" || *appID == "" || *platform == "" || *space == "" || *platformUser == "" {
 			return true, fmt.Errorf("configuration error: identity-unbind requires --database, --platform, --space and --platform-user")
 		}
 		if !filepath.IsAbs(*database) {

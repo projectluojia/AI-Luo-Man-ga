@@ -7,11 +7,13 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access/configui"
+	kernelecho "github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/pkg/capability"
@@ -43,21 +45,24 @@ func TestLoadConfigRejectsSourcePathLogging(t *testing.T) {
 	}
 }
 
-func TestLoadConfigRejectsDemoDataInProduction(t *testing.T) {
-	t.Setenv("AILUO_MANAGE_EXECUTOR", "false")
-	t.Setenv("AILUO_ENVIRONMENT", "production")
-	t.Setenv("AILUO_LOAD_DEMO_DATA", "true")
-	_, err := loadConfig()
-	if err == nil || !strings.Contains(err.Error(), "AILUO_LOAD_DEMO_DATA must be false") {
-		t.Fatalf("error=%v", err)
-	}
-}
-
 func TestLoadConfigRejectsRelativeRuntimeInstallRoot(t *testing.T) {
 	t.Setenv("AILUO_MANAGE_EXECUTOR", "false")
 	t.Setenv("AILUO_RUNTIME_INSTALL_ROOT", "relative/runtime")
 	if _, err := loadConfig(); err == nil || !strings.Contains(err.Error(), "clean absolute path") {
 		t.Fatalf("error=%v", err)
+	}
+}
+
+func TestInitialCapabilityIDsUseInstalledMetadata(t *testing.T) {
+	ids := initialCapabilityIDs(registry.New(), []loader.InstalledRecord{{Capabilities: []capability.CapabilitySpec{
+		{ID: "z.capability"}, {ID: "a.capability"}, {ID: "z.capability"},
+	}}})
+	want := []string{
+		"a.capability", kernelecho.CreateChildRunCapabilityID,
+		kernelecho.GetChildStatusCapabilityID, "z.capability",
+	}
+	if !slices.Equal(ids, want) {
+		t.Fatalf("initial capabilities=%v, want %v", ids, want)
 	}
 }
 

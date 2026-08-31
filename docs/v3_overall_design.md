@@ -270,17 +270,15 @@ storage:
 internal/
 ├─ kernel/            L2 Go 内核（治理/编排/协议/Loader/存储端口）
 ├─ access/ storage/ observe/   平台接入 · L1 适配器 · 可观测性
-├─ tools/             共享原子 Tool 包（跨 Service 复用）
-│  └─ bus/            bus 域工具（stops/routes/journeys + Store 端口）
-└─ services/          业务 Service 装配（对应安装形态 services/）
-   ├─ executor/       Executor Runtime（isolated/hosted + executor.v1）
-   └─ campus/         Campus App 契约夹具（IDs/schema 副本 + demo 播种 + campustest）
-      ├─ specs.go     App/能力稳定标识与契约构造器（main 与测试共用）
-      ├─ demo/        演示数据播种（经 packstore 端口，非权威标记）
-      └─ campustest/  测试装配（guest 源码 testdata 内嵌、测试时现场编译）
+└─ services/          仍在迁移期的内核服务装配
+
+testsupport/
+└─ campus/            校巴包测试夹具（IDs/schema 副本 + hosted 装配）
+   ├─ specs.go        测试使用的稳定契约构造器
+   └─ campustest/     测试装配（guest 源码 testdata 内嵌、测试时现场编译）
 ```
 
-可安装包源码在包工作区（如 `packages/campus-bus`，guest 自包含只依赖标准库），经 `ailuo pack [build]` 交叉编译、`ailuo install` 安装后从安装目录装载。Core 只保留测试固件（generic firmware）与 campustest 的 testdata guest 源码（不提交任何 wasm 工件），不把示例 Package 当作生产组件。
+可安装包源码在包工作区（如 `packages/campus-bus`，guest 自包含只依赖标准库），经 `ailuo pack [build]` 交叉编译、`ailuo install` 安装后从安装目录装载。Core 只保留通用测试固件；校巴 hosted 装配位于 `testsupport/campus`，不提交任何 wasm 工件，也不把示例 Package 当作内核内置组件。
 
 共享规则：Tool 是全局目录，任何 Service 声明 `ToolDependencies` 即可复用同一 handler；可被第二个 Service 复用的原子能力进 `internal/tools`，服务专属装配留在 `internal/services`，工具包绝不反向依赖服务。有状态包的持久化统一经 `internal/kernel/packstore` 窄端口（`ailuo.store` 宿主函数背后，作用域 = App × 包 namespace）；新增有状态包零内核改动。
 
@@ -1212,7 +1210,7 @@ SQLite 迁移 8 新增 `bus_current_snapshots`，以 `(app_id, revision)` 外键
 
 每次成功 Tool 结果都包含 `data_status`，明确给出 `state=authoritative_fresh`、`source_revision`、来源、`authoritative=true`、`complete=true`、导入时间和有效截止时间。没有活动修订、元数据不完整、非权威来源或已到有效截止时间分别产生 `data_unavailable`、`data_incomplete`、`data_non_authoritative`、`data_expired`；这些状态不返回业务行，Agent 因而无法把演示、未知或过期行静默描述为当前事实。
 
-演示快照继续使用独立的 `demo-fixture-*` 修订、`demo-fixture-not-zhihui-luojia` 来源和 `authoritative=false`。生产配置同时启用 `AILUO_LOAD_DEMO_DATA` 会在启动配置校验阶段失败；开发环境可以载入演示快照来验证治理路径，但查询只会得到明确的非权威数据错误，不会得到可作为当前事实的班次或线路。
+演示快照只存在于测试夹具中，使用独立的 `demo-fixture-*` 修订、`demo-fixture-not-zhihui-luojia` 来源和 `authoritative=false`；Core 启动路径不读取或播种业务演示数据。真实数据仍必须经授权 ingestion 写入 Go 托管存储。
 
 已应用迁移 9 前存在的来源修订无法追溯证明“完整”，升级时默认 `complete=false` 并保持 fail-closed；必须由受授权适配器重新导入并验证后才能成为活动权威快照。校方尚未确认的更新频率和最大允许延迟不会由代码擅自假定，当前新鲜度严格以授权来源提供且通过校验的 `valid_until` 为准。
 

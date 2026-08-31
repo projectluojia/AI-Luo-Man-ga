@@ -31,8 +31,6 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/session"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/task"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus/demo"
 	promptservice "github.com/projectluojia/AI-Luo-Man-ga/internal/services/prompt"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/blob"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite"
@@ -168,33 +166,30 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 	if err != nil {
 		return fmt.Errorf("create session service: %w", err)
 	}
-	if config.loadDemoData {
-		if err := demo.LoadBusData(ctx, store.PackageDocuments(), time.Now()); err != nil {
-			return fmt.Errorf("load demo bus data: %w", err)
-		}
-		observe.Warn(ctx, "已载入非权威校巴演示数据",
-			observe.BoolAttr("authoritative", false),
-			observe.StringAttr("source", "demo-fixture-not-zhihui-luojia"),
-		)
-	}
 
 	reg := registry.New()
+	promptService := promptservice.NewService(config.promptCatalog, store)
+	if err := promptservice.Register(reg, promptService); err != nil {
+		return fmt.Errorf("register prompt Service: %w", err)
+	}
+	installedHosts, installedRecords, err := configureInstalledRuntimes(ctx, config, store.PackageDocuments())
+	if err != nil {
+		return err
+	}
+	if len(installedRecords) == 0 {
+		return fmt.Errorf("未发现已安装运行时：请先安装 executor 包")
+	}
 	app, created, err := store.Ensure(ctx, appconfig.Config{
-		AppID: campus.AppID, Enabled: true, Model: config.model,
+		AppID: config.appID, Enabled: true, Model: config.model,
 		SystemPrompt: config.baseSystemPrompt, ChannelPrompts: config.channelPrompts,
 		Timezone: config.agentRun.Timezone, MaxSteps: config.agentRun.MaxSteps,
 		MaxToolCalls: config.agentRun.MaxToolCalls, MaxInputTokens: config.agentRun.MaxInputTokens,
 		MaxOutputTokens: config.agentRun.MaxOutputTokens, MaxTotalTokens: config.agentRun.MaxTotalTokens,
 		MaxOutputBytes: config.agentRun.MaxOutputBytes, ProviderTimeout: config.executorTimeout,
-		EnabledCapabilities: []string{
-			campus.BusStopSearchCapabilityID, campus.BusRouteListCapabilityID,
-			campus.BusJourneySearchCapabilityID, kernelecho.CreateChildRunCapabilityID,
-			kernelecho.GetChildStatusCapabilityID, promptservice.PreferenceGetID,
-			promptservice.PreferenceSetID, promptservice.PreferenceResetID,
-		},
+		EnabledCapabilities: initialCapabilityIDs(reg, installedRecords),
 	})
 	if err != nil {
-		return fmt.Errorf("ensure campus App config: %w", err)
+		return fmt.Errorf("ensure App config: %w", err)
 	}
 	if !created {
 		replacement := app
@@ -211,10 +206,10 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 		replacement.ChannelPrompts = config.channelPrompts
 		app, err = store.CompareAndSwap(ctx, app.Generation, replacement)
 		if err != nil {
-			return fmt.Errorf("update campus App configuration: %w", err)
+			return fmt.Errorf("update App configuration: %w", err)
 		}
 	}
-	observe.Info(ctx, "校园 App 持久配置已经就绪",
+	observe.Info(ctx, "App 持久配置已经就绪",
 		observe.StringAttr("app_id", app.AppID), observe.StringAttr("config_revision", app.Revision),
 		observe.Int64Attr("config_generation", int64(app.Generation)), observe.BoolAttr("created", created),
 	)
@@ -222,22 +217,11 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 	if err != nil {
 		return err
 	}
-	promptService := promptservice.NewService(config.promptCatalog, store)
-	if err := promptservice.Register(reg, promptService); err != nil {
-		return fmt.Errorf("register prompt Service: %w", err)
-	}
 	confirmations := confirmation.NewService(store, confirmation.Config{})
 	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{
 		MaxCallDepth: config.orchestration.MaxCallDepth, IdempotencyStore: store,
 		ConfirmationVerifier: confirmations,
 	})
-	installedHosts, installedRecords, err := configureInstalledRuntimes(ctx, config, store.PackageDocuments())
-	if err != nil {
-		return err
-	}
-	if len(installedRecords) == 0 {
-		return fmt.Errorf("未发现已安装运行时：请先安装校园服务与 executor 包")
-	}
 	hosts := installedHosts
 	runtimeLoader, err := loader.New(hosts...)
 	if err != nil {
@@ -246,16 +230,6 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 	lifecycle.runtimeLoader = runtimeLoader
 	if err := loader.RegisterInstalled(ctx, runtimeLoader, reg, installedRecords); err != nil {
 		return fmt.Errorf("register installed runtimes: %w", err)
-	}
-	campusInstalled := false
-	for _, record := range installedRecords {
-		if record.PackageID == campus.ServiceID && record.ComponentID == campus.BusComponentID {
-			campusInstalled = true
-			break
-		}
-	}
-	if !campusInstalled {
-		return fmt.Errorf("campus.bus 未安装：请先安装其 .tgz 发布物或 owner/repo[@version] 发布包")
 	}
 	pinnedRuntimes := runtimeLoader.Pinned()
 	if err := runtimeLoader.Warmup(ctx, pinnedRuntimes, min(len(pinnedRuntimes), 4)); err != nil {
@@ -292,7 +266,7 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 		Idempotency: store, Creation: store, Execution: store, Recovery: store,
 		Cancellation: store, Events: store, Audit: store,
 	}, kernelecho.Config{
-		AppID: campus.AppID, AppConfigSource: store, Context: sessionService,
+		AppID: config.appID, AppConfigSource: store, Context: sessionService,
 		ContextBudget: contextasm.Budget{
 			MaxMessages: config.contextAssembly.MaxMessages, MaxCharsPerMsg: config.contextAssembly.MaxCharsPerMsg,
 			MaxTotalChars: config.contextAssembly.MaxTotalChars, MaxPromptBytes: config.contextAssembly.MaxPromptBytes,
@@ -305,7 +279,7 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 	if err := kernelecho.RegisterChildCapabilities(reg, orchestrator); err != nil {
 		return fmt.Errorf("register governed child Run capabilities: %w", err)
 	}
-	observe.Info(ctx, "校园服务与受治理子 Run Capability 注册完成",
+	observe.Info(ctx, "已安装服务与受治理子 Run Capability 注册完成",
 		observe.IntAttr("service_count", len(reg.Services())), observe.IntAttr("tool_count", len(reg.Tools())),
 		observe.IntAttr("capability_count", len(reg.Capabilities())),
 	)
@@ -319,24 +293,24 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 	if err := taskScheduler.Start(ctx); err != nil {
 		return fmt.Errorf("start background task scheduler: %w", err)
 	}
-	if err := seedConfirmationSweep(ctx, taskScheduler, campus.AppID, confirmationSweepInterval); err != nil {
+	if err := seedConfirmationSweep(ctx, taskScheduler, config.appID, confirmationSweepInterval); err != nil {
 		return fmt.Errorf("seed confirmation sweep: %w", err)
 	}
 	observe.Info(ctx, "后台任务调度器与确认过期清扫已就绪",
-		observe.StringAttr("app_id", campus.AppID), observe.StringAttr("sweep_type", confirmationSweepType),
+		observe.StringAttr("app_id", config.appID), observe.StringAttr("sweep_type", confirmationSweepType),
 		observe.Int64Attr("sweep_interval_ms", confirmationSweepInterval.Milliseconds()),
 	)
 	echoEvents := access.NewEventHub()
-	runScheduler := kernelecho.NewScheduler(ctx, orchestrator, store, echoEvents, campus.AppID,
+	runScheduler := kernelecho.NewScheduler(ctx, orchestrator, store, echoEvents, config.appID,
 		kernelecho.WithScheduler(config.scheduler.Workers, time.Duration(config.scheduler.PollMs)*time.Millisecond, config.scheduler.BatchSize))
 	lifecycle.runScheduler = runScheduler
 	if _, err := runScheduler.Recover(ctx); err != nil {
 		return fmt.Errorf("recover durable runs: %w", err)
 	}
 	echoAdmission := kernelecho.NewAdmission(orchestrator, runScheduler)
-	readiness := health.Combined{store, health.ExecutorAppChecker{Client: executorClient, Source: store, AppID: campus.AppID}}
+	readiness := health.Combined{store, health.ExecutorAppChecker{Client: executorClient, Source: store, AppID: config.appID}}
 	identities := identity.NewService(store)
-	platformHub, err := access.NewHub(campus.AppID, store, identities)
+	platformHub, err := access.NewHub(config.appID, store, identities)
 	if err != nil {
 		return fmt.Errorf("configure platform access hub: %w", err)
 	}
@@ -359,19 +333,19 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 		return fmt.Errorf("configure QQ access manager: %w", err)
 	}
 	lifecycle.qqManager = qqManager
-	webAccess := web.NewServer(echoAdmission, store, readiness, reg, policy, campus.AppID, platformHub, runScheduler, echoEvents,
+	webAccess := web.NewServer(echoAdmission, store, readiness, reg, policy, config.appID, platformHub, runScheduler, echoEvents,
 		web.WithDispatcher(dispatcher))
-	ingressServer := ingress.NewServer(campus.AppID, platformHub, echoAdmission)
+	ingressServer := ingress.NewServer(config.appID, platformHub, echoAdmission)
 	lifecycle.webAccess = webAccess
 	lifecycle.ingressServer = ingressServer
 	if err := qqManager.Start(ctx, qqsettings.Settings{
-		AppID: campus.AppID, Enabled: config.qqEnabled, WSURL: config.qqWSURL, BotQQID: config.qqBotID,
+		AppID: config.appID, Enabled: config.qqEnabled, WSURL: config.qqWSURL, BotQQID: config.qqBotID,
 		AllowedGroupIDs: config.qqAllowedGroupIDs, AllowedPrivateUserIDs: config.qqAllowedPrivateIDs,
 	}); err != nil {
 		return fmt.Errorf("start QQ access manager: %w", err)
 	}
 	qqDesired := qqsettings.Settings{
-		AppID: campus.AppID, Enabled: config.qqEnabled, WSURL: config.qqWSURL, BotQQID: config.qqBotID,
+		AppID: config.appID, Enabled: config.qqEnabled, WSURL: config.qqWSURL, BotQQID: config.qqBotID,
 		AllowedGroupIDs: config.qqAllowedGroupIDs, AllowedPrivateUserIDs: config.qqAllowedPrivateIDs,
 	}
 	qqCurrent, qqStatus, err := qqManager.Snapshot(ctx)
