@@ -9,9 +9,10 @@ const (
 	AppID     = "campus-services"
 	ServiceID = "campus"
 
-	BusStopSearchCapabilityID    = "campus.bus.stops.search"
-	BusRouteListCapabilityID     = "campus.bus.routes.list"
-	BusJourneySearchCapabilityID = "campus.bus.journeys.search"
+	BusStopSearchCapabilityID       = "campus.bus.stops.search"
+	BusRouteListCapabilityID        = "campus.bus.routes.list"
+	BusJourneySearchCapabilityID    = "campus.bus.journeys.search"
+	BusRealtimePositionCapabilityID = "campus.bus.vehicles.realtime"
 )
 
 // ServiceSpec 返回 campus 服务规格。
@@ -20,7 +21,7 @@ func ServiceSpec() registry.ServiceSpec {
 		ID:               ServiceID,
 		Version:          "1.0.0",
 		Description:      "Campus-wide public services.",
-		ToolDependencies: []string{bus.StopSearchToolID, bus.RouteListToolID, bus.JourneySearchToolID},
+		ToolDependencies: []string{bus.StopSearchToolID, bus.RouteListToolID, bus.JourneySearchToolID, bus.RealtimePositionToolID},
 	}
 }
 
@@ -57,5 +58,6 @@ func CapabilitySpecs() []registry.CapabilitySpec {
 			SideEffect:      registry.SideEffectRead,
 			ToolID:          bus.JourneySearchToolID,
 		},
+		{ID: BusRealtimePositionCapabilityID, Version: "1.0.0", Name: "查询校巴实时位置", Description: "Query authorized real-time campus bus vehicle positions.", ServiceID: ServiceID, InputSchemaJSON: bus.RealtimePositionInputSchemaJSON, SideEffect: registry.SideEffectRead, ToolID: bus.RealtimePositionToolID},
 	}
 }

@@ -95,6 +95,9 @@ func (hostStore) ListRoutes(_ context.Context, _ string, request bus.RouteListRe
 func (hostStore) SearchJourneys(_ context.Context, _ string, request bus.SearchRequest) (bus.JourneySnapshot, error) {
 	return query[bus.JourneySnapshot]("search_journeys", request)
 }
+func (hostStore) SearchVehiclePositions(_ context.Context, _ string, request bus.RealtimePositionRequest) (bus.RealtimePositionSnapshot, error) {
+	return query[bus.RealtimePositionSnapshot]("search_vehicle_positions", request)
+}
 
 // query 调用宿主函数并把响应反序列化为目标快照类型。
 func query[T any](op string, args any) (T, error) {
@@ -139,6 +142,8 @@ func callBusQuery(op string, args any, result any) error {
 			return errors.Join(contracts.ErrDataUntrusted, errors.New("bus host function: data untrusted"))
 		case "data_expired":
 			return errors.Join(contracts.ErrDataExpired, errors.New("bus host function: data expired"))
+		case "realtime_unauthorized":
+			return errors.Join(contracts.ErrRealtimeUnauthorized, errors.New("bus host function: realtime unauthorized"))
 		default:
 			return fmt.Errorf("bus host function failed: %s", envelope.Code)
 		}
@@ -157,6 +162,8 @@ func codeFor(err error) string {
 		return "data_untrusted"
 	case errors.Is(err, contracts.ErrDataExpired):
 		return "data_expired"
+	case errors.Is(err, contracts.ErrRealtimeUnauthorized):
+		return "realtime_unauthorized"
 	case isInvalidArgument(err):
 		return "invalid_argument"
 	default:

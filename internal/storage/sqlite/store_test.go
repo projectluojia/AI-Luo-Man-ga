@@ -940,6 +940,35 @@ func TestConcurrentBusSnapshotReadersNeverObserveMixedRevision(t *testing.T) {
 	}
 }
 
+func TestSearchVehiclePositionsOrdersFractionalTimestampsChronologically(t *testing.T) {
+	store, err := sqlite.Open(filepath.Join(t.TempDir(), "vehicle-order.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	now := time.Now().UTC()
+	snapshot := sqlite.BusSnapshot{
+		AppID: "app", Revision: "revision", Source: "zhihui-luojia", Authoritative: true, Complete: true,
+		RealtimeAuthorized: true, ImportedAt: now.Add(-time.Hour), ValidUntil: now.Add(time.Hour),
+		Stops:  []bus.Stop{{ID: "a", Name: "A"}, {ID: "b", Name: "B"}},
+		Routes: []bus.Route{{ID: "r", Name: "R", Direction: "D", OriginStopID: "a", DestinationID: "b"}},
+		Positions: []bus.VehiclePosition{
+			{VehicleID: "older", RouteID: "r", Latitude: 1, Longitude: 1, RecordedAt: now.Add(-500 * time.Microsecond)},
+			{VehicleID: "newer", RouteID: "r", Latitude: 2, Longitude: 2, RecordedAt: now},
+		},
+	}
+	if err := store.ReplaceBusSnapshot(context.Background(), snapshot); err != nil {
+		t.Fatal(err)
+	}
+	result, err := store.SearchVehiclePositions(context.Background(), "app", bus.RealtimePositionRequest{Limit: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Positions) != 1 || result.Positions[0].VehicleID != "newer" {
+		t.Fatalf("positions=%#v", result.Positions)
+	}
+}
+
 func createTestEchoRun(t *testing.T, store *sqlite.Store, appID, echoID, input string, createdAt time.Time) kernelecho.RunRecord {
 	t.Helper()
 	echo, run := echoRunRecords(appID, echoID, "run-"+appID+"-"+echoID, input, createdAt)

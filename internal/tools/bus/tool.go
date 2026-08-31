@@ -14,13 +14,15 @@ import (
 )
 
 const (
-	StopSearchToolID    = "campus.bus.stops.search"
-	RouteListToolID     = "campus.bus.routes.list"
-	JourneySearchToolID = "campus.bus.schedule.search"
+	StopSearchToolID       = "campus.bus.stops.search"
+	RouteListToolID        = "campus.bus.routes.list"
+	JourneySearchToolID    = "campus.bus.schedule.search"
+	RealtimePositionToolID = "campus.bus.vehicles.realtime"
 
-	StopSearchInputSchemaJSON    = `{"type":"object","properties":{"query":{"type":"string","minLength":1},"limit":{"type":"integer","minimum":1,"maximum":50}},"required":["query"],"additionalProperties":false}`
-	RouteListInputSchemaJSON     = `{"type":"object","properties":{"limit":{"type":"integer","minimum":1,"maximum":50}},"additionalProperties":false}`
-	JourneySearchInputSchemaJSON = `{"type":"object","properties":{"origin_stop_id":{"type":"string","minLength":1},"destination_stop_id":{"type":"string","minLength":1},"depart_after":{"type":"string","format":"date-time"},"limit":{"type":"integer","minimum":1,"maximum":50}},"required":["origin_stop_id","destination_stop_id"],"additionalProperties":false}`
+	StopSearchInputSchemaJSON       = `{"type":"object","properties":{"query":{"type":"string","minLength":1},"limit":{"type":"integer","minimum":1,"maximum":50}},"required":["query"],"additionalProperties":false}`
+	RouteListInputSchemaJSON        = `{"type":"object","properties":{"limit":{"type":"integer","minimum":1,"maximum":50}},"additionalProperties":false}`
+	JourneySearchInputSchemaJSON    = `{"type":"object","properties":{"origin_stop_id":{"type":"string","minLength":1},"destination_stop_id":{"type":"string","minLength":1},"depart_after":{"type":"string","format":"date-time"},"limit":{"type":"integer","minimum":1,"maximum":50}},"required":["origin_stop_id","destination_stop_id"],"additionalProperties":false}`
+	RealtimePositionInputSchemaJSON = `{"type":"object","properties":{"route_id":{"type":"string","minLength":1},"limit":{"type":"integer","minimum":1,"maximum":100}},"additionalProperties":false}`
 )
 
 // ToolSpecs 返回校巴工具规格（单一来源，供安装清单与 Registry 注册共用）。
@@ -33,6 +35,7 @@ func ToolSpecs() []registry.ToolSpec {
 			InputSchemaJSON: StopSearchInputSchemaJSON,
 			SideEffect:      registry.SideEffectRead,
 		},
+		{ID: RealtimePositionToolID, Version: "1.0.0", Description: "Query authorized real-time campus bus vehicle positions.", InputSchemaJSON: RealtimePositionInputSchemaJSON, SideEffect: registry.SideEffectRead},
 		{
 			ID:              RouteListToolID,
 			Version:         "1.0.0",
@@ -53,9 +56,46 @@ func ToolSpecs() []registry.ToolSpec {
 // ToolHandlers 返回校巴工具执行器（注入存储端口），供 hosted 包 guest 装配使用。
 func ToolHandlers(store Store) map[string]registry.Handler {
 	return map[string]registry.Handler{
-		StopSearchToolID:    stopSearchHandler(store),
-		RouteListToolID:     routeListHandler(store),
-		JourneySearchToolID: journeySearchHandler(store, time.Now),
+		StopSearchToolID:       stopSearchHandler(store),
+		RouteListToolID:        routeListHandler(store),
+		JourneySearchToolID:    journeySearchHandler(store, time.Now),
+		RealtimePositionToolID: realtimePositionHandler(store, time.Now),
+	}
+}
+
+// realtimePositionHandler 在校方授权、权威且新鲜的快照上执行实时位置查询。
+func realtimePositionHandler(store Store, now func() time.Time) registry.Handler {
+	return func(ctx context.Context, requestContext contracts.RequestContext, payload json.RawMessage) (json.RawMessage, error) {
+		var request RealtimePositionRequest
+		if err := json.Unmarshal(payload, &request); err != nil {
+			return nil, fmt.Errorf("decode bus realtime position request: %w", err)
+		}
+		if err := request.NormalizeAndValidate(); err != nil {
+			return nil, err
+		}
+		snapshot, err := store.SearchVehiclePositions(ctx, requestContext.AppID, request)
+		if err != nil {
+			return nil, fmt.Errorf("search bus vehicle positions: %w", err)
+		}
+		status, err := snapshot.Metadata.GovernRealtime(now())
+		if err != nil {
+			if errors.Is(err, contracts.ErrRealtimeUnauthorized) {
+				observe.Warn(ctx, "校巴实时位置因未获授权拒绝")
+			} else {
+				logRejectedSnapshot(ctx, "vehicle_positions", snapshot.Metadata, err)
+			}
+			return nil, fmt.Errorf("govern bus realtime positions: %w", err)
+		}
+		positions := snapshot.Positions
+		for _, position := range positions {
+			if position.SourceRevision != snapshot.Metadata.Revision || position.RecordedAt.IsZero() || position.Latitude < -90 || position.Latitude > 90 || position.Longitude < -180 || position.Longitude > 180 {
+				return nil, fmt.Errorf("bus vehicle position validation: %w", contracts.ErrDataIncomplete)
+			}
+		}
+		if positions == nil {
+			positions = []VehiclePosition{}
+		}
+		return marshalResult(RealtimePositionResult{DataStatus: status, Positions: positions})
 	}
 }
 
@@ -217,6 +257,8 @@ func logRejectedSnapshot(ctx context.Context, dataKind string, metadata Snapshot
 		errorCode = "data_non_authoritative"
 	case errors.Is(err, contracts.ErrDataExpired):
 		errorCode = "data_expired"
+	case errors.Is(err, contracts.ErrRealtimeUnauthorized):
+		errorCode = "realtime_unauthorized"
 	}
 	observe.Warn(ctx, "校巴数据快照未通过使用治理",
 		observe.StringAttr("data_kind", dataKind),

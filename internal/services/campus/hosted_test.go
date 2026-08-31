@@ -38,8 +38,8 @@ func TestHostedCampusBuiltinManifestLocksArtifact(t *testing.T) {
 func TestHostedCampusSpecsRegisterThroughInstalled(t *testing.T) {
 	reg := registry.New()
 	campustest.RegisterHosted(t, reg, memory.NewBusStore())
-	if len(reg.Tools()) != 3 || len(reg.Capabilities()) != 3 || len(reg.Services()) != 1 {
-		t.Fatalf("registry = %d tools, %d capabilities, %d services; want 3/3/1",
+	if len(reg.Tools()) != 4 || len(reg.Capabilities()) != 4 || len(reg.Services()) != 1 {
+		t.Fatalf("registry = %d tools, %d capabilities, %d services; want 4/4/1",
 			len(reg.Tools()), len(reg.Capabilities()), len(reg.Services()))
 	}
 }
@@ -193,6 +193,36 @@ func TestHostedCampusEnforcesCallDepth(t *testing.T) {
 	}
 }
 
+func TestHostedCampusRealtimePositionFailsClosedWithoutAuthorization(t *testing.T) {
+	store := memory.NewBusStore()
+	store.Replace(campus.AppID, []bus.Journey{})
+	store.SetSnapshotMetadata(campus.AppID, authoritativeFreshMetadata())
+	store.ReplacePositions(campus.AppID, []bus.VehiclePosition{{VehicleID: "bus-1", RouteID: "route-1", Latitude: 30, Longitude: 114, RecordedAt: time.Now().UTC()}})
+	dispatcher := newHostedDispatcherWithDepth(t, store, 0, campus.AppID)
+	_, err := dispatcher.InvokeCapability(context.Background(), requestContext(campus.AppID), campus.BusRealtimePositionCapabilityID, mustJSON(t, bus.RealtimePositionRequest{}))
+	if !errors.Is(err, contracts.ErrRealtimeUnauthorized) {
+		t.Fatalf("error=%v, want ErrRealtimeUnauthorized", err)
+	}
+}
+
+func TestHostedCampusRealtimePositionAuthorized(t *testing.T) {
+	store := memory.NewBusStore()
+	now := time.Now().UTC()
+	metadata := authoritativeFreshMetadata()
+	metadata.RealtimeAuthorized = true
+	store.SetSnapshotMetadata(campus.AppID, metadata)
+	store.ReplacePositions(campus.AppID, []bus.VehiclePosition{{VehicleID: "bus-1", RouteID: "route-1", Latitude: 30, Longitude: 114, RecordedAt: now}})
+	dispatcher := newHostedDispatcherWithDepth(t, store, 0, campus.AppID)
+	payload, err := dispatcher.InvokeCapability(context.Background(), requestContext(campus.AppID), campus.BusRealtimePositionCapabilityID, mustJSON(t, bus.RealtimePositionRequest{}))
+	if err != nil {
+		t.Fatalf("invoke: %v", err)
+	}
+	var result bus.RealtimePositionResult
+	if err := json.Unmarshal(payload, &result); err != nil || len(result.Positions) != 1 || result.DataStatus.State != bus.DataStateAuthoritativeFresh {
+		t.Fatalf("result=%s err=%v", payload, err)
+	}
+}
+
 // newHostedDispatcherWithDepth 装配完整 hosted 链路：内置工件 → WasmHost →
 // Loader → RegisterInstalled → Dispatcher；maxCallDepth 为 0 时使用 Dispatcher 默认值。
 func newHostedDispatcherWithDepth(t *testing.T, store bus.Store, maxCallDepth uint16, enabledApps ...string) *runtime.Dispatcher {
@@ -204,6 +234,7 @@ func newHostedDispatcherWithDepth(t *testing.T, store bus.Store, maxCallDepth ui
 		policy.Enable(appID, campus.BusStopSearchCapabilityID)
 		policy.Enable(appID, campus.BusRouteListCapabilityID)
 		policy.Enable(appID, campus.BusJourneySearchCapabilityID)
+		policy.Enable(appID, campus.BusRealtimePositionCapabilityID)
 	}
 	return runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{MaxCallDepth: maxCallDepth})
 }
