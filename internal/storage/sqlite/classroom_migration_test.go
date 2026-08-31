@@ -11,7 +11,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/tools/classroom"
 )
 
-func TestMigration25UpgradesPreviousSchema(t *testing.T) {
+func TestMigration29UpgradesPreviousSchema(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "upgrade-v24.db")
 	db, err := sql.Open("sqlite", path+"?_pragma=foreign_keys(1)")
 	if err != nil {
@@ -41,11 +41,11 @@ func TestMigration25UpgradesPreviousSchema(t *testing.T) {
 	if err := upgraded.db.QueryRowContext(t.Context(), `SELECT max(version) FROM schema_migrations`).Scan(&version); err != nil || version != currentSchemaVersion() {
 		t.Fatalf("version=%d current=%d err=%v", version, currentSchemaVersion(), err)
 	}
-	if version < 25 {
-		t.Fatalf("升级后版本=%d，期望至少 25", version)
+	if version < 29 {
+		t.Fatalf("升级后版本=%d，期望至少 29", version)
 	}
 	if err := upgraded.db.QueryRowContext(t.Context(), `SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN ('classroom_source_revisions','classroom_current_snapshots','classroom_campuses','classroom_buildings','classroom_rooms','classroom_occupancy','classroom_schedules')`).Scan(&present); err != nil || present != 7 {
-		t.Fatalf("migration 25 表数量=%d err=%v", present, err)
+		t.Fatalf("migration 29 表数量=%d err=%v", present, err)
 	}
 	now := time.Date(2026, time.August, 31, 8, 0, 0, 0, time.UTC)
 	if err := upgraded.ReplaceClassroomSnapshot(t.Context(), ClassroomSnapshot{
