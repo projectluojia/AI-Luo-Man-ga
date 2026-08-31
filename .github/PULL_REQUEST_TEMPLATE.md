@@ -1,6 +1,6 @@
 ## 变更内容
 
-<!-- 描述本次 PR 做了什么、为什么。标题须符合 Conventional Commits（如 feat:/fix:/refactor:/chore:）。 -->
+<!-- 描述本次 PR 做了什么、为什么。标题须符合 Conventional Commits（如 feat:/fix:/refactor:/chore:）；破坏性变更使用 ! 并在正文 footer 写明 BREAKING CHANGE:。 -->
 
 ## 影响范围
 
@@ -16,9 +16,12 @@
 - [ ] `go test ./...` 通过
 - [ ] `go test -race ./...` 通过
 - [ ] `go vet ./...` 通过
-- [ ] Agent 包仓库已通过其 Python 单元测试（由包仓库 CI 提供证据）
+- [ ] Executor 包已通过 Python compileall、Ruff 和单元测试
+- [ ] Campus 包已通过 WASI vet 与交叉编译
+- [ ] package pack/install/list/start smoke 已通过
+- [ ] workflow lint 已通过
 - [ ] Runtime Host 集成测试通过（`go test -tags=integration ./internal/kernel/loader -v -timeout=30s`）
-- [ ] executor 包 e2e 集成测试通过（`AILUO_EXECUTOR_PACKAGE_DIR="$PWD/packages/agent" go test -tags=integration ./e2e -v -timeout=30s`）
+- [ ] executor 包 e2e 集成测试通过（`AILUO_EXECUTOR_PACKAGE_DIR="$PWD/packages/agent" go test -tags=integration ./e2e -v -timeout=60s`）
 
 ## 安全与治理
 

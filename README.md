@@ -72,14 +72,17 @@ Core 不再内置或自动播种业务演示数据；测试夹具通过通用 St
 
 ```bash
 make test
+make test-agent
+make test-campus
 make test-race
 make vet
 make test-integration
+make test-e2e
 ```
 
-Core Go 开发链路和 `packages/agent` Python 包测试分别支持 Windows、Linux 和 macOS。安装目录属主验证在 Unix/Windows 有对应实现；不支持等价安全语义的平台显式拒绝。CI 在三平台运行 Core 测试，并单独运行两个包的语言门禁。
+Core Go 开发链路和 `packages/agent` Python 包测试分别支持 Windows、Linux 和 macOS。安装目录属主验证在 Unix/Windows 有对应实现；不支持等价安全语义的平台显式拒绝。CI 在三平台运行 Core 测试；Agent 与 Campus 包分别由独立 workflow 执行语言和分发门禁。
 
-配置 `AILUO_EXECUTOR_PACKAGE_DIR=packages/agent` 后，e2e 测试会启动该 Executor 包并通过真实 OpenAI-compatible 流式协议完成 Go Capability、Service、Tool、数据库和最终回复闭环。`go test -tags=integration ./internal/kernel/loader` 另行启动真实 isolated Runtime Host 子进程，验证 Unix gRPC、协议身份、优雅退出和进程组强制清理；该测试需要允许创建本机 Unix Socket。
+配置 `AILUO_EXECUTOR_PACKAGE_DIR=packages/agent` 后，e2e 测试会启动该 Executor 包并通过真实 OpenAI-compatible 流式协议完成 Go Capability、Service、Tool、数据库和最终回复闭环；Agent 包 workflow 还会从 pack/install 后的安装目录启动同一条 e2e。`go test -tags=integration ./internal/kernel/loader` 另行启动真实 isolated Runtime Host 子进程，验证 Unix gRPC、协议身份、优雅退出和进程组强制清理；该测试需要允许创建本机 Unix Socket。
 
 ## 日志与可观测性
 

@@ -3,10 +3,13 @@ name: PR 标题规范
 on:
   pull_request_target:
     types: [opened, edited, reopened, synchronize]
-    branches: [main]
 
 permissions:
   pull-requests: write
+
+concurrency:
+  group: pr-title-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   main:
@@ -30,3 +33,93 @@ jobs:
             ci
             chore
             revert
+      - name: 校验提交格式与破坏性变更
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          import subprocess
+          import sys
+
+          types = r"feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert"
+          header_pattern = re.compile(rf"^({types})(?:\([^()\r\n]+\))?(!)?:\s+\S.*$")
+
+          footer_key_pattern = re.compile(r"^(?:BREAKING CHANGE|[A-Za-z0-9-]+)(?:\s+#\d+)?\s*:")
+
+          def has_breaking_footer(message: str) -> bool:
+              if "\n\n" not in message:
+                  return False
+              footer_lines = message.rsplit("\n\n", 1)[1].splitlines()
+              if not footer_lines or any(
+                  not line.startswith((" ", "\t")) and footer_key_pattern.match(line) is None
+                  for line in footer_lines
+              ):
+                  return False
+              return any(
+                  line.startswith("BREAKING CHANGE:")
+                  and bool(line[len("BREAKING CHANGE:"):].strip())
+                  for line in footer_lines
+              )
+
+          response = subprocess.run(
+              [
+                  "gh",
+                  "api",
+                  f"repos/{os.environ['REPOSITORY']}/pulls/{os.environ['PR_NUMBER']}/commits",
+                  "--paginate",
+                  "--slurp",
+              ],
+              check=False,
+              capture_output=True,
+              text=True,
+          )
+          if response.returncode != 0:
+              sys.stderr.write(response.stderr)
+              sys.exit(response.returncode)
+
+          pages = json.loads(response.stdout)
+          commits = [commit for page in pages for commit in page]
+          errors = []
+          has_breaking_commit = False
+          for commit in commits:
+              message = commit["commit"]["message"]
+              commit_id = commit["sha"][:12]
+              lines = message.splitlines()
+              header = lines[0] if lines else ""
+              match = header_pattern.fullmatch(header)
+              if match is None:
+                  errors.append(f"提交 {commit_id} 的标题不符合 Conventional Commits")
+                  continue
+              has_bang = bool(match.group(2))
+              has_footer = has_breaking_footer("\n".join(lines))
+              if has_bang != has_footer:
+                  errors.append(f"提交 {commit_id} 的破坏性变更必须同时使用 ! 和 BREAKING CHANGE:")
+              has_breaking_commit |= has_bang or has_footer
+
+          title = os.environ["PR_TITLE"]
+          title_match = header_pattern.fullmatch(title)
+          title_has_bang = bool(title_match and title_match.group(2))
+          body_has_footer = has_breaking_footer(os.environ.get("PR_BODY", ""))
+          if title_has_bang and not body_has_footer:
+              errors.append("PR 标题使用 ! 时，正文 footer 必须包含 BREAKING CHANGE: <说明>")
+          elif body_has_footer and not title_has_bang:
+              errors.append("PR 正文包含 BREAKING CHANGE: <说明> 时，标题必须使用 !")
+          if has_breaking_commit != (title_has_bang and body_has_footer):
+              if has_breaking_commit:
+                  errors.append("包含破坏性提交时，PR 标题和正文都必须声明破坏性变更")
+              else:
+                  errors.append("PR 标题和正文声明破坏性变更时，至少一个提交也必须声明破坏性变更")
+
+          if errors:
+              for error in errors:
+                  print(error, file=sys.stderr)
+              sys.exit(1)
+          PY
