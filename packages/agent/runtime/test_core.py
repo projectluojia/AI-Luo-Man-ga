@@ -69,16 +69,23 @@ class AgentKernelTest(unittest.IsolatedAsyncioTestCase):
             description="Optional fields",
             input_schema={
                 "type": "object",
-                "properties": {"name": {"type": "string"}, "count": {"type": "integer"}},
+                "properties": {
+                    "name": {"type": "string"},
+                    "count": {"type": "integer"},
+                    "metadata": {"type": "object", "properties": {"region": {"type": "string"}}},
+                },
                 "required": ["name"],
                 "additionalProperties": False,
             },
         )
         parameters = capability.as_model_tool()["function"]["parameters"]
-        self.assertEqual(parameters["required"], ["name", "count"])
+        self.assertEqual(parameters["required"], ["name", "count", "metadata"])
         self.assertEqual(parameters["properties"]["count"], {
             "anyOf": [{"type": "integer"}, {"type": "null"}],
         })
+        metadata = parameters["properties"]["metadata"]["anyOf"][0]
+        self.assertEqual(metadata["required"], ["region"])
+        self.assertFalse(metadata["additionalProperties"])
 
     @staticmethod
     async def execute(call: ToolCall) -> str:

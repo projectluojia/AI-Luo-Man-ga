@@ -39,17 +39,19 @@ class Capability:
 def _strict_schema(schema: dict[str, Any]) -> dict[str, Any]:
     """将可选字段转为 nullable，满足 Provider strict tool schema 约束。"""
     normalized = dict(schema)
-    if schema.get("type") == "object" and isinstance(schema.get("properties"), dict):
-        properties = schema["properties"]
-        required = set(schema.get("required", []))
-        normalized_properties: dict[str, Any] = {}
-        for name, value in properties.items():
-            child = _strict_schema(value) if isinstance(value, dict) else value
-            if name not in required and isinstance(child, dict):
-                child = {"anyOf": [child, {"type": "null"}]}
-            normalized_properties[name] = child
-        normalized["properties"] = normalized_properties
-        normalized["required"] = list(properties)
+    if schema.get("type") == "object":
+        normalized["additionalProperties"] = False
+        if isinstance(schema.get("properties"), dict):
+            properties = schema["properties"]
+            required = set(schema.get("required", []))
+            normalized_properties: dict[str, Any] = {}
+            for name, value in properties.items():
+                child = _strict_schema(value) if isinstance(value, dict) else value
+                if name not in required and isinstance(child, dict):
+                    child = {"anyOf": [child, {"type": "null"}]}
+                normalized_properties[name] = child
+            normalized["properties"] = normalized_properties
+            normalized["required"] = list(properties)
     elif schema.get("type") == "array" and isinstance(schema.get("items"), dict):
         normalized["items"] = _strict_schema(schema["items"])
     elif isinstance(schema.get("anyOf"), list):
