@@ -115,12 +115,8 @@ func currentSchemaVersion() int {
 	return maximum
 }
 
-// registeredMigrationCountThrough 统计不超过指定版本的已注册迁移数。
-// 独立模块可并行注册非连续版本号，备份校验不能假设 1..max 连续存在。
-func registeredMigrationCountThrough(maximum int) int {
-	return len(registeredVersionsThrough(maximum))
-}
-
+// registeredVersionsThrough 返回不超过指定版本的已注册迁移集合。
+// 独立模块可并行注册非连续版本号，备份校验必须比对完整版本集合。
 func registeredVersionsThrough(maximum int) map[int]struct{} {
 	versions := make(map[int]struct{})
 	for version := range registeredMigrations {

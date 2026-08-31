@@ -209,13 +209,12 @@ func putCredentialHandler(cfg Config) registry.Handler {
 		if err := decode(payload, &input); err != nil {
 			return nil, err
 		}
+		if err := validatePutMaterial(input.Kind, input.CredentialMaterial, cfg.DemoMode, cfg.Production); err != nil {
+			return nil, err
+		}
 		// JSON 字符串本身不可原地覆盖；只清零派生出的明文副本。
 		plain := []byte(input.CredentialMaterial)
 		input.CredentialMaterial = ""
-		if err := validatePutMaterial(input.Kind, string(plain), cfg.DemoMode, cfg.Production); err != nil {
-			clearBytes(plain)
-			return nil, err
-		}
 		expiresAt, err := time.Parse(time.RFC3339Nano, input.ExpiresAt)
 		if err != nil {
 			expiresAt, err = time.Parse(time.RFC3339, input.ExpiresAt)
