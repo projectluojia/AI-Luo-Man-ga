@@ -36,6 +36,10 @@ var privateFieldNames = map[string]struct{}{
 	"tool_arguments": {},
 	"tool_result":    {},
 	"user_message":   {},
+	"student_id":     {},
+	"studentid":      {},
+	"stu_id":         {},
+	"cas_ticket":     {},
 }
 
 type Config struct {
@@ -265,7 +269,7 @@ func isSensitiveKey(key string) bool {
 			return true
 		}
 	}
-	for _, marker := range []string{"password", "passwd", "secret", "token", "api_key", "authorization", "cookie", "credential"} {
+	for _, marker := range []string{"password", "passwd", "secret", "token", "api_key", "authorization", "cookie", "credential", "ticket"} {
 		if strings.Contains(normalized, marker) {
 			return true
 		}
