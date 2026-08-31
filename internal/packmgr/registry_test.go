@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/packmgr"
@@ -147,7 +146,6 @@ func TestPublishCreatesReleaseAndUploadsAsset(t *testing.T) {
 	writeSourcePackage(t, source, "demo.pkg", "1.0.0", packmgr.ModeHosted, "app.wasm", nil)
 
 	var uploadPath string
-	var stateMu sync.Mutex
 	client, _, _ := newGitHubTestClient(t, func(writer http.ResponseWriter, request *http.Request) {
 		if request.Method != http.MethodPost || !strings.Contains(request.URL.Path, "/releases") {
 			http.NotFound(writer, request)
@@ -156,9 +154,7 @@ func TestPublishCreatesReleaseAndUploadsAsset(t *testing.T) {
 		writer.WriteHeader(http.StatusCreated)
 		_ = json.NewEncoder(writer).Encode(map[string]any{"id": 7, "html_url": "https://github.com/owner/repo/releases/tag/v1.0.0"})
 	}, func(writer http.ResponseWriter, request *http.Request) {
-		stateMu.Lock()
 		uploadPath = request.URL.RequestURI()
-		stateMu.Unlock()
 		writer.WriteHeader(http.StatusCreated)
 	})
 
@@ -169,11 +165,8 @@ func TestPublishCreatesReleaseAndUploadsAsset(t *testing.T) {
 	if htmlURL != "https://github.com/owner/repo/releases/tag/v1.0.0" {
 		t.Fatalf("html url = %s", htmlURL)
 	}
-	stateMu.Lock()
-	uploaded := uploadPath
-	stateMu.Unlock()
-	if !strings.Contains(uploaded, "demo.pkg-1.0.0.tgz") {
-		t.Fatalf("upload path = %s, want asset name demo.pkg-1.0.0.tgz", uploaded)
+	if !strings.Contains(uploadPath, "demo.pkg-1.0.0.tgz") {
+		t.Fatalf("upload path = %s, want asset name demo.pkg-1.0.0.tgz", uploadPath)
 	}
 }
 
@@ -181,12 +174,9 @@ func TestPublishRemovesReleaseAfterUploadFailure(t *testing.T) {
 	source := filepath.Join(t.TempDir(), "pkg")
 	writeSourcePackage(t, source, "demo.pkg", "1.0.0", packmgr.ModeHosted, "app.wasm", nil)
 	var deleted bool
-	var stateMu sync.Mutex
 	client, _, _ := newGitHubTestClient(t, func(writer http.ResponseWriter, request *http.Request) {
 		if request.Method == http.MethodDelete {
-			stateMu.Lock()
 			deleted = true
-			stateMu.Unlock()
 			writer.WriteHeader(http.StatusNoContent)
 			return
 		}
@@ -198,10 +188,7 @@ func TestPublishRemovesReleaseAfterUploadFailure(t *testing.T) {
 	if _, err := client.Publish(context.Background(), "owner", "repo", source); err == nil {
 		t.Fatal("Publish upload failure = nil")
 	}
-	stateMu.Lock()
-	wasDeleted := deleted
-	stateMu.Unlock()
-	if !wasDeleted {
+	if !deleted {
 		t.Fatal("Publish did not remove the incomplete release")
 	}
 }
