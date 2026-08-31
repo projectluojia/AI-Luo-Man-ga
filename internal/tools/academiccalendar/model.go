@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
-	"strings"
 	"time"
 	"unicode/utf8"
 )
@@ -128,19 +127,6 @@ func ValidateSnapshotInput(in SnapshotInput) error {
 		}
 	}
 	return nil
-}
-
-func normalizeText(value string, max int) string {
-	clean := strings.TrimSpace(strings.Map(func(r rune) rune {
-		if r < 0x20 || r == 0x7f {
-			return -1
-		}
-		return r
-	}, value))
-	if utf8.RuneCountInString(clean) <= max {
-		return clean
-	}
-	return string([]rune(clean)[:max])
 }
 
 func validText(value string, max int) bool {

@@ -39,7 +39,8 @@ func TestEventsHandlerGovernanceAndFiltering(t *testing.T) {
 }
 
 func TestQueryRejectsInvalidRange(t *testing.T) {
-	r := QueryRequest{From: time.Now(), To: time.Now()}
+	now := time.Now()
+	r := QueryRequest{From: now, To: now}
 	if !errors.Is(r.NormalizeAndValidate(), ErrQueryRequired) {
 		t.Fatal("expected invalid range")
 	}
