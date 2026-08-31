@@ -21,6 +21,12 @@ var (
 const (
 	DataStateAuthoritativeFresh = "authoritative_fresh"
 	MaxEvents                   = 5000
+	MaxRevision                 = 128
+	MaxSource                   = 128
+	MaxEventID                  = 128
+	MaxEventTitle               = 256
+	MaxEventType                = 64
+	MaxEventDescription         = 2048
 	SourceWUDA                  = "zhihui-luojia"
 	SourceDemo                  = "demo-fixture-not-zhihui-luojia"
 )
@@ -104,6 +110,24 @@ type SnapshotInput struct {
 	ImportedAt    time.Time
 	ValidUntil    time.Time
 	Events        []Event
+}
+
+func ValidateSnapshotInput(in SnapshotInput) error {
+	if !validText(in.AppID, 128) || !validText(in.Revision, MaxRevision) || !validText(in.Source, MaxSource) || !in.Complete || in.ImportedAt.IsZero() || in.ValidUntil.IsZero() || !in.ValidUntil.After(in.ImportedAt) || len(in.Events) > MaxEvents {
+		return ErrInvalid
+	}
+	if in.Source != SourceDemo && in.Source != SourceWUDA {
+		return ErrInvalid
+	}
+	if in.Authoritative && in.Source != SourceWUDA {
+		return ErrInvalid
+	}
+	for _, e := range in.Events {
+		if !validText(e.ID, MaxEventID) || !validText(e.Title, MaxEventTitle) || (e.Type != "" && !validText(e.Type, MaxEventType)) || (e.Description != "" && !validText(e.Description, MaxEventDescription)) || e.StartAt.IsZero() || !e.EndAt.After(e.StartAt) || !e.StartAt.Before(in.ValidUntil) || e.EndAt.After(in.ValidUntil) {
+			return ErrInvalid
+		}
+	}
+	return nil
 }
 
 func normalizeText(value string, max int) string {
