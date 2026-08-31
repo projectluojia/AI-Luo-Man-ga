@@ -87,6 +87,7 @@ function render(snapshot, preserveInputs = false) {
   const settings = snapshot.settings;
   revision = settings.revision;
   if (!preserveInputs) {
+    byId('app-id').value = settings.app_id || '';
     byId('model').value = settings.model || '';
     byId('executor-timeout').value = settings.executor_timeout_seconds;
     byId('qq-enabled').checked = settings.qq_enabled;
@@ -166,6 +167,7 @@ form.addEventListener('submit', async event => {
   }
   const payload = {
     revision,
+    app_id: byId('app-id').value.trim(),
     model: byId('model').value.trim(),
     executor_timeout_seconds: Number(byId('executor-timeout').value),
     qq_enabled: byId('qq-enabled').checked,

@@ -8,6 +8,7 @@ import (
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access/qq"
 	qqsettings "github.com/projectluojia/AI-Luo-Man-ga/internal/access/qq/settings"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/identity"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/promptcatalog"
 )
 
@@ -23,6 +24,7 @@ var (
 // Settings 是不含秘密的本机运行配置。
 type Settings struct {
 	Revision                uint64                  `json:"revision"`
+	AppID                   string                  `json:"app_id"`
 	Model                   string                  `json:"model"`
 	ExecutorTimeoutSeconds  float64                 `json:"executor_timeout_seconds"`
 	QQEnabled               bool                    `json:"qq_enabled"`
@@ -48,6 +50,7 @@ type Settings struct {
 // SaveInput 是 WebUI 写入契约。秘密为空表示保留已有值。
 type SaveInput struct {
 	Revision                uint64                  `json:"revision"`
+	AppID                   string                  `json:"app_id"`
 	Model                   string                  `json:"model"`
 	ExecutorTimeoutSeconds  float64                 `json:"executor_timeout_seconds"`
 	QQEnabled               bool                    `json:"qq_enabled"`
@@ -117,7 +120,7 @@ func DefaultSettings() Settings {
 
 func normalize(input SaveInput) (Settings, error) {
 	settings := Settings{
-		Revision: input.Revision, Model: strings.TrimSpace(input.Model),
+		Revision: input.Revision, AppID: strings.TrimSpace(input.AppID), Model: strings.TrimSpace(input.Model),
 		ExecutorTimeoutSeconds: input.ExecutorTimeoutSeconds, QQEnabled: input.QQEnabled, QQWSURL: strings.TrimSpace(input.QQWSURL),
 		QQBotID: strings.TrimSpace(input.QQBotID), QQAllowedGroupIDs: input.QQAllowedGroupIDs,
 		QQAllowedPrivateUserIDs: input.QQAllowedPrivateUserIDs, QQQuickReplies: input.QQQuickReplies,
@@ -172,7 +175,7 @@ func normalize(input SaveInput) (Settings, error) {
 	if err != nil {
 		return Settings{}, ErrInvalid
 	}
-	if len(settings.Model) == 0 || len(settings.Model) > 256 ||
+	if identity.ValidateAppID(settings.AppID) != nil || len(settings.Model) == 0 || len(settings.Model) > 256 ||
 		settings.ExecutorTimeoutSeconds < 0.1 || settings.ExecutorTimeoutSeconds > 120 {
 		return Settings{}, ErrInvalid
 	}
@@ -187,7 +190,7 @@ func normalize(input SaveInput) (Settings, error) {
 	settings.RuntimeProcess = runtimeProcess
 	settings.Governance = governance
 	qqValue, err := qqsettings.Normalize(qqsettings.Settings{
-		AppID: "campus-services", Enabled: settings.QQEnabled, WSURL: settings.QQWSURL, BotQQID: settings.QQBotID,
+		AppID: settings.AppID, Enabled: settings.QQEnabled, WSURL: settings.QQWSURL, BotQQID: settings.QQBotID,
 		AllowedGroupIDs: settings.QQAllowedGroupIDs, AllowedPrivateUserIDs: settings.QQAllowedPrivateUserIDs,
 	})
 	if err != nil {
@@ -217,7 +220,7 @@ func normalize(input SaveInput) (Settings, error) {
 
 func validateStored(settings Settings) (Settings, error) {
 	return normalize(SaveInput{
-		Revision: settings.Revision, Model: settings.Model,
+		Revision: settings.Revision, AppID: settings.AppID, Model: settings.Model,
 		ExecutorTimeoutSeconds: settings.ExecutorTimeoutSeconds, QQEnabled: settings.QQEnabled, QQWSURL: settings.QQWSURL,
 		QQBotID: settings.QQBotID, QQAllowedGroupIDs: settings.QQAllowedGroupIDs,
 		QQAllowedPrivateUserIDs: settings.QQAllowedPrivateUserIDs, QQQuickReplies: settings.QQQuickReplies,
