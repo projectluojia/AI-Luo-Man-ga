@@ -1,22 +1,25 @@
 package qq
 
 import (
-	"path/filepath"
 	"testing"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite/sqlitetest"
 )
 
-// newQQTestStore 打开测试存储并注册清理：关闭后等待 Windows 文件句柄释放
-// 再删目录（modernc SQLite 延迟释放，避免 TempDir 清理竞争）。
-func newQQTestStore(t *testing.T, name string) *sqlite.Store {
+// newQQTestStore 打开内存态测试存储并注册清理。不用临时目录文件：modernc
+// SQLite 在 Windows 上对回显链路产生的句柄存在延迟释放，文件删除会与
+// finalizer 竞争导致 TempDir 清理偶发失败（CI flaky）；内存库语义相同且无
+// 文件句柄竞争。每个 :memory: 打开都是独立数据库，测试间隔离不变。
+func newQQTestStore(t *testing.T, _ string) *sqlite.Store {
 	t.Helper()
-	dir := t.TempDir()
-	store, err := sqlite.Open(filepath.Join(dir, name))
+	store, err := sqlite.Open(":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { sqlitetest.CloseAndWait(t, store, dir) })
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("close store: %v", err)
+		}
+	})
 	return store
 }
