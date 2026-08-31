@@ -32,14 +32,33 @@ CREATE TABLE package_snapshots (
 CREATE UNIQUE INDEX package_snapshots_current_idx
   ON package_snapshots(app_id, namespace) WHERE is_current = 1;
 
+WITH RECURSIVE stop_aliases(app_id, stop_id, rest, alias, position) AS (
+  SELECT app_id, id, aliases || char(31), NULL, 0
+  FROM bus_stops
+  WHERE aliases <> ''
+  UNION ALL
+  SELECT app_id, stop_id,
+    substr(rest, instr(rest, char(31)) + 1),
+    substr(rest, 1, instr(rest, char(31)) - 1),
+    position + 1
+  FROM stop_aliases
+  WHERE rest <> ''
+)
 INSERT INTO package_documents(app_id, namespace, collection, doc_id, payload, updated_at)
-SELECT app_id, 'campus/bus', 'stops', id,
-  json_object('id', id, 'name', name, 'aliases',
-    json(CASE WHEN aliases = '' THEN '[]'
-      ELSE '["' || replace(aliases, char(31), '","') || '"]' END),
-    'latitude', latitude, 'longitude', longitude, 'source_revision', source_revision),
+SELECT stops.app_id, 'campus/bus', 'stops', stops.id,
+  json_object('id', stops.id, 'name', stops.name, 'aliases',
+    CASE WHEN stops.aliases = '' THEN json('[]')
+      ELSE (SELECT json_group_array(alias)
+        FROM (SELECT alias
+          FROM stop_aliases
+          WHERE stop_aliases.app_id = stops.app_id AND stop_aliases.stop_id = stops.id
+            AND stop_aliases.alias IS NOT NULL
+          ORDER BY position))
+    END,
+    'latitude', stops.latitude, 'longitude', stops.longitude,
+    'source_revision', stops.source_revision),
   strftime('%Y-%m-%dT%H:%M:%fZ','now')
-FROM bus_stops;
+FROM bus_stops stops;
 
 INSERT INTO package_documents(app_id, namespace, collection, doc_id, payload, updated_at)
 SELECT app_id, 'campus/bus', 'routes', id,

@@ -88,14 +88,7 @@ function render(snapshot, preserveInputs = false) {
   revision = settings.revision;
   if (!preserveInputs) {
     byId('model').value = settings.model || '';
-    byId('model-base-url').value = settings.model_base_url || '';
-    byId('request-timeout').value = settings.model_request_timeout_seconds;
-    byId('readiness-timeout').value = settings.model_readiness_timeout_seconds;
-    byId('max-retries').value = settings.model_max_retries;
-    byId('retry-base').value = settings.model_retry_base_seconds;
-    byId('retry-max').value = settings.model_retry_max_seconds;
-    byId('requests-per-minute').value = settings.model_requests_per_minute;
-    byId('max-concurrency').value = settings.model_max_concurrency;
+    byId('executor-timeout').value = settings.executor_timeout_seconds;
     byId('qq-enabled').checked = settings.qq_enabled;
     byId('qq-ws-url').value = settings.qq_ws_url || '';
     byId('qq-bot-id').value = settings.qq_bot_id || '';
@@ -131,12 +124,11 @@ function render(snapshot, preserveInputs = false) {
     byId('qq-reconnect-delay').value = settings.qq_connection?.reconnect_delay_seconds;
     byId('qq-run-timeout').value = settings.qq_connection?.run_timeout_seconds;
     byId('qq-manager-stop-timeout').value = settings.qq_connection?.manager_stop_timeout_seconds;
-    byId('agent-dial-timeout').value = settings.agent_process?.dial_timeout_seconds;
-    byId('agent-stop-grace').value = settings.agent_process?.stop_grace_seconds;
-    byId('agent-terminate-grace').value = settings.agent_process?.terminate_grace_seconds;
+    byId('runtime-dial-timeout').value = settings.runtime_process?.dial_timeout_seconds;
+    byId('runtime-stop-grace').value = settings.runtime_process?.stop_grace_seconds;
+    byId('runtime-terminate-grace').value = settings.runtime_process?.terminate_grace_seconds;
   }
   renderPromptCatalog(settings.prompt_catalog, preserveInputs);
-  byId('model-key-state').textContent = snapshot.model_api_key_configured ? '已安全保存' : '未配置';
   byId('qq-token-state').textContent = snapshot.qq_ws_token_configured ? '已安全保存' : '未配置';
   byId('revision').textContent = revision ? `配置修订 ${revision}` : '首次配置';
   byId('runtime-state').textContent = ({ready: '运行中', starting: '启动中', restarting: '应用中', setup_required: '等待配置', failed: '启动失败'})[snapshot.runtime.state] || snapshot.runtime.state;
@@ -175,15 +167,7 @@ form.addEventListener('submit', async event => {
   const payload = {
     revision,
     model: byId('model').value.trim(),
-    model_base_url: byId('model-base-url').value.trim(),
-    model_api_key: byId('model-api-key').value,
-    model_request_timeout_seconds: Number(byId('request-timeout').value),
-    model_readiness_timeout_seconds: Number(byId('readiness-timeout').value),
-    model_max_retries: Number(byId('max-retries').value),
-    model_retry_base_seconds: Number(byId('retry-base').value),
-    model_retry_max_seconds: Number(byId('retry-max').value),
-    model_requests_per_minute: Number(byId('requests-per-minute').value),
-    model_max_concurrency: Number(byId('max-concurrency').value),
+    executor_timeout_seconds: Number(byId('executor-timeout').value),
     qq_enabled: byId('qq-enabled').checked,
     qq_ws_url: byId('qq-ws-url').value.trim(),
     qq_ws_token: byId('qq-token').value,
@@ -233,10 +217,10 @@ form.addEventListener('submit', async event => {
       run_timeout_seconds: Number(byId('qq-run-timeout').value),
       manager_stop_timeout_seconds: Number(byId('qq-manager-stop-timeout').value)
     },
-    agent_process: {
-      dial_timeout_seconds: Number(byId('agent-dial-timeout').value),
-      stop_grace_seconds: Number(byId('agent-stop-grace').value),
-      terminate_grace_seconds: Number(byId('agent-terminate-grace').value)
+    runtime_process: {
+      dial_timeout_seconds: Number(byId('runtime-dial-timeout').value),
+      stop_grace_seconds: Number(byId('runtime-stop-grace').value),
+      terminate_grace_seconds: Number(byId('runtime-terminate-grace').value)
     },
     governance: {
       confirmation_sweep_seconds: Number(byId('governance-confirmation-sweep').value)
@@ -244,7 +228,6 @@ form.addEventListener('submit', async event => {
   };
   try {
     const snapshot = await readJSON(await fetch('/api/v1/config', {method: 'PUT', headers: {'Content-Type': 'application/json', Accept: 'application/json'}, body: JSON.stringify(payload)}));
-    byId('model-api-key').value = '';
     byId('qq-token').value = '';
     byId('clear-qq-token').checked = false;
     render(snapshot);

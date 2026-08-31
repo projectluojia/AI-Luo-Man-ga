@@ -36,7 +36,7 @@ func TestValidateManifestAcceptsIsolatedProcessTemplate(t *testing.T) {
 		SchemaVersion: packagecontract.SchemaVersion, ID: "agent", Version: "1.0.0",
 		Components: []packagecontract.Component{{
 			ID: "executor", Mode: packagecontract.ModeIsolated, Role: packagecontract.RoleExecutor,
-			Entrypoint: "runtime", EnvFrom: []string{"MODEL_KEY"},
+			Entrypoint: "runtime",
 			Process: &packagecontract.ProcessTemplate{
 				Path: ".venv/python", WorkDir: ".", Address: "127.0.0.1:50051",
 			},

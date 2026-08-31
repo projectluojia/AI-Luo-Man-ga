@@ -85,9 +85,9 @@ func writeMultiComponentFixture(t *testing.T, root, version string) string {
 		SchemaVersion: packagecontract.SchemaVersion, ID: "test.multi", Version: version,
 		Extensions: extensions,
 		Components: []packagecontract.Component{
-			{ID: "multi.core", Mode: loader.ModeHosted, Entrypoint: "bus-core.wasm",
+			{ID: "multi.core", Mode: loader.ModeHosted, Entrypoint: "multi-core.wasm",
 				Exports: []string{"test.multi.query"}, Imports: []string{"test.multi.transport"}},
-			{ID: "multi.adapter", Mode: loader.ModeIsolated, Entrypoint: "bus-adapter",
+			{ID: "multi.adapter", Mode: loader.ModeIsolated, Entrypoint: "multi-adapter",
 				Exports: []string{"test.multi.transport"}},
 		},
 	}
@@ -102,7 +102,7 @@ func writeMultiComponentFixture(t *testing.T, root, version string) string {
 	locked := make([]packagecontract.LockedArtifact, 0, 2)
 	for name, body := range artifacts {
 		componentID := "multi.core"
-		if name == "bus-adapter" {
+		if name == "multi-adapter" {
 			componentID = "multi.adapter"
 		}
 		path := filepath.Join(directory, name)

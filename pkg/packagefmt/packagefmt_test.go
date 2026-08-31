@@ -101,7 +101,6 @@ id = "executor"
 mode = "isolated"
 role = "executor"
 entrypoint = "runtime"
-env_from = ["MODEL_KEY"]
 
 [component.process]
 path = "bin/runner"
@@ -115,7 +114,7 @@ address = "127.0.0.1:50051"
 		t.Fatalf("Parse: %v", err)
 	}
 	component := manifest.Components[0]
-	if component.Role != packagecontract.RoleExecutor || len(component.EnvFrom) != 1 || component.Process == nil {
+	if component.Role != packagecontract.RoleExecutor || component.Process == nil {
 		t.Fatalf("component = %+v, want executor template", component)
 	}
 	if component.Process.Path != "bin/runner" || component.Process.WorkDir != "." ||

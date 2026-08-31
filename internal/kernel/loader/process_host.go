@@ -15,7 +15,6 @@ import (
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/executor"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/health"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
 	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packagecontract"
 
@@ -45,15 +44,6 @@ type ProcessHostConfig struct {
 	// SpawnFor 按运行角色决定是否由本宿主启动进程；未设置时使用 Spawn。
 	// capability 角色若返回 false 会在加载期 fail-closed。
 	SpawnFor func(Manifest) bool
-	// Environment 返回按清单 EnvFrom 声明允许注入的运行时环境。返回值只
-	// 在启动时合并，不参与来源 Verify，也不会写入 lock。
-	Environment func(context.Context, Manifest) ([]string, error)
-	// Address 可在 Deployment 启动时覆盖锁定的本机地址（例如执行者监听地址）；
-	// 来源身份校验仍针对未覆盖的锁定规格。
-	Address func(context.Context, Manifest, string) (string, error)
-	// ExecutorHealthModel 是 executor 角色健康检查使用的模型名
-	// （capability 角色忽略）。
-	ExecutorHealthModel string
 	// Stdout/Stderr 决定子进程输出去向；nil 默认丢弃。
 	Stdout io.Writer
 	Stderr io.Writer
@@ -125,7 +115,7 @@ func (h *ProcessHost) Load(ctx context.Context, manifest Manifest) (Runtime, err
 	}
 
 	// Load 再次解析并校验，避免 Verify 与真正执行之间替换安装单元。
-	spec, err := h.resolveSpec(ctx, manifest)
+	spec, err := h.resolveVerifiedSpec(ctx, manifest)
 	if err != nil {
 		return nil, err
 	}
@@ -158,8 +148,7 @@ func (h *ProcessHost) loadExecutor(ctx context.Context, manifest Manifest, spec 
 	}
 	runtime := &executorRuntime{
 		id: manifest.ID, version: manifest.Version, mode: manifest.Mode,
-		process: process, connection: connection, client: client,
-		model: h.config.ExecutorHealthModel, host: h,
+		process: process, connection: connection, client: client, host: h,
 		stopGrace: h.config.StopGrace, terminateGrace: h.config.TerminateGrace,
 	}
 	h.track(runtime)
@@ -264,8 +253,7 @@ func (h *ProcessHost) shouldSpawn(manifest Manifest) bool {
 	return h.config.Spawn
 }
 
-// resolveVerifiedSpec 读取并校验来源锁定的规格；动态环境和地址在来源校验
-// 之后才应用，避免把 Deployment 配置误当成包身份的一部分。
+// resolveVerifiedSpec 读取并校验来源锁定的规格。
 func (h *ProcessHost) resolveVerifiedSpec(ctx context.Context, manifest Manifest) (packagecontract.ProcessSpec, error) {
 	spec, err := h.config.Resolve(ctx, manifest)
 	if err != nil {
@@ -280,71 +268,6 @@ func (h *ProcessHost) resolveVerifiedSpec(ctx context.Context, manifest Manifest
 		}
 	}
 	return spec, nil
-}
-
-// resolveSpec 返回可实际启动的规格：来源锁定字段先完成校验，随后按清单声明
-// 合并宿主注入环境和 Deployment 地址覆盖。
-func (h *ProcessHost) resolveSpec(ctx context.Context, manifest Manifest) (packagecontract.ProcessSpec, error) {
-	spec, err := h.resolveVerifiedSpec(ctx, manifest)
-	if err != nil {
-		return packagecontract.ProcessSpec{}, err
-	}
-	if h.shouldSpawn(manifest) && len(manifest.EnvFrom) > 0 && h.config.Environment == nil {
-		return packagecontract.ProcessSpec{}, ErrInvalidProcessSpec
-	}
-	if h.shouldSpawn(manifest) && h.config.Environment != nil {
-		injected, err := h.config.Environment(ctx, manifest)
-		if err != nil {
-			return packagecontract.ProcessSpec{}, errors.Join(ErrInvalidProcessSpec, err)
-		}
-		spec.Env, err = mergeInjectedEnvironment(manifest.EnvFrom, spec.Env, injected)
-		if err != nil {
-			return packagecontract.ProcessSpec{}, err
-		}
-	}
-	if h.config.Address != nil {
-		spec.Address, err = h.config.Address(ctx, manifest, spec.Address)
-		if err != nil {
-			return packagecontract.ProcessSpec{}, errors.Join(ErrInvalidProcessSpec, err)
-		}
-	}
-	if err := h.validateSpec(manifest, spec); err != nil {
-		return packagecontract.ProcessSpec{}, err
-	}
-	return spec, nil
-}
-
-// mergeInjectedEnvironment 只接受清单 EnvFrom 中声明的完整 KEY=VALUE 项，
-// 并拒绝覆盖包模板已有的同名变量。
-func mergeInjectedEnvironment(declared, base, injected []string) ([]string, error) {
-	allowed := make(map[string]struct{}, len(declared))
-	for _, name := range declared {
-		allowed[name] = struct{}{}
-	}
-	seen := make(map[string]struct{}, len(base)+len(injected))
-	result := append([]string(nil), base...)
-	for _, item := range base {
-		name, _, ok := strings.Cut(item, "=")
-		if !ok {
-			return nil, ErrInvalidProcessSpec
-		}
-		seen[name] = struct{}{}
-	}
-	for _, item := range injected {
-		name, _, ok := strings.Cut(item, "=")
-		if !ok || !environmentNamePattern.MatchString(name) {
-			return nil, ErrInvalidProcessSpec
-		}
-		if _, ok := allowed[name]; !ok {
-			return nil, ErrInvalidProcessSpec
-		}
-		if _, duplicate := seen[name]; duplicate {
-			return nil, ErrInvalidProcessSpec
-		}
-		seen[name] = struct{}{}
-		result = append(result, item)
-	}
-	return result, nil
 }
 
 // hostManagedRuntime 是进程宿主可强制清理的运行时统一面。
@@ -382,7 +305,7 @@ func ProcessWatchContext(ctx context.Context, process *Process) (derived context
 
 // Process 是受监督子进程：启动时应用资源限额，退出经 done channel 通知，
 // 清理（优雅终止 → 强制终止）与限额释放封装为原语，供 isolated 形态的
-// 内置 Agent 与 installed 扩展 Runtime 共用。
+// 所有 isolated Runtime 共用。
 type Process struct {
 	command *exec.Cmd
 	done    chan struct{}
@@ -394,13 +317,14 @@ type Process struct {
 }
 
 // StartProcess 启动受监督子进程并应用资源限额。stdout/stderr 决定子进程
-// 输出去向：installed 扩展默认丢弃，内置 agent 直接透传内核输出。
+// 输出去向：默认丢弃，只有组合根显式选择时才透传。
 func StartProcess(ctx context.Context, spec packagecontract.ProcessSpec, stdout, stderr io.Writer) (*Process, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	command := exec.Command(spec.Path, spec.Args...)
-	command.Env = append([]string(nil), spec.Env...)
+	// 空环境必须使用非 nil 切片；nil 会让 os/exec 继承 Core 的全部环境。
+	command.Env = append([]string{}, spec.Env...)
 	command.Dir = spec.WorkDir
 	command.Stdin = nil
 	command.Stdout = stdout
@@ -663,7 +587,6 @@ type executorRuntime struct {
 	process           *Process
 	connection        *grpc.ClientConn
 	client            executor.Client
-	model             string
 	host              *ProcessHost
 	stopGrace         time.Duration
 	terminateGrace    time.Duration
@@ -682,7 +605,9 @@ func (r *executorRuntime) Health(ctx context.Context) error {
 	if r.process != nil && r.process.Exited() {
 		return ErrUnavailable
 	}
-	return health.ExecutorChecker{Client: r.client, Model: r.model}.Ping(ctx)
+	// Executor 的模型/Provider 就绪取决于当前 App 配置，由内核 health
+	// checker 在接单前用真实模型探测；Loader 这里只报告进程存活。
+	return nil
 }
 
 func (r *executorRuntime) Stop(ctx context.Context) error {

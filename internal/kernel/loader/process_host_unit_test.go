@@ -107,22 +107,6 @@ func TestValidateProcessSpecRejectsUnsafeExecutionInputs(t *testing.T) {
 	}
 }
 
-func TestMergeInjectedEnvironmentRequiresManifestDeclaration(t *testing.T) {
-	base := []string{"STATIC=1"}
-	if got, err := mergeInjectedEnvironment([]string{"MODEL_KEY"}, base, []string{"MODEL_KEY=secret"}); err != nil || len(got) != 2 {
-		t.Fatalf("valid injected environment = %v, %v", got, err)
-	}
-	for _, injected := range [][]string{
-		{"UNDECLARED=value"},
-		{"MODEL_KEY=one", "MODEL_KEY=two"},
-		{"not a name=value"},
-	} {
-		if _, err := mergeInjectedEnvironment([]string{"MODEL_KEY"}, nil, injected); !errors.Is(err, ErrInvalidProcessSpec) {
-			t.Fatalf("injected environment %v error = %v, want ErrInvalidProcessSpec", injected, err)
-		}
-	}
-}
-
 func TestValidProcessLimits(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -200,6 +184,37 @@ func TestProcessReapStopsStubbornChild(t *testing.T) {
 	}
 	// Reap 已释放限额：重复释放安全。
 	process.Release()
+}
+
+func TestStartProcessDoesNotInheritCoreEnvironment(t *testing.T) {
+	t.Setenv("AILUO_PROCESS_HOST_INHERIT_SENTINEL", "must-not-reach-child")
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	process, err := StartProcess(context.Background(), packagecontract.ProcessSpec{
+		Path: executable, Args: []string{"-test.run=^TestProcessEnvironmentHelper$"}, WorkDir: t.TempDir(),
+	}, io.Discard, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-process.Done():
+	case <-time.After(3 * time.Second):
+		_ = process.Kill()
+		t.Fatal("environment helper did not exit")
+	}
+	if err := process.Err(); err != nil {
+		t.Fatalf("environment helper exited with error: %v", err)
+	}
+}
+
+// TestProcessEnvironmentHelper 由父测试进程启动，确认 Core 环境不会隐式进入
+// isolated 子进程。
+func TestProcessEnvironmentHelper(t *testing.T) {
+	if os.Getenv("AILUO_PROCESS_HOST_INHERIT_SENTINEL") != "" {
+		t.Fatal("Core environment was inherited")
+	}
 }
 
 // TestReapHelperChild 是 Reap 测试的辅助子进程：忽略中断信号并长时间驻留，

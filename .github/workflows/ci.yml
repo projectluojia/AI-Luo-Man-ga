@@ -50,16 +50,6 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
-        with:
-          enable-cache: true
-          cache-dependency-glob: agent/uv.lock
-      - name: 同步 Python 环境
-        run: uv sync --project agent --locked
-      - name: 编译 Python Agent
-        run: uv run --project agent --locked python -m compileall -q agent
-      - name: 运行 Python Agent 单元测试
-        run: uv run --project agent --locked python -m unittest discover -s agent -p "test_*.py" -v
       - name: 校验 go.mod/go.sum 无漂移
         # go mod tidy 的结论与平台相关（Windows 依赖 x/sys 等），只在单一 Linux job 校验。
         run: go mod tidy -diff
@@ -79,8 +69,6 @@ jobs:
         run: go test -race ./...
       - name: 运行 Runtime Host 集成测试
         run: go test -tags=integration ./internal/kernel/loader -v -timeout=30s
-      - name: 运行 Go → Python 端到端测试
-        run: go test -tags=integration ./e2e -v -timeout=30s
       - name: 检查工作树未被验证步骤修改
         run: git diff --exit-code
 
@@ -100,18 +88,19 @@ jobs:
       - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           enable-cache: true
-          cache-dependency-glob: agent/uv.lock
-      - name: 同步 Python 环境（含 grpc_tools protoc）
-        run: uv sync --project agent --locked
+          cache-dependency-glob: packages/agent/runtime/uv.lock
+      - name: 同步协议生成工具环境
+        run: uv sync --project packages/agent/runtime --locked
       - name: 安装与提交产物一致的 Go protoc 插件
         run: |
           go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.12
           go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.2
       - name: 重新生成并检查无漂移
         run: |
-          export PATH="$(go env GOPATH)/bin:$PATH"
-          uv run --project agent --locked python -m grpc_tools.protoc -I proto --go_out=. --go_opt=module=github.com/projectluojia/AI-Luo-Man-ga --go-grpc_out=. --go-grpc_opt=module=github.com/projectluojia/AI-Luo-Man-ga proto/executor.proto proto/runtime_host.proto
-          uv run --project agent --locked python -m grpc_tools.protoc -I proto --python_out=agent/generated --grpc_python_out=agent/generated proto/executor.proto
+          go_bin="$(go env GOPATH)/bin"
+          export PATH="$go_bin:$PATH"
+          uv run --project packages/agent/runtime --locked python -m grpc_tools.protoc -I proto --go_out=. --go_opt=module=github.com/projectluojia/AI-Luo-Man-ga --go-grpc_out=. --go-grpc_opt=module=github.com/projectluojia/AI-Luo-Man-ga proto/executor.proto proto/runtime_host.proto
+          uv run --project packages/agent/runtime --locked python -m grpc_tools.protoc -I proto --python_out=packages/agent/runtime/agent/generated --grpc_python_out=packages/agent/runtime/agent/generated proto/executor.proto
           git diff --exit-code
 
   # Docker Compose 编排语法校验（QQ OneBot 容器）。

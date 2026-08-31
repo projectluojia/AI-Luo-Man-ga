@@ -47,8 +47,8 @@ func TestProcessHostServesExecutorOverConnectMode(t *testing.T) {
 		Resolve: func(context.Context, loader.Manifest) (packagecontract.ProcessSpec, error) {
 			return packagecontract.ProcessSpec{Address: listener.Addr().String()}, nil
 		},
-		ExecutorHealthModel: "test-model", DialTimeout: 5 * time.Second,
-		StopGrace: time.Second, TerminateGrace: time.Second,
+		DialTimeout: 5 * time.Second,
+		StopGrace:   time.Second, TerminateGrace: time.Second,
 	})
 	if err != nil {
 		t.Fatal(err)

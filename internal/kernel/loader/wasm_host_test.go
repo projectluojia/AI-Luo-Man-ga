@@ -34,11 +34,6 @@ func hostedTestRequest(toolID string) contracts.RequestContext {
 	}
 }
 
-// echoHostFunction 是 ailuo.host.echo 的测试投影：回显请求字节。
-func echoHostFunction(call func(context.Context, contracts.RequestContext, []byte) ([]byte, error)) loader.HostedFunction {
-	return loader.HostedFunction{Module: "ailuo.host", Name: "echo", Call: call}
-}
-
 func TestWasmHostRejectsInvalidConfiguration(t *testing.T) {
 	if _, err := loader.NewWasmHost(loader.WasmHostConfig{}); !errors.Is(err, loader.ErrUnavailable) {
 		t.Fatalf("NewWasmHost without read artifact error = %v, want ErrUnavailable", err)

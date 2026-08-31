@@ -12,9 +12,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	goruntime "runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -40,6 +42,24 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packagecontract"
 )
 
+// syncBuffer 保护 os/exec 输出协程与测试断言之间的并发读写。
+type syncBuffer struct {
+	mu      sync.Mutex
+	builder strings.Builder
+}
+
+func (b *syncBuffer) Write(data []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.builder.Write(data)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.builder.String()
+}
+
 type integrationWebAuthenticator struct{}
 
 type integrationPromptRenderer struct{}
@@ -56,7 +76,7 @@ func (integrationWebAuthenticator) Authenticate(*http.Request) (web.Authenticate
 
 func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 	if goruntime.GOOS != "linux" && goruntime.GOOS != "darwin" {
-		t.Skip("Python Agent 的受限模型密钥文件校验仅支持 Unix")
+		t.Skip("Executor 包的受限模型密钥文件校验仅支持 Unix")
 	}
 	var modelTurns atomic.Int32
 	modelHandler := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -130,9 +150,24 @@ func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 	defer modelServer.Close()
 
 	address := freeAddress(t)
-	root, err := filepath.Abs("..")
+	coreRoot, err := filepath.Abs("..")
 	if err != nil {
 		t.Fatal(err)
+	}
+	executorPackageRoot := os.Getenv("AILUO_EXECUTOR_PACKAGE_DIR")
+	if executorPackageRoot == "" {
+		executorPackageRoot, err = filepath.Abs(filepath.Join(coreRoot, "packages", "agent"))
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	executorRuntimeRoot := filepath.Join(executorPackageRoot, "runtime")
+	pythonPath := filepath.Join(executorRuntimeRoot, ".venv", "bin", "python")
+	if goruntime.GOOS == "windows" {
+		pythonPath = filepath.Join(executorRuntimeRoot, ".venv", "Scripts", "python.exe")
+	}
+	if _, err := os.Stat(pythonPath); err != nil {
+		t.Fatalf("executor 包未构建：%v（可用 AILUO_EXECUTOR_PACKAGE_DIR 指定包目录）", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -140,7 +175,7 @@ func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 关闭顺序（defer 逆序）：取消调度 → 租约归还 → 关闭 agent → 取消上下文 → 关闭存储。
+	// 关闭顺序（defer 逆序）：取消调度 → 租约归还 → 关闭执行者 → 取消上下文 → 关闭存储。
 	// 调度必须先于关库，避免活动 Run 或轮询打到已关闭的存储。
 	defer store.Close()
 	defer cancel()
@@ -148,26 +183,35 @@ func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 	if err := os.WriteFile(secretPath, []byte("test-key\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	// Python 执行者经通用 executor.v1 宿主纳管：进程启动、健康、停止由 Loader 负责。
-	logs := &strings.Builder{}
+	logs := &syncBuffer{}
+	// Executor 是独立包，由测试 Deployment 负责启动并提供 Provider 配置；Core
+	// 的通用 ProcessHost 只连接已运行的 executor.v1，不接收包专属环境变量。
+	executorProcess := exec.CommandContext(ctx, pythonPath, "-m", "agent.runtime", "--listen", address)
+	executorProcess.Dir = executorRuntimeRoot
+	executorProcess.Env = append(os.Environ(),
+		"AILUO_MODEL_API_KEY_FILE="+secretPath,
+		"AILUO_MODEL_BASE_URL="+modelServer.URL+"/v1",
+	)
+	executorProcess.Stdout = logs
+	executorProcess.Stderr = logs
+	if err := executorProcess.Start(); err != nil {
+		t.Fatalf("启动 Executor 包: %v", err)
+	}
+	defer func() {
+		cancel()
+		_ = executorProcess.Wait()
+	}()
+
 	executorManifest := loader.Manifest{
-		ID: "ailuo.agent.test", Version: "1.0.0", Mode: loader.ModeIsolated,
+		ID: "test.executor", Version: "1.0.0", Mode: loader.ModeIsolated,
 		Role:         loader.RoleExecutor,
 		LockedDigest: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
 	}
 	executorHost, err := loader.NewProcessHost(loader.ProcessHostConfig{
 		Resolve: func(context.Context, loader.Manifest) (packagecontract.ProcessSpec, error) {
-			return packagecontract.ProcessSpec{
-				Path: filepath.Join(root, "agent", ".venv", "bin", "python"),
-				Args: []string{"-m", "agent.runtime", "--listen", address},
-				Env: append(os.Environ(),
-					"AILUO_MODEL_API_KEY_FILE="+secretPath,
-					"AILUO_MODEL_BASE_URL="+modelServer.URL+"/v1",
-				),
-				WorkDir: root, Address: address,
-			}, nil
+			return packagecontract.ProcessSpec{Address: address}, nil
 		},
-		Spawn: true, ExecutorHealthModel: "test-model", Stdout: logs, Stderr: logs,
+		Spawn:          false,
 		DialTimeout:    10 * time.Second,
 		StopGrace:      3 * time.Second,
 		TerminateGrace: 2 * time.Second,

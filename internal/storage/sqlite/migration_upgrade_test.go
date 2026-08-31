@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -213,7 +214,8 @@ INSERT INTO bus_source_revisions(app_id,revision,source,authoritative,imported_a
 VALUES('app','revision-1','zhihui-luojia',1,'2026-08-30T07:00:00.000Z','2026-08-30T09:00:00.000Z',1);
 INSERT INTO bus_stops(app_id,id,name,aliases,latitude,longitude,source_revision)
 VALUES('app','stop-a','文理学部','文理学部站'||char(31)||'本部',30.5,114.3,'revision-1'),
-      ('app','stop-b','信息学部','信息学部站',30.5,114.4,'revision-1');
+      ('app','stop-b','信息学部','信息学部站',30.5,114.4,'revision-1'),
+      ('app','stop-c','特殊站点','带"引号'||char(31)||'反斜杠'||char(92)||'字符'||char(31)||'换'||char(10),30.5,114.5,'revision-1');
 INSERT INTO bus_routes(app_id,id,name,direction,origin_stop_id,destination_stop_id,source_revision)
 VALUES('app','route-a','文理—信息','outbound','stop-a','stop-b','revision-1');
 INSERT INTO bus_journeys(app_id,trip_id,route_id,route_name,direction,origin_stop_id,origin_stop_name,destination_stop_id,destination_stop_name,departure_at,arrival_at,source_revision)
@@ -241,10 +243,10 @@ VALUES('app','revision-1','2026-08-30T07:00:00.000Z');`,
 		!listed.Meta.Authoritative || !listed.Meta.Complete {
 		t.Fatalf("listed=%#v err=%v", listed, err)
 	}
-	// 三张关系表迁为三组文档（两站一线一班）；aliases 由 \x1f 分隔串还原为 JSON 数组。
+	// 三张关系表迁为三组文档（三站一线一班）；aliases 由 \x1f 分隔串还原为 JSON 数组。
 	var count int
 	if err := upgraded.db.QueryRowContext(ctx,
-		`SELECT count(*) FROM package_documents WHERE app_id='app' AND namespace='campus/bus'`).Scan(&count); err != nil || count != 4 {
+		`SELECT count(*) FROM package_documents WHERE app_id='app' AND namespace='campus/bus'`).Scan(&count); err != nil || count != 5 {
 		t.Fatalf("migrated documents=%d err=%v", count, err)
 	}
 	stop, err := docs.Get(ctx, scope, "stops", "stop-a")
@@ -253,6 +255,20 @@ VALUES('app','revision-1','2026-08-30T07:00:00.000Z');`,
 	}
 	if !strings.Contains(string(stop.Document.Payload), `"aliases":["文理学部站","本部"]`) {
 		t.Fatalf("stop payload aliases not normalized: %s", stop.Document.Payload)
+	}
+	var specialPayload struct {
+		Aliases []string `json:"aliases"`
+	}
+	var specialPayloadBytes []byte
+	if err := upgraded.db.QueryRowContext(ctx,
+		`SELECT payload FROM package_documents WHERE app_id='app' AND namespace='campus/bus' AND collection='stops' AND doc_id='stop-c'`).Scan(&specialPayloadBytes); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(specialPayloadBytes, &specialPayload); err != nil {
+		t.Fatal(err)
+	}
+	if len(specialPayload.Aliases) != 3 || specialPayload.Aliases[0] != `带"引号` || specialPayload.Aliases[1] != `反斜杠\字符` || specialPayload.Aliases[2] != "换\n" {
+		t.Fatalf("special aliases=%#v", specialPayload.Aliases)
 	}
 	if len(listed.Documents) != 1 || listed.Documents[0].ID != "route-a" {
 		t.Fatalf("routes=%#v", listed.Documents)
