@@ -41,6 +41,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/promptcatalog"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/agent"
+	calendarservice "github.com/projectluojia/AI-Luo-Man-ga/internal/services/calendar"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus/demo"
 	promptservice "github.com/projectluojia/AI-Luo-Man-ga/internal/services/prompt"
@@ -484,6 +485,7 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 			campus.BusStopSearchCapabilityID,
 			campus.BusRouteListCapabilityID,
 			campus.BusJourneySearchCapabilityID,
+			calendarservice.CapabilityID,
 			agent.CapabilityID,
 			agent.StatusCapabilityID,
 			promptservice.PreferenceGetID,
@@ -568,6 +570,9 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 	timetableService := timetableservice.NewService(store)
 	if err := timetableservice.Register(reg, timetableService); err != nil {
 		return fmt.Errorf("register timetable Service: %w", err)
+	}
+	if err := calendarservice.Register(reg, store); err != nil {
+		return fmt.Errorf("register calendar Service: %w", err)
 	}
 	// 确认与副作用治理：持久确认服务注入 Dispatcher，凡声明 write/external 副作用
 	// 的 Capability 在未获批准前 fail-closed（缺确认标识或验证失败一律拒绝执行）。
