@@ -871,7 +871,7 @@ func (m *Manager) Shutdown(ctx context.Context) error {
 		// 并等待其完成，避免在途全部释放前 Shutdown 提前返回。
 		for _, old := range retired {
 			item.mu.Lock()
-			drained := old.inFlight <= 0
+			drained := item.inFlight == 0 && old.inFlight == 0
 			item.mu.Unlock()
 			if drained {
 				stopRetiredRuntime(item, old)
