@@ -940,11 +940,12 @@ func TestShutdownWaitsForAdmittedCreationBeforeCancellingRun(t *testing.T) {
 
 func newTestServer(t *testing.T, block bool) (http.Handler, *sqlite.Store) {
 	t.Helper()
-	store, err := sqlite.Open(filepath.Join(t.TempDir(), "test.db"))
+	tempDir := t.TempDir()
+	store, err := sqlite.Open(filepath.Join(tempDir, "test.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { store.Close() })
+	t.Cleanup(func() { sqlitetest.CloseAndWait(t, store, tempDir) })
 	reg := registry.New()
 	policy := runtimetest.NewStaticAppPolicy()
 	backend := &fakeOrchestrator{store: store, block: block}
