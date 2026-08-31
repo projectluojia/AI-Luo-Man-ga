@@ -65,7 +65,7 @@ func TestValidateRuntimeInvokeRejectsMalformedCapabilityProjections(t *testing.T
 		{name: "Schema 非法 JSON", projection: contracts.CapabilityProjection{ID: "provider.cap", Version: "1.0.0", InputSchemaJSON: `{"type":`}},
 		{name: "ID 携带控制字符", projection: contracts.CapabilityProjection{ID: "provider.cap\n", Version: "1.0.0", InputSchemaJSON: `{"type":"object"}`}},
 		{name: "版本非法 UTF-8", projection: contracts.CapabilityProjection{ID: "provider.cap", Version: "1.\xff0", InputSchemaJSON: `{"type":"object"}`}},
-		{name: "Schema 超长", projection: contracts.CapabilityProjection{ID: "provider.cap", Version: "1.0.0", InputSchemaJSON: `{"pad":"` + strings.Repeat("x", maxContextValueBytes) + `"}`}},
+		{name: "Schema 超长", projection: contracts.CapabilityProjection{ID: "provider.cap", Version: "1.0.0", InputSchemaJSON: `{"pad":"` + strings.Repeat("x", maxProjectionSchemaBytes) + `"}`}},
 	}
 	for _, test := range tests {
 		request := validProjectionInvokeRequest()

@@ -30,8 +30,12 @@ func TestValidateRejectsMalformedCapabilityProjections(t *testing.T) {
 	}{
 		{name: "缺失 ID", projections: []contracts.CapabilityProjection{{Version: "1.0.0", InputSchemaJSON: `{"type":"object"}`}}},
 		{name: "缺失版本", projections: []contracts.CapabilityProjection{{ID: "provider.cap", InputSchemaJSON: `{"type":"object"}`}}},
+		{name: "版本格式非法", projections: []contracts.CapabilityProjection{{ID: "provider.cap", Version: "not-semver", InputSchemaJSON: `{"type":"object"}`}}},
+		{name: "ID 格式非法", projections: []contracts.CapabilityProjection{{ID: "provider cap", Version: "1.0.0", InputSchemaJSON: `{"type":"object"}`}}},
 		{name: "缺失 Schema", projections: []contracts.CapabilityProjection{{ID: "provider.cap", Version: "1.0.0"}}},
 		{name: "Schema 非法 JSON", projections: []contracts.CapabilityProjection{{ID: "provider.cap", Version: "1.0.0", InputSchemaJSON: `{"type":`}}},
+		{name: "权限格式非法", projections: []contracts.CapabilityProjection{{ID: "provider.cap", Version: "1.0.0", InputSchemaJSON: `{"type":"object"}`, RequiredPermissions: []string{"Bus.Read"}}}},
+		{name: "权限重复", projections: []contracts.CapabilityProjection{{ID: "provider.cap", Version: "1.0.0", InputSchemaJSON: `{"type":"object"}`, RequiredPermissions: []string{"bus.read", "bus.read"}}}},
 		{name: "重复 ID", projections: []contracts.CapabilityProjection{valid, valid}},
 	}
 	for _, test := range tests {

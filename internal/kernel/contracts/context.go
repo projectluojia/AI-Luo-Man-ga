@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"time"
+
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/id"
+	"golang.org/x/mod/semver"
 )
 
 // CapabilityProjection 是 Go 内核投影给组件的最小 Capability 描述。
@@ -75,13 +78,29 @@ func (c RequestContext) Validate(now time.Time) error {
 func validCapabilityProjections(values []CapabilityProjection) bool {
 	seen := make(map[string]struct{}, len(values))
 	for _, value := range values {
-		if value.ID == "" || value.Version == "" || value.InputSchemaJSON == "" || !json.Valid([]byte(value.InputSchemaJSON)) {
+		if !id.StableLower.MatchString(value.ID) || !semver.IsValid("v"+value.Version) ||
+			value.InputSchemaJSON == "" || !json.Valid([]byte(value.InputSchemaJSON)) ||
+			!validProjectionPermissions(value.RequiredPermissions) {
 			return false
 		}
 		if _, exists := seen[value.ID]; exists {
 			return false
 		}
 		seen[value.ID] = struct{}{}
+	}
+	return true
+}
+
+func validProjectionPermissions(values []string) bool {
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		if !id.Permission.MatchString(value) {
+			return false
+		}
+		if _, exists := seen[value]; exists {
+			return false
+		}
+		seen[value] = struct{}{}
 	}
 	return true
 }

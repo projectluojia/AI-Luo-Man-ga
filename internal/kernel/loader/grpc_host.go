@@ -26,11 +26,12 @@ import (
 const RuntimeHostProtocolVersion = "2.0"
 
 const (
-	maxRuntimeMessageBytes = 512 << 10
-	maxInvokePayloadBytes  = 64 << 10
-	maxInvokeResultBytes   = 256 << 10
-	maxContextItems        = 64
-	maxContextValueBytes   = 256
+	maxRuntimeMessageBytes   = 512 << 10
+	maxInvokePayloadBytes    = 64 << 10
+	maxInvokeResultBytes     = 256 << 10
+	maxContextItems          = 64
+	maxContextValueBytes     = 256
+	maxProjectionSchemaBytes = 64 << 10
 )
 
 var ErrRuntimeProtocol = errors.New("runtime host protocol violation")
@@ -401,7 +402,10 @@ func validateRuntimeInvoke(request contracts.RequestContext, payload json.RawMes
 	values = append(values, request.PermissionScope...)
 	values = append(values, request.CallChain...)
 	for _, projection := range request.ImportedCapabilities {
-		values = append(values, projection.ID, projection.Version, projection.InputSchemaJSON)
+		if len(projection.InputSchemaJSON) > maxProjectionSchemaBytes || !utf8.ValidString(projection.InputSchemaJSON) || strings.ContainsRune(projection.InputSchemaJSON, '\x00') {
+			return ErrRuntimeProtocol
+		}
+		values = append(values, projection.ID, projection.Version)
 		values = append(values, projection.RequiredPermissions...)
 	}
 	for _, value := range values {
