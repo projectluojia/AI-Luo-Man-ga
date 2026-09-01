@@ -298,29 +298,30 @@ func (x *LifecycleResponse) GetStatusCode() string {
 }
 
 type GovernedRequestContext struct {
-	state           protoimpl.MessageState `protogen:"open.v1"`
-	AppId           string                 `protobuf:"bytes,1,opt,name=app_id,json=appId,proto3" json:"app_id,omitempty"`
-	EchoId          string                 `protobuf:"bytes,2,opt,name=echo_id,json=echoId,proto3" json:"echo_id,omitempty"`
-	RequestId       string                 `protobuf:"bytes,3,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
-	TraceId         string                 `protobuf:"bytes,4,opt,name=trace_id,json=traceId,proto3" json:"trace_id,omitempty"`
-	UserId          string                 `protobuf:"bytes,5,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
-	SessionId       string                 `protobuf:"bytes,6,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
-	RunId           string                 `protobuf:"bytes,7,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
-	ParentRunId     string                 `protobuf:"bytes,8,opt,name=parent_run_id,json=parentRunId,proto3" json:"parent_run_id,omitempty"`
-	CallDepth       uint32                 `protobuf:"varint,9,opt,name=call_depth,json=callDepth,proto3" json:"call_depth,omitempty"`
-	DeadlineUnixMs  int64                  `protobuf:"varint,10,opt,name=deadline_unix_ms,json=deadlineUnixMs,proto3" json:"deadline_unix_ms,omitempty"`
-	IdempotencyKey  string                 `protobuf:"bytes,11,opt,name=idempotency_key,json=idempotencyKey,proto3" json:"idempotency_key,omitempty"`
-	ConfirmationId  string                 `protobuf:"bytes,12,opt,name=confirmation_id,json=confirmationId,proto3" json:"confirmation_id,omitempty"`
-	ProtocolVersion string                 `protobuf:"bytes,13,opt,name=protocol_version,json=protocolVersion,proto3" json:"protocol_version,omitempty"`
-	PermissionScope []string               `protobuf:"bytes,14,rep,name=permission_scope,json=permissionScope,proto3" json:"permission_scope,omitempty"`
-	CallChain       []string               `protobuf:"bytes,15,rep,name=call_chain,json=callChain,proto3" json:"call_chain,omitempty"`
-	CallId          string                 `protobuf:"bytes,16,opt,name=call_id,json=callId,proto3" json:"call_id,omitempty"`
-	TargetType      string                 `protobuf:"bytes,17,opt,name=target_type,json=targetType,proto3" json:"target_type,omitempty"`
-	CapabilityId    string                 `protobuf:"bytes,18,opt,name=capability_id,json=capabilityId,proto3" json:"capability_id,omitempty"`
-	ServiceId       string                 `protobuf:"bytes,19,opt,name=service_id,json=serviceId,proto3" json:"service_id,omitempty"`
-	ToolId          string                 `protobuf:"bytes,20,opt,name=tool_id,json=toolId,proto3" json:"tool_id,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	state                protoimpl.MessageState  `protogen:"open.v1"`
+	AppId                string                  `protobuf:"bytes,1,opt,name=app_id,json=appId,proto3" json:"app_id,omitempty"`
+	EchoId               string                  `protobuf:"bytes,2,opt,name=echo_id,json=echoId,proto3" json:"echo_id,omitempty"`
+	RequestId            string                  `protobuf:"bytes,3,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	TraceId              string                  `protobuf:"bytes,4,opt,name=trace_id,json=traceId,proto3" json:"trace_id,omitempty"`
+	UserId               string                  `protobuf:"bytes,5,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	SessionId            string                  `protobuf:"bytes,6,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	RunId                string                  `protobuf:"bytes,7,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
+	ParentRunId          string                  `protobuf:"bytes,8,opt,name=parent_run_id,json=parentRunId,proto3" json:"parent_run_id,omitempty"`
+	CallDepth            uint32                  `protobuf:"varint,9,opt,name=call_depth,json=callDepth,proto3" json:"call_depth,omitempty"`
+	DeadlineUnixMs       int64                   `protobuf:"varint,10,opt,name=deadline_unix_ms,json=deadlineUnixMs,proto3" json:"deadline_unix_ms,omitempty"`
+	IdempotencyKey       string                  `protobuf:"bytes,11,opt,name=idempotency_key,json=idempotencyKey,proto3" json:"idempotency_key,omitempty"`
+	ConfirmationId       string                  `protobuf:"bytes,12,opt,name=confirmation_id,json=confirmationId,proto3" json:"confirmation_id,omitempty"`
+	ProtocolVersion      string                  `protobuf:"bytes,13,opt,name=protocol_version,json=protocolVersion,proto3" json:"protocol_version,omitempty"`
+	PermissionScope      []string                `protobuf:"bytes,14,rep,name=permission_scope,json=permissionScope,proto3" json:"permission_scope,omitempty"`
+	CallChain            []string                `protobuf:"bytes,15,rep,name=call_chain,json=callChain,proto3" json:"call_chain,omitempty"`
+	CallId               string                  `protobuf:"bytes,16,opt,name=call_id,json=callId,proto3" json:"call_id,omitempty"`
+	TargetType           string                  `protobuf:"bytes,17,opt,name=target_type,json=targetType,proto3" json:"target_type,omitempty"`
+	CapabilityId         string                  `protobuf:"bytes,18,opt,name=capability_id,json=capabilityId,proto3" json:"capability_id,omitempty"`
+	ServiceId            string                  `protobuf:"bytes,19,opt,name=service_id,json=serviceId,proto3" json:"service_id,omitempty"`
+	ToolId               string                  `protobuf:"bytes,20,opt,name=tool_id,json=toolId,proto3" json:"tool_id,omitempty"`
+	ImportedCapabilities []*CapabilityProjection `protobuf:"bytes,21,rep,name=imported_capabilities,json=importedCapabilities,proto3" json:"imported_capabilities,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *GovernedRequestContext) Reset() {
@@ -493,6 +494,82 @@ func (x *GovernedRequestContext) GetToolId() string {
 	return ""
 }
 
+func (x *GovernedRequestContext) GetImportedCapabilities() []*CapabilityProjection {
+	if x != nil {
+		return x.ImportedCapabilities
+	}
+	return nil
+}
+
+// CapabilityProjection 是 Go 内核投影给组件的版本化、只读能力描述。
+type CapabilityProjection struct {
+	state               protoimpl.MessageState `protogen:"open.v1"`
+	Id                  string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Version             string                 `protobuf:"bytes,2,opt,name=version,proto3" json:"version,omitempty"`
+	InputSchemaJson     string                 `protobuf:"bytes,3,opt,name=input_schema_json,json=inputSchemaJson,proto3" json:"input_schema_json,omitempty"`
+	RequiredPermissions []string               `protobuf:"bytes,4,rep,name=required_permissions,json=requiredPermissions,proto3" json:"required_permissions,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
+}
+
+func (x *CapabilityProjection) Reset() {
+	*x = CapabilityProjection{}
+	mi := &file_runtime_host_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CapabilityProjection) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CapabilityProjection) ProtoMessage() {}
+
+func (x *CapabilityProjection) ProtoReflect() protoreflect.Message {
+	mi := &file_runtime_host_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CapabilityProjection.ProtoReflect.Descriptor instead.
+func (*CapabilityProjection) Descriptor() ([]byte, []int) {
+	return file_runtime_host_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *CapabilityProjection) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *CapabilityProjection) GetVersion() string {
+	if x != nil {
+		return x.Version
+	}
+	return ""
+}
+
+func (x *CapabilityProjection) GetInputSchemaJson() string {
+	if x != nil {
+		return x.InputSchemaJson
+	}
+	return ""
+}
+
+func (x *CapabilityProjection) GetRequiredPermissions() []string {
+	if x != nil {
+		return x.RequiredPermissions
+	}
+	return nil
+}
+
 type InvokeRequest struct {
 	state         protoimpl.MessageState  `protogen:"open.v1"`
 	Identity      *RuntimeIdentity        `protobuf:"bytes,1,opt,name=identity,proto3" json:"identity,omitempty"`
@@ -504,7 +581,7 @@ type InvokeRequest struct {
 
 func (x *InvokeRequest) Reset() {
 	*x = InvokeRequest{}
-	mi := &file_runtime_host_proto_msgTypes[6]
+	mi := &file_runtime_host_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -516,7 +593,7 @@ func (x *InvokeRequest) String() string {
 func (*InvokeRequest) ProtoMessage() {}
 
 func (x *InvokeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_runtime_host_proto_msgTypes[6]
+	mi := &file_runtime_host_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -529,7 +606,7 @@ func (x *InvokeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InvokeRequest.ProtoReflect.Descriptor instead.
 func (*InvokeRequest) Descriptor() ([]byte, []int) {
-	return file_runtime_host_proto_rawDescGZIP(), []int{6}
+	return file_runtime_host_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *InvokeRequest) GetIdentity() *RuntimeIdentity {
@@ -566,7 +643,7 @@ type InvokeResponse struct {
 
 func (x *InvokeResponse) Reset() {
 	*x = InvokeResponse{}
-	mi := &file_runtime_host_proto_msgTypes[7]
+	mi := &file_runtime_host_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -578,7 +655,7 @@ func (x *InvokeResponse) String() string {
 func (*InvokeResponse) ProtoMessage() {}
 
 func (x *InvokeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_runtime_host_proto_msgTypes[7]
+	mi := &file_runtime_host_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -591,7 +668,7 @@ func (x *InvokeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InvokeResponse.ProtoReflect.Descriptor instead.
 func (*InvokeResponse) Descriptor() ([]byte, []int) {
-	return file_runtime_host_proto_rawDescGZIP(), []int{7}
+	return file_runtime_host_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *InvokeResponse) GetIdentity() *RuntimeIdentity {
@@ -653,7 +730,7 @@ const file_runtime_host_proto_rawDesc = "" +
 	"\bidentity\x18\x01 \x01(\v2!.ailuo.runtime.v1.RuntimeIdentityR\bidentity\x12\x14\n" +
 	"\x05ready\x18\x02 \x01(\bR\x05ready\x12\x1f\n" +
 	"\vstatus_code\x18\x03 \x01(\tR\n" +
-	"statusCode\"\x9c\x05\n" +
+	"statusCode\"\xf9\x05\n" +
 	"\x16GovernedRequestContext\x12\x15\n" +
 	"\x06app_id\x18\x01 \x01(\tR\x05appId\x12\x17\n" +
 	"\aecho_id\x18\x02 \x01(\tR\x06echoId\x12\x1d\n" +
@@ -681,7 +758,13 @@ const file_runtime_host_proto_rawDesc = "" +
 	"\rcapability_id\x18\x12 \x01(\tR\fcapabilityId\x12\x1d\n" +
 	"\n" +
 	"service_id\x18\x13 \x01(\tR\tserviceId\x12\x17\n" +
-	"\atool_id\x18\x14 \x01(\tR\x06toolId\"\xb5\x01\n" +
+	"\atool_id\x18\x14 \x01(\tR\x06toolId\x12[\n" +
+	"\x15imported_capabilities\x18\x15 \x03(\v2&.ailuo.runtime.v1.CapabilityProjectionR\x14importedCapabilities\"\x9f\x01\n" +
+	"\x14CapabilityProjection\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x18\n" +
+	"\aversion\x18\x02 \x01(\tR\aversion\x12*\n" +
+	"\x11input_schema_json\x18\x03 \x01(\tR\x0finputSchemaJson\x121\n" +
+	"\x14required_permissions\x18\x04 \x03(\tR\x13requiredPermissions\"\xb5\x01\n" +
 	"\rInvokeRequest\x12=\n" +
 	"\bidentity\x18\x01 \x01(\v2!.ailuo.runtime.v1.RuntimeIdentityR\bidentity\x12B\n" +
 	"\acontext\x18\x02 \x01(\v2(.ailuo.runtime.v1.GovernedRequestContextR\acontext\x12!\n" +
@@ -712,7 +795,7 @@ func file_runtime_host_proto_rawDescGZIP() []byte {
 	return file_runtime_host_proto_rawDescData
 }
 
-var file_runtime_host_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
+var file_runtime_host_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
 var file_runtime_host_proto_goTypes = []any{
 	(*RuntimeIdentity)(nil),        // 0: ailuo.runtime.v1.RuntimeIdentity
 	(*DescribeRequest)(nil),        // 1: ailuo.runtime.v1.DescribeRequest
@@ -720,31 +803,33 @@ var file_runtime_host_proto_goTypes = []any{
 	(*LifecycleRequest)(nil),       // 3: ailuo.runtime.v1.LifecycleRequest
 	(*LifecycleResponse)(nil),      // 4: ailuo.runtime.v1.LifecycleResponse
 	(*GovernedRequestContext)(nil), // 5: ailuo.runtime.v1.GovernedRequestContext
-	(*InvokeRequest)(nil),          // 6: ailuo.runtime.v1.InvokeRequest
-	(*InvokeResponse)(nil),         // 7: ailuo.runtime.v1.InvokeResponse
+	(*CapabilityProjection)(nil),   // 6: ailuo.runtime.v1.CapabilityProjection
+	(*InvokeRequest)(nil),          // 7: ailuo.runtime.v1.InvokeRequest
+	(*InvokeResponse)(nil),         // 8: ailuo.runtime.v1.InvokeResponse
 }
 var file_runtime_host_proto_depIdxs = []int32{
 	0,  // 0: ailuo.runtime.v1.DescribeRequest.identity:type_name -> ailuo.runtime.v1.RuntimeIdentity
 	0,  // 1: ailuo.runtime.v1.LifecycleRequest.identity:type_name -> ailuo.runtime.v1.RuntimeIdentity
 	0,  // 2: ailuo.runtime.v1.LifecycleResponse.identity:type_name -> ailuo.runtime.v1.RuntimeIdentity
-	0,  // 3: ailuo.runtime.v1.InvokeRequest.identity:type_name -> ailuo.runtime.v1.RuntimeIdentity
-	5,  // 4: ailuo.runtime.v1.InvokeRequest.context:type_name -> ailuo.runtime.v1.GovernedRequestContext
-	0,  // 5: ailuo.runtime.v1.InvokeResponse.identity:type_name -> ailuo.runtime.v1.RuntimeIdentity
-	1,  // 6: ailuo.runtime.v1.RuntimeHost.Describe:input_type -> ailuo.runtime.v1.DescribeRequest
-	3,  // 7: ailuo.runtime.v1.RuntimeHost.Start:input_type -> ailuo.runtime.v1.LifecycleRequest
-	3,  // 8: ailuo.runtime.v1.RuntimeHost.Health:input_type -> ailuo.runtime.v1.LifecycleRequest
-	6,  // 9: ailuo.runtime.v1.RuntimeHost.Invoke:input_type -> ailuo.runtime.v1.InvokeRequest
-	3,  // 10: ailuo.runtime.v1.RuntimeHost.Stop:input_type -> ailuo.runtime.v1.LifecycleRequest
-	2,  // 11: ailuo.runtime.v1.RuntimeHost.Describe:output_type -> ailuo.runtime.v1.RuntimeDescription
-	4,  // 12: ailuo.runtime.v1.RuntimeHost.Start:output_type -> ailuo.runtime.v1.LifecycleResponse
-	4,  // 13: ailuo.runtime.v1.RuntimeHost.Health:output_type -> ailuo.runtime.v1.LifecycleResponse
-	7,  // 14: ailuo.runtime.v1.RuntimeHost.Invoke:output_type -> ailuo.runtime.v1.InvokeResponse
-	4,  // 15: ailuo.runtime.v1.RuntimeHost.Stop:output_type -> ailuo.runtime.v1.LifecycleResponse
-	11, // [11:16] is the sub-list for method output_type
-	6,  // [6:11] is the sub-list for method input_type
-	6,  // [6:6] is the sub-list for extension type_name
-	6,  // [6:6] is the sub-list for extension extendee
-	0,  // [0:6] is the sub-list for field type_name
+	6,  // 3: ailuo.runtime.v1.GovernedRequestContext.imported_capabilities:type_name -> ailuo.runtime.v1.CapabilityProjection
+	0,  // 4: ailuo.runtime.v1.InvokeRequest.identity:type_name -> ailuo.runtime.v1.RuntimeIdentity
+	5,  // 5: ailuo.runtime.v1.InvokeRequest.context:type_name -> ailuo.runtime.v1.GovernedRequestContext
+	0,  // 6: ailuo.runtime.v1.InvokeResponse.identity:type_name -> ailuo.runtime.v1.RuntimeIdentity
+	1,  // 7: ailuo.runtime.v1.RuntimeHost.Describe:input_type -> ailuo.runtime.v1.DescribeRequest
+	3,  // 8: ailuo.runtime.v1.RuntimeHost.Start:input_type -> ailuo.runtime.v1.LifecycleRequest
+	3,  // 9: ailuo.runtime.v1.RuntimeHost.Health:input_type -> ailuo.runtime.v1.LifecycleRequest
+	7,  // 10: ailuo.runtime.v1.RuntimeHost.Invoke:input_type -> ailuo.runtime.v1.InvokeRequest
+	3,  // 11: ailuo.runtime.v1.RuntimeHost.Stop:input_type -> ailuo.runtime.v1.LifecycleRequest
+	2,  // 12: ailuo.runtime.v1.RuntimeHost.Describe:output_type -> ailuo.runtime.v1.RuntimeDescription
+	4,  // 13: ailuo.runtime.v1.RuntimeHost.Start:output_type -> ailuo.runtime.v1.LifecycleResponse
+	4,  // 14: ailuo.runtime.v1.RuntimeHost.Health:output_type -> ailuo.runtime.v1.LifecycleResponse
+	8,  // 15: ailuo.runtime.v1.RuntimeHost.Invoke:output_type -> ailuo.runtime.v1.InvokeResponse
+	4,  // 16: ailuo.runtime.v1.RuntimeHost.Stop:output_type -> ailuo.runtime.v1.LifecycleResponse
+	12, // [12:17] is the sub-list for method output_type
+	7,  // [7:12] is the sub-list for method input_type
+	7,  // [7:7] is the sub-list for extension type_name
+	7,  // [7:7] is the sub-list for extension extendee
+	0,  // [0:7] is the sub-list for field type_name
 }
 
 func init() { file_runtime_host_proto_init() }
@@ -758,7 +843,7 @@ func file_runtime_host_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_runtime_host_proto_rawDesc), len(file_runtime_host_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   8,
+			NumMessages:   9,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

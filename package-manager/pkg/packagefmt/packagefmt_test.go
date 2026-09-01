@@ -3,6 +3,7 @@ package packagefmt
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -187,6 +188,87 @@ description = "覆盖描述"
 	}
 }
 
+func TestParseServiceCapabilityImports(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, SourceFileName)
+	writeSource(t, path, `
+[package]
+id = "consumer.pkg"
+version = "1.0.0"
+
+[[component]]
+id = "core"
+mode = "hosted"
+entrypoint = "consumer.wasm"
+exports = ["consumer.cap"]
+
+[tool."consumer.tool"]
+description = "consumer"
+schema = "{}"
+side_effect = "read"
+
+[[capability]]
+id = "consumer.cap"
+tool = "consumer.tool"
+
+[service]
+capability_import = [{ id = "provider.cap", version = "2.0.0" }]
+`)
+
+	manifest, _, _, err := Parse(path)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	extensions := decodeExtensions(t, manifest.Extensions)
+	if len(extensions.Service.CapabilityImports) != 1 ||
+		extensions.Service.CapabilityImports[0].ID != "provider.cap" ||
+		extensions.Service.CapabilityImports[0].Version != "2.0.0" {
+		t.Fatalf("capability imports = %+v", extensions.Service.CapabilityImports)
+	}
+}
+
+func TestParseRejectsMalformedServiceCapabilityImports(t *testing.T) {
+	base := `
+[package]
+id = "consumer.pkg"
+version = "1.0.0"
+
+[[component]]
+id = "core"
+mode = "hosted"
+entrypoint = "consumer.wasm"
+exports = ["consumer.cap"]
+
+[tool."consumer.tool"]
+description = "consumer"
+schema = "{}"
+side_effect = "read"
+
+[[capability]]
+id = "consumer.cap"
+tool = "consumer.tool"
+
+[service]
+`
+	for _, test := range []struct {
+		name        string
+		declaration string
+	}{
+		{name: "missing fields", declaration: "capability_import = [{}]"},
+		{name: "invalid version", declaration: `capability_import = [{ id = "provider.cap" }]`},
+		{name: "invalid id", declaration: `capability_import = [{ id = "Provider.Cap", version = "1.0.0" }]`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, SourceFileName)
+			writeSource(t, path, base+test.declaration+"\n")
+			if _, _, _, err := Parse(path); !errors.Is(err, ErrSourceInvalid) {
+				t.Fatalf("Parse error = %v, want ErrSourceInvalid", err)
+			}
+		})
+	}
+}
+
 // capability 引用不存在的 tool 必须拒绝。
 func TestParseCapabilityUnknownTool(t *testing.T) {
 	dir := t.TempDir()
@@ -271,10 +353,16 @@ type testTool struct {
 }
 
 type testService struct {
-	ID               string   `json:"id"`
-	Version          string   `json:"version"`
-	Description      string   `json:"description"`
-	ToolDependencies []string `json:"tool_dependencies"`
+	ID                string                 `json:"id"`
+	Version           string                 `json:"version"`
+	Description       string                 `json:"description"`
+	ToolDependencies  []string               `json:"tool_dependencies"`
+	CapabilityImports []testCapabilityImport `json:"capability_imports"`
+}
+
+type testCapabilityImport struct {
+	ID      string `json:"id"`
+	Version string `json:"version"`
 }
 
 type testCapability struct {

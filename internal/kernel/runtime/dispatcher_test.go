@@ -180,6 +180,89 @@ func TestDispatcherProjectsClosedTargetIdentityToHandlers(t *testing.T) {
 	}
 }
 
+func TestDispatcherEnforcesDeclaredCapabilityImportsAndProjectsThem(t *testing.T) {
+	t.Parallel()
+
+	reg := registry.New()
+	policy := runtimetest.NewStaticAppPolicy()
+	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{})
+	providerSchema := `{"type":"object","additionalProperties":false}`
+	var consumerRequest, providerRequest contracts.RequestContext
+	providerCalled := 0
+
+	provider := registry.ServiceRegistration{
+		Spec: capability.ServiceSpec{ID: "provider", Version: "1.0.0"},
+		Capabilities: map[string]struct {
+			Spec    capability.CapabilitySpec
+			Handler registry.Handler
+		}{
+			"provider.capability": {
+				Spec: capability.CapabilitySpec{
+					ID: "provider.capability", Version: "1.0.0", ServiceID: "provider",
+					InputSchemaJSON: providerSchema, SideEffect: capability.SideEffectRead,
+				},
+				Handler: func(_ context.Context, request contracts.RequestContext, _ json.RawMessage) (json.RawMessage, error) {
+					providerCalled++
+					providerRequest = request
+					return json.RawMessage(`{"ok":true}`), nil
+				},
+			},
+		},
+	}
+	consumer := registry.ServiceRegistration{
+		Spec: capability.ServiceSpec{
+			ID: "consumer", Version: "1.0.0",
+			CapabilityImports: []capability.CapabilityImport{{ID: "provider.capability", Version: "1.0.0"}},
+		},
+		Capabilities: map[string]struct {
+			Spec    capability.CapabilitySpec
+			Handler registry.Handler
+		}{
+			"consumer.capability": {
+				Spec: capability.CapabilitySpec{
+					ID: "consumer.capability", Version: "1.0.0", ServiceID: "consumer",
+					InputSchemaJSON: providerSchema, SideEffect: capability.SideEffectRead,
+				},
+				Handler: func(ctx context.Context, request contracts.RequestContext, payload json.RawMessage) (json.RawMessage, error) {
+					consumerRequest = request
+					return dispatcher.InvokeImportedCapability(ctx, request, "consumer", "provider.capability", payload)
+				},
+			},
+		},
+	}
+	if err := reg.RegisterBatch(nil, []registry.ServiceRegistration{consumer, provider}); err != nil {
+		t.Fatalf("RegisterBatch: %v", err)
+	}
+	policy.Enable("app", "consumer.capability")
+	policy.Enable("app", "provider.capability")
+
+	if _, err := dispatcher.InvokeCapability(context.Background(), validRequest(), "consumer.capability", json.RawMessage(`{}`)); err != nil {
+		t.Fatalf("declared imported call failed: %v", err)
+	}
+	if providerCalled != 1 {
+		t.Fatalf("provider calls = %d, want 1", providerCalled)
+	}
+	if len(consumerRequest.ImportedCapabilities) != 1 ||
+		consumerRequest.ImportedCapabilities[0].ID != "provider.capability" ||
+		consumerRequest.ImportedCapabilities[0].Version != "1.0.0" ||
+		consumerRequest.ImportedCapabilities[0].InputSchemaJSON != providerSchema {
+		t.Fatalf("consumer projection = %#v", consumerRequest.ImportedCapabilities)
+	}
+	if len(providerRequest.ImportedCapabilities) != 0 || providerRequest.ServiceID != "provider" ||
+		providerRequest.CapabilityID != "provider.capability" {
+		t.Fatalf("provider request = %#v", providerRequest)
+	}
+
+	spoofed := validRequest()
+	spoofed.ServiceID = "consumer"
+	if _, err := dispatcher.InvokeCapability(context.Background(), spoofed, "provider.capability", json.RawMessage(`{}`)); !errors.Is(err, runtime.ErrCapabilityNotImported) {
+		t.Fatalf("unbound service claim error = %v, want ErrCapabilityNotImported", err)
+	}
+	if _, err := dispatcher.InvokeImportedCapability(context.Background(), validRequest(), "consumer", "provider.capability", json.RawMessage(`{}`)); !errors.Is(err, runtime.ErrCapabilityNotImported) {
+		t.Fatalf("unbound imported invoke error = %v, want ErrCapabilityNotImported", err)
+	}
+}
+
 func TestDispatcherUsesPersistentAppPolicyAndRevalidatesChanges(t *testing.T) {
 	reg := registry.New()
 	called := 0

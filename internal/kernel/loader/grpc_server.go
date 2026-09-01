@@ -291,25 +291,44 @@ func (s *RuntimeHostProtocolServer) decodeInvoke(request *runtimev1.InvokeReques
 	if request.Context.CallDepth > 64 {
 		return BackendIdentity{}, contracts.RequestContext{}, nil, safeRuntimeStatus(codes.InvalidArgument)
 	}
+	importedCapabilities, err := decodeCapabilityProjections(request.Context.ImportedCapabilities)
+	if err != nil {
+		return BackendIdentity{}, contracts.RequestContext{}, nil, safeRuntimeStatus(codes.InvalidArgument)
+	}
 	governed := contracts.RequestContext{
 		AppID: request.Context.AppId, EchoID: request.Context.EchoId, RequestID: request.Context.RequestId,
 		TraceID: request.Context.TraceId, UserID: request.Context.UserId, SessionID: request.Context.SessionId,
 		RunID: request.Context.RunId, ParentRunID: request.Context.ParentRunId, CallID: request.Context.CallId,
 		CallDepth: uint16(request.Context.CallDepth), Deadline: deadline,
 		IdempotencyKey: request.Context.IdempotencyKey, ConfirmationID: request.Context.ConfirmationId,
-		ProtocolVersion: request.Context.ProtocolVersion,
-		TargetType:      request.Context.TargetType,
-		CapabilityID:    request.Context.CapabilityId,
-		ServiceID:       request.Context.ServiceId,
-		ToolID:          request.Context.ToolId,
-		PermissionScope: append([]string(nil), request.Context.PermissionScope...),
-		CallChain:       append([]string(nil), request.Context.CallChain...),
+		ProtocolVersion:      request.Context.ProtocolVersion,
+		TargetType:           request.Context.TargetType,
+		CapabilityID:         request.Context.CapabilityId,
+		ServiceID:            request.Context.ServiceId,
+		ToolID:               request.Context.ToolId,
+		ImportedCapabilities: importedCapabilities,
+		PermissionScope:      append([]string(nil), request.Context.PermissionScope...),
+		CallChain:            append([]string(nil), request.Context.CallChain...),
 	}
 	payload := append(json.RawMessage(nil), request.PayloadJson...)
 	if err := validateRuntimeInvoke(governed, payload, now); err != nil {
 		return BackendIdentity{}, contracts.RequestContext{}, nil, safeRuntimeStatus(codes.InvalidArgument)
 	}
 	return identity, governed, payload, nil
+}
+
+func decodeCapabilityProjections(values []*runtimev1.CapabilityProjection) ([]contracts.CapabilityProjection, error) {
+	result := make([]contracts.CapabilityProjection, 0, len(values))
+	for _, value := range values {
+		if value == nil {
+			return nil, errors.New("capability projection entry is nil")
+		}
+		result = append(result, contracts.CapabilityProjection{
+			ID: value.Id, Version: value.Version, InputSchemaJSON: value.InputSchemaJson,
+			RequiredPermissions: append([]string(nil), value.RequiredPermissions...),
+		})
+	}
+	return result, nil
 }
 
 func (s *RuntimeHostProtocolServer) beginInvoke(identity BackendIdentity) bool {

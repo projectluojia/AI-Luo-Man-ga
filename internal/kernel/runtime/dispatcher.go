@@ -27,6 +27,7 @@ var (
 	ErrIdempotencyUnavailable = errors.New("durable idempotency is unavailable")
 	ErrConfirmationRequired   = errors.New("governed confirmation is required")
 	ErrAppPolicyUnavailable   = errors.New("app policy is unavailable")
+	ErrCapabilityNotImported  = errors.New("capability is not imported by caller service")
 )
 
 type AppPolicy interface {
@@ -66,6 +67,8 @@ type Dispatcher struct {
 	maxCallDepth  uint16
 }
 
+type callerServiceContextKey struct{}
+
 func NewDispatcher(reg *registry.Registry, policy AppPolicy, config DispatcherConfig) *Dispatcher {
 	if config.MaxCallDepth == 0 {
 		config.MaxCallDepth = 16
@@ -90,6 +93,19 @@ func (d *Dispatcher) InvokeCapability(ctx context.Context, request contracts.Req
 			spec, handler, err := d.registry.ResolveCapability(capabilityID)
 			if err != nil {
 				return routedTarget{}, err
+			}
+			callerService, bound := ctx.Value(callerServiceContextKey{}).(string)
+			if !bound && request.ServiceID != "" {
+				return routedTarget{}, fmt.Errorf("%w: unbound caller claims consumer %q", ErrCapabilityNotImported, request.ServiceID)
+			}
+			if bound && callerService != spec.ServiceID {
+				imported, importErr := d.registry.IsCapabilityImported(callerService, capabilityID)
+				if importErr != nil {
+					return routedTarget{}, importErr
+				}
+				if !imported {
+					return routedTarget{}, fmt.Errorf("%w: consumer=%q capability=%q", ErrCapabilityNotImported, callerService, capabilityID)
+				}
 			}
 			return routedTarget{
 				targetID: capabilityID, version: spec.Version, sideEffect: spec.SideEffect,
@@ -221,8 +237,14 @@ func (d *Dispatcher) route(
 	}
 	derived = target.fillTarget(derived)
 	derived.TargetType = targetType
+	projection, err := d.registry.ImportedCapabilityProjection(derived.ServiceID)
+	if err != nil {
+		return nil, err
+	}
+	derived.ImportedCapabilities = projection
 	result, replayed, err := d.invokeHandler(ctx, request, targetType, target.targetID, target.version, target.sideEffect, fingerprint, func(executionContext context.Context) (json.RawMessage, error) {
-		return target.handler(executionContext, derived, payload)
+		handlerContext := context.WithValue(executionContext, callerServiceContextKey{}, derived.ServiceID)
+		return target.handler(handlerContext, derived, payload)
 	})
 	if err != nil {
 		observe.Warn(ctx, "调用处理失败",
@@ -238,6 +260,18 @@ func (d *Dispatcher) route(
 	)
 	succeeded = true
 	return result, nil
+}
+
+// InvokeImportedCapability 由 Service 在其已绑定的 Dispatcher 上下文中调用
+// 另一 Service 的 Capability。消费方身份来自私有 context 绑定，不接受调用方
+// 通过公开 RequestContext 字段自报身份。
+func (d *Dispatcher) InvokeImportedCapability(ctx context.Context, request contracts.RequestContext, consumerServiceID, capabilityID string, payload json.RawMessage) (json.RawMessage, error) {
+	boundService, bound := ctx.Value(callerServiceContextKey{}).(string)
+	if !bound || consumerServiceID == "" || consumerServiceID != boundService {
+		return nil, fmt.Errorf("%w: consumer=%q is not bound to the current handler", ErrCapabilityNotImported, consumerServiceID)
+	}
+	request.ServiceID = boundService
+	return d.InvokeCapability(ctx, request, capabilityID, payload)
 }
 
 func (d *Dispatcher) policySnapshot(ctx context.Context, request contracts.RequestContext) (appconfig.PolicySnapshot, error) {
