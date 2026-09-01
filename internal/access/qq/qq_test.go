@@ -273,6 +273,19 @@ func TestQQAdapterIntakesAndReplies(t *testing.T) {
 	}
 }
 
+func TestTerminalReplyUsesFallbackForNonRenderableCompletion(t *testing.T) {
+	payload, err := json.Marshal(kernelecho.Output{
+		ContentType: "application/octet-stream", Data: []byte{0, 1, 2},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reply := terminalReply(kernelecho.Event{Type: "run.completed", Payload: payload})
+	if reply == nil || *reply != "处理完成，但结果暂不支持展示" {
+		t.Fatalf("reply=%v", reply)
+	}
+}
+
 func TestQQAdapterQuickReplySkipsExecutorAndDoesNotMentionSender(t *testing.T) {
 	store := newQQTestStore(t, "qq-quick-reply.db")
 	bot := newFakeOneBot(t)
