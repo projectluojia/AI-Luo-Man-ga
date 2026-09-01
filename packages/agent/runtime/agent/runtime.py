@@ -401,7 +401,8 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
         ExecutorRuntime._valid_token(start.app_id)
         ExecutorRuntime._validate_payload(start.input_payload, True, MAX_INPUT_PAYLOAD_BYTES, "执行输入")
         ExecutorRuntime._validate_payload(start.context_payload, False, MAX_CONTEXT_PAYLOAD_BYTES, "执行上下文")
-        ExecutorRuntime._validate_payload(start.executor_config, False, MAX_EXECUTOR_CONFIG_BYTES, "执行者配置")
+        if start.executor_config.data or start.executor_config.content_type != "application/json":
+            ExecutorRuntime._validate_payload(start.executor_config, False, MAX_EXECUTOR_CONFIG_BYTES, "执行者配置")
         if (
             start.max_steps < 1
             or start.max_steps > MAX_PROTOCOL_STEPS

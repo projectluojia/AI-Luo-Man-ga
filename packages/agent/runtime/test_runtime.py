@@ -97,7 +97,7 @@ class RuntimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(failure.sequence, 2)
         self.assertEqual(failure.run_failure.code, "executor_configuration_unavailable")
 
-    async def test_run_clamps_zero_usage_to_valid_execution_units(self) -> None:
+    async def test_run_accepts_empty_config_and_clamps_zero_usage(self) -> None:
         class ZeroUsageModel(ModelProvider):
             async def stream_turn(self, **kwargs):
                 yield TurnCompleted(
@@ -107,7 +107,9 @@ class RuntimeTest(unittest.IsolatedAsyncioTestCase):
                 )
 
         async def request_iterator():
-            yield self._start_frame()
+            frame = self._start_frame()
+            frame.start_run.executor_config.content_type = "application/json"
+            yield frame
 
         output = ExecutorRuntime(ZeroUsageModel(), model_name="test-model").Run(request_iterator(), None)
         await anext(output)
