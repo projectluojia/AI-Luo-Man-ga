@@ -195,7 +195,7 @@ func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 		t.Fatalf("启动已安装 Executor 包: %v", err)
 	}
 	defer func() {
-		cleanupContext, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		cleanupContext, cleanupCancel := context.WithTimeout(context.Background(), 6*time.Second)
 		defer cleanupCancel()
 		if err := executorProcess.Reap(cleanupContext, 3*time.Second, 2*time.Second); err != nil {
 			t.Errorf("回收 Executor 包进程: %v", err)
