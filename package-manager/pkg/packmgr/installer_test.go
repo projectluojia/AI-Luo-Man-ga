@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -155,6 +156,36 @@ func TestInstallRejectsIsolatedWithoutProcessTemplate(t *testing.T) {
 	}
 	if _, err := packmgr.Install(context.Background(), root, source); err == nil {
 		t.Fatal("isolated package without process template was accepted")
+	}
+}
+
+func TestInstallRejectsImplicitUnixAddressOnWindows(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("仅 Windows 需要拒绝隐式 Unix Socket")
+	}
+	for _, address := range []string{"", "unix:/runtime.sock"} {
+		t.Run(address, func(t *testing.T) {
+			source := t.TempDir()
+			if err := os.WriteFile(filepath.Join(source, "app"), []byte("executable"), 0o750); err != nil {
+				t.Fatal(err)
+			}
+			manifest, err := json.Marshal(packagecontract.Manifest{
+				SchemaVersion: packagecontract.SchemaVersion, ID: "demo.windows", Version: "1.0.0",
+				Components: []packagecontract.Component{{
+					ID: "core", Mode: packagecontract.ModeIsolated, Entrypoint: "app",
+					Process: &packagecontract.ProcessTemplate{Path: "app", Address: address},
+				}},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(source, "manifest.json"), manifest, 0o640); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := packmgr.Install(context.Background(), t.TempDir(), source); err == nil {
+				t.Fatalf("Install accepted Windows address %q", address)
+			}
+		})
 	}
 }
 
