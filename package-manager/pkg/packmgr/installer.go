@@ -42,7 +42,7 @@ func Inspect(ctx context.Context, sourcePath string) (packagecontract.Manifest, 
 		return packagecontract.Manifest{}, nil, err
 	}
 	if strings.HasSuffix(strings.ToLower(sourcePath), ".tgz") {
-		if err := validateArchiveLock(ctx, sourceDir, source.Manifest, artifacts); err != nil {
+		if err := validateArchiveLock(ctx, sourceDir, source.Manifest, source.manifestBytes, artifacts); err != nil {
 			return packagecontract.Manifest{}, nil, err
 		}
 	}
@@ -77,7 +77,7 @@ func Install(ctx context.Context, root, sourcePath string) (InstalledRecord, err
 		return InstalledRecord{}, err
 	}
 	if strings.HasSuffix(strings.ToLower(sourcePath), ".tgz") {
-		if err := validateArchiveLock(ctx, sourceDir, source.Manifest, artifacts); err != nil {
+		if err := validateArchiveLock(ctx, sourceDir, source.Manifest, source.manifestBytes, artifacts); err != nil {
 			return InstalledRecord{}, err
 		}
 	}
@@ -421,7 +421,7 @@ func readSourceArtifacts(ctx context.Context, sourceDir string, manifest package
 
 // validateArchiveLock 校验发布归档中的 lock，并把每个工件摘要与实际解压内容
 // 对照。安装 lock 会在目标目录重新生成，因此归档 lock 只接受包根相对路径。
-func validateArchiveLock(ctx context.Context, directory string, manifest packagecontract.Manifest, artifacts []sourceArtifact) error {
+func validateArchiveLock(ctx context.Context, directory string, manifest packagecontract.Manifest, manifestBytes []byte, artifacts []sourceArtifact) error {
 	lockBytes, err := packageio.ReadFileLimited(filepath.Join(directory, "lock.json"), packagecontract.MaxLockBytes)
 	if err != nil {
 		return err
@@ -429,6 +429,10 @@ func validateArchiveLock(ctx context.Context, directory string, manifest package
 	var lock packagecontract.Lock
 	if err := packagecontract.DecodeStrictJSON(lockBytes, &lock); err != nil {
 		return err
+	}
+	manifestDigest := sha256.Sum256(manifestBytes)
+	if lock.ManifestSHA256 != hex.EncodeToString(manifestDigest[:]) {
+		return packagecontract.ErrInvalidFormat
 	}
 	if err := packagecontract.ValidateArchiveLock(lock, manifest); err != nil {
 		return err
