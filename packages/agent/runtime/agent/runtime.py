@@ -77,6 +77,10 @@ class ProtocolViolation(Exception):
     pass
 
 
+class ExecutorConfigurationUnavailable(Exception):
+    pass
+
+
 class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
     def __init__(self, provider: ModelProvider | None = None, model_name: str | None = None) -> None:
         self._provider = provider or OpenAICompatibleProvider.from_environment()
@@ -199,7 +203,7 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
 
                 kernel = AgentKernel(self._provider)
                 if not self._model_name:
-                    raise ProtocolViolation("执行者未配置自身运行所需的模型")
+                    raise ExecutorConfigurationUnavailable("执行者未配置自身运行所需的模型")
                 agent_config = self._parse_executor_config(start.executor_config)
                 input_message = _decode_text_payload(start.input_payload, "执行输入")
                 context_text = _render_agent_context(start.context_payload, agent_config)
@@ -284,7 +288,7 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
                             first_frame.run_id,
                             outbound_sequence,
                             resource_usage=executor_pb2.ResourceUsage(
-                                execution_units=event.total_tokens,
+                                execution_units=max(1, event.total_tokens),
                                 cost_microusd=event.cost_microusd,
                                 retries=event.provider_retries,
                             ),
@@ -307,6 +311,8 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
                 retryable = False
                 if isinstance(exc, ProtocolViolation):
                     code = "protocol_violation"
+                elif isinstance(exc, ExecutorConfigurationUnavailable):
+                    code = "executor_configuration_unavailable"
                 elif isinstance(exc, ProviderFailure):
                     code = _execution_failure_code(exc.code)
                     retryable = exc.retryable
