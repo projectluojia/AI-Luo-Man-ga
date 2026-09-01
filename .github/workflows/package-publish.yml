@@ -107,7 +107,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          metadata="$($RUNNER_TEMP/ailuo inspect "$PACKAGE_DIR")"
+          metadata="$("$RUNNER_TEMP/ailuo" inspect "$PACKAGE_DIR")"
           printf '%s\n' "$metadata" > "$RUNNER_TEMP/package-metadata.json"
           jq -e '.id | type == "string" and length > 0' "$RUNNER_TEMP/package-metadata.json" >/dev/null
           jq -e '.version | type == "string" and length > 0' "$RUNNER_TEMP/package-metadata.json" >/dev/null
