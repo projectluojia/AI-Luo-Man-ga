@@ -268,6 +268,11 @@ func resolveProcessSpec(component packagecontract.Component, artifactPath, packa
 	}
 	if component.Process.Address != "" {
 		process.Address = component.Process.Address
+	} else if runtime.GOOS == "windows" {
+		return nil, packagecontract.ErrInvalidFormat
+	}
+	if runtime.GOOS == "windows" && strings.HasPrefix(process.Address, "unix:") {
+		return nil, packagecontract.ErrInvalidFormat
 	}
 	for index, argument := range process.Args {
 		process.Args[index] = strings.ReplaceAll(argument, "${address}", process.Address)
