@@ -643,7 +643,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="运行 AI珞（爱珞） Python AI Agent")
     parser.add_argument("--listen", default="127.0.0.1:50051", help="gRPC 监听地址")
     arguments = parser.parse_args()
-    configure()
+    try:
+        configure()
+    except ValueError as exc:
+        raise SystemExit(f"日志配置无效: {exc}") from None
     asyncio.run(serve(arguments.listen))
 
 
