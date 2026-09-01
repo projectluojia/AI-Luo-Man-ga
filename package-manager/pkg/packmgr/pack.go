@@ -146,16 +146,23 @@ func writeArtifactEntries(writer *tar.Writer, sourceRoot, archiveRoot string, li
 		if walkErr != nil {
 			return walkErr
 		}
-		entries++
-		if entries > limit {
-			return fmt.Errorf("%w: 目录工件条目超过上限 %d", packagecontract.ErrInvalidFormat, limit)
-		}
 		if entry.Type()&os.ModeSymlink != 0 {
 			return fmt.Errorf("%w: 目录工件包含符号链接", packagecontract.ErrInvalidFormat)
 		}
 		relative, err := filepath.Rel(sourceRoot, current)
 		if err != nil {
 			return packagecontract.ErrInvalidFormat
+		}
+		relative = filepath.ToSlash(relative)
+		if packageio.IsIgnoredArtifactPath(relative) {
+			if entry.IsDir() {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		entries++
+		if entries > limit {
+			return fmt.Errorf("%w: 目录工件条目超过上限 %d", packagecontract.ErrInvalidFormat, limit)
 		}
 		name := filepath.ToSlash(filepath.Join(archiveRoot, relative))
 		if relative == "." {

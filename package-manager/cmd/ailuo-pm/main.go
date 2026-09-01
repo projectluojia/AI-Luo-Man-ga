@@ -20,6 +20,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packageio"
 	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/packagefmt"
 	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/packmgr"
+	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/projectmgr"
 	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/sdkgen"
 )
 
@@ -41,13 +42,15 @@ func run(arguments []string, output io.Writer) error {
 	return runPackageCommand(ctx, arguments, output)
 }
 
-// runPackageCommand 执行包管理 CLI：install 支持本地目录/tarball/GitHub
-// Release 源（owner/repo[@约束]），upgrade/uninstall/list/pack/publish 见各分支。
+// runPackageCommand 执行包管理 CLI：sync/install 支持项目或本地包，install 还
+// 支持 GitHub Release 源（owner/repo[@约束]），upgrade/uninstall/list/pack/publish
+// 见各分支。
 func runPackageCommand(parent context.Context, arguments []string, output io.Writer) error {
 	command := arguments[0]
 	flags := flag.NewFlagSet(command, flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	root := flags.String("root", "", "安装根目录（默认 AILUO_PACKAGE_INSTALL_ROOT，再默认用户配置目录 ailuo/runtime）")
+	project := flags.String("project", ".", "项目目录或 ailuo.toml 路径（sync 使用）")
 	repo := flags.String("repo", "", "GitHub 仓库（owner/repo），publish 使用")
 	version := flags.String("version", "", "零声明包自动生成的 semver 版本")
 	if err := flags.Parse(arguments[1:]); err != nil {
@@ -65,6 +68,20 @@ func runPackageCommand(parent context.Context, arguments []string, output io.Wri
 	ctx, cancel := context.WithTimeout(parent, 2*time.Minute)
 	defer cancel()
 	switch command {
+	case "sync":
+		if flags.NArg() != 0 {
+			return fmt.Errorf("configuration error: sync 不接受位置参数")
+		}
+		projectFile, err := projectManifestPath(*project)
+		if err != nil {
+			return err
+		}
+		lock, err := projectmgr.Sync(ctx, projectFile, *root, packmgr.NewGitHubClient())
+		if err != nil {
+			return err
+		}
+		_, err = fmt.Fprintf(output, "已同步项目 %s：%d 个包\n", lock.ProjectID, len(lock.Packages))
+		return err
 	case "install":
 		if flags.NArg() != 1 {
 			return fmt.Errorf("configuration error: install requires exactly one source package directory")
@@ -79,7 +96,28 @@ func runPackageCommand(parent context.Context, arguments []string, output io.Wri
 		} else if sourceErr != nil {
 			return sourceErr
 		} else {
-			record, err = packmgr.Install(ctx, *root, source)
+			info, statErr := os.Stat(source)
+			if statErr != nil {
+				return statErr
+			}
+			if !info.IsDir() {
+				record, err = packmgr.Install(ctx, *root, source)
+			} else {
+				manifest, manifestBytes, resolveErr := resolveSource(ctx, source, *version)
+				if resolveErr != nil {
+					return resolveErr
+				}
+				stage, stageErr := os.MkdirTemp("", "ailuo-install-")
+				if stageErr != nil {
+					return stageErr
+				}
+				defer func() { _ = os.RemoveAll(stage) }()
+				archive, packErr := packmgr.PackFromSource(ctx, source, stage, manifest, manifestBytes)
+				if packErr != nil {
+					return packErr
+				}
+				record, err = packmgr.Install(ctx, *root, archive)
+			}
 		}
 		if err != nil {
 			return err
@@ -216,6 +254,23 @@ func runPackageCommand(parent context.Context, arguments []string, output io.Wri
 	}
 }
 
+func projectManifestPath(value string) (string, error) {
+	if value == "" {
+		return "", fmt.Errorf("configuration error: --project 不能为空")
+	}
+	info, err := os.Stat(value)
+	if err != nil {
+		return "", fmt.Errorf("读取项目路径失败: %w", err)
+	}
+	if info.IsDir() {
+		return filepath.Join(value, packagefmt.ProjectFileName), nil
+	}
+	if filepath.Base(value) != packagefmt.ProjectFileName {
+		return "", fmt.Errorf("configuration error: --project 必须是项目目录或 %s", packagefmt.ProjectFileName)
+	}
+	return value, nil
+}
+
 // componentModes 汇总包内组件的运行形态：单组件直接给出 mode，多组件按形态计数。
 func componentModes(manifest packagecontract.Manifest) string {
 	if len(manifest.Components) == 1 {
@@ -251,42 +306,7 @@ func splitRegistryRef(source string) (owner, repo, constraint string, ok bool) {
 // 无则从源码自动提取清单并构建（作者零声明，纯计算包）。清单声明 [build] 时
 // 先执行构建再返回（pack/publish 共用，构建失败即报错，不打包残缺工件）。
 func resolveSource(ctx context.Context, sourceDir, version string) (manifest packagecontract.Manifest, manifestBytes []byte, err error) {
-	path := packagefmt.SourcePath(sourceDir)
-	_, statErr := os.Stat(path)
-	if errors.Is(statErr, fs.ErrNotExist) {
-		if version == "" {
-			return packagecontract.Manifest{}, nil, fmt.Errorf("配置错误：零声明包必须通过 --version 提供版本")
-		}
-		capabilities, buildTool, extractErr := packagefmt.AutoExtract(ctx, sourceDir)
-		if extractErr != nil {
-			return packagecontract.Manifest{}, nil, extractErr
-		}
-		absolute, absErr := filepath.Abs(sourceDir)
-		if absErr != nil {
-			return packagecontract.Manifest{}, nil, absErr
-		}
-		manifest, manifestBytes, err = packagefmt.ManifestFromCapabilities(filepath.Base(absolute), version, capabilities)
-		if err != nil {
-			return packagecontract.Manifest{}, nil, err
-		}
-		if err := packagefmt.Build(ctx, sourceDir, manifest, packagefmt.BuildSpec{Tool: buildTool}); err != nil {
-			return packagecontract.Manifest{}, nil, err
-		}
-		return manifest, manifestBytes, nil
-	}
-	if statErr != nil {
-		return packagecontract.Manifest{}, nil, fmt.Errorf("读取源清单失败: %w", statErr)
-	}
-	manifest, manifestBytes, build, err := packagefmt.Parse(path)
-	if err != nil {
-		return packagecontract.Manifest{}, nil, err
-	}
-	if build != nil {
-		if err := packagefmt.Build(ctx, sourceDir, manifest, *build); err != nil {
-			return packagecontract.Manifest{}, nil, err
-		}
-	}
-	return manifest, manifestBytes, nil
+	return packagefmt.Resolve(ctx, sourceDir, version)
 }
 
 // resolveSDKSource 读取显式源清单，或只提取零声明源码的 extensions；SDK 生成不构建
