@@ -22,7 +22,7 @@ type Handler func(ctx context.Context, value Task) error
 // TypeSpec 描述一种封闭任务类型。任务类型必须在注册表预先注册，
 // 调度器绝不执行未注册类型的任务。
 type TypeSpec struct {
-	TypeID       string          // 稳定类型标识（如 "bus.catalog.sync"）
+	TypeID       string          // 稳定任务类型标识（由任务拥有者定义）
 	ParamsSchema json.RawMessage // 严格 JSON Schema：顶层 object、拒绝未知字段
 	AllowRetry   bool            // 是否允许自动重试；含不安全副作用且非幂等的类型必须为 false
 	Handler      Handler         // 处理器，不可为空

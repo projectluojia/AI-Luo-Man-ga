@@ -237,7 +237,26 @@ SELECT app_id,run_id,run_group_id,echo_id,parent_run_id,origin_call_id,attempt,s
        used_input_tokens,used_output_tokens,used_total_tokens,used_cost_microusd,
        used_provider_retries,available_at,capability_scope,permission_scope,result_message,
        task_message,last_agent_sequence
+		FROM runs LIMIT 0`
+	}
+	if version >= 26 {
+		runColumns = `
+SELECT app_id,run_id,run_group_id,echo_id,parent_run_id,origin_call_id,attempt,status,
+       executor_id,config_revision,protocol_version,executor_config,input_payload,input_content_type,
+       max_steps,max_capability_calls,max_execution_units,max_output_bytes,max_cost_microusd,
+       execution_timeout_ms,used_execution_units,used_cost_microusd,used_retries,
+       available_at,capability_scope,permission_scope,result_payload,result_content_type,
+       last_executor_sequence
 FROM runs LIMIT 0`
+		for _, table := range []string{"app_config_revisions", "app_config_heads"} {
+			rows, err := db.QueryContext(ctx, "SELECT 1 FROM "+table+" LIMIT 0")
+			if err != nil {
+				return fmt.Errorf("required App configuration table is unavailable")
+			}
+			if err := rows.Close(); err != nil {
+				return fmt.Errorf("close App configuration schema probe: %w", err)
+			}
+		}
 	}
 	if version >= 26 {
 		runColumns = strings.ReplaceAll(runColumns, "max_tool_calls", "max_capability_calls")

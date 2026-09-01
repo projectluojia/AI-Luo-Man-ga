@@ -48,7 +48,7 @@ func setContextRun(t *testing.T, store *sqlite.Store) kernelecho.RunRecord {
 	t.Helper()
 	now := time.Now().UTC()
 	createTestEchoRun(t, store, "app", "echo", "input", now)
-	claimed, err := store.ClaimRun(context.Background(), "app", "echo", "lease-token", now, now.Add(time.Minute))
+	claimed, err := store.ClaimRun(context.Background(), "app", "echo", "run-app-echo", "lease-token", now, now.Add(time.Minute))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +136,7 @@ func TestRetryRunCarriesSessionContextAndResetsDigest(t *testing.T) {
 	}, run, 0); err != nil || !created || stored != "echo" {
 		t.Fatal(err)
 	}
-	claimed, err := store.ClaimRun(context.Background(), "app", "echo", "lease", now, now.Add(time.Minute))
+	claimed, err := store.ClaimRun(context.Background(), "app", "echo", "run-1", "lease", now, now.Add(time.Minute))
 	if err != nil {
 		t.Fatal(err)
 	}

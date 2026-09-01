@@ -125,7 +125,10 @@ func currentSchemaVersion() int {
 }
 
 func init() {
-	baseMigrations := []string{`
+	// 1–19 是已经发布的历史 Schema，只用于把旧数据库升级到当前契约；其中
+	// 的旧模型/Agent 字段不能被当前 Store 查询或重新使用。当前 canonical 表
+	// 由后续前向迁移重建，历史 SQL 不得删除或改写。
+	historicalMigrations := []string{`
 CREATE TABLE IF NOT EXISTS bus_source_revisions (
   app_id TEXT NOT NULL,
   revision TEXT NOT NULL,
@@ -722,7 +725,7 @@ DROP TABLE capability_audit;
 ALTER TABLE capability_audit_v14 RENAME TO capability_audit;
 CREATE INDEX capability_audit_echo_idx ON capability_audit(app_id,echo_id,created_at,run_id,call_id);
 `}
-	for index, statements := range baseMigrations {
+	for index, statements := range historicalMigrations {
 		registerMigration(index+1, statements)
 	}
 }

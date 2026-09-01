@@ -135,7 +135,7 @@ func NewScheduler(
 	return scheduler
 }
 
-// Recover 处理遗留 Run 并启动固定 worker。只有持久化 queued root 会重新进入队列。
+// Recover 处理遗留 Run 并启动固定 worker；持久化 queued Run 会重新进入队列。
 func (s *Scheduler) Recover(ctx context.Context) (int, error) {
 	work, err := s.runner.Recoverable(ctx)
 	if err != nil {
@@ -251,7 +251,7 @@ func (s *Scheduler) runNext() bool {
 			}
 			selected = &work[index]
 			base := s.ctx
-			if pendingContext, exists := s.pending[key.echoID]; exists && work[index].Run.ParentRunID == "" {
+			if pendingContext, exists := s.pending[key.echoID]; exists {
 				base = observe.Copy(pendingContext, s.ctx)
 				delete(s.pending, key.echoID)
 			}

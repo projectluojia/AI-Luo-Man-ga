@@ -57,7 +57,7 @@ INSERT INTO capability_audit(
 	defer upgraded.Close()
 	runs, err := upgraded.ListRuns(context.Background(), "app", "echo")
 	if err != nil || len(runs) != 1 || runs[0].ID != "root" || runs[0].RunGroupID != "root" ||
-		runs[0].UsedProviderRetries != 0 || len(runs[0].CapabilityScope) != 0 || len(runs[0].PermissionScope) != 0 {
+		runs[0].UsedRetries != 0 || len(runs[0].CapabilityScope) != 0 || len(runs[0].PermissionScope) != 0 {
 		t.Fatalf("upgraded runs=%#v err=%v", runs, err)
 	}
 	audits, err := upgraded.ListCapabilityCalls(context.Background(), "app", "echo")
@@ -115,11 +115,11 @@ SELECT app_id,revision,7,?,? FROM app_config_revisions WHERE app_id='app-a';`,
 	if generation != 7 {
 		t.Fatalf("升级后 generation=%d，期望 7", generation)
 	}
-	var channelPrompts string
+	var executorConfig string
 	if err := upgraded.db.QueryRowContext(t.Context(),
-		`SELECT channel_prompts FROM app_config_revisions WHERE app_id='app-a' AND revision=?`, revision).
-		Scan(&channelPrompts); err != nil || channelPrompts != `{"web":"自定义"}` {
-		t.Fatalf("升级后渠道提示=%q err=%v", channelPrompts, err)
+		`SELECT executor_config FROM app_config_revisions WHERE app_id='app-a' AND revision=?`, revision).
+		Scan(&executorConfig); err != nil || !strings.Contains(executorConfig, "自定义") {
+		t.Fatalf("升级后不透明 Executor 配置未保留旧配置=%q err=%v", executorConfig, err)
 	}
 }
 
@@ -304,7 +304,7 @@ func TestMigrationV14UpgradesPreviousSchema(t *testing.T) {
 	}
 	defer upgraded.Close()
 	rows, err := upgraded.db.QueryContext(t.Context(), `
-SELECT run_group_id,origin_call_id,capability_scope,permission_scope,result_message
+	SELECT run_group_id,origin_call_id,capability_scope,permission_scope,result_payload,result_content_type
 FROM runs LIMIT 0`)
 	if err != nil {
 		t.Fatal(err)

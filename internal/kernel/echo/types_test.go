@@ -14,13 +14,13 @@ func TestPublicRunJSONDoesNotExposeChildResultOrPermissionScope(t *testing.T) {
 		ParentRunID: "parent", OriginCallID: "call",
 		CapabilityScope: []string{"campus.bus.routes.list"},
 		PermissionScope: []string{"sensitive.permission"},
-		ResultMessage:   "sensitive child model result",
+		Result:          echo.Output{ContentType: "text/plain", Data: []byte("sensitive child result")},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	text := string(encoded)
-	for _, forbidden := range []string{"sensitive.permission", "sensitive child model result", "permission_scope", "result_message"} {
+	for _, forbidden := range []string{"sensitive.permission", "sensitive child result", "permission_scope"} {
 		if strings.Contains(text, forbidden) {
 			t.Fatalf("public Run JSON disclosed %q: %s", forbidden, text)
 		}

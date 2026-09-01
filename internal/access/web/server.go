@@ -201,7 +201,7 @@ func (s *Server) createEcho(writer http.ResponseWriter, request *http.Request) {
 	}
 	input.IdempotencyKey = idempotencyValues[0]
 	// 平台接入统一入口：标准消息校验 → 身份解析 → 会话找到或创建 → 消息入库。
-	// 平台与 Agent 历史在此解耦：消息进会话台账（SQLite），Echo 在入库成功后创建。
+	// 平台与执行者历史在此解耦：消息进会话台账（SQLite），Echo 在入库成功后创建。
 	intake, err := s.platformHub.Intake(request.Context(), access.InboundMessage{
 		AppID:             s.appID,
 		Platform:          "web",

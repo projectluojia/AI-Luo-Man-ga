@@ -1,13 +1,13 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
-
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/promptcatalog"
+	"time"
 )
 
 func TestManagerStartsInSetupModeAndPersistsQQSecretPrivately(t *testing.T) {
@@ -47,7 +47,7 @@ func TestManagerStartsInSetupModeAndPersistsQQSecretPrivately(t *testing.T) {
 		t.Fatal(err)
 	}
 	resolved, ready := reloaded.CurrentResolved()
-	if !ready || resolved.Settings.AppID != "test-app" || resolved.Settings.Model != "test-model" || resolved.Settings.QQBotID != "2647414417" {
+	if !ready || resolved.Settings.AppID != "test-app" || resolved.Settings.ExecutorID != "executor.test" || resolved.Settings.QQBotID != "2647414417" {
 		t.Fatalf("resolved=%+v ready=%v", resolved.Settings, ready)
 	}
 	if len(resolved.Settings.QQQuickReplies) != 1 || resolved.Settings.QQQuickReplies[0] != (QQQuickReply{Trigger: "ping", Reply: "pong"}) {
@@ -60,12 +60,51 @@ func TestManagerStartsInSetupModeAndPersistsQQSecretPrivately(t *testing.T) {
 
 func TestManagerRejectsLegacyProviderAndProcessFields(t *testing.T) {
 	root := t.TempDir()
-	legacy := []byte(`{"app_id":"test-app","agent_process":{},"runtime_process":{}}`)
-	if err := os.WriteFile(filepath.Join(root, "ailuo-settings.json"), legacy, 0o600); err != nil {
+	settings, err := normalize(validInput())
+	if err != nil {
 		t.Fatal(err)
 	}
+	settings.Revision = 1
+	settings.UpdatedAt = time.Now().UTC()
+	encoded, err := json.Marshal(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var legacy map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &legacy); err != nil {
+		t.Fatal(err)
+	}
+	process, err := json.Marshal(settings.RuntimeProcess)
+	if err != nil {
+		t.Fatal(err)
+	}
+	delete(legacy, "runtime_process")
+	legacy["agent_process"] = process
+	for key, value := range map[string]any{
+		"model_base_url":                  "http://127.0.0.1:8081/v1",
+		"model_request_timeout_seconds":   30,
+		"model_readiness_timeout_seconds": 3,
+		"model_max_retries":               2,
+		"model_retry_base_seconds":        0.25,
+		"model_retry_max_seconds":         2,
+		"model_requests_per_minute":       60,
+		"model_max_concurrency":           4,
+	} {
+		legacy[key], err = json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	legacyBytes, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "ailuo-settings.json"), legacyBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
 	if _, err := NewService(root); err == nil {
-		t.Fatal("legacy provider/process fields were accepted")
+		t.Fatal("legacy settings were accepted; final configuration must fail closed")
 	}
 }
 
@@ -87,10 +126,8 @@ func TestManagerRejectsIncompleteSettings(t *testing.T) {
 		t.Fatal(err)
 	}
 	input := validInput()
-	input.PromptCatalog = promptcatalog.Catalog{}
-	input.BaseSystemPrompt = ""
-	input.ChannelPrompts = nil
-	input.AgentRun = AgentRunSettings{}
+	input.ExecutorConfig = json.RawMessage(`{`)
+	input.Execution = ExecutionSettings{}
 	if _, err := manager.Save(input); err != ErrInvalid {
 		t.Fatalf("incomplete settings error=%v", err)
 	}
@@ -125,12 +162,12 @@ func TestManagerUsesRevisionCASAndPreservesBlankSecrets(t *testing.T) {
 	second := validInput()
 	second.Revision = first.Settings.Revision
 	second.QQWSToken = ""
-	second.Model = "next-model"
+	second.ExecutorID = "next.executor"
 	snapshot, err := manager.Save(second)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snapshot.Settings.Revision != 2 || snapshot.Settings.Model != "next-model" || !snapshot.QQWSTokenConfigured {
+	if snapshot.Settings.Revision != 2 || snapshot.Settings.ExecutorID != "next.executor" || !snapshot.QQWSTokenConfigured {
 		t.Fatalf("snapshot=%+v", snapshot)
 	}
 }
@@ -138,61 +175,13 @@ func TestManagerUsesRevisionCASAndPreservesBlankSecrets(t *testing.T) {
 func validInput() SaveInput {
 	defaults := DefaultSettings()
 	return SaveInput{
-		AppID: "test-app", Model: "test-model", ExecutorTimeoutSeconds: 30,
+		AppID: "test-app", ExecutorID: "executor.test", ExecutorConfig: defaults.ExecutorConfig, ExecutorTimeoutSeconds: 30,
 		QQEnabled: true, QQWSURL: "ws://127.0.0.1:3001", QQWSToken: "qq-secret", QQBotID: "2647414417",
 		QQAllowedGroupIDs: []string{"123456"}, QQAllowedPrivateUserIDs: []string{"654321"},
 		QQQuickReplies: []QQQuickReply{{Trigger: " ping ", Reply: " pong "}}, QQPokeReplies: []string{" 在呢 "},
-		PromptCatalog: defaults.PromptCatalog, BaseSystemPrompt: defaults.BaseSystemPrompt, ChannelPrompts: defaults.ChannelPrompts,
-		AgentRun: defaults.AgentRun, Orchestration: defaults.Orchestration, ContextAssembly: defaults.ContextAssembly,
+		Execution: defaults.Execution, Orchestration: defaults.Orchestration, ContextAssembly: defaults.ContextAssembly,
 		Scheduler: defaults.Scheduler, QQConnection: defaults.QQConnection, RuntimeProcess: defaults.RuntimeProcess,
 		Governance: defaults.Governance,
-	}
-}
-
-func TestManagerPersistsPromptCatalog(t *testing.T) {
-	root := t.TempDir()
-	manager, err := NewService(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	input := validInput()
-	input.PromptCatalog = promptcatalog.Default()
-	input.PromptCatalog.BasicStyles[0].Text = "自定义默认风格"
-	input.BaseSystemPrompt = "自定义基础系统提示"
-	input.ChannelPrompts = map[string]string{"web": "自定义 web 渠道提示", "qq_group": "自定义群渠道提示", "qq_private": "自定义私聊渠道提示"}
-	snapshot, err := manager.Save(input)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if snapshot.Settings.PromptCatalog.BasicStyles[0].Text != "自定义默认风格" || snapshot.Settings.BaseSystemPrompt != "自定义基础系统提示" ||
-		snapshot.Settings.ChannelPrompts["web"] != "自定义 web 渠道提示" {
-		t.Fatalf("prompt catalog=%#v base=%q channels=%#v", snapshot.Settings.PromptCatalog.BasicStyles[0], snapshot.Settings.BaseSystemPrompt, snapshot.Settings.ChannelPrompts)
-	}
-	reloaded, err := NewService(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	resolved, ready := reloaded.CurrentResolved()
-	gotStyle := ""
-	if len(resolved.Settings.PromptCatalog.BasicStyles) > 0 {
-		gotStyle = resolved.Settings.PromptCatalog.BasicStyles[0].Text
-	}
-	if !ready || gotStyle != "自定义默认风格" || resolved.Settings.BaseSystemPrompt != "自定义基础系统提示" ||
-		resolved.Settings.ChannelPrompts["web"] != "自定义 web 渠道提示" {
-		t.Fatalf("reloaded prompt catalog style=%q styles=%d base=%q channels=%#v ready=%v", gotStyle, len(resolved.Settings.PromptCatalog.BasicStyles), resolved.Settings.BaseSystemPrompt, resolved.Settings.ChannelPrompts, ready)
-	}
-}
-
-func TestManagerRejectsInvalidPromptCatalog(t *testing.T) {
-	manager, err := NewService(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	input := validInput()
-	input.PromptCatalog = promptcatalog.Default()
-	input.PromptCatalog.BasicStyles[0].Key = "changed"
-	if _, err := manager.Save(input); err != ErrInvalid {
-		t.Fatalf("invalid prompt catalog error=%v", err)
 	}
 }
 
@@ -203,12 +192,12 @@ func TestManagerPersistsRuntimeSettings(t *testing.T) {
 		t.Fatal(err)
 	}
 	input := validInput()
-	input.AgentRun = AgentRunSettings{
-		Timezone: "Asia/Tokyo", MaxSteps: 12, MaxCapabilityCalls: 16, MaxInputTokens: 20000,
-		MaxOutputTokens: 6000, MaxTotalTokens: 26000, MaxOutputBytes: 32768, MaxChildRuns: 3,
+	input.Execution = ExecutionSettings{
+		MaxSteps: 12, MaxCapabilityCalls: 16, MaxExecutionUnits: 26000,
+		MaxOutputBytes: 32768, MaxCostMicrousd: 0,
 	}
 	input.Orchestration = OrchestrationSettings{RunTimeoutSeconds: 120, MaxRunAttempts: 4, QueueCapacity: 256, MaxCallDepth: 20}
-	input.ContextAssembly = ContextAssemblySettings{MaxMessages: 30, MaxCharsPerMsg: 3000, MaxTotalChars: 20000, MaxPromptBytes: 20000}
+	input.ContextAssembly = ContextAssemblySettings{MaxMessages: 30, MaxCharsPerMsg: 3000, MaxTotalChars: 20000, MaxContextBytes: 20000}
 	input.Scheduler = SchedulerSettings{Workers: 6, PollMs: 400, BatchSize: 40}
 	input.QQConnection = QQConnectionSettings{DialTimeoutSeconds: 12, ReconnectDelaySeconds: 8, RunTimeoutSeconds: 240, ManagerStopTimeoutSeconds: 9}
 	input.RuntimeProcess = RuntimeProcessSettings{DialTimeoutSeconds: 20, StopGraceSeconds: 8, TerminateGraceSeconds: 3}
@@ -222,13 +211,12 @@ func TestManagerPersistsRuntimeSettings(t *testing.T) {
 		t.Fatal(err)
 	}
 	settings := reloaded.Snapshot().Settings
-	if settings.AgentRun.Timezone != "Asia/Tokyo" || settings.AgentRun.MaxChildRuns != 3 ||
-		settings.Orchestration.RunTimeoutSeconds != 120 || settings.ContextAssembly.MaxMessages != 30 ||
+	if settings.Orchestration.RunTimeoutSeconds != 120 || settings.ContextAssembly.MaxMessages != 30 ||
 		settings.Scheduler.Workers != 6 || settings.QQConnection.ReconnectDelaySeconds != 8 || settings.QQConnection.ManagerStopTimeoutSeconds != 9 ||
 		settings.RuntimeProcess.StopGraceSeconds != 8 || settings.Governance.ConfirmationSweepSeconds != 600 {
 		t.Fatalf("runtime settings=%+v", settings)
 	}
-	if snapshot.Settings.AgentRun.MaxSteps != 12 {
-		t.Fatalf("snapshot agent run=%+v", snapshot.Settings.AgentRun)
+	if snapshot.Settings.Execution.MaxSteps != 12 {
+		t.Fatalf("snapshot executor run=%+v", snapshot.Settings.Execution)
 	}
 }

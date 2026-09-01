@@ -26,8 +26,8 @@ if _version_not_supported:
 
 
 class ExecutorRuntimeStub:
-    """ExecutorRuntime 是内核 AI 执行者会话协议：内核与执行者（LLM 智能体、
-    规划器、工作流引擎等任何可驱动受治理 Run 会话的实现）之间协商执行。
+    """ExecutorRuntime 是内核执行者会话协议：内核与任意能够驱动受治理 Run 会话的
+    执行者实现之间协商执行。执行者可以是规划器、工作流引擎或其他运行时。
     """
 
     def __init__(self, channel):
@@ -49,8 +49,8 @@ class ExecutorRuntimeStub:
 
 
 class ExecutorRuntimeServicer:
-    """ExecutorRuntime 是内核 AI 执行者会话协议：内核与执行者（LLM 智能体、
-    规划器、工作流引擎等任何可驱动受治理 Run 会话的实现）之间协商执行。
+    """ExecutorRuntime 是内核执行者会话协议：内核与任意能够驱动受治理 Run 会话的
+    执行者实现之间协商执行。执行者可以是规划器、工作流引擎或其他运行时。
     """
 
     def Run(self, request_iterator, context):
@@ -87,8 +87,8 @@ def add_ExecutorRuntimeServicer_to_server(servicer, server):
 
  # This class is part of an EXPERIMENTAL API.
 class ExecutorRuntime:
-    """ExecutorRuntime 是内核 AI 执行者会话协议：内核与执行者（LLM 智能体、
-    规划器、工作流引擎等任何可驱动受治理 Run 会话的实现）之间协商执行。
+    """ExecutorRuntime 是内核执行者会话协议：内核与任意能够驱动受治理 Run 会话的
+    执行者实现之间协商执行。执行者可以是规划器、工作流引擎或其他运行时。
     """
 
     @staticmethod

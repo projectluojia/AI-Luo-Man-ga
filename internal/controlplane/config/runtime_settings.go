@@ -1,23 +1,17 @@
 package config
 
 import (
-	"time"
-
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contextasm"
-	kernelecho "github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
 )
 
-// AgentRunSettings 是当前 App 的执行预算与时区。它们会写入 App 配置，
+// ExecutionSettings 是当前 App 的通用执行预算。它们会写入 App 配置，
 // 因此校验边界与 internal/kernel/appconfig 保持一致。
-type AgentRunSettings struct {
-	Timezone           string `json:"timezone"`
+type ExecutionSettings struct {
 	MaxSteps           uint32 `json:"max_steps"`
 	MaxCapabilityCalls uint32 `json:"max_capability_calls"`
-	MaxInputTokens     uint64 `json:"max_input_tokens"`
-	MaxOutputTokens    uint64 `json:"max_output_tokens"`
-	MaxTotalTokens     uint64 `json:"max_total_tokens"`
+	MaxExecutionUnits  uint64 `json:"max_execution_units"`
 	MaxOutputBytes     uint64 `json:"max_output_bytes"`
-	MaxChildRuns       uint32 `json:"max_child_runs"`
+	MaxCostMicrousd    uint64 `json:"max_cost_microusd"`
 }
 
 // OrchestrationSettings 是 Echo/Run 编排参数。
@@ -28,12 +22,12 @@ type OrchestrationSettings struct {
 	MaxCallDepth      uint16  `json:"max_call_depth"`
 }
 
-// ContextAssemblySettings 是 contextasm 的历史与提示预算。
+// ContextAssemblySettings 是 contextasm 的历史与上下文预算。
 type ContextAssemblySettings struct {
-	MaxMessages    int `json:"max_messages"`
-	MaxCharsPerMsg int `json:"max_chars_per_msg"`
-	MaxTotalChars  int `json:"max_total_chars"`
-	MaxPromptBytes int `json:"max_prompt_bytes"`
+	MaxMessages     int `json:"max_messages"`
+	MaxCharsPerMsg  int `json:"max_chars_per_msg"`
+	MaxTotalChars   int `json:"max_total_chars"`
+	MaxContextBytes int `json:"max_context_bytes"`
 }
 
 // SchedulerSettings 是 Web Access 持久 Run 调度器参数。
@@ -63,11 +57,10 @@ type GovernanceSettings struct {
 	ConfirmationSweepSeconds float64 `json:"confirmation_sweep_seconds"`
 }
 
-func defaultAgentRunSettings() AgentRunSettings {
-	return AgentRunSettings{
-		Timezone: "Asia/Shanghai", MaxSteps: 8, MaxCapabilityCalls: 8,
-		MaxInputTokens: 32768, MaxOutputTokens: 8192, MaxTotalTokens: 40960,
-		MaxOutputBytes: 65536, MaxChildRuns: kernelecho.DefaultMaxChildRunsPerRoot,
+func defaultExecutionSettings() ExecutionSettings {
+	return ExecutionSettings{
+		MaxSteps: 8, MaxCapabilityCalls: 8, MaxExecutionUnits: 40960,
+		MaxOutputBytes: 65536, MaxCostMicrousd: 0,
 	}
 }
 
@@ -81,7 +74,7 @@ func defaultContextAssemblySettings() ContextAssemblySettings {
 	budget := contextasm.DefaultBudget()
 	return ContextAssemblySettings{
 		MaxMessages: budget.MaxMessages, MaxCharsPerMsg: budget.MaxCharsPerMsg,
-		MaxTotalChars: budget.MaxTotalChars, MaxPromptBytes: budget.MaxPromptBytes,
+		MaxTotalChars: budget.MaxTotalChars, MaxContextBytes: budget.MaxContextBytes,
 	}
 }
 
@@ -106,18 +99,12 @@ func defaultGovernanceSettings() GovernanceSettings {
 	return GovernanceSettings{ConfirmationSweepSeconds: 300}
 }
 
-func normalizeAgentRun(value AgentRunSettings) (AgentRunSettings, error) {
-	if value.Timezone == "" {
-		return AgentRunSettings{}, ErrInvalid
-	}
-	if _, err := time.LoadLocation(value.Timezone); err != nil {
-		return AgentRunSettings{}, ErrInvalid
-	}
-	if value.MaxSteps < 1 || value.MaxSteps > 64 || value.MaxCapabilityCalls < 1 || value.MaxCapabilityCalls > 128 ||
-		value.MaxInputTokens < 1 || value.MaxInputTokens > 10_000_000 || value.MaxOutputTokens < 1 || value.MaxOutputTokens > 1_000_000 ||
-		value.MaxTotalTokens < value.MaxInputTokens || value.MaxTotalTokens > 11_000_000 ||
-		value.MaxOutputBytes < 1 || value.MaxOutputBytes > 256<<10 || value.MaxChildRuns < 1 || value.MaxChildRuns > kernelecho.MaxChildRunsPerRoot {
-		return AgentRunSettings{}, ErrInvalid
+func normalizeExecution(value ExecutionSettings) (ExecutionSettings, error) {
+	if value.MaxSteps < 1 || value.MaxSteps > 64 || value.MaxCapabilityCalls < 1 || value.MaxCapabilityCalls > 256 ||
+		value.MaxExecutionUnits < 1 || value.MaxExecutionUnits > 1_000_000_000 ||
+		value.MaxOutputBytes < 1 || value.MaxOutputBytes > 256<<10 ||
+		value.MaxCostMicrousd > 1_000_000_000_000_000 {
+		return ExecutionSettings{}, ErrInvalid
 	}
 	return value, nil
 }
@@ -135,7 +122,7 @@ func normalizeContextAssembly(value ContextAssemblySettings) (ContextAssemblySet
 	if value.MaxMessages < 1 || value.MaxMessages > 1000 ||
 		value.MaxCharsPerMsg < 1 || value.MaxCharsPerMsg > 64<<10 ||
 		value.MaxTotalChars < 1 || value.MaxTotalChars > 1<<20 ||
-		value.MaxPromptBytes < 1 || value.MaxPromptBytes > 32<<10 {
+		value.MaxContextBytes < 1 || value.MaxContextBytes > 64<<10 {
 		return ContextAssemblySettings{}, ErrInvalid
 	}
 	return value, nil

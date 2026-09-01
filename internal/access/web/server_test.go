@@ -47,6 +47,11 @@ type fakeOrchestrator struct {
 	maxActiveRuns atomic.Int32
 }
 
+func outputEvent(text string) []byte {
+	encoded, _ := json.Marshal(kernelecho.Output{ContentType: "text/plain", Data: []byte(text)})
+	return encoded
+}
+
 type testWebResolver struct{}
 
 func (testWebResolver) ResolveIdentity(_ context.Context, appID, _, _, _ string) (identity.IdentityContext, error) {
@@ -148,10 +153,11 @@ func (f *fakeOrchestrator) CreateIdempotent(ctx context.Context, request kernele
 	}, kernelecho.RunRecord{
 		ID: "run-" + id, RunGroupID: "run-" + id, AppID: "campus-services", EchoID: id, Attempt: 1,
 		SessionID: request.SessionID, UserID: request.UserID, MessageID: request.MessageID, Channel: request.Channel,
-		Status: kernelecho.RunStatusQueued, Model: "test-model", ModelConfigVersion: "test-config",
+		Status: kernelecho.RunStatusQueued, ExecutorID: "executor.test", ExecutorConfig: []byte(`{"strategy":"test"}`), ConfigRevision: "test-config",
+		InputPayload: []byte(request.Message), InputContentType: "text/plain; charset=utf-8",
 		ProtocolVersion: "1.0", MaxSteps: 4, MaxCapabilityCalls: 4,
-		MaxInputTokens: 1000, MaxOutputTokens: 1000, MaxTotalTokens: 2000,
-		MaxOutputBytes: 4096, ProviderTimeoutMS: 5000, Deadline: now.Add(time.Minute), AvailableAt: now,
+		MaxExecutionUnits: 2000,
+		MaxOutputBytes:    4096, ExecutionTimeoutMS: 5000, Deadline: now.Add(time.Minute), AvailableAt: now,
 		RecoverableState: []byte(`{}`), CreatedAt: now,
 	}, 0)
 }
@@ -219,7 +225,11 @@ func (f *fakeOrchestrator) run(ctx context.Context, echoID string, emit kernelec
 		}
 	}
 	now := time.Now().UTC()
-	run, err := f.store.ClaimRun(ctx, "campus-services", echoID, "lease-"+echoID, now, now.Add(time.Minute))
+	runs, err := f.store.ListRuns(ctx, "campus-services", echoID)
+	if err != nil || len(runs) != 1 {
+		return errors.New("expected one persisted Run")
+	}
+	run, err := f.store.ClaimRun(ctx, "campus-services", echoID, runs[0].ID, "lease-"+echoID, now, now.Add(time.Minute))
 	if err != nil {
 		return err
 	}
@@ -235,16 +245,16 @@ func (f *fakeOrchestrator) run(ctx context.Context, echoID string, emit kernelec
 		select {
 		case <-f.runGate:
 		case <-ctx.Done():
-			return f.store.CompleteRun(context.Background(), run, kernelecho.RunStatusCancelled, kernelecho.StatusCancelled, "", publicerror.Echo("cancelled"), time.Now().UTC())
+			return f.store.CompleteRun(context.Background(), run, kernelecho.RunStatusCancelled, kernelecho.StatusCancelled, kernelecho.Output{}, publicerror.Echo("cancelled"), time.Now().UTC())
 		}
 	}
 	if f.block {
 		<-ctx.Done()
-		return f.store.CompleteRun(context.Background(), run, kernelecho.RunStatusCancelled, kernelecho.StatusCancelled, "", publicerror.Echo("cancelled"), time.Now().UTC())
+		return f.store.CompleteRun(context.Background(), run, kernelecho.RunStatusCancelled, kernelecho.StatusCancelled, kernelecho.Output{}, publicerror.Echo("cancelled"), time.Now().UTC())
 	}
 	events := []kernelecho.Event{
-		{AppID: "campus-services", EchoID: echoID, RunID: run.ID, Type: "reply.delta", Payload: []byte(`{"text":"你好"}`), CreatedAt: time.Now().UTC()},
-		{AppID: "campus-services", EchoID: echoID, RunID: run.ID, Type: "reply.final", Payload: []byte(`{"text":"你好"}`), CreatedAt: time.Now().UTC()},
+		{AppID: "campus-services", EchoID: echoID, RunID: run.ID, Type: "output.delta", Payload: outputEvent("你好"), CreatedAt: time.Now().UTC()},
+		{AppID: "campus-services", EchoID: echoID, RunID: run.ID, Type: "run.completed", Payload: outputEvent("你好"), CreatedAt: time.Now().UTC()},
 	}
 	for _, event := range events {
 		stored, err := f.store.AppendEchoEvent(ctx, event)
@@ -255,7 +265,7 @@ func (f *fakeOrchestrator) run(ctx context.Context, echoID string, emit kernelec
 			return err
 		}
 	}
-	return f.store.CompleteRun(ctx, run, kernelecho.RunStatusSucceeded, kernelecho.StatusSucceeded, "你好", publicerror.Error{}, time.Now().UTC())
+	return f.store.CompleteRun(ctx, run, kernelecho.RunStatusSucceeded, kernelecho.StatusSucceeded, kernelecho.Output{ContentType: "text/plain", Data: []byte("你好")}, publicerror.Error{}, time.Now().UTC())
 }
 
 func (f *fakeOrchestrator) RunQueued(ctx context.Context, work kernelecho.RunWork, emit kernelecho.EventEmitter) error {
@@ -269,7 +279,7 @@ func TestWebAccessEchoSSEAndStatus(t *testing.T) {
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, eventsURL, nil))
 	body := response.Body.Bytes()
-	if response.Code != http.StatusOK || !bytes.Contains(body, []byte("event: reply.delta")) || !bytes.Contains(body, []byte("event: reply.final")) {
+	if response.Code != http.StatusOK || !bytes.Contains(body, []byte("event: output.delta")) || !bytes.Contains(body, []byte("event: run.completed")) {
 		t.Fatalf("status=%d body=%s", response.Code, body)
 	}
 	record, events, err := store.GetEcho(context.Background(), "campus-services", echoID)
@@ -426,7 +436,7 @@ func TestWebAccessRecoversPersistedQueuedRun(t *testing.T) {
 	if err != nil || len(runs) != 1 {
 		t.Fatalf("runs=%#v err=%v", runs, err)
 	}
-	backend.recovery = []kernelecho.RunWork{{Run: runs[0], InputMessage: "recover"}}
+	backend.recovery = []kernelecho.RunWork{{Run: runs[0]}}
 	_ = newAuthenticatedServer(t, context.Background(), backend, store, store, reg, policy, "campus-services", newTestHub(store, "campus-services"))
 	deadline := time.Now().Add(5 * time.Second)
 	for {
@@ -453,10 +463,11 @@ func TestWebAccessDoesNotExposeCrossAppEcho(t *testing.T) {
 		Status: kernelecho.StatusRunning, CreatedAt: now,
 	}, kernelecho.RunRecord{
 		ID: "other-app-run", RunGroupID: "other-app-run", AppID: "app-b", EchoID: "other-app-echo", Attempt: 1,
-		Status: kernelecho.RunStatusQueued, Model: "test-model", ModelConfigVersion: "test-config",
+		Status: kernelecho.RunStatusQueued, ExecutorID: "executor.test", ExecutorConfig: []byte(`{"strategy":"test"}`), ConfigRevision: "test-config",
+		InputPayload: []byte("secret"), InputContentType: "text/plain; charset=utf-8",
 		ProtocolVersion: "1.0", MaxSteps: 4, MaxCapabilityCalls: 4,
-		MaxInputTokens: 1000, MaxOutputTokens: 1000, MaxTotalTokens: 2000,
-		MaxOutputBytes: 4096, ProviderTimeoutMS: 5000, Deadline: now.Add(time.Minute), AvailableAt: now,
+		MaxExecutionUnits: 2000,
+		MaxOutputBytes:    4096, ExecutionTimeoutMS: 5000, Deadline: now.Add(time.Minute), AvailableAt: now,
 		RecoverableState: []byte(`{}`), CreatedAt: now,
 	}, 0); err != nil || !created {
 		t.Fatal(err)

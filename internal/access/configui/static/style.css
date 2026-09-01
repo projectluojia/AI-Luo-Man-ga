@@ -76,29 +76,3 @@ h1 em { color: var(--signal); font-style: normal; }
   .action-bar button { width: 100%; }
 }
 @media (prefers-reduced-motion: reduce) { .switch::after { transition: none; } }
-.prompt-catalog-editor { display: grid; gap: 18px; }
-.prompt-catalog-block { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
-.prompt-card { border: 1px solid var(--line); background: #08191d; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
-.prompt-trait-card { grid-column: span 2; }
-.prompt-card-head { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
-.prompt-card-head strong { color: var(--signal); font: 600 12px/1.4 ui-monospace, monospace; }
-.prompt-card-head input { flex: 1; max-width: 360px; border: 1px solid #31545a; border-radius: 2px; background: #0d2025; color: var(--text); padding: 8px 10px; font: 500 13px/1.4 inherit; }
-.prompt-card textarea, .trait-level-grid textarea { width: 100%; border: 1px solid #31545a; border-radius: 2px; background: #0d2025; color: var(--text); padding: 10px 11px; font: 400 13px/1.55 inherit; resize: vertical; }
-.prompt-card textarea:focus, .prompt-card-head input:focus, .trait-level-grid textarea:focus { outline: 3px solid #77e4c022; border-color: var(--signal); }
-.trait-level-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
-.trait-level-grid label { display: flex; flex-direction: column; gap: 7px; color: #cfe0dc; font-size: 13px; font-weight: 650; }
-.trait-level-grid label span { color: var(--muted); font-size: 11px; }
-@media (max-width: 880px) {
-  .prompt-catalog-block { grid-template-columns: 1fr; }
-  .prompt-trait-card { grid-column: auto; }
-  .trait-level-grid { grid-template-columns: 1fr; }
-}
-.prompt-base-editor { display: flex; flex-direction: column; gap: 10px; margin-bottom: 22px; }
-.prompt-base-editor > span { display: flex; justify-content: space-between; gap: 18px; align-items: baseline; }
-.prompt-base-editor strong { color: var(--text); }
-.prompt-base-editor small { color: var(--muted); font-size: 12px; font-weight: 400; }
-.prompt-base-editor textarea { min-height: 320px; border: 1px solid #31545a; border-radius: 2px; background: #08191d; color: var(--text); padding: 13px; font: 400 14px/1.65 "IBM Plex Sans", "Noto Sans SC", "PingFang SC", system-ui, sans-serif; resize: vertical; }
-.prompt-base-editor textarea:focus { outline: 3px solid #77e4c022; border-color: var(--signal); }
-.channel-prompts-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin-bottom: 24px; }
-.channel-prompts-grid .field textarea { min-height: 240px; font: 400 13px/1.55 "IBM Plex Sans", "Noto Sans SC", "PingFang SC", system-ui, sans-serif; }
-@media (max-width: 980px) { .channel-prompts-grid { grid-template-columns: 1fr; } }

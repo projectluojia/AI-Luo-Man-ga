@@ -113,34 +113,34 @@ func NormalizeCapability(value Error) Error {
 	return Error{Code: "capability_failed", Message: "Capability 调用失败"}
 }
 
-func Agent(code string, retryable bool) Error {
+func Executor(code string, retryable bool) Error {
 	switch code {
 	case "invalid_request":
-		return Error{Code: "protocol_violation", Message: "Agent 协议请求无效"}
+		return Error{Code: "protocol_violation", Message: "执行者协议请求无效"}
 	case "cancelled":
-		return Error{Code: "cancelled", Message: "Agent Run 已取消"}
+		return Error{Code: "cancelled", Message: "执行者 Run 已取消"}
 	case "deadline_exceeded":
-		return Error{Code: "deadline_exceeded", Message: "Agent Run 已超时", Retryable: retryable}
-	case "provider_timeout":
-		return Error{Code: "provider_timeout", Message: "模型服务响应超时", Retryable: retryable}
-	case "rate_limited":
-		return Error{Code: "rate_limited", Message: "模型服务请求过于频繁", Retryable: retryable}
-	case "provider_unavailable":
-		return Error{Code: "provider_unavailable", Message: "模型服务暂时不可用", Retryable: retryable}
-	case "provider_rejected":
-		return Error{Code: "provider_rejected", Message: "模型服务拒绝了请求"}
-	case "provider_failure":
-		return Error{Code: "provider_failure", Message: "模型服务请求失败"}
-	case "provider_protocol_error":
-		return Error{Code: "provider_protocol_error", Message: "模型服务响应无效"}
+		return Error{Code: "deadline_exceeded", Message: "执行者 Run 已超时", Retryable: retryable}
+	case "execution_timeout":
+		return Error{Code: "execution_timeout", Message: "执行者依赖响应超时", Retryable: retryable}
+	case "execution_rate_limited":
+		return Error{Code: "execution_rate_limited", Message: "执行者依赖请求过于频繁", Retryable: retryable}
+	case "execution_unavailable":
+		return Error{Code: "executor_unavailable", Message: "执行者暂时不可用", Retryable: retryable}
+	case "execution_rejected":
+		return Error{Code: "execution_rejected", Message: "执行者依赖拒绝了请求"}
+	case "execution_failed":
+		return Error{Code: "execution_failed", Message: "执行者依赖请求失败"}
+	case "execution_protocol_error":
+		return Error{Code: "execution_protocol_error", Message: "执行者依赖响应无效"}
 	case "budget_exceeded":
-		return Error{Code: "budget_exceeded", Message: "Agent Run 已达到资源预算"}
+		return Error{Code: "budget_exceeded", Message: "执行者 Run 已达到资源预算"}
 	case "protocol_violation":
-		return Error{Code: "protocol_violation", Message: "Agent 协议响应无效"}
+		return Error{Code: "protocol_violation", Message: "执行者协议响应无效"}
 	case "protocol_version_mismatch":
-		return Error{Code: "protocol_version_mismatch", Message: "Agent 协议版本不兼容"}
+		return Error{Code: "protocol_version_mismatch", Message: "执行者协议版本不兼容"}
 	default:
-		return Error{Code: "agent_run_failed", Message: "Agent Run 执行失败", Retryable: retryable}
+		return Error{Code: "executor_failed", Message: "执行者 Run 执行失败", Retryable: retryable}
 	}
 }
 
@@ -150,30 +150,28 @@ func Echo(code string) Error {
 		return Error{Code: "cancelled", Message: "Echo 已取消"}
 	case "deadline_exceeded":
 		return Error{Code: "deadline_exceeded", Message: "Echo 执行超时", Retryable: true}
-	case "provider_timeout":
-		return Error{Code: "provider_timeout", Message: "模型服务响应超时", Retryable: true}
-	case "rate_limited":
-		return Error{Code: "rate_limited", Message: "模型服务请求过于频繁", Retryable: true}
-	case "provider_unavailable":
-		return Error{Code: "provider_unavailable", Message: "模型服务暂时不可用", Retryable: true}
-	case "provider_rejected":
-		return Error{Code: "provider_rejected", Message: "模型服务拒绝了请求"}
-	case "provider_failure":
-		return Error{Code: "provider_failure", Message: "模型服务请求失败"}
-	case "provider_protocol_error":
-		return Error{Code: "provider_protocol_error", Message: "模型服务响应无效"}
+	case "execution_timeout":
+		return Error{Code: "execution_timeout", Message: "执行者依赖响应超时", Retryable: true}
+	case "execution_rate_limited":
+		return Error{Code: "execution_rate_limited", Message: "执行者依赖请求过于频繁", Retryable: true}
+	case "execution_unavailable", "executor_unavailable", "executor_start_failed", "executor_stream_failed":
+		return Error{Code: "executor_unavailable", Message: "执行者暂时不可用", Retryable: true}
+	case "execution_rejected":
+		return Error{Code: "execution_rejected", Message: "执行者依赖拒绝了请求"}
+	case "execution_failed":
+		return Error{Code: "execution_failed", Message: "执行者依赖请求失败"}
+	case "execution_protocol_error":
+		return Error{Code: "execution_protocol_error", Message: "执行者依赖响应无效"}
 	case "budget_exceeded":
-		return Error{Code: "budget_exceeded", Message: "Agent Run 已达到资源预算"}
-	case "agent_unavailable", "agent_start_failed", "agent_stream_failed":
-		return Error{Code: "agent_unavailable", Message: "Agent 服务暂时不可用", Retryable: true}
+		return Error{Code: "budget_exceeded", Message: "执行者 Run 已达到资源预算"}
 	case "lease_lost":
 		return Error{Code: "lease_lost", Message: "Run 执行租约已失效", Retryable: true}
 	case "protocol_violation":
-		return Error{Code: "protocol_violation", Message: "Agent 协议响应无效"}
+		return Error{Code: "protocol_violation", Message: "执行者协议响应无效"}
 	case "protocol_version_mismatch":
-		return Error{Code: "protocol_version_mismatch", Message: "Agent 协议版本不兼容"}
-	case "agent_run_failed":
-		return Error{Code: "agent_run_failed", Message: "Agent Run 执行失败"}
+		return Error{Code: "protocol_version_mismatch", Message: "执行者协议版本不兼容"}
+	case "executor_failed":
+		return Error{Code: "executor_failed", Message: "执行者 Run 执行失败"}
 	case "recovery_failed":
 		return Error{Code: "recovery_failed", Message: "Run 无法安全恢复"}
 	case "app_policy_unavailable":
