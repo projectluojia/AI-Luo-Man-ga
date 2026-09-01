@@ -17,6 +17,33 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/packmgr"
 )
 
+func writeTestArchive(t *testing.T, path string, manifestBytes, artifact, lockBytes []byte) {
+	t.Helper()
+	payload := &bytes.Buffer{}
+	gzipWriter := gzip.NewWriter(payload)
+	tarWriter := tar.NewWriter(gzipWriter)
+	write := func(name string, data []byte) {
+		if err := tarWriter.WriteHeader(&tar.Header{Name: name, Mode: 0o640, Size: int64(len(data)), Typeflag: tar.TypeReg}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tarWriter.Write(data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("manifest.json", manifestBytes)
+	write("app.wasm", artifact)
+	write("lock.json", lockBytes)
+	if err := tarWriter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gzipWriter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, payload.Bytes(), 0o640); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestUnpackTarballRejectsTraversal(t *testing.T) {
 	// 恶意 tarball：路径穿越条目必须被拒绝。gzip writer 必须显式关闭，否则
 	// 压缩尾块不落盘，payload 是个截断的 gzip 流——测试就变成在验证"解压失败"
@@ -134,32 +161,41 @@ func TestInstallRejectsArchiveLockDigestMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	payload := &bytes.Buffer{}
-	gzipWriter := gzip.NewWriter(payload)
-	tarWriter := tar.NewWriter(gzipWriter)
-	write := func(name string, data []byte) {
-		t.Helper()
-		if err := tarWriter.WriteHeader(&tar.Header{Name: name, Mode: 0o640, Size: int64(len(data)), Typeflag: tar.TypeReg}); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := tarWriter.Write(data); err != nil {
-			t.Fatal(err)
-		}
+	archive := filepath.Join(t.TempDir(), "demo.pkg-1.0.0.tgz")
+	writeTestArchive(t, archive, manifestBytes, artifact, lockBytes)
+	if _, err := packmgr.Install(context.Background(), t.TempDir(), archive); err == nil {
+		t.Fatal("Install accepted archive lock with a mismatched artifact digest")
 	}
-	write("manifest.json", manifestBytes)
-	write("app.wasm", artifact)
-	write("lock.json", lockBytes)
-	if err := tarWriter.Close(); err != nil {
+}
+
+func TestInspectAndInstallRejectArchiveManifestDigestMismatch(t *testing.T) {
+	manifest := packagecontract.Manifest{
+		SchemaVersion: packagecontract.SchemaVersion, ID: "demo.pkg", Version: "1.0.0",
+		Components: []packagecontract.Component{{ID: "main", Mode: packagecontract.ModeHosted, Entrypoint: "app.wasm"}},
+	}
+	manifestBytes, err := json.Marshal(manifest)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := gzipWriter.Close(); err != nil {
+	artifact := []byte("actual artifact")
+	artifactDigest := sha256.Sum256(artifact)
+	wrongManifestDigest := sha256.Sum256([]byte("different manifest"))
+	lockBytes, err := json.Marshal(packagecontract.Lock{
+		SchemaVersion: packagecontract.SchemaVersion, PackageID: manifest.ID,
+		PackageVersion: manifest.Version, ManifestSHA256: hex.EncodeToString(wrongManifestDigest[:]),
+		Artifacts: []packagecontract.LockedArtifact{{
+			ComponentID: "main", Path: "app.wasm", SHA256: hex.EncodeToString(artifactDigest[:]),
+		}},
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
 	archive := filepath.Join(t.TempDir(), "demo.pkg-1.0.0.tgz")
-	if err := os.WriteFile(archive, payload.Bytes(), 0o640); err != nil {
-		t.Fatal(err)
+	writeTestArchive(t, archive, manifestBytes, artifact, lockBytes)
+	if _, _, err := packmgr.Inspect(context.Background(), archive); err == nil {
+		t.Fatal("Inspect accepted archive with a mismatched manifest digest")
 	}
 	if _, err := packmgr.Install(context.Background(), t.TempDir(), archive); err == nil {
-		t.Fatal("Install accepted archive lock with a mismatched artifact digest")
+		t.Fatal("Install accepted archive with a mismatched manifest digest")
 	}
 }
