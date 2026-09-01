@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -26,8 +25,6 @@ var (
 	ErrInvalidProcessSpec = errors.New("invalid isolated runtime process specification")
 	ErrProcessCleanup     = errors.New("isolated runtime process cleanup failed")
 )
-
-var environmentNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,127}$`)
 
 // ProcessHostConfig 是统一进程宿主的配置：服务 mode=isolated 的全部组件，
 // role 决定装载后的协议面——capability 走 runtime_host 协议（Invoker），
@@ -324,7 +321,7 @@ func StartProcess(ctx context.Context, spec packagecontract.ProcessSpec, stdout,
 	}
 	command := exec.Command(spec.Path, spec.Args...)
 	// 空环境必须使用非 nil 切片；nil 会让 os/exec 继承 Core 的全部环境。
-	command.Env = append([]string{}, spec.Env...)
+	command.Env = []string{}
 	command.Dir = spec.WorkDir
 	command.Stdin = nil
 	command.Stdout = stdout
@@ -727,18 +724,6 @@ func validateProcessSpec(spec packagecontract.ProcessSpec) error {
 			return ErrInvalidProcessSpec
 		}
 	}
-	seenEnvironment := make(map[string]struct{}, len(spec.Env))
-	for _, item := range spec.Env {
-		name, value, found := strings.Cut(item, "=")
-		if !found || !environmentNamePattern.MatchString(name) || len(value) > 4096 ||
-			strings.ContainsRune(value, '\x00') || forbiddenProcessEnvironment(name) {
-			return ErrInvalidProcessSpec
-		}
-		if _, exists := seenEnvironment[name]; exists {
-			return ErrInvalidProcessSpec
-		}
-		seenEnvironment[name] = struct{}{}
-	}
 	return nil
 }
 
@@ -754,20 +739,6 @@ func removeRuntimeSocket(socketPath string) error {
 		return ErrProcessCleanup
 	}
 	return nil
-}
-
-func forbiddenProcessEnvironment(name string) bool {
-	upper := strings.ToUpper(name)
-	if upper == "LD_PRELOAD" || upper == "LD_LIBRARY_PATH" || strings.HasPrefix(upper, "DYLD_") ||
-		upper == "PYTHONPATH" {
-		return true
-	}
-	for _, protected := range []string{"TOKEN", "SECRET", "PASSWORD", "PASSWD", "CREDENTIAL", "COOKIE", "AUTH"} {
-		if strings.Contains(upper, protected) {
-			return true
-		}
-	}
-	return false
 }
 
 // ValidProcessDuration 校验进程生命周期宽限期的合理范围。

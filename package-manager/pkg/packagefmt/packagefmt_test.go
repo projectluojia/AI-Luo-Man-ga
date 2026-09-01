@@ -110,7 +110,7 @@ tool = "demo.text"
 	}
 }
 
-// isolated 组件的角色、进程模板和宿主环境声明必须完整传入中性清单。
+// isolated 组件的角色与进程模板必须完整传入中性清单。
 func TestParseIsolatedProcessTemplate(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, SourceFileName)
