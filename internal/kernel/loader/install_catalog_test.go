@@ -27,7 +27,7 @@ func TestInstalledCatalogDiscoversVerifiesAndRegistersHostedRuntime(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	records, err := catalog.Discover(t.Context())
+	records, err := discoverCatalogLocked(t, catalog, root)
 	if err != nil || len(records) != 1 {
 		t.Fatalf("records=%#v err=%v", records, err)
 	}
@@ -72,7 +72,7 @@ func TestInstalledCatalogReverificationRejectsUnexpectedRootEntry(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	records, err := catalog.Discover(t.Context())
+	records, err := discoverCatalogLocked(t, catalog, root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,7 +128,8 @@ func TestInstalledCatalogResolvesIsolatedProcessAndRejectsCatalogTampering(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	records, err := catalog.Discover(t.Context())
+	projectLock := catalogProjectLock(t, root)
+	records, err := catalog.DiscoverLocked(t.Context(), projectLock)
 	if err != nil || len(records) != 1 {
 		t.Fatalf("records=%#v err=%v", records, err)
 	}
@@ -152,7 +153,7 @@ func TestInstalledCatalogResolvesIsolatedProcessAndRejectsCatalogTampering(t *te
 		t.Fatal(err)
 	}
 	rewriteManifestDigest(t, filepath.Join(root, "isolated.test"), manifest)
-	if _, err := catalog.Discover(t.Context()); !errors.Is(err, packagesource.ErrInvalidCatalog) {
+	if _, err := catalog.DiscoverLocked(t.Context(), projectLock); !errors.Is(err, packagesource.ErrInvalidCatalog) {
 		t.Fatalf("未知字段目录错误=%v", err)
 	}
 }
@@ -161,7 +162,7 @@ func TestInstalledRegistrationRollsBackLoaderOnRegistryConflict(t *testing.T) {
 	root := t.TempDir()
 	writeInstalledFixture(t, root, "extension.test", loader.ModeHosted, false)
 	catalog, _ := packagesource.NewCatalog(root)
-	records, err := catalog.Discover(t.Context())
+	records, err := discoverCatalogLocked(t, catalog, root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -190,6 +191,7 @@ func TestInstalledCatalogRejectsDuplicateJSONAndWritableDirectory(t *testing.T) 
 	root := t.TempDir()
 	writeInstalledFixture(t, root, "extension.test", loader.ModeHosted, false)
 	directory := filepath.Join(root, "extension.test")
+	projectLock := catalogProjectLockForIDs(t, root, "extension.test")
 	manifestPath := filepath.Join(directory, "manifest.json")
 	manifest, err := os.ReadFile(manifestPath)
 	if err != nil {
@@ -201,17 +203,18 @@ func TestInstalledCatalogRejectsDuplicateJSONAndWritableDirectory(t *testing.T) 
 	}
 	rewriteManifestDigest(t, directory, duplicate)
 	catalog, _ := packagesource.NewCatalog(root)
-	if _, err := catalog.Discover(t.Context()); !errors.Is(err, packagesource.ErrInvalidCatalog) {
+	if _, err := catalog.DiscoverLocked(t.Context(), projectLock); !errors.Is(err, packagesource.ErrInvalidCatalog) {
 		t.Fatalf("重复 JSON 键错误=%v", err)
 	}
 
 	root = t.TempDir()
 	writeInstalledFixture(t, root, "extension.test", loader.ModeHosted, false)
+	projectLock = catalogProjectLockForIDs(t, root, "extension.test")
 	if err := os.Chmod(filepath.Join(root, "extension.test"), 0o770); err != nil {
 		t.Fatal(err)
 	}
 	catalog, _ = packagesource.NewCatalog(root)
-	if _, err := catalog.Discover(t.Context()); !errors.Is(err, packagesource.ErrInvalidCatalog) {
+	if _, err := catalog.DiscoverLocked(t.Context(), projectLock); !errors.Is(err, packagesource.ErrInvalidCatalog) {
 		t.Fatalf("可写安装目录错误=%v", err)
 	}
 }
@@ -389,7 +392,7 @@ func writeDeclaredFixture(t *testing.T, root, runtimeID string, decls []packagec
 	if err != nil {
 		t.Fatal(err)
 	}
-	records, err := catalog.Discover(t.Context())
+	records, err := discoverCatalogLocked(t, catalog, root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -501,7 +504,7 @@ func TestInstalledCatalogRejectsInvalidDeclarations(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if _, err := catalog.Discover(t.Context()); !errors.Is(err, packagesource.ErrInvalidCatalog) {
+				if _, err := catalog.DiscoverLocked(t.Context(), catalogProjectLockForIDs(t, root, "extension.bad")); !errors.Is(err, packagesource.ErrInvalidCatalog) {
 					t.Fatalf("Discover with invalid declarations error = %v, want ErrInvalidCatalog", err)
 				}
 				return

@@ -59,6 +59,9 @@ AI珞 V3 是长期维护的生产级项目。功能范围可以窄，但已实�
   `projectcontract` 定义项目依赖清单与 `ailuo.lock` 校验；不依赖 Core `internal`。
 - `package-manager`：独立 Go module，提供作者侧 `packagefmt`、安装/发布
   `packmgr`、`sdkgen` 与 `cmd/ailuo-pm`；Core 生产代码不得导入该实现。
+- 项目根 `ailuo.toml` 声明 Core 的直接包依赖；`ailuo sync` 生成 `ailuo.lock`。
+  Core 和外部 Runtime Host 只按项目锁加载版本与摘要匹配的安装包，不自由发现
+  安装根中的额外目录。
 - `packages`：同仓运行时包工作区（当前包含 Agent 与 Campus bus），不是 Core
   的业务实现目录；每个包使用自己的语言工具链和清单。
 - Python Executor 包位于 `packages/agent`；其环境和依赖仅由 `uv`、
