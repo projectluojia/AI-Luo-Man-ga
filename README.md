@@ -28,14 +28,15 @@ Web Access API
 
 ```bash
 make test-agent
-# 先设置绝对安装根，再按包清单构建并安装两个包
+# 根 ailuo.toml 声明 Core 使用的包；sync 递归解析、构建、安装并生成 ailuo.lock
 export AILUO_RUNTIME_INSTALL_ROOT=/absolute/path/to/ailuo/runtime
-(cd package-manager && go run ./cmd/ailuo-pm pack ../packages/agent ../dist)
-(cd package-manager && go run ./cmd/ailuo-pm pack ../packages/campus-bus ../dist)
-(cd package-manager && go run ./cmd/ailuo-pm install --root "$AILUO_RUNTIME_INSTALL_ROOT" ../dist/agent-1.0.0.tgz)
-(cd package-manager && go run ./cmd/ailuo-pm install --root "$AILUO_RUNTIME_INSTALL_ROOT" ../dist/campus-1.0.0.tgz)
+(cd package-manager && go run ./cmd/ailuo-pm sync --project .. --root "$AILUO_RUNTIME_INSTALL_ROOT")
 make run
 ```
+
+Core 只装载项目 `ailuo.lock` 中列出的、版本和摘要都匹配的包；缺少锁、清单
+发生变化、依赖闭包不完整或安装物漂移都会 fail closed。额外手工安装的包不会
+自动进入 Core。
 
 默认 Core 连接已由 `packages/agent` 自己启动的 Executor；启动命令和 Provider
 秘密配置见该包的 README。Core 只连接或按安装锁启动已声明的进程，不继承自身环境，
