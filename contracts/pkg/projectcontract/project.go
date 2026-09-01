@@ -101,12 +101,21 @@ func ValidateLock(lock Lock, manifest Manifest) error {
 		ValidateLockShape(lock) != nil {
 		return ErrInvalid
 	}
-	seen := make(map[string]struct{}, len(lock.Packages))
+	lockedByID := make(map[string]LockedPackage, len(lock.Packages))
 	for _, locked := range lock.Packages {
-		seen[locked.ID] = struct{}{}
+		lockedByID[locked.ID] = locked
 	}
 	for _, dependency := range manifest.Dependencies {
-		if _, exists := seen[dependency.ID]; !exists {
+		locked, exists := lockedByID[dependency.ID]
+		if !exists || locked.Source != dependency.Source {
+			return ErrInvalid
+		}
+		constraint, err := packagecontract.ParseConstraint(dependency.Constraint)
+		if err != nil {
+			return ErrInvalid
+		}
+		version, err := packagecontract.ParseVersion(locked.Version)
+		if err != nil || !constraint.Matches(version) {
 			return ErrInvalid
 		}
 	}
