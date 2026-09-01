@@ -14,6 +14,7 @@ coverage.out
 dist/
 .review-gocache/
 .codegraph/
+.serena/
 .ruff_cache/
 .uv-cache/
 
