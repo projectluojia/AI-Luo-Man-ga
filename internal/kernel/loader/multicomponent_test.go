@@ -88,6 +88,7 @@ func writeMultiComponentFixture(t *testing.T, root, version string) string {
 			{ID: "multi.core", Mode: loader.ModeHosted, Entrypoint: "multi-core.wasm",
 				Exports: []string{"test.multi.query"}, Imports: []string{"test.multi.transport"}},
 			{ID: "multi.adapter", Mode: loader.ModeIsolated, Entrypoint: "multi-adapter",
+				Process: &packagecontract.ProcessTemplate{Path: "multi-adapter", Address: "127.0.0.1:50051"},
 				Exports: []string{"test.multi.transport"}},
 		},
 	}

@@ -197,7 +197,7 @@ func TestInstalledCatalogRejectsDuplicateJSONAndWritableDirectory(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	duplicate := append(manifest[:len(manifest)-1], []byte(`,"schema_version":"ailuo.package.v2"}`)...)
+	duplicate := append(manifest[:len(manifest)-1], []byte(`,"schema_version":"ailuo.package.v3"}`)...)
 	if err := os.WriteFile(manifestPath, duplicate, 0o640); err != nil {
 		t.Fatal(err)
 	}
@@ -255,11 +255,16 @@ func writeInstalledFixture(t *testing.T, root, pkgID, mode string, unknown bool)
 	if err != nil {
 		t.Fatal(err)
 	}
+	var process *packagecontract.ProcessTemplate
+	if mode == loader.ModeIsolated {
+		process = &packagecontract.ProcessTemplate{Path: "runtime-artifact", Address: "127.0.0.1:50051"}
+	}
 	installed := packagecontract.Manifest{
 		SchemaVersion: packagecontract.SchemaVersion, ID: pkgID, Version: "1.0.0",
 		IdleTTLMS: 1000, Extensions: extensions,
 		Components: []packagecontract.Component{{
 			ID: pkgID, Mode: mode, Entrypoint: "runtime-artifact",
+			Process: process,
 			Exports: []string{"extension.query"},
 		}},
 	}
