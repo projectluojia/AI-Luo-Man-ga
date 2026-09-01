@@ -8,7 +8,7 @@ import (
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
-	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packagecontract"
+	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/packagecontract"
 )
 
 // StoreModule 是通用包存储宿主函数的模块名。guest 只能调用清单声明的函数，

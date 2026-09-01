@@ -8,7 +8,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packagecontract"
+	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/packagecontract"
 )
 
 // applyProcessLimits 在子进程启动后立即用 prlimit 应用资源限额。

@@ -54,6 +54,12 @@ AI珞 V3 是长期维护的生产级项目。功能范围可以窄，但已实�
 - `internal/tools`：跨 Service 可复用的原子 Tool，绝不反向依赖 Service。
 - `internal/services`：业务 Service 与运行时装配；通过 `ToolDependencies` 使用 Tool。
 - 具体存储实现位于领域/内核窄端口之后；测试适配器可放 `internal/storage/memory`。
+- `package-manager`：独立 Go module；其中 `pkg/capability`、
+  `pkg/packagecontract` 和 `pkg/packageio` 是 Core 与外部包共同消费的稳定契约，
+  `packagefmt`、`packmgr`、`sdkgen` 与 `cmd/ailuo-pm` 是作者/分发工具；Core
+  生产代码不得导入后者实现。
+- `packages`：同仓运行时包工作区（当前包含 Agent 与 Campus bus），不是 Core
+  的业务实现目录；每个包使用自己的语言工具链和清单。
 - Python Executor 包位于 `packages/agent`；其环境和依赖仅由 `uv`、
   `packages/agent/runtime/pyproject.toml` 与提交的 `packages/agent/runtime/uv.lock` 管理。
 - 普通 Go/Web/SQLite/Python 开发路径须兼容 Windows、Linux、macOS；平台专属强安全边界在不支持的平台 fail closed。
@@ -149,7 +155,7 @@ AI珞 V3 是长期维护的生产级项目。功能范围可以窄，但已实�
 ## Validation
 
 修改后先跑最相关的检查；修复当前改动导致的失败后再重跑。不能运行的相关检查必须说明具体原因，不得把跳过或部分通过描述为通过；不得为了变绿而削弱测试。完成前复核完整 diff，只保留当前任务相关改动。
-CI 完整门禁还包括 Core 的 `ci-required` 聚合检查、`go mod verify`、`go mod tidy -diff`、staticcheck、actionlint、Protobuf 生成物漂移检查、嵌套 Go module 检查，以及 Agent/Campus 独立包 workflow 各自的 Ruff/WASI、`pack → install → list` smoke 和 Agent 安装后 e2e；任何一项未运行都要在交付说明中明确标注。以下是本地可运行的主要门禁子集，不等同于 CI 完整门禁；Protobuf 漂移、包发布物 `pack → install → list`、Agent 安装后 e2e、CodeQL 和安全扫描仍以 CI 结果为准。
+CI 完整门禁还包括 Core 的 `ci-required` 聚合检查、`go mod verify`、`go mod tidy -diff`、staticcheck、actionlint、Protobuf 生成物漂移检查、Package Manager 嵌套 Go module 检查，以及 Agent/Campus 独立包 workflow 各自的 Ruff/WASI、`pack → install → list` smoke 和 Agent 安装后 e2e；任何一项未运行都要在交付说明中明确标注。以下是本地可运行的主要门禁子集，不等同于 CI 完整门禁；Protobuf 漂移、包发布物 `pack → install → list`、Agent 安装后 e2e、CodeQL 和安全扫描仍以 CI 结果为准。
 
 新增功能按适用范围覆盖：严格边界、App 隔离、权限收窄、幂等、状态转换、重启恢复、取消/超时、事件顺序、SSE 重连、背压、协议违例、并发/race、迁移/备份恢复和敏感信息不泄露。
 
@@ -161,6 +167,13 @@ test -z "$files" || { echo "$files"; exit 1; }
 go mod verify
 go mod tidy -diff
 go test ./...
+(
+  cd package-manager
+  go mod verify
+  go mod tidy -diff
+  go test ./...
+  go vet ./...
+)
 make test-campus
 go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 '-checks=inherit,-SA1019' ./...
 actionlint .github/workflows/*.yml

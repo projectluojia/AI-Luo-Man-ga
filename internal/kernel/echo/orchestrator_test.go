@@ -26,7 +26,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/blob"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite/sqlitetest"
-	"github.com/projectluojia/AI-Luo-Man-ga/pkg/capability"
+	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/capability"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
