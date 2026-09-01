@@ -18,6 +18,6 @@ args = ["-m", "agent.runtime", "--listen", "${address}"]
 work_dir = "."
 address = "127.0.0.1:50051"
 
-[build]
+[component.build]
 tool = "python-uv"
 source = "runtime"

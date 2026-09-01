@@ -143,7 +143,7 @@ func compileGuest() ([]byte, error) {
 			},
 		}},
 	}
-	if err := packagefmt.Build(context.Background(), sourceDir, manifest, packagefmt.BuildSpec{Tool: packagefmt.BuildToolGoWasm}); err != nil {
+	if err := packagefmt.Build(context.Background(), sourceDir, manifest, []packagefmt.BuildSpec{{Tool: packagefmt.BuildToolGoWasm}}); err != nil {
 		return nil, fmt.Errorf("build guest wasm: %w", err)
 	}
 	return os.ReadFile(filepath.Join(sourceDir, guestEntrypointName))
