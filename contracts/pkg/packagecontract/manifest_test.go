@@ -278,7 +278,10 @@ func TestValidateSourceRequiresExplicitScheme(t *testing.T) {
 			t.Fatalf("ValidateSource(%q): %v", source, err)
 		}
 	}
-	for _, source := range []string{"", "packages/demo", "path:../demo", "github:owner", "github:owner/repo/extra"} {
+	for _, source := range []string{
+		"", "packages/demo", "path:../demo", "github:owner", "github:owner/repo/extra",
+		"github:./repo", "github:owner/..",
+	} {
 		if err := packagecontract.ValidateSource(source); !errors.Is(err, packagecontract.ErrInvalidFormat) {
 			t.Fatalf("ValidateSource(%q) = %v, want ErrInvalidFormat", source, err)
 		}

@@ -50,6 +50,33 @@ func TestValidateProjectLockRequiresDirectDependency(t *testing.T) {
 	}
 }
 
+func TestValidateProjectLockBindsDirectDependency(t *testing.T) {
+	manifest := validManifest()
+	cases := []struct {
+		name   string
+		mutate func(*projectcontract.Lock)
+	}{
+		{name: "source mismatch", mutate: func(lock *projectcontract.Lock) {
+			lock.Packages[0].Source = "github:other/repo"
+		}},
+		{name: "version outside constraint", mutate: func(lock *projectcontract.Lock) {
+			lock.Packages[0].Version = "2.0.0"
+		}},
+		{name: "invalid version", mutate: func(lock *projectcontract.Lock) {
+			lock.Packages[0].Version = "1.0"
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			lock := validLock()
+			tc.mutate(&lock)
+			if err := projectcontract.ValidateLock(lock, manifest); !errors.Is(err, projectcontract.ErrInvalid) {
+				t.Fatalf("ValidateLock = %v, want ErrInvalid", err)
+			}
+		})
+	}
+}
+
 func TestValidateProjectLockRejectsInvalidVersionAndDigest(t *testing.T) {
 	manifest := validManifest()
 	for _, mutate := range []func(*projectcontract.Lock){
