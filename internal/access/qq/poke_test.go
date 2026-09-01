@@ -8,11 +8,12 @@ import (
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access"
 	kernelecho "github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite/sqlitetest"
 )
 
-func newPokeAdapter(t *testing.T, bot *fakeOneBot) *Adapter {
+func newPokeAdapter(t *testing.T, bot *fakeOneBot) {
 	t.Helper()
-	store := newQQTestStore(t, "qq-poke.db")
+	store := sqlitetest.NewMemoryStore(t)
 	hub := newQQTestHub(t, store, stubResolver{user: "user-1"})
 	adapter, err := New(Config{
 		AppID: "campus-services", WSURL: bot.wsURL(), BotQQID: "2647414417",
@@ -23,22 +24,12 @@ func newPokeAdapter(t *testing.T, bot *fakeOneBot) *Adapter {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		_ = adapter.Run(ctx)
-	}()
-	t.Cleanup(func() {
-		cancel()
-		<-done
-	})
+	startQQAdapter(t, adapter)
 	select {
 	case <-bot.authHeader:
 	case <-time.After(5 * time.Second):
 		t.Fatal("adapter did not connect")
 	}
-	return adapter
 }
 
 // TestQQAdapterRepliesToGroupPoke 验证群聊戳机器人：回随机文案 + group_poke 戳回去。
@@ -102,7 +93,7 @@ func TestQQAdapterRepliesToPrivatePoke(t *testing.T) {
 
 func TestQQAdapterCanDisablePokeTextWithoutDisablingGroupPoke(t *testing.T) {
 	bot := newFakeOneBot(t)
-	store := newQQTestStore(t, "qq-poke-disabled.db")
+	store := sqlitetest.NewMemoryStore(t)
 	hub := newQQTestHub(t, store, stubResolver{user: "user-1"})
 	adapter, err := New(Config{
 		AppID: "campus-services", WSURL: bot.wsURL(), BotQQID: "2647414417",
@@ -112,9 +103,7 @@ func TestQQAdapterCanDisablePokeTextWithoutDisablingGroupPoke(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	go func() { _ = adapter.Run(ctx) }()
+	startQQAdapter(t, adapter)
 	select {
 	case <-bot.authHeader:
 	case <-time.After(5 * time.Second):
@@ -156,7 +145,7 @@ func TestQQAdapterIgnoresPokeOnOthers(t *testing.T) {
 // TestQQAdapterIgnoresGroupMessageWithoutMention 验证群聊未 @ 机器人时静默忽略。
 func TestQQAdapterIgnoresGroupMessageWithoutMention(t *testing.T) {
 	bot := newFakeOneBot(t)
-	store := newQQTestStore(t, "qq-ignore.db")
+	store := sqlitetest.NewMemoryStore(t)
 	hub := newQQTestHub(t, store, stubResolver{user: "user-1"})
 	orchestrator := &qqFakeOrchestrator{store: store, created: make(chan struct{})}
 	adapter, err := New(Config{
@@ -167,9 +156,7 @@ func TestQQAdapterIgnoresGroupMessageWithoutMention(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go func() { _ = adapter.Run(ctx) }()
+	startQQAdapter(t, adapter)
 	select {
 	case <-bot.authHeader:
 	case <-time.After(5 * time.Second):
@@ -189,7 +176,7 @@ func TestQQAdapterIgnoresGroupMessageWithoutMention(t *testing.T) {
 // TestQQAdapterIgnoresMentionOfAnotherUser 验证群聊只 @ 其他用户时不会创建 Echo。
 func TestQQAdapterIgnoresMentionOfAnotherUser(t *testing.T) {
 	bot := newFakeOneBot(t)
-	store := newQQTestStore(t, "qq-other-mention.db")
+	store := sqlitetest.NewMemoryStore(t)
 	hub := newQQTestHub(t, store, stubResolver{user: "user-1"})
 	orchestrator := &qqFakeOrchestrator{store: store, created: make(chan struct{})}
 	adapter, err := New(Config{
@@ -200,9 +187,7 @@ func TestQQAdapterIgnoresMentionOfAnotherUser(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go func() { _ = adapter.Run(ctx) }()
+	startQQAdapter(t, adapter)
 	select {
 	case <-bot.authHeader:
 	case <-time.After(5 * time.Second):
@@ -221,7 +206,7 @@ func TestQQAdapterIgnoresMentionOfAnotherUser(t *testing.T) {
 // TestQQAdapterHandlesGroupMessageWithMention 验证群聊 @ 机器人后正常入站。
 func TestQQAdapterHandlesGroupMessageWithMention(t *testing.T) {
 	bot := newFakeOneBot(t)
-	store := newQQTestStore(t, "qq-mention.db")
+	store := sqlitetest.NewMemoryStore(t)
 	hub := newQQTestHub(t, store, stubResolver{user: "user-1"})
 	orchestrator := &qqFakeOrchestrator{store: store, created: make(chan struct{})}
 	echoReader := completedEchoReader{}
@@ -233,16 +218,7 @@ func TestQQAdapterHandlesGroupMessageWithMention(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		_ = adapter.Run(ctx)
-	}()
-	t.Cleanup(func() {
-		cancel()
-		<-done
-	})
+	startQQAdapter(t, adapter)
 	select {
 	case <-bot.authHeader:
 	case <-time.After(5 * time.Second):
