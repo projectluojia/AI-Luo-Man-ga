@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"github.com/iancoleman/strcase"
-	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/capability"
+	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/capability"
 )
 
 // reservedKeywords 是 Python 与 TypeScript 保留字的并集：字段名直接作为标识符

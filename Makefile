@@ -1,4 +1,4 @@
-.PHONY: generate test test-package-manager test-agent test-campus test-e2e test-race test-integration vet run
+.PHONY: generate test test-contracts test-package-manager test-agent test-campus test-e2e test-race test-integration vet run
 
 UV ?= uv
 AGENT_PROJECT := packages/agent/runtime
@@ -14,6 +14,9 @@ generate:
 
 test:
 	go test ./...
+
+test-contracts:
+	cd contracts && go test ./...
 
 test-package-manager:
 	cd package-manager && go test ./...

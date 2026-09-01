@@ -16,8 +16,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/packagecontract"
-	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/packageio"
+	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packagecontract"
+	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packageio"
 )
 
 const maxTarEntries = 4096

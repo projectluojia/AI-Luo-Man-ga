@@ -10,7 +10,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/capability"
+	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/capability"
 )
 
 // 包格式版本：清单与 lock 共用的 schema 版本。
@@ -53,10 +53,11 @@ type Storage struct {
 	Retention     string `json:"retention"`
 }
 
-// Dependency 是包声明的版本化依赖（tool_id + semver 约束）。
+// Dependency 是包声明的版本化依赖（包 ID + semver 约束 + 显式来源）。
 type Dependency struct {
 	ID         string `json:"id"`
 	Constraint string `json:"constraint"`
+	Source     string `json:"source"`
 }
 
 // ValidateHostedFunctions 校验声明集合：标识符闭式、去重、用途长度，且不得
@@ -101,15 +102,57 @@ func EqualStorage(left, right *Storage) bool {
 	return *left == *right
 }
 
-// ValidateDependency 校验依赖声明：标识符闭式 + semver 约束可解析。
+// ValidateDependency 校验依赖声明：标识符、来源闭式且 semver 约束可解析。
 func ValidateDependency(dep Dependency) error {
-	if !capability.IsStableID(dep.ID) {
+	if !capability.IsStableID(dep.ID) || !validSource(dep.Source) {
 		return ErrInvalidFormat
 	}
 	if _, err := ParseConstraint(dep.Constraint); err != nil {
 		return ErrInvalidFormat
 	}
 	return nil
+}
+
+// ValidateSource 校验依赖来源的公共表示。path: 表示包管理器工作区内的相对
+// 路径，github: 表示 GitHub owner/repo；解析和下载由包管理器负责，Core 只
+// 消费已经解析并锁定的结果。
+func ValidateSource(source string) error {
+	if !validSource(source) {
+		return ErrInvalidFormat
+	}
+	return nil
+}
+
+func validSource(source string) bool {
+	if source == "" || len(source) > 512 || strings.TrimSpace(source) != source ||
+		!utf8.ValidString(source) || strings.ContainsRune(source, '\x00') {
+		return false
+	}
+	switch {
+	case strings.HasPrefix(source, "path:"):
+		value := strings.TrimPrefix(source, "path:")
+		return value != "." && IsPackagePath(value)
+	case strings.HasPrefix(source, "github:"):
+		parts := strings.Split(strings.TrimPrefix(source, "github:"), "/")
+		return len(parts) == 2 && validSourceSegment(parts[0]) && validSourceSegment(parts[1])
+	default:
+		return false
+	}
+}
+
+func validSourceSegment(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, character := range value {
+		if !(character >= 'a' && character <= 'z') &&
+			!(character >= 'A' && character <= 'Z') &&
+			!(character >= '0' && character <= '9') &&
+			character != '.' && character != '-' && character != '_' {
+			return false
+		}
+	}
+	return true
 }
 
 // HostedFunctionKey 返回宿主函数声明/实现的唯一键。分隔符用 NUL：module 与

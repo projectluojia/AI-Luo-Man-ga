@@ -9,8 +9,8 @@ import (
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
 
+	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/capability"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/strictschema"
-	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/capability"
 )
 
 const maxSchemaBytes = 64 << 10

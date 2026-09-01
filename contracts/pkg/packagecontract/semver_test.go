@@ -3,7 +3,7 @@ package packagecontract_test
 import (
 	"testing"
 
-	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/packagecontract"
+	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packagecontract"
 )
 
 func mustVersion(t *testing.T, text string) packagecontract.Version {

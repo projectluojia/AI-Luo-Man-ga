@@ -7,11 +7,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packagecontract"
 	executorv1 "github.com/projectluojia/AI-Luo-Man-ga/gen/executorv1"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/executor"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
-	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/packagecontract"
 
 	"google.golang.org/grpc"
 )

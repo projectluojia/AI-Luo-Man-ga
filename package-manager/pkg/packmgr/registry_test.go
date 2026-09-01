@@ -11,7 +11,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/packagecontract"
+	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packagecontract"
 	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/packmgr"
 )
 
@@ -295,7 +295,7 @@ func TestPublishCreatesReleaseAndUploadsAsset(t *testing.T) {
 
 func TestPublishTarballCreatesReleaseAndUploadsAsset(t *testing.T) {
 	source := filepath.Join(t.TempDir(), "pkg")
-	writeSourcePackage(t, source, "demo.pkg", "1.0.0", packagecontract.ModeHosted, "app.wasm", []packagecontract.Dependency{{ID: "dependency.pkg", Constraint: "^1.0.0"}})
+	writeSourcePackage(t, source, "demo.pkg", "1.0.0", packagecontract.ModeHosted, "app.wasm", []packagecontract.Dependency{{ID: "dependency.pkg", Constraint: "^1.0.0", Source: "github:owner/dependency"}})
 	manifest, manifestBytes := readSourceManifest(t, source)
 	var err error
 	tarball, err := packmgr.PackFromSource(context.Background(), source, t.TempDir(), manifest, manifestBytes)

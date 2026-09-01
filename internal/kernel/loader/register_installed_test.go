@@ -5,9 +5,9 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/capability"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
-	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/capability"
 )
 
 func TestRegisterInstalledRejectsCapabilityPackageWithoutUniquePrimaryService(t *testing.T) {

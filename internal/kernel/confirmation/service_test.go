@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/capability"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/confirmation"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	kernelecho "github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
@@ -20,7 +21,6 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime/runtimetest"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite"
-	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/capability"
 )
 
 // fakeClock 是测试用的确定性时钟。
