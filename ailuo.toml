@@ -1,0 +1,13 @@
+# AI珞 Core 项目依赖清单。Core 不在代码中绑定具体包，包由 ailuo sync
+# 解析、构建、安装并写入同目录 ailuo.lock。
+
+[project]
+id = "ailuo"
+
+[dependencies."agent"]
+version = "1.0.0"
+path = "packages/agent"
+
+[dependencies."campus"]
+version = "1.0.0"
+path = "packages/campus-bus"
