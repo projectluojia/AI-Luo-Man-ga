@@ -51,7 +51,7 @@ NapCat 保持独立运行和独立 WebUI，负责 QQ 登录及 OneBot 服务；A
 
 `/readyz` 会实际探测已安装 Executor 的协议与就绪状态，不只检查进程是否存在。
 
-Go Run 调度使用 SQLite 持久队列和固定 4 个 worker，默认每个 App 最多容纳 128 个 queued/running Run。超过容量时创建接口返回 HTTP 429 `queue_full` 和 `Retry-After: 1`；相同幂等请求仍可重放。默认最多 3 个 Run attempt，只有稳定错误标记为可重试且当前 attempt 未请求 write/external Capability 时才按持久 `available_at` 延迟重试；活动 Run 的 lease 会周期续期。当前合同面向单 Deployment，不宣称多节点 SQLite 调度。
+Go Run 调度使用 SQLite 持久队列，worker 数量由 App 的 `scheduler.workers` 配置（默认 4，范围 1–64），默认每个 App 最多容纳 128 个 queued/running Run。超过容量时创建接口返回 HTTP 429 `queue_full` 和 `Retry-After: 1`；相同幂等请求仍可重放。默认最多 3 个 Run attempt，只有稳定错误标记为可重试且当前 attempt 未请求 write/external Capability 时才按持久 `available_at` 延迟重试；活动 Run 的 lease 会周期续期。当前合同面向单 Deployment，不宣称多节点 SQLite 调度。
 
 App 的启停状态、Executor ID、opaque ExecutorConfig、运行预算、Capability 集合和权限上界保存在 SQLite 不可变配置修订中，当前 head 以 generation CAS 更新。新 Run 固化创建时的配置修订用于确定性恢复；停用和 Capability/权限撤销在每次调用边界读取当前策略并立即生效。ExecutorConfig 不会进入普通日志或公共 API。当前没有公开配置管理 API；在多入口管理员身份边界实现前，只允许受信 Go 控制面使用该 CAS 合同，不能直接修改数据库。
 

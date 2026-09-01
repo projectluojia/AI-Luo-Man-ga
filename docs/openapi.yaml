@@ -801,6 +801,7 @@ components:
       required: [workers, poll_ms, batch_size]
       properties:
         workers:
+          description: Number of persistent Run scheduler workers; configurable per App.
           type: integer
           minimum: 1
           maximum: 64
