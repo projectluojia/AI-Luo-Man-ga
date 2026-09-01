@@ -73,7 +73,7 @@ jobs:
       - name: 运行 staticcheck
         # 默认检查集排除 SA1019（grpc.DialContext/WithBlock 弃用）：迁移到
         # grpc.NewClient 涉及内核拨号语义与 15 处测试同步，作为独立重构任务跟进。
-        run: go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 '-checks=inherit,-SA1019' ./...
+        run: go run honnef.co/go/tools/cmd/staticcheck@v0.8.1 '-checks=inherit,-SA1019' ./...
       - name: 运行 Go race 测试
         run: go test -race ./...
       - name: 运行 Runtime Host 集成测试
@@ -114,7 +114,8 @@ jobs:
         run: |
           go_bin="$(go env GOPATH)/bin"
           export PATH="$go_bin:$PATH"
-          uv run --project packages/agent/runtime --locked python -m grpc_tools.protoc -I proto --go_out=. --go_opt=module=github.com/projectluojia/AI-Luo-Man-ga --go-grpc_out=. --go-grpc_opt=module=github.com/projectluojia/AI-Luo-Man-ga proto/executor.proto proto/runtime_host.proto
+          uv run --project packages/agent/runtime --locked python -m grpc_tools.protoc -I proto --go_out=contracts --go_opt=module=github.com/projectluojia/AI-Luo-Man-ga/contracts --go-grpc_out=contracts --go-grpc_opt=module=github.com/projectluojia/AI-Luo-Man-ga/contracts proto/executor.proto
+          uv run --project packages/agent/runtime --locked python -m grpc_tools.protoc -I proto --go_out=. --go_opt=module=github.com/projectluojia/AI-Luo-Man-ga --go-grpc_out=. --go-grpc_opt=module=github.com/projectluojia/AI-Luo-Man-ga proto/runtime_host.proto
           uv run --project packages/agent/runtime --locked python -m grpc_tools.protoc -I proto --python_out=packages/agent/runtime/agent/generated --grpc_python_out=packages/agent/runtime/agent/generated proto/executor.proto
           git diff --exit-code
 
