@@ -83,3 +83,19 @@ func TestParseHostedEnvelopeReturnsGenericInvocationErrors(t *testing.T) {
 		t.Fatalf("unknown hosted error code = %v, want ErrRuntimeProtocol", err)
 	}
 }
+
+func TestParseHostedEnvelopeRejectsNonCanonicalOrIncompleteResults(t *testing.T) {
+	for _, payload := range []string{
+		`{"ok":true,"result":{},"extra":true}`,
+		`{"ok":true,"result":{},"result":{}}`,
+		`{"ok":true,"result":{}} trailing`,
+		`{"ok":true}`,
+		`{"ok":true,"result":{},"code":"internal"}`,
+		`{"ok":false,"result":{},"code":"internal"}`,
+		`{"ok":false}`,
+	} {
+		if _, err := parseHostedEnvelope("test.runtime", []byte(payload)); !errors.Is(err, ErrRuntimeProtocol) {
+			t.Errorf("payload %q error=%v, want ErrRuntimeProtocol", payload, err)
+		}
+	}
+}
