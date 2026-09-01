@@ -32,6 +32,11 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+          cache-dependency-path: |
+            go.sum
+            contracts/go.sum
+            package-manager/go.sum
+            go.work.sum
       - name: 校验 Go 模块（go.sum 完整性）
         run: go mod verify
       - name: 运行 Go 单元测试
@@ -50,6 +55,11 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+          cache-dependency-path: |
+            go.sum
+            contracts/go.sum
+            package-manager/go.sum
+            go.work.sum
       - name: 校验 go.mod/go.sum 无漂移
         # go mod tidy 的结论与平台相关（Windows 依赖 x/sys 等），只在单一 Linux job 校验。
         run: go mod tidy -diff
@@ -84,6 +94,11 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+          cache-dependency-path: |
+            go.sum
+            contracts/go.sum
+            package-manager/go.sum
+            go.work.sum
       - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           version: "0.12.7"
@@ -127,6 +142,11 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+          cache-dependency-path: |
+            go.sum
+            contracts/go.sum
+            package-manager/go.sum
+            go.work.sum
       - name: 检查 GitHub Actions workflow
         shell: bash
         run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/*.yml

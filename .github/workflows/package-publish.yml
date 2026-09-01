@@ -3,7 +3,8 @@ name: 包发布流水线（可复用）
 # npm 式包发布流水线：构建 → pack（tarball）→ 冒烟安装验证 → 版本一致性 →
 # （tag 发布时）附 GitHub Release。包作者仓库通过
 # `uses: projectluojia/AI-Luo-Man-ga/.github/workflows/package-publish.yml@ref`
-# 复用；Package Manager CLI 从本仓库 workflow 所在提交构建，不能把调用方源码当作 CLI 仓库。
+# 复用；调用方必须显式传入不可变 package-manager-ref，不能把调用方提交 SHA
+# 猜作 CLI 仓库中的提交。
 #
 # 打包与发布分两个 job：package 只读（PR 冒烟走这条路，且它执行调用方传入的
 # build-command），contents: write 只在 tag 触发的 publish job 里存在；发布 job
@@ -17,6 +18,10 @@ on:
         type: string
         default: "."
         description: 源包目录（含 ailuo.toml 或源码与 entrypoint 工件）
+      package-manager-ref:
+        type: string
+        required: true
+        description: AI珞 Package Manager 的完整 40 位 commit SHA
       build-tool:
         type: string
         required: true
@@ -74,17 +79,30 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # Package Manager 仓库与调用方包仓库分离，固定到当前 workflow 的源提交。
+      - name: 校验 Package Manager ref
+        env:
+          PACKAGE_MANAGER_REF: ${{ inputs.package-manager-ref }}
+        shell: bash
+        run: |
+          [[ "$PACKAGE_MANAGER_REF" =~ ^[0-9a-fA-F]{40}$ ]] || {
+            echo "package-manager-ref 必须是完整 40 位 commit SHA" >&2
+            exit 1
+          }
+      # Package Manager 仓库与调用方包仓库分离，固定到调用方显式提供的 ref。
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: projectluojia/AI-Luo-Man-ga
-          ref: ${{ github.workflow_sha }}
+          ref: ${{ inputs.package-manager-ref }}
           path: .ailuo-cli
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: .ailuo-cli/package-manager/go.mod
           cache: true
+          cache-dependency-path: |
+            .ailuo-cli/contracts/go.sum
+            .ailuo-cli/package-manager/go.sum
+            .ailuo-cli/go.work.sum
       - name: 校验构建器与工具链版本
         env:
           BUILD_TOOL: ${{ inputs.build-tool }}
@@ -124,7 +142,7 @@ jobs:
         with:
           node-version: ${{ inputs.node-version }}
       - name: 构建 ailuo CLI
-        run: go build -o ../ailuo ./cmd/ailuo-pm
+        run: go build -o "$RUNNER_TEMP/ailuo" ./cmd/ailuo-pm
         working-directory: .ailuo-cli/package-manager
       - name: 构建包工件
         if: ${{ inputs.build-command != '' }}
@@ -150,7 +168,7 @@ jobs:
             package_version="${GITHUB_REF#refs/tags/}"
             package_version="${package_version#v}"
           fi
-          ./.ailuo-cli/ailuo pack --version "$package_version" "$PACKAGE_DIR" dist
+          "$RUNNER_TEMP/ailuo" pack --version "$package_version" "$PACKAGE_DIR" dist
           mapfile -t tarballs < <(find dist -maxdepth 1 -type f -name '*.tgz' -print)
           test "${#tarballs[@]}" -eq 1
           tarball="${tarballs[0]}"
@@ -162,8 +180,8 @@ jobs:
           id="$(jq -er .id <<<"$manifest")"
           version="$(jq -er .version <<<"$manifest")"
           # 发布物必须可安装并可列出（真实闭环，不信任"打包成功"本身）。
-          ./.ailuo-cli/ailuo install --root "$RUNNER_TEMP/pkgroot" "$tarball"
-          ./.ailuo-cli/ailuo list --root "$RUNNER_TEMP/pkgroot" | grep -q "^${id}@${version}"
+          "$RUNNER_TEMP/ailuo" install --root "$RUNNER_TEMP/pkgroot" "$tarball"
+          "$RUNNER_TEMP/ailuo" list --root "$RUNNER_TEMP/pkgroot" | grep -q "^${id}@${version}"
           {
             echo "package-id=$id"
             echo "package-version=$version"
@@ -200,26 +218,39 @@ jobs:
     timeout-minutes: 15
     environment: release
     permissions:
-      actions: read
-      contents: write
+      actions: read # 下载 package job 的已验证 tarball。
+      contents: write # 上传并发布经过验证的不可变 Release 工件。
     steps:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           artifact-ids: ${{ needs.package.outputs.artifact-id }}
           path: package-artifact
-      # 只检出 workflow 源提交中的 Package Manager；不检出或执行调用方仓库代码。
+      - name: 校验 Package Manager ref
+        env:
+          PACKAGE_MANAGER_REF: ${{ inputs.package-manager-ref }}
+        shell: bash
+        run: |
+          [[ "$PACKAGE_MANAGER_REF" =~ ^[0-9a-fA-F]{40}$ ]] || {
+            echo "package-manager-ref 必须是完整 40 位 commit SHA" >&2
+            exit 1
+          }
+      # 只检出指定 ref 中的 Package Manager；不检出或执行调用方仓库代码。
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: projectluojia/AI-Luo-Man-ga
-          ref: ${{ github.workflow_sha }}
+          ref: ${{ inputs.package-manager-ref }}
           path: .ailuo-cli
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: .ailuo-cli/package-manager/go.mod
           cache: true
+          cache-dependency-path: |
+            .ailuo-cli/contracts/go.sum
+            .ailuo-cli/package-manager/go.sum
+            .ailuo-cli/go.work.sum
       - name: 构建 ailuo CLI
-        run: go build -o ../ailuo ./cmd/ailuo-pm
+        run: go build -o "$RUNNER_TEMP/ailuo" ./cmd/ailuo-pm
         working-directory: .ailuo-cli/package-manager
       - name: 发布到 GitHub Release（tag 时，版本不可变）
         env:
@@ -231,7 +262,7 @@ jobs:
           mapfile -t tarballs < <(find "$PACKAGE_TARBALL_DIR" -maxdepth 1 -type f -name '*.tgz' -print)
           test "${#tarballs[@]}" -eq 1
           tarball="${tarballs[0]}"
-          ./.ailuo-cli/ailuo publish --repo "$REPOSITORY" "$tarball"
+          "$RUNNER_TEMP/ailuo" publish --repo "$REPOSITORY" "$tarball"
       - name: 从注册表安装验证（发布物真实闭环）
         shell: bash
         env:
@@ -241,5 +272,5 @@ jobs:
           PACKAGE_VERSION: ${{ needs.package.outputs.package-version }}
         run: |
           set -euo pipefail
-          ./.ailuo-cli/ailuo install --root "$RUNNER_TEMP/pkgroot-registry" "$REPOSITORY@$PACKAGE_VERSION"
-          ./.ailuo-cli/ailuo list --root "$RUNNER_TEMP/pkgroot-registry" | grep -q "^${PACKAGE_ID}@${PACKAGE_VERSION}"
+          "$RUNNER_TEMP/ailuo" install --root "$RUNNER_TEMP/pkgroot-registry" "$REPOSITORY@$PACKAGE_VERSION"
+          "$RUNNER_TEMP/ailuo" list --root "$RUNNER_TEMP/pkgroot-registry" | grep -q "^${PACKAGE_ID}@${PACKAGE_VERSION}"
