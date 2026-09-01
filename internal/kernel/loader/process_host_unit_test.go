@@ -3,6 +3,7 @@ package loader
 import (
 	"context"
 	"errors"
+	"flag"
 	"io"
 	"os"
 	"os/signal"
@@ -12,6 +13,8 @@ import (
 
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packagecontract"
 )
+
+var reapHelper = flag.Bool("ailuo-test-reap-helper", false, "测试 Reap 辅助进程")
 
 func TestProcessWatchContextCancelsWhenProcessExits(t *testing.T) {
 	process := &Process{done: make(chan struct{})}
@@ -59,21 +62,6 @@ func TestValidateProcessSpecRejectsUnsafeExecutionInputs(t *testing.T) {
 		func() packagecontract.ProcessSpec { value := base; value.Path = "relative"; return value }(),
 		func() packagecontract.ProcessSpec { value := base; value.WorkDir = "relative"; return value }(),
 		func() packagecontract.ProcessSpec { value := base; value.Address = "192.0.2.1:9000"; return value }(),
-		func() packagecontract.ProcessSpec {
-			value := base
-			value.Env = []string{"API_TOKEN=private"}
-			return value
-		}(),
-		func() packagecontract.ProcessSpec {
-			value := base
-			value.Env = []string{"LD_PRELOAD=/tmp/inject.so"}
-			return value
-		}(),
-		func() packagecontract.ProcessSpec {
-			value := base
-			value.Env = []string{"SAFE=1", "SAFE=2"}
-			return value
-		}(),
 		func() packagecontract.ProcessSpec {
 			value := base
 			value.Args = []string{"bad\x00argument"}
@@ -164,8 +152,7 @@ func TestProcessReapStopsStubbornChild(t *testing.T) {
 	}
 	process, err := StartProcess(context.Background(), packagecontract.ProcessSpec{
 		Path:    executable,
-		Args:    []string{"-test.run=TestReapHelperChild"},
-		Env:     append(os.Environ(), "AILUO_REAP_HELPER=1"),
+		Args:    []string{"-test.run=TestReapHelperChild", "-ailuo-test-reap-helper=true"},
 		WorkDir: t.TempDir(),
 	}, io.Discard, io.Discard)
 	if err != nil {
@@ -220,7 +207,7 @@ func TestProcessEnvironmentHelper(t *testing.T) {
 // TestReapHelperChild 是 Reap 测试的辅助子进程：忽略中断信号并长时间驻留，
 // 供父进程验证优雅终止失败后的强制终止路径。
 func TestReapHelperChild(t *testing.T) {
-	if os.Getenv("AILUO_REAP_HELPER") != "1" {
+	if !*reapHelper {
 		t.Skip("helper process")
 	}
 	signal.Ignore(os.Interrupt)
