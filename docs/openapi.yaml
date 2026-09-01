@@ -331,9 +331,8 @@ paths:
         event translation) and is delivered as a text/event-stream with events
         track, text_delta, final, error and done. The kernel echo events are
         translated; kernel event types are not exposed.
-        A trusted server-side Web login identity is required. The user_id,
-        user_name and session_id request fields are compatibility display fields only
-        and never establish identity or session ownership.
+        A trusted server-side Web login identity is required; identity and
+        session ownership come exclusively from that server-side identity.
       requestBody:
         required: true
         content:
@@ -343,15 +342,6 @@ paths:
               additionalProperties: false
               required: [text]
               properties:
-                session_id:
-                  type: string
-                  description: Compatibility field only; ignored for identity and session ownership.
-                user_id:
-                  type: string
-                  description: Compatibility field only; never trusted as an identity credential.
-                user_name:
-                  type: string
-                  description: Compatibility field only; never trusted as an identity credential.
                 text:
                   type: string
                   minLength: 1
