@@ -62,7 +62,7 @@ go test ./...
   go vet ./...
 )
 make test-campus
-go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 '-checks=inherit,-SA1019' ./...
+go run honnef.co/go/tools/cmd/staticcheck@v0.8.1 '-checks=inherit,-SA1019' ./...
 actionlint .github/workflows/*.yml
 uv sync --project packages/agent/runtime --locked
 uv run --project packages/agent/runtime --locked python -m compileall -q packages/agent/runtime
@@ -78,7 +78,7 @@ AILUO_EXECUTOR_PACKAGE_DIR="$PWD/packages/agent" go test -tags=integration ./e2e
 
 - 所有手写代码注释使用中文；生成文件、`//go:build` 与 `//go:embed` 指令除外。
 - 用户可见日志使用清晰中文，字段键保持英文；日志与审计不得包含正文、密钥、凭据或原始错误。
-- **生成文件是提交构件，禁止手工修改**：`proto/executor.proto` 或 `proto/runtime_host.proto` 变更后必须重新生成 Go 与 Python 产物并连同测试一起提交（`make generate`，CI 有漂移检查）。WASM 工件由包清单的 `[build]` 声明在 pack 时生成，不提交构建产物。
+- **生成文件是提交构件，禁止手工修改**：`proto/executor.proto` 或 `proto/runtime_host.proto` 变更后必须重新生成 Go 与 Python 产物并连同测试一起提交（`make generate`，CI 有漂移检查）。WASM 工件由包清单的 `[component.build]` 声明在 pack 时生成，不提交构建产物。
 - 修改工程配置（CI、规则集、依赖机器人、模板）时，同步更新 `AGENTS.md` 与相关文档。
 - 密钥、本地数据库、真实校巴数据、虚拟环境与临时输出不得入库。
 

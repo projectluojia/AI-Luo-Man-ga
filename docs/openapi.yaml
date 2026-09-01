@@ -130,7 +130,7 @@ paths:
           $ref: "#/components/responses/Error"
   /api/v1/runs/{run_id}:
     get:
-      summary: Get an App-scoped root or child Run
+      summary: Get an App-scoped Run
       parameters:
         - name: run_id
           in: path
@@ -155,7 +155,7 @@ paths:
           $ref: "#/components/responses/Error"
   /api/v1/capabilities:
     get:
-      summary: List capabilities enabled for the campus-services App
+      summary: List capabilities enabled for the current App
       responses:
         "200":
           description: Capability list
@@ -428,7 +428,7 @@ paths:
   /metrics:
     get:
       summary: Prometheus process metrics
-      description: Exposes fixed, low-cardinality operational metrics without App, Echo, Run, call, payload, prompt, or credential labels.
+      description: Exposes fixed, low-cardinality operational metrics without App, Echo, Run, call, payload, ExecutorConfig, or credential labels.
       responses:
         "200":
           description: Prometheus text exposition
@@ -526,8 +526,16 @@ components:
       required:
         - revision
         - app_id
-        - model
+        - executor_id
+        - executor_config
         - executor_timeout_seconds
+        - execution
+        - orchestration
+        - context_assembly
+        - scheduler
+        - qq_connection
+        - runtime_process
+        - governance
         - qq_enabled
         - qq_ws_url
         - qq_ws_token
@@ -544,10 +552,26 @@ components:
           minLength: 1
           maxLength: 128
           pattern: "^[a-z0-9][a-z0-9._-]{0,127}$"
-        model:
+        executor_id:
           type: string
           minLength: 1
           maxLength: 256
+        executor_config:
+          description: Opaque JSON interpreted only by the selected Executor package.
+        execution:
+          $ref: "#/components/schemas/ExecutionSettings"
+        orchestration:
+          $ref: "#/components/schemas/OrchestrationSettings"
+        context_assembly:
+          $ref: "#/components/schemas/ContextAssemblySettings"
+        scheduler:
+          $ref: "#/components/schemas/SchedulerSettings"
+        qq_connection:
+          $ref: "#/components/schemas/QQConnectionSettings"
+        runtime_process:
+          $ref: "#/components/schemas/RuntimeProcessSettings"
+        governance:
+          $ref: "#/components/schemas/GovernanceSettings"
         executor_timeout_seconds:
           type: number
           minimum: 0.1
@@ -582,7 +606,7 @@ components:
         qq_quick_replies:
           type: array
           maxItems: 64
-          description: Exact QQ Access replies handled before identity, message persistence, Echo, and Agent execution.
+          description: Exact QQ Access replies handled before identity, message persistence, Echo, and Executor execution.
           items:
             $ref: "#/components/schemas/QQQuickReply"
         qq_poke_replies:
@@ -617,7 +641,8 @@ components:
           required:
             - revision
             - app_id
-            - model
+            - executor_id
+            - executor_config
             - executor_timeout_seconds
             - qq_enabled
             - qq_ws_url
@@ -626,6 +651,13 @@ components:
             - qq_allowed_private_user_ids
             - qq_quick_replies
             - qq_poke_replies
+            - execution
+            - orchestration
+            - context_assembly
+            - scheduler
+            - qq_connection
+            - runtime_process
+            - governance
             - updated_at
           properties:
             revision:
@@ -636,8 +668,10 @@ components:
               maxLength: 128
               pattern: "^(?:[a-z0-9][a-z0-9._-]{0,127})?$"
               description: Empty only before the first local configuration is saved.
-            model:
+            executor_id:
               type: string
+            executor_config:
+              description: Opaque JSON interpreted only by the selected Executor package.
             executor_timeout_seconds:
               type: number
             qq_enabled:
@@ -662,6 +696,20 @@ components:
               type: array
               items:
                 type: string
+            execution:
+              $ref: "#/components/schemas/ExecutionSettings"
+            orchestration:
+              $ref: "#/components/schemas/OrchestrationSettings"
+            context_assembly:
+              $ref: "#/components/schemas/ContextAssemblySettings"
+            scheduler:
+              $ref: "#/components/schemas/SchedulerSettings"
+            qq_connection:
+              $ref: "#/components/schemas/QQConnectionSettings"
+            runtime_process:
+              $ref: "#/components/schemas/RuntimeProcessSettings"
+            governance:
+              $ref: "#/components/schemas/GovernanceSettings"
             updated_at:
               type: string
               format: date-time
@@ -680,6 +728,137 @@ components:
             revision:
               type: integer
               minimum: 0
+    ExecutionSettings:
+      type: object
+      additionalProperties: false
+      required: [max_steps, max_capability_calls, max_execution_units, max_output_bytes, max_cost_microusd]
+      properties:
+        max_steps:
+          type: integer
+          minimum: 1
+          maximum: 64
+        max_capability_calls:
+          type: integer
+          minimum: 1
+          maximum: 256
+        max_execution_units:
+          type: integer
+          minimum: 1
+          maximum: 1000000000
+        max_output_bytes:
+          type: integer
+          minimum: 1
+          maximum: 262144
+        max_cost_microusd:
+          type: integer
+          minimum: 0
+          maximum: 1000000000000000
+    OrchestrationSettings:
+      type: object
+      additionalProperties: false
+      required: [run_timeout_seconds, max_run_attempts, queue_capacity, max_call_depth]
+      properties:
+        run_timeout_seconds:
+          type: number
+          minimum: 1
+          maximum: 600
+        max_run_attempts:
+          type: integer
+          minimum: 1
+          maximum: 10
+        queue_capacity:
+          type: integer
+          minimum: 1
+          maximum: 10000
+        max_call_depth:
+          type: integer
+          minimum: 1
+          maximum: 64
+    ContextAssemblySettings:
+      type: object
+      additionalProperties: false
+      required: [max_messages, max_chars_per_msg, max_total_chars, max_context_bytes]
+      properties:
+        max_messages:
+          type: integer
+          minimum: 1
+          maximum: 1000
+        max_chars_per_msg:
+          type: integer
+          minimum: 1
+          maximum: 65536
+        max_total_chars:
+          type: integer
+          minimum: 1
+          maximum: 1048576
+        max_context_bytes:
+          type: integer
+          minimum: 1
+          maximum: 65536
+    SchedulerSettings:
+      type: object
+      additionalProperties: false
+      required: [workers, poll_ms, batch_size]
+      properties:
+        workers:
+          type: integer
+          minimum: 1
+          maximum: 64
+        poll_ms:
+          type: integer
+          minimum: 10
+          maximum: 60000
+        batch_size:
+          type: integer
+          minimum: 1
+          maximum: 1000
+    QQConnectionSettings:
+      type: object
+      additionalProperties: false
+      required: [dial_timeout_seconds, reconnect_delay_seconds, run_timeout_seconds, manager_stop_timeout_seconds]
+      properties:
+        dial_timeout_seconds:
+          type: number
+          minimum: 0.1
+          maximum: 120
+        reconnect_delay_seconds:
+          type: number
+          minimum: 0.1
+          maximum: 600
+        run_timeout_seconds:
+          type: number
+          minimum: 1
+          maximum: 3600
+        manager_stop_timeout_seconds:
+          type: number
+          minimum: 1
+          maximum: 120
+    RuntimeProcessSettings:
+      type: object
+      additionalProperties: false
+      required: [dial_timeout_seconds, stop_grace_seconds, terminate_grace_seconds]
+      properties:
+        dial_timeout_seconds:
+          type: number
+          minimum: 1
+          maximum: 120
+        stop_grace_seconds:
+          type: number
+          minimum: 1
+          maximum: 120
+        terminate_grace_seconds:
+          type: number
+          minimum: 1
+          maximum: 60
+    GovernanceSettings:
+      type: object
+      additionalProperties: false
+      required: [confirmation_sweep_seconds]
+      properties:
+        confirmation_sweep_seconds:
+          type: number
+          minimum: 10
+          maximum: 86400
     PlatformEvent:
       type: object
       additionalProperties: false
@@ -842,67 +1021,57 @@ components:
         - echo_id
         - attempt
         - status
-        - model
-        - model_config_version
+        - executor_id
+        - config_revision
         - protocol_version
         - max_steps
-        - max_tool_calls
-        - max_input_tokens
-        - max_output_tokens
-        - max_total_tokens
+        - max_capability_calls
+        - max_execution_units
         - max_output_bytes
         - max_cost_microusd
-        - provider_timeout_ms
-        - used_input_tokens
-        - used_output_tokens
-        - used_total_tokens
+        - execution_timeout_ms
+        - used_execution_units
         - used_cost_microusd
-        - used_provider_retries
+        - used_retries
         - deadline
         - available_at
-        - last_agent_sequence
+        - last_executor_sequence
         - created_at
       properties:
         run_id:
           type: string
         run_group_id:
           type: string
-          description: Stable identity shared by retry attempts of one root execution; a child Run has its own group.
+          description: Stable identity shared by retry attempts of one logical execution group.
         app_id:
           type: string
         echo_id:
           type: string
         parent_run_id:
           type: string
-          description: Present only for the single governed child Run level.
+          description: Optional causal parent Run identity supplied by a governed executor flow.
         origin_call_id:
           type: string
-          description: Parent CapabilityCall identity that created this child Run.
+          description: Optional originating CapabilityCall identity in a causal execution chain.
         attempt:
           type: integer
           minimum: 1
         status:
           type: string
           enum: [queued, running, succeeded, failed, cancelled, timed_out]
-        model:
+        executor_id:
           type: string
-        model_config_version:
+        config_revision:
           type: string
         protocol_version:
           type: string
         max_steps:
           type: integer
-          minimum: 0
-        max_tool_calls:
+          minimum: 1
+        max_capability_calls:
           type: integer
           minimum: 1
-        max_input_tokens:
-          type: integer
-          minimum: 1
-        max_output_tokens:
-          type: integer
-          minimum: 1
-        max_total_tokens:
+        max_execution_units:
           type: integer
           minimum: 1
         max_output_bytes:
@@ -911,22 +1080,16 @@ components:
         max_cost_microusd:
           type: integer
           minimum: 0
-        provider_timeout_ms:
+        execution_timeout_ms:
           type: integer
           minimum: 100
-        used_input_tokens:
-          type: integer
-          minimum: 0
-        used_output_tokens:
-          type: integer
-          minimum: 0
-        used_total_tokens:
+        used_execution_units:
           type: integer
           minimum: 0
         used_cost_microusd:
           type: integer
           minimum: 0
-        used_provider_retries:
+        used_retries:
           type: integer
           minimum: 0
           maximum: 320
@@ -940,14 +1103,14 @@ components:
         lease_expires_at:
           type: string
           format: date-time
-        last_agent_sequence:
+        last_executor_sequence:
           type: integer
           minimum: 0
         capability_scope:
           type: array
           maxItems: 64
           uniqueItems: true
-          description: Persisted acceptance-time Capability ceiling; child Runs contain a further narrowed subset and never contain run.create_child.
+          description: Persisted acceptance-time Capability ceiling for this Run; later internal calls can only narrow it.
           items:
             type: string
         error_code:
@@ -958,7 +1121,7 @@ components:
           description: Safe localized error message.
         result:
           type: string
-          description: Completed user-visible Run output; task text, prompts, reasoning, and Tool arguments are never included.
+          description: Completed user-visible Run output; task text, ExecutorConfig, reasoning, and Tool arguments are never included.
         created_at:
           type: string
           format: date-time
