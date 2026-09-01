@@ -5,6 +5,7 @@ package loader_test
 import (
 	"context"
 	"encoding/json"
+	"flag"
 	"net"
 	"os"
 	"path/filepath"
@@ -21,25 +22,24 @@ import (
 	"google.golang.org/grpc"
 )
 
-const (
-	helperEnabled   = "AILUO_RUNTIME_HELPER"
-	helperSocket    = "AILUO_RUNTIME_SOCKET"
-	helperMode      = "AILUO_RUNTIME_MODE"
-	helperWriteFile = "AILUO_RUNTIME_WRITE_FILE"
+var (
+	helperSocket     = flag.String("ailuo-test-helper-socket", "", "测试运行时 Unix socket")
+	helperWriteFile  = flag.String("ailuo-test-helper-write-file", "", "测试运行时写入目标")
+	helperIgnoreStop = flag.Bool("ailuo-test-helper-ignore-stop", false, "测试运行时是否忽略停止")
 )
 
 type processHelperRuntime struct {
 	runtimev1.UnimplementedRuntimeHostServer
 
-	mode       string
 	stop       chan struct{}
+	writeFile  string
 	ignoreStop bool
 	stopOnce   sync.Once
 }
 
 func (s *processHelperRuntime) Describe(_ context.Context, request *runtimev1.DescribeRequest) (*runtimev1.RuntimeDescription, error) {
 	return &runtimev1.RuntimeDescription{
-		RuntimeId: request.Identity.RuntimeId, Version: request.Identity.Version, Mode: s.mode,
+		RuntimeId: request.Identity.RuntimeId, Version: request.Identity.Version, Mode: loader.ModeIsolated,
 		SupportedProtocolVersions: []string{loader.RuntimeHostProtocolVersion},
 	}, nil
 }
@@ -54,7 +54,7 @@ func (s *processHelperRuntime) Health(_ context.Context, request *runtimev1.Life
 
 func (s *processHelperRuntime) Invoke(_ context.Context, request *runtimev1.InvokeRequest) (*runtimev1.InvokeResponse, error) {
 	// 资源限额验证模式：向工作目录写入 8 KiB 文件，写失败（如 RLIMIT_FSIZE 生效）则报告失败。
-	if target := os.Getenv(helperWriteFile); target != "" {
+	if target := s.writeFile; target != "" {
 		if err := os.WriteFile(target, make([]byte, 8<<10), 0o600); err != nil {
 			return &runtimev1.InvokeResponse{
 				Identity: cloneIdentity(request.Identity), Success: false, ErrorCode: "file_write_failed",
@@ -82,10 +82,10 @@ func (s *processHelperRuntime) Stop(_ context.Context, request *runtimev1.Lifecy
 }
 
 func TestIsolatedRuntimeHelper(t *testing.T) {
-	if os.Getenv(helperEnabled) != "1" {
+	if *helperSocket == "" {
 		return
 	}
-	socketPath := os.Getenv(helperSocket)
+	socketPath := *helperSocket
 	listener, err := net.Listen("unix", socketPath)
 	if err != nil {
 		t.Fatal(err)
@@ -94,7 +94,7 @@ func TestIsolatedRuntimeHelper(t *testing.T) {
 		t.Fatal(err)
 	}
 	implementation := &processHelperRuntime{
-		mode: os.Getenv(helperMode), stop: make(chan struct{}), ignoreStop: os.Getenv("AILUO_RUNTIME_IGNORE_STOP") == "1",
+		stop: make(chan struct{}), writeFile: *helperWriteFile, ignoreStop: *helperIgnoreStop,
 	}
 	server := grpc.NewServer(grpc.MaxRecvMsgSize(512 << 10))
 	runtimev1.RegisterRuntimeHostServer(server, implementation)
@@ -117,9 +117,9 @@ func TestProcessHostRunsOutsideKernelAndShutsDownGracefully(t *testing.T) {
 	workDir := t.TempDir()
 	socketPath := filepath.Join(workDir, "runtime.sock")
 	spec := packagecontract.ProcessSpec{
-		Path: executable, Args: []string{"-test.run=^TestIsolatedRuntimeHelper$"},
-		Env: []string{
-			helperEnabled + "=1", helperSocket + "=" + socketPath, helperMode + "=" + loader.ModeIsolated,
+		Path: executable, Args: []string{
+			"-test.run=^TestIsolatedRuntimeHelper$",
+			"-ailuo-test-helper-socket=" + socketPath,
 		},
 		WorkDir: workDir, Address: "unix:" + socketPath,
 	}
@@ -189,10 +189,10 @@ func TestProcessHostEnforcesFileSizeLimit(t *testing.T) {
 	socketPath := filepath.Join(workDir, "runtime.sock")
 	writeTarget := filepath.Join(workDir, "out.bin")
 	spec := packagecontract.ProcessSpec{
-		Path: executable, Args: []string{"-test.run=^TestIsolatedRuntimeHelper$"},
-		Env: []string{
-			helperEnabled + "=1", helperSocket + "=" + socketPath, helperMode + "=" + loader.ModeIsolated,
-			helperWriteFile + "=" + writeTarget,
+		Path: executable, Args: []string{
+			"-test.run=^TestIsolatedRuntimeHelper$",
+			"-ailuo-test-helper-socket=" + socketPath,
+			"-ailuo-test-helper-write-file=" + writeTarget,
 		},
 		WorkDir: workDir, Address: "unix:" + socketPath,
 		// RLIMIT_FSIZE=1 KiB：helper 写入 8 KiB 必须被限额阻止。
@@ -244,10 +244,10 @@ func TestProcessHostForcesBoundedExitAfterStopGrace(t *testing.T) {
 	workDir := t.TempDir()
 	socketPath := filepath.Join(workDir, "runtime.sock")
 	spec := packagecontract.ProcessSpec{
-		Path: executable, Args: []string{"-test.run=^TestIsolatedRuntimeHelper$"},
-		Env: []string{
-			helperEnabled + "=1", helperSocket + "=" + socketPath, helperMode + "=" + loader.ModeIsolated,
-			"AILUO_RUNTIME_IGNORE_STOP=1",
+		Path: executable, Args: []string{
+			"-test.run=^TestIsolatedRuntimeHelper$",
+			"-ailuo-test-helper-socket=" + socketPath,
+			"-ailuo-test-helper-ignore-stop=true",
 		},
 		WorkDir: workDir, Address: "unix:" + socketPath,
 	}
@@ -296,21 +296,6 @@ func TestProcessHostRejectsUnsafeLaunchSpecifications(t *testing.T) {
 		func() packagecontract.ProcessSpec { value := base; value.Path = "relative"; return value }(),
 		func() packagecontract.ProcessSpec { value := base; value.WorkDir = "relative"; return value }(),
 		func() packagecontract.ProcessSpec { value := base; value.Address = "192.0.2.1:9000"; return value }(),
-		func() packagecontract.ProcessSpec {
-			value := base
-			value.Env = []string{"API_TOKEN=private"}
-			return value
-		}(),
-		func() packagecontract.ProcessSpec {
-			value := base
-			value.Env = []string{"LD_PRELOAD=/tmp/inject.so"}
-			return value
-		}(),
-		func() packagecontract.ProcessSpec {
-			value := base
-			value.Env = []string{"SAFE=1", "SAFE=2"}
-			return value
-		}(),
 		func() packagecontract.ProcessSpec {
 			value := base
 			value.Args = []string{"bad\x00argument"}

@@ -167,18 +167,12 @@ func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 		t.Fatalf("解析已安装 Executor 进程规格: %v", err)
 	}
 	ctx, cancel := context.WithCancel(t.Context())
-	deploymentSpec := executorSpec
 	// 这些变量属于 Agent 自己的 Deployment；Core 的 ProcessHost 只连接
-	// 安装 lock 中的空环境，不把模型配置注入包进程。
+	// 安装 lock 中的进程，不把模型配置注入包进程。
 	secretPath := filepath.Join(t.TempDir(), "model-key")
 	if err := os.WriteFile(secretPath, []byte("test-key\n"), 0o600); err != nil {
 		t.Fatalf("写入测试模型密钥: %v", err)
 	}
-	deploymentSpec.Env = append(os.Environ(),
-		"AILUO_MODEL_NAME=test-model",
-		"AILUO_MODEL_API_KEY_FILE="+secretPath,
-		"AILUO_MODEL_BASE_URL="+modelServer.URL+"/v1",
-	)
 
 	store, err := sqlite.Open(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
@@ -189,17 +183,25 @@ func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 	defer store.Close()
 	defer cancel()
 	logs := &syncBuffer{}
-	// Executor 由自己的 Deployment 按安装 lock 启动；Core 只负责连接和治理。
-	executorProcess, err := loader.StartProcess(ctx, deploymentSpec, logs, logs)
-	if err != nil {
+	// Executor 由自己的 Deployment 启动；Deployment 只提供自身所需配置，
+	// Core 只负责按安装 lock 连接和治理。
+	deploymentCommand := exec.CommandContext(ctx, executorSpec.Path, executorSpec.Args...)
+	deploymentCommand.Dir = executorSpec.WorkDir
+	deploymentCommand.Env = []string{
+		"AILUO_MODEL_NAME=test-model",
+		"AILUO_MODEL_API_KEY_FILE=" + secretPath,
+		"AILUO_MODEL_BASE_URL=" + modelServer.URL + "/v1",
+	}
+	deploymentCommand.Stdout = logs
+	deploymentCommand.Stderr = logs
+	if err := deploymentCommand.Start(); err != nil {
 		t.Fatalf("启动已安装 Executor 包: %v", err)
 	}
 	defer func() {
-		cleanupContext, cleanupCancel := context.WithTimeout(context.Background(), 6*time.Second)
-		defer cleanupCancel()
-		if err := executorProcess.Reap(cleanupContext, 3*time.Second, 2*time.Second); err != nil {
-			t.Errorf("回收 Executor 包进程: %v", err)
+		if deploymentCommand.Process != nil {
+			_ = deploymentCommand.Process.Kill()
 		}
+		_ = deploymentCommand.Wait()
 	}()
 
 	executorHost, err := loader.NewProcessHost(loader.ProcessHostConfig{

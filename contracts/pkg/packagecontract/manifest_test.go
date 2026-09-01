@@ -273,6 +273,13 @@ func TestValidateProcessSpecRejectsNonLoopback(t *testing.T) {
 	}
 }
 
+func TestDecodeStrictJSONRejectsProcessEnvironment(t *testing.T) {
+	var spec packagecontract.ProcessSpec
+	if err := packagecontract.DecodeStrictJSON([]byte(`{"env":[]}`), &spec); err == nil {
+		t.Fatal("DecodeStrictJSON accepted removed process environment field")
+	}
+}
+
 func TestLocalRuntimeAddressPolicy(t *testing.T) {
 	for _, address := range []string{"127.0.0.1:9000", "[::1]:9000", "localhost:9000", "unix:/runtime.sock"} {
 		if !packagecontract.IsLocalRuntimeAddress(address) {
