@@ -20,6 +20,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/idempotency"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/identity"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite/sqlitetest"
 )
 
 // fakeOneBot 是 OneBot v11 WebSocket 服务端测试桩：记录收到的动作，可注入事件。
@@ -29,6 +30,25 @@ type fakeOneBot struct {
 	conns      chan *websocket.Conn
 	received   chan map[string]any
 	upgrader   websocket.Upgrader
+}
+
+// startQQAdapter 启动测试适配器，并在测试结束前等待所有内部 worker 退出。
+func startQQAdapter(t *testing.T, adapter *Adapter) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = adapter.Run(ctx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatal("adapter did not stop")
+		}
+	})
 }
 
 func newFakeOneBot(t *testing.T) *fakeOneBot {
@@ -185,7 +205,7 @@ func (f *qqFakeOrchestrator) CreateIdempotent(ctx context.Context, request kerne
 }
 
 func TestNewRejectsInvalidBotQQID(t *testing.T) {
-	store := newQQTestStore(t, "qq-config.db")
+	store := sqlitetest.NewMemoryStore(t)
 	hub := newQQTestHub(t, store, stubResolver{user: "user-1"})
 	for _, botQQID := range []string{"", " 2647414417", "02647414417", "-1", "all", "0"} {
 		t.Run(botQQID, func(t *testing.T) {
@@ -204,7 +224,7 @@ func TestNewRejectsInvalidBotQQID(t *testing.T) {
 // 幂等 Echo → 订阅终态 → send_group_msg 回发。事件经 store 重放与实时
 // 发布双路径送达，消除订阅时序竞态。
 func TestQQAdapterIntakesAndReplies(t *testing.T) {
-	store := newQQTestStore(t, "qq.db")
+	store := sqlitetest.NewMemoryStore(t)
 	bot := newFakeOneBot(t)
 	hub := newQQTestHub(t, store, stubResolver{user: "user-1"})
 	events := access.NewEventHub()
@@ -217,9 +237,8 @@ func TestQQAdapterIntakesAndReplies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go func() { _ = adapter.Run(ctx) }()
+	startQQAdapter(t, adapter)
+	ctx := context.Background()
 
 	select {
 	case header := <-bot.authHeader:
@@ -287,7 +306,7 @@ func TestTerminalReplyUsesFallbackForNonRenderableCompletion(t *testing.T) {
 }
 
 func TestQQAdapterQuickReplySkipsExecutorAndDoesNotMentionSender(t *testing.T) {
-	store := newQQTestStore(t, "qq-quick-reply.db")
+	store := sqlitetest.NewMemoryStore(t)
 	bot := newFakeOneBot(t)
 	hub := newQQTestHub(t, store, stubResolver{user: "user-1"})
 	orchestrator := &qqFakeOrchestrator{store: store, created: make(chan struct{})}
@@ -299,9 +318,7 @@ func TestQQAdapterQuickReplySkipsExecutorAndDoesNotMentionSender(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go func() { _ = adapter.Run(ctx) }()
+	startQQAdapter(t, adapter)
 	select {
 	case <-bot.authHeader:
 	case <-time.After(5 * time.Second):
@@ -343,7 +360,7 @@ func assertGroupReply(t *testing.T, raw any, expectedUserID, expectedText string
 // TestQQAdapterProcessesEchoesConcurrently 验证 WebSocket 读取循环不会等待单个
 // Echo 终态，且同时处理的 Echo 数量受固定 worker 上限约束。
 func TestQQAdapterProcessesEchoesConcurrently(t *testing.T) {
-	store := newQQTestStore(t, "qq-concurrent.db")
+	store := sqlitetest.NewMemoryStore(t)
 	bot := newFakeOneBot(t)
 	hub := newQQTestHub(t, store, stubResolver{user: "user-1"})
 	orchestrator := &blockingEchoCreator{
@@ -358,20 +375,7 @@ func TestQQAdapterProcessesEchoesConcurrently(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		_ = adapter.Run(ctx)
-	}()
-	t.Cleanup(func() {
-		cancel()
-		select {
-		case <-done:
-		case <-time.After(5 * time.Second):
-			t.Fatal("adapter did not stop")
-		}
-	})
+	startQQAdapter(t, adapter)
 
 	select {
 	case <-bot.authHeader:
@@ -406,7 +410,7 @@ func TestQQAdapterProcessesEchoesConcurrently(t *testing.T) {
 // TestQQAdapterRepliesPublicErrorOnUnboundIdentity 验证未绑定身份的消息被
 // 安全拒绝并回发公共错误，不泄露内部细节。
 func TestQQAdapterRepliesPublicErrorOnUnboundIdentity(t *testing.T) {
-	store := newQQTestStore(t, "qq-unbound.db")
+	store := sqlitetest.NewMemoryStore(t)
 	bot := newFakeOneBot(t)
 	hub := newQQTestHub(t, store, stubResolver{err: identity.ErrNotFound})
 	adapter, err := New(Config{
@@ -417,9 +421,7 @@ func TestQQAdapterRepliesPublicErrorOnUnboundIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go func() { _ = adapter.Run(ctx) }()
+	startQQAdapter(t, adapter)
 
 	select {
 	case <-bot.authHeader:

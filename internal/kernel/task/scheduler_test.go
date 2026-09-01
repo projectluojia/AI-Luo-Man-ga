@@ -745,19 +745,28 @@ func TestSchedulerGracefulShutdownPersistsRunningTask(t *testing.T) {
 		t.Fatalf("关闭后任务状态=%q err=%v，期望保持 running", stored.Status, err)
 	}
 	// 模拟进程重启：租约到期后由新调度器确定性恢复并再次执行。
-	close(release)
 	clock.Advance(10 * time.Minute)
 	restarted := NewScheduler(store, registry, schedulerConfig(clock))
 	restartCancel := startScheduler(t, restarted)
 	defer restartCancel()
 	defer stopScheduler(t, restarted)
-	waitForTask(t, store, value.AppID, value.TaskID, func(item Task) bool {
-		return item.Status == StatusRetryScheduled
+	recovered := waitForTask(t, store, value.AppID, value.TaskID, func(item Task) bool {
+		return item.Status == StatusRetryScheduled && item.Attempt == 2
 	}, 5*time.Second)
+	if recovered.ErrorClass != ErrorClassNone {
+		t.Fatalf("重启恢复任务=%#v，重试安排不应携带错误分类", recovered)
+	}
 	clock.Advance(time.Second)
 	waitForTask(t, store, value.AppID, value.TaskID, func(item Task) bool {
-		return item.Status == StatusSucceeded
+		return item.Status == StatusRunning && item.Attempt == 2
 	}, 5*time.Second)
+	close(release)
+	recovered = waitForTask(t, store, value.AppID, value.TaskID, func(item Task) bool {
+		return item.Status == StatusSucceeded && item.Attempt == 2
+	}, 5*time.Second)
+	if recovered.Attempt != 2 {
+		t.Fatalf("重启恢复后任务=%#v，期望 attempt=2", recovered)
+	}
 	if got := executions.Load(); got != 2 {
 		t.Fatalf("重启恢复后执行次数=%d，期望 2（崩溃前 1 次 + 恢复后 1 次）", got)
 	}
