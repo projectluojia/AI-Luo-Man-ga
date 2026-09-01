@@ -908,19 +908,15 @@ func TestShutdownWaitsForAdmittedCreationBeforeCancellingRun(t *testing.T) {
 
 func newTestServer(t *testing.T, block bool) (http.Handler, *sqlite.Store) {
 	t.Helper()
-	var store *sqlite.Store
-	if block {
-		store = newWebFileStore(t, "test.db")
-	} else {
-		store = sqlitetest.NewMemoryStore(t)
-	}
+	store := newWebFileStore(t, "test.db")
 	reg := registry.New()
 	policy := runtimetest.NewStaticAppPolicy()
 	backend := &fakeOrchestrator{store: store, block: block}
 	return newAuthenticatedServer(t, context.Background(), backend, store, store, reg, policy, "campus-services", newTestHub(store, "campus-services")).Handler(), store
 }
 
-// newWebFileStore 为需要验证取消与关闭时序的测试保留文件态存储。
+// newWebFileStore 为启动持久 Scheduler 的测试保留文件态存储；内存 SQLite
+// 在取消上下文后可能丢失连接级 Schema。
 func newWebFileStore(t *testing.T, name string) *sqlite.Store {
 	t.Helper()
 	dir := t.TempDir()
