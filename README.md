@@ -98,7 +98,7 @@ Go 内核和 Executor 包统一输出中文结构化日志。控制台格式优�
 - `AILUO_LOG_SOURCE`：必须保持 `false`；源码绝对路径禁止进入日志，启用时拒绝启动。
 - `AILUO_LOG_MAX_VALUE_LENGTH`：单个字符串字段最大字符数，默认 `4096`。
 
-Web 请求会验证并继承 W3C `traceparent`（兼容合法的 32 位十六进制 `X-Trace-ID`），为 HTTP 与 Executor Run 创建 Span，再通过 Protobuf 把追踪上下文传给执行者。日志只记录标识、数量、长度、状态、稳定错误类别和耗时，不记录原始错误正文、用户或模型消息、Tool 参数、请求体、密钥或凭据。完整规范见 `docs/日志与可观测性设计.md`。
+Web 请求会验证并继承 W3C `traceparent`；缺失或无效时生成新的 trace root，为 HTTP 与 Executor Run 创建 Span，再通过 Protobuf 把追踪上下文传给执行者。日志只记录标识、数量、长度、状态、稳定错误类别和耗时，不记录原始错误正文、用户或模型消息、Tool 参数、请求体、密钥或凭据。完整规范见 `docs/日志与可观测性设计.md`。
 
 ## 运维
 
