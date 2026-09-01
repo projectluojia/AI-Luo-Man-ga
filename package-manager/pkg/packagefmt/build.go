@@ -55,11 +55,20 @@ const BuildToolPythonUV = "python-uv"
 // AssemblyScript 编译器）；未知工具 fail-closed。源码目录相对包目录解析，
 // 校验不逃逸包目录。
 func Build(ctx context.Context, sourceDir string, manifest packagecontract.Manifest, specs []BuildSpec) error {
-	builtPythonSources := make(map[string]struct{})
+	plannedComponents := make(map[string]struct{})
 	for _, spec := range specs {
-		if err := validateBuildTargets(manifest, spec); err != nil {
+		switch spec.Tool {
+		case BuildToolGoWasm, BuildToolPythonUV, BuildToolAssemblyScript:
+		default:
+			return fmt.Errorf("%w: %q（支持：go-wasm、python-uv、ts-as）", ErrBuildUnsupported, spec.Tool)
+		}
+		if err := validateBuildTargets(manifest, spec, plannedComponents); err != nil {
 			return err
 		}
+	}
+
+	builtPythonSources := make(map[string]struct{})
+	for _, spec := range specs {
 		switch spec.Tool {
 		case BuildToolGoWasm:
 			if err := buildGoWasm(ctx, sourceDir, manifest, spec); err != nil {
@@ -89,19 +98,30 @@ func Build(ctx context.Context, sourceDir string, manifest packagecontract.Manif
 	return nil
 }
 
-func validateBuildTargets(manifest packagecontract.Manifest, spec BuildSpec) error {
-	seen := make(map[string]struct{}, len(spec.Components))
-	for _, componentID := range spec.Components {
+func validateBuildTargets(manifest packagecontract.Manifest, spec BuildSpec, planned map[string]struct{}) error {
+	targets := spec.Components
+	if len(targets) == 0 {
+		targetMode := packagecontract.ModeHosted
+		if spec.Tool == BuildToolPythonUV {
+			targetMode = packagecontract.ModeIsolated
+		}
+		for _, component := range manifest.Components {
+			if component.Mode == targetMode {
+				targets = append(targets, component.ID)
+			}
+		}
+	}
+	for _, componentID := range targets {
 		component, ok := packagecontract.FindComponent(manifest, componentID)
 		if !ok ||
 			(spec.Tool == BuildToolPythonUV && component.Mode != packagecontract.ModeIsolated) ||
 			(spec.Tool != BuildToolPythonUV && component.Mode != packagecontract.ModeHosted) {
 			return fmt.Errorf("%w: 构建计划引用了不适用的组件 %q", ErrBuildFailed, componentID)
 		}
-		if _, duplicate := seen[componentID]; duplicate {
+		if _, duplicate := planned[componentID]; duplicate {
 			return fmt.Errorf("%w: 构建计划重复引用组件 %q", ErrBuildFailed, componentID)
 		}
-		seen[componentID] = struct{}{}
+		planned[componentID] = struct{}{}
 	}
 	return nil
 }
