@@ -22,6 +22,27 @@ import (
 // packageio 负责。
 type InstalledRecord = packageio.InstalledRecord
 
+// Inspect 校验一个已打包源的 manifest 与组件工件，但不修改安装根目录。
+// 项目解析器用它读取远端 tarball 的依赖闭包；最终安装仍必须再次经过 Install
+// 的完整原子发布路径。
+func Inspect(ctx context.Context, sourcePath string) (packagecontract.Manifest, []byte, error) {
+	sourceDir, cleanup, err := unpackSource(sourcePath)
+	if err != nil {
+		return packagecontract.Manifest{}, nil, err
+	}
+	if cleanup != nil {
+		defer cleanup()
+	}
+	source, err := readManifest(sourceDir)
+	if err != nil {
+		return packagecontract.Manifest{}, nil, err
+	}
+	if _, err := readSourceArtifacts(ctx, sourceDir, source.Manifest); err != nil {
+		return packagecontract.Manifest{}, nil, err
+	}
+	return source.Manifest, source.manifestBytes, nil
+}
+
 // Install 从源包目录或发布 tarball 安装到安装根目录（以整个 Package 为单位）：
 // 校验源（manifest + 每组件 entrypoint 工件）、解析依赖、原子发布
 // manifest+lock+全部组件工件，并回读验证。目标已有同 ID 且版本不同时替换；
