@@ -2,17 +2,14 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
-	"io/fs"
 	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"syscall"
 	"time"
@@ -24,10 +21,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite"
-	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packagecontract"
-	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packagefmt"
-	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
-	"github.com/projectluojia/AI-Luo-Man-ga/pkg/sdkgen"
+	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/packagecontract"
 	"google.golang.org/grpc"
 )
 
@@ -159,297 +153,9 @@ func runMaintenanceCommand(arguments []string, output io.Writer) (bool, error) {
 		}
 		_, err = fmt.Fprintf(output, "身份解绑完成：app=%s 平台=%s space=%s platform_user=%s\n", *appID, *platform, *space, *platformUser)
 		return true, err
-	case "install", "upgrade", "uninstall", "list", "pack", "publish", "sdk-go", "sdk-py", "sdk-ts":
-		return runPackageCommand(ctx, arguments, output)
 	default:
 		return true, fmt.Errorf("configuration error: unknown command")
 	}
-}
-
-// runPackageCommand 执行包管理 CLI：install 支持本地目录/tarball/GitHub
-// Release 源（owner/repo[@约束]），upgrade/uninstall/list/pack/publish 见各分支。
-func runPackageCommand(parent context.Context, arguments []string, output io.Writer) (bool, error) {
-	command := arguments[0]
-	flags := flag.NewFlagSet(command, flag.ContinueOnError)
-	flags.SetOutput(io.Discard)
-	root := flags.String("root", "", "安装根目录（默认 AILUO_RUNTIME_INSTALL_ROOT，再默认用户配置目录 ailuo/runtime）")
-	repo := flags.String("repo", "", "GitHub 仓库（owner/repo），publish 使用")
-	version := flags.String("version", "", "零声明包自动生成的 semver 版本")
-	if err := flags.Parse(arguments[1:]); err != nil {
-		return true, fmt.Errorf("configuration error: %s", err)
-	}
-	if *root == "" {
-		*root = os.Getenv("AILUO_RUNTIME_INSTALL_ROOT")
-	}
-	if *root == "" {
-		*root = packmgr.DefaultInstallRoot()
-	}
-	if *root == "" && command != "pack" && command != "publish" && command != "sdk-go" && command != "sdk-py" && command != "sdk-ts" {
-		return true, fmt.Errorf("configuration error: %s requires --root 或 AILUO_RUNTIME_INSTALL_ROOT", command)
-	}
-	ctx, cancel := context.WithTimeout(parent, 2*time.Minute)
-	defer cancel()
-	switch command {
-	case "install":
-		if flags.NArg() != 1 {
-			return true, fmt.Errorf("configuration error: install requires exactly one source package directory")
-		}
-		source := flags.Arg(0)
-		owner, name, constraint, isRegistry := splitRegistryRef(source)
-		var record packmgr.InstalledRecord
-		var err error
-		_, sourceErr := os.Stat(source)
-		if errors.Is(sourceErr, fs.ErrNotExist) && isRegistry {
-			record, err = packmgr.InstallFromRelease(ctx, *root, packmgr.NewGitHubClient(), owner, name, constraint)
-		} else if sourceErr != nil {
-			return true, sourceErr
-		} else {
-			record, err = packmgr.Install(ctx, *root, source)
-		}
-		if err != nil {
-			return true, err
-		}
-		if _, err := fmt.Fprintf(output, "已安装 %s@%s（%s）\n", record.Manifest.ID, record.Manifest.Version, componentModes(record.Manifest)); err != nil {
-			return true, err
-		}
-		return true, nil
-	case "upgrade":
-		if flags.NArg() != 2 {
-			return true, fmt.Errorf("configuration error: upgrade requires package id and source package directory")
-		}
-		record, err := packmgr.Upgrade(ctx, *root, flags.Arg(0), flags.Arg(1))
-		if err != nil {
-			return true, err
-		}
-		_, err = fmt.Fprintf(output, "已升级 %s@%s（%s）\n", record.Manifest.ID, record.Manifest.Version, componentModes(record.Manifest))
-		return true, err
-	case "uninstall":
-		if flags.NArg() != 1 {
-			return true, fmt.Errorf("configuration error: uninstall requires exactly one package id")
-		}
-		if err := packmgr.Uninstall(ctx, *root, flags.Arg(0)); err != nil {
-			return true, err
-		}
-		if _, err := fmt.Fprintf(output, "已卸载 %s\n", flags.Arg(0)); err != nil {
-			return true, err
-		}
-		return true, nil
-	case "pack":
-		if flags.NArg() < 1 || flags.NArg() > 2 {
-			return true, fmt.Errorf("configuration error: pack requires source package directory [and optional output directory]")
-		}
-		// 输出目录只由位置参数决定：--root 是安装根，拿它当打包输出目录会把
-		// tarball 丢进已安装包的目录树里。
-		outputDir := "."
-		if flags.NArg() == 2 {
-			outputDir = flags.Arg(1)
-		}
-		manifest, manifestBytes, err := resolveSource(ctx, flags.Arg(0), *version)
-		if err != nil {
-			return true, err
-		}
-		tarballPath, err := packmgr.PackFromSource(ctx, flags.Arg(0), outputDir, manifest, manifestBytes)
-		if err != nil {
-			return true, err
-		}
-		if _, err := fmt.Fprintf(output, "已打包 %s\n", tarballPath); err != nil {
-			return true, err
-		}
-		return true, nil
-	case "publish":
-		if flags.NArg() != 1 {
-			return true, fmt.Errorf("configuration error: publish requires exactly one source package directory or .tgz")
-		}
-		owner, name, _, ok := splitRegistryRef(*repo)
-		if !ok || owner == "" || name == "" {
-			return true, fmt.Errorf("configuration error: publish requires --repo owner/repo")
-		}
-		client := packmgr.NewGitHubClient()
-		var htmlURL string
-		var err error
-		if strings.HasSuffix(strings.ToLower(flags.Arg(0)), ".tgz") {
-			htmlURL, err = client.PublishTarball(ctx, owner, name, flags.Arg(0))
-		} else {
-			manifest, manifestBytes, resolveErr := resolveSource(ctx, flags.Arg(0), *version)
-			if resolveErr != nil {
-				return true, resolveErr
-			}
-			htmlURL, err = client.PublishFromSource(ctx, owner, name, flags.Arg(0), manifest, manifestBytes)
-		}
-		if err != nil {
-			return true, err
-		}
-		if _, err := fmt.Fprintf(output, "已发布 %s\n", htmlURL); err != nil {
-			return true, err
-		}
-		return true, nil
-	case "sdk-go", "sdk-py", "sdk-ts":
-		if flags.NArg() < 1 || flags.NArg() > 2 {
-			return true, fmt.Errorf("configuration error: %s requires source package directory [and optional output directory]", command)
-		}
-		language := sdkgen.LanguageGo
-		if command == "sdk-py" {
-			language = sdkgen.LanguagePython
-		}
-		if command == "sdk-ts" {
-			language = sdkgen.LanguageTypeScript
-		}
-		packageID, extensions, err := resolveSDKSource(ctx, flags.Arg(0))
-		if err != nil {
-			return true, err
-		}
-		files, err := sdkgen.Generate(extensions, sdkgen.Options{Language: language, PackageID: packageID})
-		if err != nil {
-			return true, err
-		}
-		outputDir := "."
-		if flags.NArg() == 2 {
-			outputDir = flags.Arg(1)
-		}
-		for _, f := range files {
-			path := filepath.Join(outputDir, f.Path)
-			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-				return true, err
-			}
-			if err := os.WriteFile(path, f.Code, 0o644); err != nil {
-				return true, err
-			}
-		}
-		if _, err := fmt.Fprintf(output, "已生成 SDK：%d 个文件到 %s\n", len(files), outputDir); err != nil {
-			return true, err
-		}
-		return true, nil
-	default: // list
-		if flags.NArg() != 0 {
-			return true, fmt.Errorf("configuration error: list takes no positional arguments")
-		}
-		records, err := packmgr.ListInstalled(ctx, *root)
-		if err != nil {
-			return true, err
-		}
-		if len(records) == 0 {
-			if _, err := fmt.Fprintln(output, "安装根目录为空"); err != nil {
-				return true, err
-			}
-			return true, nil
-		}
-		for _, record := range records {
-			pin := ""
-			if record.Manifest.Pin {
-				pin = " [pin]"
-			}
-			if _, err := fmt.Fprintf(output, "%s@%s\t%s%s\n", record.Manifest.ID, record.Manifest.Version, componentModes(record.Manifest), pin); err != nil {
-				return true, err
-			}
-		}
-		return true, nil
-	}
-}
-
-// componentModes 汇总包内组件的运行形态：单组件直接给出 mode，多组件按形态计数。
-// 包不是"一种模式"（每个组件各有 mode），打印 Components[0].Mode 会把混合包说成
-// 单一形态。
-func componentModes(manifest packagecontract.Manifest) string {
-	if len(manifest.Components) == 1 {
-		return manifest.Components[0].Mode
-	}
-	counts := make(map[string]int, 2)
-	for _, component := range manifest.Components {
-		counts[component.Mode]++
-	}
-	parts := make([]string, 0, len(counts))
-	for _, mode := range []string{packagecontract.ModeHosted, packagecontract.ModeIsolated} {
-		if counts[mode] > 0 {
-			parts = append(parts, fmt.Sprintf("%s×%d", mode, counts[mode]))
-		}
-	}
-	return strings.Join(parts, "+")
-}
-
-// registryRefPattern 匹配 GitHub Release 源：owner/repo[@约束]。
-var registryRefPattern = regexp.MustCompile(`^([A-Za-z0-9._-]+)/([A-Za-z0-9._-]+)(?:@(.+))?$`)
-
-// splitRegistryRef 解析 owner/repo[@constraint] 注册表引用；本地存在的路径
-// 由调用方先排除（本地路径优先）。
-func splitRegistryRef(source string) (owner, repo, constraint string, ok bool) {
-	match := registryRefPattern.FindStringSubmatch(source)
-	if match == nil {
-		return "", "", "", false
-	}
-	return match[1], match[2], match[3], true
-}
-
-// resolveSource 解析源包目录：优先 ailuo.toml（显式声明，含宿主函数/存储），
-// 无则从源码自动提取清单并构建（作者零声明，纯计算包）。清单声明 [build] 时
-// 先执行构建再返回（pack/publish 共用，构建失败即报错，不打包残缺工件）。
-func resolveSource(ctx context.Context, sourceDir, version string) (manifest packagecontract.Manifest, manifestBytes []byte, err error) {
-	path := packagefmt.SourcePath(sourceDir)
-	_, statErr := os.Stat(path)
-	if errors.Is(statErr, fs.ErrNotExist) {
-		if version == "" {
-			return packagecontract.Manifest{}, nil, fmt.Errorf("配置错误：零声明包必须通过 --version 提供版本")
-		}
-		// 无 ailuo.toml：从源码自动提取并构建（作者零声明）。
-		capabilities, buildTool, extractErr := packagefmt.AutoExtract(ctx, sourceDir)
-		if extractErr != nil {
-			return packagecontract.Manifest{}, nil, extractErr
-		}
-		absolute, absErr := filepath.Abs(sourceDir)
-		if absErr != nil {
-			return packagecontract.Manifest{}, nil, absErr
-		}
-		manifest, manifestBytes, err = packagefmt.ManifestFromCapabilities(filepath.Base(absolute), version, capabilities)
-		if err != nil {
-			return packagecontract.Manifest{}, nil, err
-		}
-		if err := packagefmt.Build(ctx, sourceDir, manifest, packagefmt.BuildSpec{Tool: buildTool}); err != nil {
-			return packagecontract.Manifest{}, nil, err
-		}
-		if err := packagesource.VerifyHostedProtocol(ctx, sourceDir, manifest); err != nil {
-			return packagecontract.Manifest{}, nil, err
-		}
-		return manifest, manifestBytes, nil
-	}
-	if statErr != nil {
-		return packagecontract.Manifest{}, nil, fmt.Errorf("读取源清单失败: %w", statErr)
-	}
-	manifest, manifestBytes, build, err := packagefmt.Parse(path)
-	if err != nil {
-		return packagecontract.Manifest{}, nil, err
-	}
-	if build != nil {
-		if err := packagefmt.Build(ctx, sourceDir, manifest, *build); err != nil {
-			return packagecontract.Manifest{}, nil, err
-		}
-	}
-	return manifest, manifestBytes, nil
-}
-
-// resolveSDKSource 读取显式源清单，或只提取零声明源码的 extensions；SDK 生成不构建
-// guest 工件，也不需要虚构一个包版本。
-func resolveSDKSource(ctx context.Context, sourceDir string) (string, json.RawMessage, error) {
-	path := packagefmt.SourcePath(sourceDir)
-	_, statErr := os.Stat(path)
-	if statErr == nil {
-		manifest, _, _, err := packagefmt.Parse(path)
-		return manifest.ID, manifest.Extensions, err
-	}
-	if !errors.Is(statErr, fs.ErrNotExist) {
-		return "", nil, fmt.Errorf("读取源清单失败: %w", statErr)
-	}
-	absolute, err := filepath.Abs(sourceDir)
-	if err != nil {
-		return "", nil, err
-	}
-	capabilities, _, err := packagefmt.AutoExtract(ctx, sourceDir)
-	if err != nil {
-		return "", nil, err
-	}
-	extensions, err := packagefmt.ExtensionsFromCapabilities(filepath.Base(absolute), capabilities)
-	if err != nil {
-		return "", nil, err
-	}
-	return filepath.Base(absolute), extensions, nil
 }
 
 // identityProvision 是 identity-bind 命令的输入。

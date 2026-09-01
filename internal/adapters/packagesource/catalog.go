@@ -13,9 +13,9 @@ import (
 	"time"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
-	"github.com/projectluojia/AI-Luo-Man-ga/pkg/capability"
-	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packagecontract"
-	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
+	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/capability"
+	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/packagecontract"
+	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/packageio"
 )
 
 const (
@@ -58,7 +58,7 @@ func (c *Catalog) Discover(ctx context.Context) ([]loader.InstalledRecord, error
 	if err := validateSecureDirectory(c.root); err != nil {
 		return nil, errors.Join(ErrInvalidCatalog, err)
 	}
-	if err := packmgr.RecoverInstallRoot(ctx, c.root); err != nil {
+	if err := packageio.RecoverInstallRoot(ctx, c.root); err != nil {
 		return nil, errors.Join(ErrInvalidCatalog, err)
 	}
 	entries, err := os.ReadDir(c.root)
@@ -73,7 +73,7 @@ func (c *Catalog) Discover(ctx context.Context) ([]loader.InstalledRecord, error
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		if packmgr.IsTransientInstallDirectory(entry.Name()) {
+		if packageio.IsTransientInstallDirectory(entry.Name()) {
 			if !entry.IsDir() {
 				return nil, ErrInvalidCatalog
 			}
@@ -170,7 +170,7 @@ func (c *Catalog) readRecordByID(ctx context.Context, id string) (installedRecor
 	if err := validateSecureDirectory(c.root); err != nil {
 		return installedRecord{}, errors.Join(ErrInvalidCatalog, err)
 	}
-	if err := packmgr.RecoverInstallRoot(ctx, c.root); err != nil {
+	if err := packageio.RecoverInstallRoot(ctx, c.root); err != nil {
 		return installedRecord{}, errors.Join(ErrInvalidCatalog, err)
 	}
 	entries, err := os.ReadDir(c.root)
@@ -183,7 +183,7 @@ func (c *Catalog) readRecordByID(ctx context.Context, id string) (installedRecor
 	var matched installedRecord
 	found := false
 	for _, entry := range entries {
-		if packmgr.IsTransientInstallDirectory(entry.Name()) {
+		if packageio.IsTransientInstallDirectory(entry.Name()) {
 			if !entry.IsDir() {
 				return installedRecord{}, ErrInvalidCatalog
 			}
@@ -213,7 +213,7 @@ func (c *Catalog) readRecordByID(ctx context.Context, id string) (installedRecor
 }
 
 // readPackage 读取一个包目录并产出每组件一条的内核记录。中性格式（manifest +
-// lock + 每组件工件哈希）由 packmgr.ReadInstalled 完成；本函数叠加部署属主
+// lock + 每组件工件哈希）由 packageio.ReadInstalled 完成；本函数叠加部署属主
 // 校验、解析 AI珞 扩展段并按组件 exports 映射 Capability 到组件运行时。
 func (c *Catalog) readPackage(ctx context.Context, directory string) ([]installedRecord, error) {
 	if err := validateSecureDirectory(directory); err != nil {
@@ -227,7 +227,7 @@ func (c *Catalog) readPackage(ctx context.Context, directory string) ([]installe
 			return nil, ErrInvalidCatalog
 		}
 	}
-	neutral, err := packmgr.ReadInstalled(ctx, directory)
+	neutral, err := packageio.ReadInstalled(ctx, directory)
 	if err != nil {
 		return nil, errors.Join(ErrInvalidCatalog, err)
 	}

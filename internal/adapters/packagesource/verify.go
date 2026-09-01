@@ -9,8 +9,8 @@ import (
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
-	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packagecontract"
-	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
+	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/packagecontract"
+	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/packageio"
 )
 
 // VerifyHostedProtocol 在自动打包前用受限 WasmHost 逐组件执行一次协议探测。
@@ -24,7 +24,7 @@ func VerifyHostedProtocol(ctx context.Context, sourceDir string, manifest packag
 		artifactPath := filepath.Join(sourceDir, component.Entrypoint)
 		host, err := loader.NewWasmHost(loader.WasmHostConfig{
 			ReadArtifact: func(context.Context, loader.Manifest) ([]byte, error) {
-				return packmgr.ReadFileLimited(artifactPath, packagecontract.MaxArtifactBytes)
+				return packageio.ReadFileLimited(artifactPath, packagecontract.MaxArtifactBytes)
 			},
 		})
 		if err != nil {

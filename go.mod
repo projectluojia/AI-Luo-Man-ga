@@ -2,12 +2,13 @@ module github.com/projectluojia/AI-Luo-Man-ga
 
 go 1.26
 
+require github.com/projectluojia/AI-Luo-Man-ga/package-manager v0.0.0
+
+replace github.com/projectluojia/AI-Luo-Man-ga/package-manager => ./package-manager
+
 require (
-	github.com/BurntSushi/toml v1.6.0
-	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
-	github.com/iancoleman/strcase v0.3.0
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
 	github.com/tetratelabs/wazero v1.12.0
 	golang.org/x/sys v0.45.0
@@ -17,7 +18,10 @@ require (
 )
 
 require (
+	github.com/BurntSushi/toml v1.6.0 // indirect
+	github.com/Masterminds/semver/v3 v3.5.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
+	github.com/iancoleman/strcase v0.3.0 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/ncruces/go-strftime v0.1.9 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
