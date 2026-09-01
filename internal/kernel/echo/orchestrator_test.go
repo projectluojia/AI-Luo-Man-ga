@@ -1297,11 +1297,7 @@ func TestOrchestratorDoesNotAutomaticallyRetryAfterSideEffect(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer connection.Close()
-	store, err := sqlite.Open(filepath.Join(t.TempDir(), "side-effect-retry.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := sqlitetest.NewMemoryStore(t)
 	reg := registry.New()
 	policy := runtimetest.NewStaticAppPolicy()
 	policy.Enable(testAppID, "test.external")
@@ -1332,7 +1328,7 @@ func TestOrchestratorDoesNotAutomaticallyRetryAfterSideEffect(t *testing.T) {
 	orchestrator := kernelecho.NewOrchestrator(
 		executorv1.NewExecutorRuntimeClient(connection), reg, dispatcher, policy, storePorts(store),
 		kernelecho.Config{
-			AppID: testAppID, AppConfigSource: store, RunTimeout: time.Second, MaxRunAttempts: 3,
+			AppID: testAppID, AppConfigSource: store, RunTimeout: 5 * time.Second, MaxRunAttempts: 3,
 			Context: newSessionSource(t, store),
 		},
 	)

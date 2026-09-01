@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite/sqlitetest"
 )
 
 type countingProvisioner struct{ calls int }
@@ -15,7 +16,7 @@ func (p *countingProvisioner) EnsureQQIdentity(context.Context, access.InboundMe
 }
 
 func TestQQAdmissionRejectsUnknownGroupBeforeHub(t *testing.T) {
-	store := newQQTestStore(t, "qq-admission.db")
+	store := sqlitetest.NewMemoryStore(t)
 	hub, err := access.NewHub("campus-services", store, stubResolver{user: "user-1"})
 	if err != nil {
 		t.Fatal(err)
