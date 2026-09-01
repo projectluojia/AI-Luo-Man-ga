@@ -632,7 +632,7 @@ func TestEchoCreationMapsAppConfigurationFailuresToSafeErrors(t *testing.T) {
 // TestEchoCreationPersistsStandardMessageToSessionStore 验证平台消息经统一入口
 // 持久化到会话台账（SQLite），且同一幂等键的重复投递既不重复消息也不重复 Echo。
 func TestEchoCreationPersistsStandardMessageToSessionStore(t *testing.T) {
-	store := sqlitetest.NewMemoryStore(t)
+	store := newWebFileStore(t, "session-message.db")
 	reg := registry.New()
 	policy := runtimetest.NewStaticAppPolicy()
 	backend := &fakeOrchestrator{store: store}
