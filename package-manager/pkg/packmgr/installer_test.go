@@ -12,8 +12,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/packagecontract"
-	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/packageio"
+	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packagecontract"
+	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packageio"
 	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/packmgr"
 )
 
@@ -98,13 +98,13 @@ func TestInstallResolvesDependenciesAgainstInstalled(t *testing.T) {
 	// 缺依赖安装失败。
 	appSource := filepath.Join(t.TempDir(), "app")
 	writeSourcePackage(t, appSource, "demo.app", "1.0.0", packagecontract.ModeHosted, "app.wasm",
-		[]packagecontract.Dependency{{ID: "demo.dep", Constraint: "^2.0.0"}})
+		[]packagecontract.Dependency{{ID: "demo.dep", Constraint: "^2.0.0", Source: "path:demo.dep"}})
 	if _, err := packmgr.Install(ctx, root, appSource); err == nil || !strings.Contains(err.Error(), "缺少依赖") {
 		t.Fatalf("Install with unsatisfied dependency error = %v, want missing dependency", err)
 	}
 	// 依赖满足后安装成功。
 	writeSourcePackage(t, appSource, "demo.app", "1.0.0", packagecontract.ModeHosted, "app.wasm",
-		[]packagecontract.Dependency{{ID: "demo.dep", Constraint: "^1.0.0"}})
+		[]packagecontract.Dependency{{ID: "demo.dep", Constraint: "^1.0.0", Source: "path:demo.dep"}})
 	if _, err := packmgr.Install(ctx, root, appSource); err != nil {
 		t.Fatalf("Install with satisfied dependency: %v", err)
 	}
@@ -192,7 +192,7 @@ func TestInstallRejectsBreakingReverseDependency(t *testing.T) {
 	}
 	app := filepath.Join(t.TempDir(), "app")
 	writeSourcePackage(t, app, "demo.app", "1.0.0", packagecontract.ModeHosted, "app.wasm",
-		[]packagecontract.Dependency{{ID: "demo.dep", Constraint: "^1.0.0"}})
+		[]packagecontract.Dependency{{ID: "demo.dep", Constraint: "^1.0.0", Source: "path:demo.dep"}})
 	if _, err := packmgr.Install(ctx, root, app); err != nil {
 		t.Fatal(err)
 	}

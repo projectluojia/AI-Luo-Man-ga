@@ -11,11 +11,11 @@ import (
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
 
+	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/capability"
+	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packagecontract"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/id"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
-	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/capability"
-	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/packagecontract"
 )
 
 var (

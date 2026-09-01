@@ -13,7 +13,7 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/packagecontract"
+	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packagecontract"
 )
 
 // BuildToolGoWasm 是内置的 Go→wasm32-wasi 构建器：跨平台一致（os/exec 设

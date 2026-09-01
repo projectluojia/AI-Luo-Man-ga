@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/capability"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/appconfig"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contextasm"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
@@ -24,7 +25,6 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
-	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/capability"
 )
 
 var (

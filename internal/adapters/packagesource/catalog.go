@@ -12,10 +12,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/capability"
+	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packagecontract"
+	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packageio"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
-	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/capability"
-	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/packagecontract"
-	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/packageio"
 )
 
 const (
