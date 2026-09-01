@@ -141,7 +141,7 @@ func validSource(source string) bool {
 }
 
 func validSourceSegment(value string) bool {
-	if value == "" {
+	if value == "" || value == "." || value == ".." {
 		return false
 	}
 	for _, character := range value {
