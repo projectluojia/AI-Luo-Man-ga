@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packagecontract"
 )
@@ -47,6 +48,12 @@ func HashArtifact(ctx context.Context, path string, maximum int64) (string, erro
 			return packagecontract.ErrInvalidFormat
 		}
 		relative = filepath.ToSlash(relative)
+		if IsIgnoredArtifactPath(relative) {
+			if entry.IsDir() {
+				return fs.SkipDir
+			}
+			return nil
+		}
 		if entry.IsDir() {
 			_, _ = digest.Write([]byte("dir\x00" + relative + "\x00"))
 			return nil
@@ -94,4 +101,17 @@ func HashArtifact(ctx context.Context, path string, maximum int64) (string, erro
 		return "", packagecontract.ErrInvalidFormat
 	}
 	return hex.EncodeToString(digest.Sum(nil)), nil
+}
+
+// IsIgnoredArtifactPath 判断目录工件中的开发缓存路径。它们不属于运行时
+// 交付物，统一从哈希和归档中排除，避免本地工具缓存改变发布摘要。
+func IsIgnoredArtifactPath(relative string) bool {
+	parts := strings.Split(filepath.ToSlash(relative), "/")
+	for _, part := range parts {
+		switch part {
+		case ".git", ".hg", ".svn", "__pycache__", ".mypy_cache", ".pytest_cache", ".ruff_cache":
+			return true
+		}
+	}
+	return strings.HasSuffix(relative, ".pyc") || strings.HasSuffix(relative, ".pyo") || filepath.Base(relative) == ".DS_Store"
 }
