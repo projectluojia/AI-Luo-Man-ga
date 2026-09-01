@@ -6,7 +6,21 @@ name: Campus bus package
 on:
   push:
     branches: [main]
+    paths:
+      - packages/campus-bus/**
+      - contracts/**
+      - package-manager/**
+      - go.work
+      - go.work.sum
+      - .github/workflows/campus-bus-package.yml
   pull_request:
+    paths:
+      - packages/campus-bus/**
+      - contracts/**
+      - package-manager/**
+      - go.work
+      - go.work.sum
+      - .github/workflows/campus-bus-package.yml
   workflow_dispatch:
 
 permissions:
@@ -29,6 +43,11 @@ jobs:
         with:
           go-version-file: packages/campus-bus/go.mod
           cache: true
+          cache-dependency-path: |
+            packages/campus-bus/go.mod
+            contracts/go.sum
+            package-manager/go.sum
+            go.work.sum
       - name: 校验校巴 Go module 与 WASM 构建
         working-directory: packages/campus-bus
         shell: bash
@@ -40,9 +59,11 @@ jobs:
           GOOS=wasip1 GOARCH=wasm go build -trimpath -o "$RUNNER_TEMP/campus.wasm" ./src
       - name: 构建 Package Manager CLI
         working-directory: package-manager
-        run: go build -o ../ailuo ./cmd/ailuo-pm
+        run: |
+          go build -o "$RUNNER_TEMP/ailuo" ./cmd/ailuo-pm
       - name: 打包 Campus bus
-        run: ./ailuo pack packages/campus-bus "$RUNNER_TEMP/campus-package-dist"
+        run: |
+          "$RUNNER_TEMP/ailuo" pack packages/campus-bus "$RUNNER_TEMP/campus-package-dist"
       - name: 安装并验证 Campus 发布物
         shell: bash
         run: |
@@ -50,5 +71,5 @@ jobs:
           campus_tgz="$(find "$RUNNER_TEMP/campus-package-dist" -maxdepth 1 -type f -name 'campus-*.tgz' -print -quit)"
           test -n "$campus_tgz"
           campus_version="$(tar -xzOf "$campus_tgz" manifest.json | jq -er .version)"
-          ./ailuo install --root "$RUNNER_TEMP/campus-package-root" "$campus_tgz"
-          ./ailuo list --root "$RUNNER_TEMP/campus-package-root" | grep -q "^campus@${campus_version}"
+          "$RUNNER_TEMP/ailuo" install --root "$RUNNER_TEMP/campus-package-root" "$campus_tgz"
+          "$RUNNER_TEMP/ailuo" list --root "$RUNNER_TEMP/campus-package-root" | grep -q "^campus@${campus_version}"

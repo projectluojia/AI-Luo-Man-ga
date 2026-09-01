@@ -6,6 +6,11 @@ on:
     paths:
       - go.mod
       - go.sum
+      - contracts/**
+      - package-manager/**
+      - packages/campus-bus/go.mod
+      - go.work
+      - go.work.sum
       - packages/agent/**
       - packages/campus-bus/**
       - .github/workflows/security-scan.yml
@@ -13,6 +18,11 @@ on:
     paths:
       - go.mod
       - go.sum
+      - contracts/**
+      - package-manager/**
+      - packages/campus-bus/go.mod
+      - go.work
+      - go.work.sum
       - packages/agent/**
       - packages/campus-bus/**
       - .github/workflows/security-scan.yml
@@ -44,7 +54,13 @@ jobs:
           cache: true
       # Go 依赖漏洞：基于完整模块图（含传递依赖）。
       - name: 运行 govulncheck
-        run: go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
+        shell: bash
+        run: |
+          set -euo pipefail
+          for module in . contracts package-manager packages/campus-bus; do
+            echo "检查 Go module: $module"
+            (cd "$module" && go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...)
+          done
       # 扫描 Core 与同仓包工作区内的 Go/Python 锁定依赖。
       - uses: google/osv-scanner-action/osv-scanner-action@6e4298ebc4db23e847df9b2e2de2939d6f066c67 # v2.5.1
         with:
@@ -67,8 +83,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
-      actions: read
-      security-events: write
+      actions: read # 读取前一个 job 上传的 SARIF 工件。
+      security-events: write # 将扫描结果写入 GitHub Code Scanning。
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - name: 下载扫描结果
@@ -76,6 +92,6 @@ jobs:
         with:
           name: sarif-results
       - name: 上传 SARIF 到 GitHub 安全分析
-        uses: github/codeql-action/upload-sarif@faaa5d804fc648d0fdb28822a8e36cf7d0a6132c # v4.37.7
+        uses: github/codeql-action/upload-sarif@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           sarif_file: results.sarif
