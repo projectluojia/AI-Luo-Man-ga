@@ -6,10 +6,11 @@ import (
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/identity"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite/sqlitetest"
 )
 
 func TestProvisionerConcurrentlyEnsuresStableIdentity(t *testing.T) {
-	store := newQQTestStore(t, "qq-identity.db")
+	store := sqlitetest.NewMemoryStore(t)
 	service := identity.NewService(store)
 	provisioner, err := NewProvisioner(service)
 	if err != nil {
@@ -41,7 +42,7 @@ func TestProvisionerConcurrentlyEnsuresStableIdentity(t *testing.T) {
 }
 
 func TestProvisionerUsesOneUserAcrossQQSpaces(t *testing.T) {
-	store := newQQTestStore(t, "qq-spaces.db")
+	store := sqlitetest.NewMemoryStore(t)
 	service := identity.NewService(store)
 	provisioner, _ := NewProvisioner(service)
 	for _, spaceID := range []string{"private", "12345", "54321"} {
