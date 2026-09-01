@@ -333,6 +333,8 @@ paths:
         translated; kernel event types are not exposed.
         A trusted server-side Web login identity is required; identity and
         session ownership come exclusively from that server-side identity.
+      security:
+        - webAuthenticator: []
       requestBody:
         required: true
         content:
@@ -491,6 +493,12 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 components:
+  securitySchemes:
+    webAuthenticator:
+      type: apiKey
+      in: header
+      name: Authorization
+      description: Deployment-specific Web authentication material validated by the configured WebAuthenticator.
   parameters:
     IdempotencyKey:
       name: Idempotency-Key
