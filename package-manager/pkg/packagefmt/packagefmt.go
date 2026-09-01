@@ -6,7 +6,8 @@
 // dependency 以 `[dependencies.<id>]` 表声明版本约束与显式来源；capability 只
 // 声明 id 与引用的 tool，其余字段（schema、side_effect、name、description）全部
 // 继承自 tool；service 段省略时自动生成（id/version/description 继承 package，
-// tool_dependencies 默认为全部 tool id）。
+// tool_dependencies 默认为全部 tool id）。每个 component 通过 `[component.build]`
+// 声明自己的构建器和源码目录。
 package packagefmt
 
 import (
@@ -38,7 +39,6 @@ type sourceManifest struct {
 	Tools        map[string]sourceTool       `toml:"tool,omitempty"`
 	Service      *sourceService              `toml:"service,omitempty"`
 	Capabilities []sourceCapability          `toml:"capability,omitempty"`
-	Build        *BuildSpec                  `toml:"build,omitempty"`
 }
 
 type sourcePackage struct {
@@ -58,6 +58,12 @@ type sourceComponent struct {
 	Exports       []string               `toml:"exports,omitempty"`
 	Imports       []string               `toml:"imports,omitempty"`
 	HostFunctions []sourceHostedFunction `toml:"host_function,omitempty"`
+	Build         *sourceBuild           `toml:"build,omitempty"`
+}
+
+type sourceBuild struct {
+	Tool   string `toml:"tool"`
+	Source string `toml:"source,omitempty"`
 }
 
 type sourceProcess struct {
@@ -111,9 +117,9 @@ type sourceCapability struct {
 
 // Parse 读取并解析 ailuo.toml：严格 TOML 解码（未知字段/重复键拒绝），转换为
 // 中性包清单并校验。返回的 manifestBytes 是序列化后的清单字节（供 pack 时
-// 原样写入与 digest 锁定，与 packmgr 安装路径一致）；build 为 `[build]` 声明
-// （nil 表示源清单未声明构建，工件由作者预置）。
-func Parse(path string) (manifest packagecontract.Manifest, manifestBytes []byte, build *BuildSpec, err error) {
+// 原样写入与 digest 锁定，与 packmgr 安装路径一致）；builds 是按 component 排列
+// 的构建计划（为空表示所有工件由作者预置）。
+func Parse(path string) (manifest packagecontract.Manifest, manifestBytes []byte, builds []BuildSpec, err error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return packagecontract.Manifest{}, nil, nil, fmt.Errorf("%w: %v", ErrSourceInvalid, err)
@@ -137,10 +143,16 @@ func Parse(path string) (manifest packagecontract.Manifest, manifestBytes []byte
 	if err != nil {
 		return packagecontract.Manifest{}, nil, nil, fmt.Errorf("%w: 清单序列化失败: %v", ErrSourceInvalid, err)
 	}
-	if source.Build != nil {
-		build = &BuildSpec{Tool: source.Build.Tool, Source: source.Build.Source}
+	for _, component := range source.Components {
+		if component.Build == nil {
+			continue
+		}
+		builds = append(builds, BuildSpec{
+			Tool: component.Build.Tool, Source: component.Build.Source,
+			Components: []string{component.ID},
+		})
 	}
-	return manifest, manifestBytes, build, nil
+	return manifest, manifestBytes, builds, nil
 }
 
 // SourcePath 返回源包目录中的 ailuo.toml 路径（若存在）。

@@ -1,5 +1,5 @@
-// Package packagefmt 的构建层：ailuo.toml 的 `[build]` 段声明构建方式，
-// ailuo pack 统一驱动，不依赖每包手写 shell 脚本。
+// Package packagefmt 的构建层：ailuo.toml 的 component 级 build 段声明构建方式，
+// ailuo-pm pack 统一驱动，不依赖每包手写 shell 脚本。
 package packagefmt
 
 import (
@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packagecontract"
@@ -34,12 +35,13 @@ var (
 	ErrBuildFailed = errors.New("build failed")
 )
 
-// BuildSpec 是 ailuo.toml 的 `[build]` 段（TOML 键与字段名一致）：源码目录
-// 相对包目录（缺省 "."），必须位于包目录内（包自包含：构建器不越界进内核
-// 目录，第三方作者按同一规则写包）。
+// BuildSpec 是一个 component 的构建计划：Tool 是构建器，Source 是相对包目录
+// 的源码目录（缺省 "."），Components 是该计划负责的组件。源码和工件必须位于
+// 包目录内，构建器不越界进入宿主或内核目录。
 type BuildSpec struct {
-	Tool   string `toml:"tool"`
-	Source string `toml:"source,omitempty"`
+	Tool       string
+	Source     string
+	Components []string
 }
 
 // BuildToolPythonUV 是内置的 Python isolated 执行形态构建器：在源码目录执行
@@ -48,21 +50,60 @@ type BuildSpec struct {
 // .venv/Scripts/python.exe），写进安装期生成的 lock 进程规格。
 const BuildToolPythonUV = "python-uv"
 
-// Build 执行 [build] 声明的构建：为包生成声明的 hosted 工件或 isolated 运行环境。
+// Build 执行 component 级构建计划：为包生成声明的 hosted 工件或 isolated 运行环境。
 // 支持 go-wasm（Go，内置）、python-uv（Python，内置）与 ts-as（TypeScript，
 // AssemblyScript 编译器）；未知工具 fail-closed。源码目录相对包目录解析，
 // 校验不逃逸包目录。
-func Build(ctx context.Context, sourceDir string, manifest packagecontract.Manifest, spec BuildSpec) error {
-	switch spec.Tool {
-	case BuildToolGoWasm:
-		return buildGoWasm(ctx, sourceDir, manifest, spec)
-	case BuildToolPythonUV:
-		return buildPythonUV(ctx, sourceDir, spec)
-	case BuildToolAssemblyScript:
-		return buildAssemblyScript(ctx, sourceDir, manifest, spec)
-	default:
-		return fmt.Errorf("%w: %q（支持：go-wasm、python-uv、ts-as）", ErrBuildUnsupported, spec.Tool)
+func Build(ctx context.Context, sourceDir string, manifest packagecontract.Manifest, specs []BuildSpec) error {
+	builtPythonSources := make(map[string]struct{})
+	for _, spec := range specs {
+		if err := validateBuildTargets(manifest, spec); err != nil {
+			return err
+		}
+		switch spec.Tool {
+		case BuildToolGoWasm:
+			if err := buildGoWasm(ctx, sourceDir, manifest, spec); err != nil {
+				return err
+			}
+		case BuildToolPythonUV:
+			source := spec.Source
+			if source == "" {
+				source = "."
+			}
+			if _, exists := builtPythonSources[source]; exists {
+				continue
+			}
+			spec.Source = source
+			if err := buildPythonUV(ctx, sourceDir, spec); err != nil {
+				return err
+			}
+			builtPythonSources[source] = struct{}{}
+		case BuildToolAssemblyScript:
+			if err := buildAssemblyScript(ctx, sourceDir, manifest, spec); err != nil {
+				return err
+			}
+		default:
+			return fmt.Errorf("%w: %q（支持：go-wasm、python-uv、ts-as）", ErrBuildUnsupported, spec.Tool)
+		}
 	}
+	return nil
+}
+
+func validateBuildTargets(manifest packagecontract.Manifest, spec BuildSpec) error {
+	seen := make(map[string]struct{}, len(spec.Components))
+	for _, componentID := range spec.Components {
+		component, ok := packagecontract.FindComponent(manifest, componentID)
+		if !ok ||
+			(spec.Tool == BuildToolPythonUV && component.Mode != packagecontract.ModeIsolated) ||
+			(spec.Tool != BuildToolPythonUV && component.Mode != packagecontract.ModeHosted) {
+			return fmt.Errorf("%w: 构建计划引用了不适用的组件 %q", ErrBuildFailed, componentID)
+		}
+		if _, duplicate := seen[componentID]; duplicate {
+			return fmt.Errorf("%w: 构建计划重复引用组件 %q", ErrBuildFailed, componentID)
+		}
+		seen[componentID] = struct{}{}
+	}
+	return nil
 }
 
 // buildGoWasm 用 Go 工具链交叉编译每个 hosted 组件：GOOS=wasip1 GOARCH=wasm
@@ -329,6 +370,9 @@ func buildHostedComponents(
 	workDir := filepath.Join(absoluteSourceDir, source)
 	for _, component := range manifest.Components {
 		if component.Mode != packagecontract.ModeHosted {
+			continue
+		}
+		if len(spec.Components) > 0 && !slices.Contains(spec.Components, component.ID) {
 			continue
 		}
 		if component.Entrypoint == "" || !packagecontract.IsPackagePath(component.Entrypoint) {
