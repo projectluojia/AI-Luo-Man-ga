@@ -61,7 +61,9 @@ func TestParseHostedEnvelopeReturnsGenericInvocationErrors(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.code, func(t *testing.T) {
-			payload, err := json.Marshal(hostedEnvelope{Code: tc.code, Message: "package detail"})
+			payload, err := json.Marshal(map[string]any{
+				"ok": false, "code": tc.code, "message": "package detail",
+			})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -75,7 +77,9 @@ func TestParseHostedEnvelopeReturnsGenericInvocationErrors(t *testing.T) {
 			}
 		})
 	}
-	unknown, err := json.Marshal(hostedEnvelope{Code: "data_non_authoritative"})
+	unknown, err := json.Marshal(map[string]any{
+		"ok": false, "code": "data_non_authoritative", "message": "package detail",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,11 +91,20 @@ func TestParseHostedEnvelopeReturnsGenericInvocationErrors(t *testing.T) {
 func TestParseHostedEnvelopeRejectsNonCanonicalOrIncompleteResults(t *testing.T) {
 	for _, payload := range []string{
 		`{"ok":true,"result":{},"extra":true}`,
+		`{"OK":true,"Result":{}}`,
 		`{"ok":true,"result":{},"result":{}}`,
 		`{"ok":true,"result":{}} trailing`,
 		`{"ok":true}`,
+		`{"code":"internal"}`,
+		`{"ok":null,"code":"internal"}`,
+		`{"ok":true,"result":{},"code":""}`,
+		`{"ok":true,"result":{},"message":""}`,
 		`{"ok":true,"result":{},"code":"internal"}`,
 		`{"ok":false,"result":{},"code":"internal"}`,
+		`{"ok":false,"result":null,"code":"internal"}`,
+		`{"ok":false,"code":""}`,
+		`{"ok":false,"code":null}`,
+		`{"ok":false,"code":"internal","message":null}`,
 		`{"ok":false}`,
 	} {
 		if _, err := parseHostedEnvelope("test.runtime", []byte(payload)); !errors.Is(err, ErrRuntimeProtocol) {
