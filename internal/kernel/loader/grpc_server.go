@@ -33,11 +33,12 @@ type RuntimeHostBackend interface {
 }
 
 type RuntimeHostServerConfig struct {
-	Mode          string
-	Backend       RuntimeHostBackend
-	MaxRuntimes   int
-	MaxConcurrent int
-	Now           func() time.Time
+	Mode            string
+	Backend         RuntimeHostBackend
+	AllowedRuntimes []BackendIdentity
+	MaxRuntimes     int
+	MaxConcurrent   int
+	Now             func() time.Time
 }
 
 type runtimeHostServerEntry struct {
@@ -53,12 +54,26 @@ type RuntimeHostProtocolServer struct {
 
 	mu          sync.Mutex
 	entries     map[BackendIdentity]*runtimeHostServerEntry
+	allowed     map[BackendIdentity]struct{}
 	invocations chan struct{}
 }
 
 func NewRuntimeHostProtocolServer(config RuntimeHostServerConfig) (*RuntimeHostProtocolServer, error) {
-	if (config.Mode != ModeHosted && config.Mode != ModeIsolated) || config.Backend == nil {
+	if (config.Mode != ModeHosted && config.Mode != ModeIsolated) || config.Backend == nil || len(config.AllowedRuntimes) == 0 {
 		return nil, ErrInvalidManifest
+	}
+	allowed := make(map[BackendIdentity]struct{}, len(config.AllowedRuntimes))
+	for _, identity := range config.AllowedRuntimes {
+		if !stableIDPattern.MatchString(identity.ID) {
+			return nil, ErrInvalidManifest
+		}
+		if _, err := packagecontract.ParseVersion(identity.Version); err != nil {
+			return nil, ErrInvalidManifest
+		}
+		if _, exists := allowed[identity]; exists {
+			return nil, ErrDuplicateID
+		}
+		allowed[identity] = struct{}{}
 	}
 	if config.MaxRuntimes == 0 {
 		config.MaxRuntimes = 128
@@ -74,7 +89,7 @@ func NewRuntimeHostProtocolServer(config RuntimeHostServerConfig) (*RuntimeHostP
 		config.Now = time.Now
 	}
 	return &RuntimeHostProtocolServer{
-		config: config, entries: make(map[BackendIdentity]*runtimeHostServerEntry),
+		config: config, entries: make(map[BackendIdentity]*runtimeHostServerEntry), allowed: allowed,
 		invocations: make(chan struct{}, config.MaxConcurrent),
 	}, nil
 }
@@ -90,6 +105,9 @@ func (s *RuntimeHostProtocolServer) Describe(ctx context.Context, request *runti
 	identity, err := decodeRuntimeIdentity(request.GetIdentity())
 	if request == nil || hasUnknown(request) || err != nil {
 		return nil, safeRuntimeStatus(codes.InvalidArgument)
+	}
+	if !s.isAllowed(identity) {
+		return nil, safeRuntimeStatus(codes.NotFound)
 	}
 	description, err := s.config.Backend.Describe(ctx, identity)
 	if err != nil {
@@ -108,6 +126,9 @@ func (s *RuntimeHostProtocolServer) Start(ctx context.Context, request *runtimev
 	identity, err := decodeLifecycleRequest(request)
 	if err != nil {
 		return nil, err
+	}
+	if !s.isAllowed(identity) {
+		return nil, safeRuntimeStatus(codes.NotFound)
 	}
 	s.mu.Lock()
 	if entry := s.entries[identity]; entry != nil {
@@ -145,6 +166,9 @@ func (s *RuntimeHostProtocolServer) Health(ctx context.Context, request *runtime
 	if err != nil {
 		return nil, err
 	}
+	if !s.isAllowed(identity) {
+		return nil, safeRuntimeStatus(codes.NotFound)
+	}
 	s.mu.Lock()
 	entry := s.entries[identity]
 	ready := entry != nil && entry.state == StateReady
@@ -163,6 +187,9 @@ func (s *RuntimeHostProtocolServer) Invoke(ctx context.Context, request *runtime
 	identity, governed, payload, err := s.decodeInvoke(request)
 	if err != nil {
 		return nil, err
+	}
+	if !s.isAllowed(identity) {
+		return nil, safeRuntimeStatus(codes.NotFound)
 	}
 	select {
 	case <-ctx.Done():
@@ -213,6 +240,9 @@ func (s *RuntimeHostProtocolServer) Stop(ctx context.Context, request *runtimev1
 	identity, err := decodeLifecycleRequest(request)
 	if err != nil {
 		return nil, err
+	}
+	if !s.isAllowed(identity) {
+		return nil, safeRuntimeStatus(codes.NotFound)
 	}
 	s.mu.Lock()
 	entry := s.entries[identity]
@@ -291,6 +321,11 @@ func (s *RuntimeHostProtocolServer) beginInvoke(identity BackendIdentity) bool {
 	}
 	entry.inFlight++
 	return true
+}
+
+func (s *RuntimeHostProtocolServer) isAllowed(identity BackendIdentity) bool {
+	_, allowed := s.allowed[identity]
+	return allowed
 }
 
 func (s *RuntimeHostProtocolServer) endInvoke(identity BackendIdentity) {
