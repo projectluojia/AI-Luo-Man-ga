@@ -199,21 +199,24 @@ func runRuntimeHostCommand(arguments []string, output io.Writer) (bool, error) {
 	flags := flag.NewFlagSet("runtime-host", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	installRoot := flags.String("install-root", "", "安装目录绝对路径")
+	projectRoot := flags.String("project-root", "", "项目根目录绝对路径（含 ailuo.toml/ailuo.lock）")
 	address := flags.String("address", "", "监听地址（loopback 或绝对 Unix socket）")
-	if err := flags.Parse(arguments); err != nil || flags.NArg() != 0 || *installRoot == "" || *address == "" {
-		return true, fmt.Errorf("configuration error: runtime-host requires --install-root and --address")
+	if err := flags.Parse(arguments); err != nil || flags.NArg() != 0 || *installRoot == "" || *projectRoot == "" || *address == "" {
+		return true, fmt.Errorf("configuration error: runtime-host requires --install-root, --project-root and --address")
 	}
-	if !filepath.IsAbs(*installRoot) || filepath.Clean(*installRoot) != *installRoot {
-		return true, fmt.Errorf("configuration error: --install-root must be a clean absolute path")
+	for name, value := range map[string]string{"--install-root": *installRoot, "--project-root": *projectRoot} {
+		if !filepath.IsAbs(value) || filepath.Clean(value) != value {
+			return true, fmt.Errorf("configuration error: %s must be a clean absolute path", name)
+		}
 	}
 	if !packagecontract.IsLocalRuntimeAddress(*address) {
 		return true, fmt.Errorf("configuration error: --address must be loopback or an absolute unix socket")
 	}
-	return true, serveRuntimeHost(*installRoot, *address, output)
+	return true, serveRuntimeHost(*installRoot, *projectRoot, *address, output)
 }
 
 // serveRuntimeHost 装载 hosted 后端并监听 RuntimeHost 协议，直到信号停止。
-func serveRuntimeHost(installRoot, address string, output io.Writer) error {
+func serveRuntimeHost(installRoot, projectRoot, address string, output io.Writer) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	ctx = observe.With(ctx, observe.Component("runtime_host"))
@@ -225,7 +228,11 @@ func serveRuntimeHost(installRoot, address string, output io.Writer) error {
 	if err != nil {
 		return err
 	}
-	records, err := catalog.Discover(ctx)
+	projectLock, err := packagesource.ReadProjectLock(ctx, projectRoot)
+	if err != nil {
+		return fmt.Errorf("read project lock: %w", err)
+	}
+	records, err := catalog.DiscoverLocked(ctx, projectLock)
 	if err != nil {
 		return fmt.Errorf("discover installed runtimes: %w", err)
 	}
