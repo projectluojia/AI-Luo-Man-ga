@@ -18,7 +18,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packageio"
 )
 
-// InstalledRecord 是安装操作返回的已安装包记录；目录读取由 contracts 的
+// InstalledRecord 是安装操作返回的已安装包记录；目录读取由公共契约层的
 // packageio 负责。
 type InstalledRecord = packageio.InstalledRecord
 
