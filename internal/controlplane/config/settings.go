@@ -79,11 +79,60 @@ type QQQuickReply struct {
 	Reply   string `json:"reply"`
 }
 
-// Snapshot 是管理 API 返回值，只有秘密是否已配置，不返回秘密正文。
+// Snapshot 是配置服务的完整内部快照，供监督器读取；不能直接序列化到公共 API。
 type Snapshot struct {
 	Settings            Settings     `json:"settings"`
 	QQWSTokenConfigured bool         `json:"qq_ws_token_configured"`
 	Runtime             RuntimeState `json:"runtime"`
+}
+
+// PublicSettings 是配置 API 的白名单响应，不包含 opaque ExecutorConfig。
+type PublicSettings struct {
+	Revision                uint64                  `json:"revision"`
+	AppID                   string                  `json:"app_id"`
+	ExecutorID              string                  `json:"executor_id"`
+	ExecutorTimeoutSeconds  float64                 `json:"executor_timeout_seconds"`
+	QQEnabled               bool                    `json:"qq_enabled"`
+	QQWSURL                 string                  `json:"qq_ws_url"`
+	QQBotID                 string                  `json:"qq_bot_id"`
+	QQAllowedGroupIDs       []string                `json:"qq_allowed_group_ids"`
+	QQAllowedPrivateUserIDs []string                `json:"qq_allowed_private_user_ids"`
+	QQQuickReplies          []QQQuickReply          `json:"qq_quick_replies"`
+	QQPokeReplies           []string                `json:"qq_poke_replies"`
+	Execution               ExecutionSettings       `json:"execution"`
+	Orchestration           OrchestrationSettings   `json:"orchestration"`
+	ContextAssembly         ContextAssemblySettings `json:"context_assembly"`
+	Scheduler               SchedulerSettings       `json:"scheduler"`
+	QQConnection            QQConnectionSettings    `json:"qq_connection"`
+	RuntimeProcess          RuntimeProcessSettings  `json:"runtime_process"`
+	Governance              GovernanceSettings      `json:"governance"`
+	UpdatedAt               time.Time               `json:"updated_at"`
+}
+
+// PublicSnapshot 是本机配置 API 的响应快照。
+type PublicSnapshot struct {
+	Settings            PublicSettings `json:"settings"`
+	QQWSTokenConfigured bool           `json:"qq_ws_token_configured"`
+	Runtime             RuntimeState   `json:"runtime"`
+}
+
+// Public 将完整内部快照投影为不含受保护配置正文的公共响应。
+func (s Snapshot) Public() PublicSnapshot {
+	settings := s.Settings
+	return PublicSnapshot{
+		Settings: PublicSettings{
+			Revision: settings.Revision, AppID: settings.AppID, ExecutorID: settings.ExecutorID,
+			ExecutorTimeoutSeconds: settings.ExecutorTimeoutSeconds, QQEnabled: settings.QQEnabled,
+			QQWSURL: settings.QQWSURL, QQBotID: settings.QQBotID,
+			QQAllowedGroupIDs: settings.QQAllowedGroupIDs, QQAllowedPrivateUserIDs: settings.QQAllowedPrivateUserIDs,
+			QQQuickReplies: settings.QQQuickReplies, QQPokeReplies: settings.QQPokeReplies,
+			Execution: settings.Execution, Orchestration: settings.Orchestration,
+			ContextAssembly: settings.ContextAssembly, Scheduler: settings.Scheduler,
+			QQConnection: settings.QQConnection, RuntimeProcess: settings.RuntimeProcess,
+			Governance: settings.Governance, UpdatedAt: settings.UpdatedAt,
+		},
+		QQWSTokenConfigured: s.QQWSTokenConfigured, Runtime: s.Runtime,
+	}
 }
 
 // RuntimeState 描述内核相对于当前配置修订的运行状态。
