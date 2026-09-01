@@ -22,15 +22,16 @@
     </header>
 
     <form id="settings-form">
-      <section class="config-section model-section" aria-labelledby="model-title">
+      <section class="config-section executor-section" aria-labelledby="executor-title">
         <div class="section-heading">
-          <div><span class="section-mark">MODEL</span><h2 id="model-title">模型连接</h2></div>
-          <p>Core 只保存执行请求使用的模型标识；具体执行者及 Provider 配置由其包的 Deployment 管理。</p>
+          <div><span class="section-mark">EXECUTOR</span><h2 id="executor-title">执行者配置</h2></div>
+          <p>Core 只保存执行者标识和不透明 JSON；具体执行者如何解释配置由安装包自己的 Deployment 管理。</p>
         </div>
         <div class="field-grid">
           <label class="field"><span>App 标识</span><input id="app-id" required maxlength="128" pattern="[a-z0-9][a-z0-9._-]{0,127}" placeholder="例如 my-app" autocomplete="off"><small>当前 Deployment 使用的业务与权限边界。</small></label>
-          <label class="field"><span>模型名称</span><input id="model" required maxlength="256" placeholder="例如 gpt-5.2" autocomplete="off"></label>
+          <label class="field"><span>执行者 ID</span><input id="executor-id" required maxlength="256" placeholder="例如 example.executor" autocomplete="off"></label>
           <label class="field"><span>Executor 单次调用超时（秒）</span><input id="executor-timeout" type="number" min="0.1" max="120" step="0.1" required></label>
+          <label class="field"><span>执行者配置 JSON</span><textarea id="executor-config" rows="8" required spellcheck="false" placeholder="例如 {&quot;steps&quot;:[]}"></textarea><small>Core 只验证 JSON 形状和大小，不读取其中字段。</small></label>
         </div>
       </section>
 
@@ -58,20 +59,16 @@
         </div>
       </section>
 
-      <section class="config-section runtime-section" aria-labelledby="agent-run-title">
+      <section class="config-section runtime-section" aria-labelledby="execution-title">
         <div class="section-heading">
-          <div><span class="section-mark">AGENT RUN</span><h2 id="agent-run-title">Agent 运行与编排</h2></div>
-          <p>决定单次 Run 的步数、调用数、Token 预算、时区、队列深度与调用链深度。</p>
+          <div><span class="section-mark">EXECUTION</span><h2 id="execution-title">执行与编排</h2></div>
+          <p>决定单次 Run 的步数、Capability 调用数、执行单元预算、队列深度与调用链深度。</p>
         </div>
         <div class="metric-grid">
-          <label class="field"><span>时区</span><input id="agent-timezone" maxlength="128" placeholder="Asia/Shanghai" required></label>
-          <label class="field"><span>最大推理步数</span><input id="agent-max-steps" type="number" min="1" max="64" step="1" required></label>
-          <label class="field"><span>最大工具调用数</span><input id="agent-max-tool-calls" type="number" min="1" max="128" step="1" required></label>
-          <label class="field"><span>输入 Token 上限</span><input id="agent-max-input-tokens" type="number" min="1" max="10000000" step="1" required></label>
-          <label class="field"><span>输出 Token 上限</span><input id="agent-max-output-tokens" type="number" min="1" max="1000000" step="1" required></label>
-          <label class="field"><span>总 Token 上限</span><input id="agent-max-total-tokens" type="number" min="1" max="11000000" step="1" required></label>
-          <label class="field"><span>输出字节上限</span><input id="agent-max-output-bytes" type="number" min="1" max="262144" step="1" required></label>
-          <label class="field"><span>子 Agent 数量上限（默认 4）</span><input id="agent-max-child-runs" type="number" min="1" max="32" step="1" required></label>
+          <label class="field"><span>最大执行步数</span><input id="execution-max-steps" type="number" min="1" max="64" step="1" required></label>
+          <label class="field"><span>最大 Capability 调用数</span><input id="execution-max-capability-calls" type="number" min="1" max="128" step="1" required></label>
+          <label class="field"><span>执行单元总上限</span><input id="execution-max-units" type="number" min="1" max="1000000000" step="1" required></label>
+          <label class="field"><span>输出字节上限</span><input id="execution-max-output-bytes" type="number" min="1" max="262144" step="1" required></label>
           <label class="field"><span>Run 超时（秒）</span><input id="run-timeout" type="number" min="1" max="600" step="1" required></label>
           <label class="field"><span>最大重试次数</span><input id="run-max-attempts" type="number" min="1" max="10" step="1" required></label>
           <label class="field"><span>队列容量</span><input id="run-queue-capacity" type="number" min="1" max="10000" step="1" required></label>
@@ -82,13 +79,13 @@
       <section class="config-section runtime-section" aria-labelledby="context-title">
         <div class="section-heading">
           <div><span class="section-mark">CONTEXT</span><h2 id="context-title">上下文装配</h2></div>
-          <p>决定会话历史能进入系统提示的条数、字符与总预算；超出时保留最新、丢弃最旧。</p>
+          <p>决定会话历史进入中性 Context Block 的条数、字符与总预算；超出时保留最新、丢弃最旧。</p>
         </div>
         <div class="metric-grid">
           <label class="field"><span>历史最大条数</span><input id="context-max-messages" type="number" min="1" max="1000" step="1" required></label>
           <label class="field"><span>单条最大字符</span><input id="context-max-chars-per-msg" type="number" min="1" max="65536" step="1" required></label>
           <label class="field"><span>历史总字符上限</span><input id="context-max-total-chars" type="number" min="1" max="1048576" step="1" required></label>
-          <label class="field"><span>系统提示字节上限</span><input id="context-max-prompt-bytes" type="number" min="1" max="32768" step="1" required></label>
+          <label class="field"><span>上下文字节上限</span><input id="context-max-bytes" type="number" min="1" max="65536" step="1" required></label>
         </div>
       </section>
 
@@ -119,23 +116,6 @@
           <label class="field"><span>运行时停止宽限（秒）</span><input id="runtime-stop-grace" type="number" min="1" max="120" step="1" required></label>
           <label class="field"><span>运行时强杀宽限（秒）</span><input id="runtime-terminate-grace" type="number" min="1" max="60" step="1" required></label>
         </div>
-      </section>
-
-      <section class="config-section prompt-section" aria-labelledby="prompt-title">
-        <div class="section-heading">
-          <div><span class="section-mark">PERSONA</span><h2 id="prompt-title">提示词配置</h2></div>
-          <p>基础系统提示、基本风格与额外特征都可以在此修改，保存后重启内核并应用到后续 Run。</p>
-        </div>
-        <label class="prompt-base-editor">
-          <span><strong>基础系统提示词</strong><small>人格、系统指令、行为准则与通用事实；保存时必须填写。</small></span>
-          <textarea id="prompt-base" rows="18" maxlength="16384" required placeholder="请输入基础系统提示"></textarea>
-        </label>
-        <div class="channel-prompts-grid">
-          <label class="field"><span>web 端渠道提示</span><textarea id="prompt-channel-web" rows="12" maxlength="8192" required></textarea></label>
-          <label class="field"><span>QQ 群渠道提示</span><textarea id="prompt-channel-qq-group" rows="12" maxlength="8192" required></textarea></label>
-          <label class="field"><span>QQ 私聊渠道提示</span><textarea id="prompt-channel-qq-private" rows="12" maxlength="8192" required></textarea></label>
-        </div>
-        <div id="prompt-catalog-editor" class="prompt-catalog-editor"></div>
       </section>
 
       <footer class="action-bar">

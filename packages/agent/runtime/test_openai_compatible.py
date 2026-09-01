@@ -222,6 +222,17 @@ class OpenAICompatibleProviderTest(unittest.IsolatedAsyncioTestCase):
             await self.collect(missing_usage)
         self.assertEqual(captured.exception.code, "provider_protocol_error")
 
+        missing_total = OpenAICompatibleProvider(
+            client=SimpleNamespace(chat=SimpleNamespace(completions=FakeCompletions([
+                chunk(content="完成"),
+                chunk(finish_reason="stop"),
+                chunk(usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1)),
+            ]))),
+        )
+        with self.assertRaises(ProviderFailure) as captured:
+            await self.collect(missing_total)
+        self.assertEqual(captured.exception.code, "provider_protocol_error")
+
     async def test_unknown_provider_failure_is_stable_and_non_retryable(self):
         completions = ScriptedCompletions([RuntimeError("raw provider body")])
         provider = OpenAICompatibleProvider(

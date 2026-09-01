@@ -62,20 +62,19 @@ type Metrics struct {
 	httpResponses [5]atomic.Uint64
 	httpDuration  durationHistogram
 
-	activeRuns       atomic.Int64
-	queuedRuns       atomic.Int64
-	runSucceeded     atomic.Uint64
-	runFailed        atomic.Uint64
-	runCancelled     atomic.Uint64
-	runTimedOut      atomic.Uint64
-	runDuration      durationHistogram
-	firstToken       durationHistogram
-	cancellations    atomic.Uint64
-	runRetries       atomic.Uint64
-	providerRetries  atomic.Uint64
-	modelInputTokens atomic.Uint64
-	modelOutputToken atomic.Uint64
-	modelCost        atomic.Uint64
+	activeRuns      atomic.Int64
+	queuedRuns      atomic.Int64
+	runSucceeded    atomic.Uint64
+	runFailed       atomic.Uint64
+	runCancelled    atomic.Uint64
+	runTimedOut     atomic.Uint64
+	runDuration     durationHistogram
+	firstOutput     durationHistogram
+	cancellations   atomic.Uint64
+	runRetries      atomic.Uint64
+	executorRetries atomic.Uint64
+	executorUnits   atomic.Uint64
+	executorCost    atomic.Uint64
 
 	capabilities outcomeCounters
 	capability   durationHistogram
@@ -151,22 +150,21 @@ func (m *Metrics) ObserveRun(status string, duration time.Duration) {
 	m.runDuration.observe(duration)
 }
 
-func (m *Metrics) ObserveFirstToken(duration time.Duration) {
-	m.firstToken.observe(duration)
+func (m *Metrics) ObserveFirstOutput(duration time.Duration) {
+	m.firstOutput.observe(duration)
 }
 
 func (m *Metrics) Cancellation() {
 	m.cancellations.Add(1)
 }
 
-func (m *Metrics) ProviderRetry() {
-	m.providerRetries.Add(1)
+func (m *Metrics) ExecutorRetry() {
+	m.executorRetries.Add(1)
 }
 
-func (m *Metrics) AddModelUsage(inputTokens, outputTokens, costMicrousd uint64) {
-	m.modelInputTokens.Add(inputTokens)
-	m.modelOutputToken.Add(outputTokens)
-	m.modelCost.Add(costMicrousd)
+func (m *Metrics) AddExecutorUsage(executionUnits, costMicrousd uint64) {
+	m.executorUnits.Add(executionUnits)
+	m.executorCost.Add(costMicrousd)
 }
 
 func (m *Metrics) ObserveCapability(success bool, duration time.Duration) {
@@ -234,13 +232,12 @@ func (m *Metrics) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	writeLabeledMetric(output, "ailuo_runs_total", "status", "cancelled", m.runCancelled.Load())
 	writeLabeledMetric(output, "ailuo_runs_total", "status", "timed_out", m.runTimedOut.Load())
 	writeHistogram(output, "ailuo_run_duration_seconds", &m.runDuration)
-	writeHistogram(output, "ailuo_model_first_token_duration_seconds", &m.firstToken)
+	writeHistogram(output, "ailuo_executor_first_output_duration_seconds", &m.firstOutput)
 	writeMetric(output, "ailuo_run_cancellations_total", m.cancellations.Load())
 	writeMetric(output, "ailuo_run_retries_total", m.runRetries.Load())
-	writeMetric(output, "ailuo_provider_retries_total", m.providerRetries.Load())
-	writeMetric(output, "ailuo_model_input_tokens_total", m.modelInputTokens.Load())
-	writeMetric(output, "ailuo_model_output_tokens_total", m.modelOutputToken.Load())
-	writeMetric(output, "ailuo_model_cost_microusd_total", m.modelCost.Load())
+	writeMetric(output, "ailuo_executor_retries_total", m.executorRetries.Load())
+	writeMetric(output, "ailuo_executor_execution_units_total", m.executorUnits.Load())
+	writeMetric(output, "ailuo_executor_cost_microusd_total", m.executorCost.Load())
 	writeOutcomes(output, "ailuo_capability_calls_total", &m.capabilities)
 	writeHistogram(output, "ailuo_capability_duration_seconds", &m.capability)
 	writeOutcomes(output, "ailuo_tool_calls_total", &m.tools)

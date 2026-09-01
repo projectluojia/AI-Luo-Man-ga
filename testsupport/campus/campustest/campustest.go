@@ -1,7 +1,7 @@
 // Package campustest 提供校园 App hosted 装配的共享测试辅助。
 //
 // guest 源码是本包 testdata 下的真实 Go 文件（testdata/guest/main.go），读入后
-// 由 packagefmt go-wasm 构建器在测试时现场编译——仓库不保存
+// 由 Go 工具链在测试时现场编译——仓库不保存
 // 任何测试用 wasm 包工件。guest 实现校园三工具（站点/线路/行程）并通过通用
 // ailuo.store 宿主函数读取宿主存储，与生产形态一致：业务逻辑在 guest，状态
 // 经 packstore 端口留在宿主。数据由测试经 packstore.Store 播种，App 隔离在
@@ -15,6 +15,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -24,7 +25,6 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/packstore"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
-	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/packagefmt"
 	"github.com/projectluojia/AI-Luo-Man-ga/testsupport/campus"
 )
 
@@ -130,21 +130,11 @@ func compileGuest() ([]byte, error) {
 	if err := os.WriteFile(filepath.Join(sourceDir, "go.mod"), []byte(goMod), 0o640); err != nil {
 		return nil, err
 	}
-	manifest := packagecontract.Manifest{
-		SchemaVersion: packagecontract.SchemaVersion, ID: campus.ServiceID, Version: campus.PackageVersion,
-		Storage: &packagecontract.Storage{
-			Namespace: campus.StorageNamespace, SchemaVersion: 1,
-			Sensitivity: packagecontract.SensitivityPublic, Retention: packagecontract.RetentionPermanent,
-		},
-		Components: []packagecontract.Component{{
-			ID: campus.BusComponentID, Mode: packagecontract.ModeHosted, Entrypoint: guestEntrypointName,
-			Exports: []string{
-				campus.BusStopSearchCapabilityID, campus.BusRouteListCapabilityID, campus.BusJourneySearchCapabilityID,
-			},
-		}},
-	}
-	if err := packagefmt.Build(context.Background(), sourceDir, manifest, []packagefmt.BuildSpec{{Tool: packagefmt.BuildToolGoWasm}}); err != nil {
-		return nil, fmt.Errorf("build guest wasm: %w", err)
+	command := exec.Command("go", "build", "-trimpath", "-o", guestEntrypointName, ".")
+	command.Dir = sourceDir
+	command.Env = append(os.Environ(), "GOOS=wasip1", "GOARCH=wasm")
+	if output, err := command.CombinedOutput(); err != nil {
+		return nil, fmt.Errorf("build guest wasm: %w\n%s", err, output)
 	}
 	return os.ReadFile(filepath.Join(sourceDir, guestEntrypointName))
 }

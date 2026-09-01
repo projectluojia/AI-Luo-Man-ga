@@ -189,13 +189,13 @@ func (s *Server) startChatRun(writer http.ResponseWriter, request *http.Request,
 	return echoID, true
 }
 
-// translateChatEvent 把内核 Echo 事件翻译为前端流式事件并写出；返回值表示
-// 事件是否为终态（reply.final / run.failed），终态后流必须结束。
+// translateChatEvent 把内核通用执行事件翻译为前端聊天事件；返回值表示
+// 事件是否为终态（run.completed / run.failed），终态后流必须结束。
 func (s *Server) translateChatEvent(writer io.Writer, event kernelecho.Event) (terminal bool) {
 	switch event.Type {
 	case "echo.started":
 		_ = writeChatSSE(writer, "track", map[string]any{
-			"kind": "agent_action", "text": "已收到你的问题，正在处理",
+			"kind": "executor_action", "text": "已收到你的问题，正在处理",
 		})
 		return false
 	case "capability.completed":
@@ -206,26 +206,26 @@ func (s *Server) translateChatEvent(writer io.Writer, event kernelecho.Event) (t
 			return false
 		}
 		_ = writeChatSSE(writer, "track", map[string]any{
-			"kind": "agent_action", "text": "已调用能力 " + payload.CapabilityID,
+			"kind": "executor_action", "text": "已调用能力 " + payload.CapabilityID,
 		})
 		return false
-	case "reply.delta":
-		var payload struct {
-			Text string `json:"text"`
-		}
-		if err := json.Unmarshal(event.Payload, &payload); err != nil || payload.Text == "" {
+	case "output.delta":
+		text, ok := decodeTextOutput(event.Payload)
+		if !ok {
 			return false
 		}
-		_ = writeChatSSE(writer, "text_delta", map[string]string{"text": payload.Text})
+		_ = writeChatSSE(writer, "text_delta", map[string]string{"text": text})
 		return false
-	case "reply.final":
-		var payload struct {
-			Text string `json:"text"`
+	case "run.completed":
+		text, ok := decodeTextOutput(event.Payload)
+		if !ok {
+			_ = writeChatSSE(writer, "error", map[string]string{"error": "执行结果格式不受聊天入口支持"})
+			return true
 		}
-		if err := json.Unmarshal(event.Payload, &payload); err != nil || payload.Text == "" {
+		if text == "" {
 			return false
 		}
-		_ = writeChatSSE(writer, "final", map[string]string{"reply": payload.Text})
+		_ = writeChatSSE(writer, "final", map[string]string{"reply": text})
 		return true
 	case "run.failed":
 		message := "处理失败"
@@ -240,6 +240,21 @@ func (s *Server) translateChatEvent(writer io.Writer, event kernelecho.Event) (t
 	default:
 		return false
 	}
+}
+
+func decodeTextOutput(payload []byte) (string, bool) {
+	var value struct {
+		ContentType string `json:"content_type"`
+		Data        []byte `json:"data"`
+	}
+	if err := json.Unmarshal(payload, &value); err != nil || !utf8.Valid(value.Data) {
+		return "", false
+	}
+	contentType := strings.ToLower(value.ContentType)
+	if !strings.HasPrefix(contentType, "text/plain") && !strings.HasPrefix(contentType, "application/json") {
+		return "", false
+	}
+	return string(value.Data), len(value.Data) > 0
 }
 
 // writeChatSSE 按前端流式协议写出一个事件。

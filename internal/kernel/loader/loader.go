@@ -25,7 +25,7 @@ const (
 	// RoleCapability 是能力提供者角色：经 Dispatcher 被内核调用（Invoke），
 	// 实现 Invoker 接口；具体包不属于 Loader 的固定知识。
 	RoleCapability = "capability"
-	// RoleExecutor 是 AI 执行者角色：驱动受治理 Run 会话、反向消费内核投影的
+	// RoleExecutor 是执行者角色：驱动受治理 Run 会话、反向消费内核投影的
 	// 能力，实现 internal/kernel/executor 契约，不注册任何被调能力。
 	RoleExecutor = "executor"
 
@@ -90,7 +90,7 @@ type Description struct {
 }
 
 // Runtime 是已加载运行时的生命周期面，全部角色共有。能力面按角色拆分：
-// 能力提供者实现 Invoker（被 Dispatcher 调用），AI 执行者实现
+// 能力提供者实现 Invoker（被 Dispatcher 调用），执行者实现
 // internal/kernel/executor.ClientProvider（驱动 Run 会话），角色由清单声明、
 // 加载期校验，不存在"不适用"的运行时方法。
 type Runtime interface {
@@ -592,28 +592,23 @@ func (m *Manager) Handler(id string) registry.Handler {
 	}
 }
 
-// Executor 解析本 Deployment 唯一的执行者运行时（清单声明 RoleExecutor），
-// 返回其租约；零个或多个执行者都 fail-closed，避免装配期不确定路由。调用方
-// 负责 Release，并按 internal/kernel/executor 契约取用客户端。
-func (m *Manager) Executor(ctx context.Context) (*Lease, error) {
-	m.mu.RLock()
-	var id string
-	matches := 0
-	for _, item := range m.entries {
-		if item.manifest.Role == RoleExecutor {
-			matches++
-			id = item.manifest.ID
-		}
+// Executor 按调用方显式选择的运行时 ID 获取执行者租约。Deployment 可以安装
+// 多个执行者，App 的 ExecutorID 决定本次使用哪个；不按安装顺序或数量猜测。
+func (m *Manager) Executor(ctx context.Context, id string) (*Lease, error) {
+	if !stableIDPattern.MatchString(id) {
+		return nil, ErrInvalidManifest
 	}
-	m.mu.RUnlock()
-	switch matches {
-	case 1:
-		return m.Acquire(ctx, id)
-	case 0:
-		return nil, fmt.Errorf("%w: no executor runtime is registered", ErrNotFound)
-	default:
-		return nil, fmt.Errorf("%w: %d executor runtimes are registered, expected exactly one", ErrInvalidManifest, matches)
+	item, err := m.resolve(id)
+	if err != nil {
+		return nil, err
 	}
+	item.mu.Lock()
+	role := item.manifest.Role
+	item.mu.Unlock()
+	if role != RoleExecutor {
+		return nil, ErrInvalidManifest
+	}
+	return m.Acquire(ctx, id)
 }
 
 func (m *Manager) Warmup(ctx context.Context, ids []string, concurrency int) error {
@@ -865,6 +860,7 @@ func ValidateManifest(manifest Manifest) error {
 	if !stableIDPattern.MatchString(manifest.ID) ||
 		(manifest.Mode != ModeHosted && manifest.Mode != ModeIsolated) ||
 		(manifest.Role != RoleCapability && manifest.Role != RoleExecutor) ||
+		(manifest.Role == RoleExecutor && manifest.Mode != ModeIsolated) ||
 		manifest.IdleTTL < 0 || len(manifest.LockedDigest) != 64 {
 		return ErrInvalidManifest
 	}
@@ -872,6 +868,9 @@ func ValidateManifest(manifest Manifest) error {
 		return ErrInvalidManifest
 	}
 	if err := packagecontract.ValidateHostedFunctions(manifest.HostFunctions); err != nil {
+		return ErrInvalidManifest
+	}
+	if manifest.Mode != ModeHosted && len(manifest.HostFunctions) > 0 {
 		return ErrInvalidManifest
 	}
 	if manifest.Storage != nil {

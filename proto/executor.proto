@@ -2,10 +2,10 @@ syntax = "proto3";
 
 package ailuo.executor.v1;
 
-option go_package = "github.com/projectluojia/AI-Luo-Man-ga/gen/executorv1;executorv1";
+option go_package = "github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/executorv1;executorv1";
 
-// ExecutorRuntime 是内核 AI 执行者会话协议：内核与执行者（LLM 智能体、
-// 规划器、工作流引擎等任何可驱动受治理 Run 会话的实现）之间协商执行。
+// ExecutorRuntime 是内核执行者会话协议：内核与任意能够驱动受治理 Run 会话的
+// 执行者实现之间协商执行。执行者可以是规划器、工作流引擎或其他运行时。
 service ExecutorRuntime {
   rpc Run(stream ExecutorFrame) returns (stream ExecutorFrame);
   rpc Health(HealthRequest) returns (HealthResponse);
@@ -13,12 +13,12 @@ service ExecutorRuntime {
 
 message HealthRequest {
   repeated string accepted_protocol_versions = 1;
-  string model = 2;
+  reserved 2;
 }
 
 message HealthResponse {
   bool ready = 1;
-  string provider = 2;
+  reserved 2;
   repeated string supported_protocol_versions = 3;
   string status_code = 4;
 }
@@ -32,46 +32,41 @@ message ExecutorFrame {
     StartRun start_run = 10;
     CapabilityCall capability_call = 11;
     CapabilityResult capability_result = 12;
-    ReplyDelta reply_delta = 13;
-    FinalMessage final_message = 14;
+    OutputDelta output_delta = 13;
+    FinalResult final_result = 14;
     RunFailure run_failure = 15;
     CancelRun cancel_run = 16;
     RunAccepted run_accepted = 17;
-    RunUsage run_usage = 18;
+    ResourceUsage resource_usage = 18;
   }
 }
 
 message StartRun {
   string app_id = 1;
-  string input_message = 2;
-  string timezone = 3;
+  Payload input_payload = 2;
+  reserved 3, 5, 6, 10, 11, 12, 13, 14, 15;
   repeated Capability capabilities = 4;
-  string model = 5;
-  string system_prompt = 6;
   uint32 max_steps = 7;
   string protocol_version = 8;
-  uint32 max_tool_calls = 9;
-  uint64 max_input_tokens = 10;
-  uint64 max_output_tokens = 11;
-  uint64 max_total_tokens = 12;
-  uint64 max_output_bytes = 13;
-  uint64 max_cost_microusd = 14;
-  uint32 provider_timeout_ms = 15;
+  uint32 max_capability_calls = 9;
   string trace_id = 16;
   string parent_span_id = 17;
   string parent_run_id = 18;
+  Payload context_payload = 19;
+  uint64 max_execution_units = 20;
+  uint64 max_output_bytes = 21;
+  uint64 max_cost_microusd = 22;
+  Payload executor_config = 23;
 }
 
 message RunAccepted {
   string protocol_version = 1;
 }
 
-message RunUsage {
-  uint64 input_tokens = 1;
-  uint64 output_tokens = 2;
-  uint64 total_tokens = 3;
-  uint64 cost_microusd = 4;
-  uint32 provider_retries = 5;
+message ResourceUsage {
+  uint64 execution_units = 1;
+  uint64 cost_microusd = 2;
+  uint32 retries = 3;
 }
 
 message Capability {
@@ -97,12 +92,17 @@ message CapabilityResult {
   string error_message = 6;
 }
 
-message ReplyDelta {
-  string text = 1;
+message Payload {
+  string content_type = 1;
+  bytes data = 2;
 }
 
-message FinalMessage {
-  string text = 1;
+message OutputDelta {
+  Payload payload = 1;
+}
+
+message FinalResult {
+  Payload payload = 1;
 }
 
 message RunFailure {
