@@ -85,10 +85,8 @@ type LockedArtifact struct {
 
 // ProcessSpec 是进程执行规格（isolated 模式）；Limits 为通用资源上限。
 type ProcessSpec struct {
-	Path string   `json:"path"`
-	Args []string `json:"args"`
-	// Env 是安装锁定的非秘密环境项；宿主不会从自身环境或部署配置补齐它。
-	Env     []string      `json:"env"`
+	Path    string        `json:"path"`
+	Args    []string      `json:"args"`
 	WorkDir string        `json:"work_dir"`
 	Address string        `json:"address"`
 	Limits  ProcessLimits `json:"limits,omitempty"`
@@ -370,11 +368,11 @@ func FindComponent(manifest Manifest, id string) (Component, bool) {
 }
 
 // ValidateProcessSpec 校验进程执行规格的形状：绝对路径、本地地址、参数与
-// 环境数量上限、资源上限闭式。文件系统存在性校验由宿主在装载时执行。
+// 资源上限闭式。文件系统存在性校验由宿主在装载时执行。
 func ValidateProcessSpec(spec ProcessSpec) error {
 	if !filepath.IsAbs(spec.Path) || filepath.Clean(spec.Path) != spec.Path ||
 		!filepath.IsAbs(spec.WorkDir) || filepath.Clean(spec.WorkDir) != spec.WorkDir ||
-		!IsLocalRuntimeAddress(spec.Address) || len(spec.Args) > 128 || len(spec.Env) > 64 ||
+		!IsLocalRuntimeAddress(spec.Address) || len(spec.Args) > 128 ||
 		!ValidProcessLimits(spec.Limits) {
 		return ErrInvalidFormat
 	}
