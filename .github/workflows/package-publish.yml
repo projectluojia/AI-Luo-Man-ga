@@ -96,7 +96,7 @@ jobs:
             echo "package-dir 必须是调用方仓库内的相对路径" >&2
             exit 1
           }
-          [[ -n "${TEST_COMMAND:-}" ]] || {
+          [[ -n "${TEST_COMMAND//[[:space:]]/}" ]] || {
             echo "test-command 不能为空" >&2
             exit 1
           }
@@ -146,11 +146,8 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         if: ${{ steps.inspect.outputs.uses-go == 'true' }}
         with:
-          go-version-file: ${{ inputs.package-dir }}/go.mod
-          cache: true
-          cache-dependency-path: |
-            ${{ inputs.package-dir }}/go.mod
-            ${{ inputs.package-dir }}/go.sum
+          go-version: stable
+          cache: false
       - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         if: ${{ steps.inspect.outputs.uses-uv == 'true' }}
         with:
