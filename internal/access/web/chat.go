@@ -17,15 +17,11 @@ import (
 )
 
 // chatRequest 是产品前端（LuoYing-Frontend）的聊天契约：文本消息经受治理
-// Intake 进入平台标准链路。session_id 只用于平台会话绑定记录，客户端提供的
-// user_id/user_name/session_id 不作为身份依据，身份只来自可信 Web 登录态。
+// Intake 进入平台标准链路，身份和会话只来自可信 Web 登录态。
 type chatRequest struct {
-	SessionID string   `json:"session_id"`
-	UserID    string   `json:"user_id"`
-	UserName  string   `json:"user_name"`
-	Text      string   `json:"text"`
-	ImageIDs  []string `json:"image_ids"`
-	FileIDs   []string `json:"file_ids"`
+	Text     string   `json:"text"`
+	ImageIDs []string `json:"image_ids"`
+	FileIDs  []string `json:"file_ids"`
 }
 
 // chatStream 提供前端流式聊天契约：POST /chat/stream。请求经标准 Intake →
