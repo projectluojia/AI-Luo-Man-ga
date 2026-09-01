@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/packagecontract"
-	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/packageio"
+	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packagecontract"
+	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packageio"
 )
 
 func TestPublishStageRestoresOldDirectoryWhenPublishRenameFails(t *testing.T) {

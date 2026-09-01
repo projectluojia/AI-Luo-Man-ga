@@ -7,10 +7,10 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packagecontract"
+	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packageio"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
-	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/packagecontract"
-	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/packageio"
 )
 
 // VerifyHostedProtocol 在自动打包前用受限 WasmHost 逐组件执行一次协议探测。

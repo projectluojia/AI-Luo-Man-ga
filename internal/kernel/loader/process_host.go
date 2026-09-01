@@ -13,10 +13,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packagecontract"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/executor"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
-	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/packagecontract"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"

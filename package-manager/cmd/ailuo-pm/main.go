@@ -16,9 +16,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/packagecontract"
+	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packagecontract"
+	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packageio"
 	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/packagefmt"
-	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/packageio"
 	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/packmgr"
 	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/sdkgen"
 )

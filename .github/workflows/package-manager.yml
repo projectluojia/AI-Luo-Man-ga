@@ -1,16 +1,18 @@
-name: Package Manager
+name: Package Manager modules
 
-# package-manager module 里的 pkg/contract 子包是 Core 唯一允许消费的公共边界；
-# 作者工具和分发实现也在该 module 内，但不进入 Core 启动路径。
+# contracts 是 Core 唯一消费的公共边界；package-manager 是作者工具和分发实现。
+# 两个嵌套 module 独立验证，不并入 Core 的 ci-required。
 
 on:
   push:
     branches: [main]
     paths:
+      - contracts/**
       - package-manager/**
       - .github/workflows/package-manager.yml
   pull_request:
     paths:
+      - contracts/**
       - package-manager/**
       - .github/workflows/package-manager.yml
   workflow_dispatch:
@@ -35,7 +37,20 @@ jobs:
         with:
           go-version-file: package-manager/go.mod
           cache: true
-          cache-dependency-path: package-manager/go.sum
+          cache-dependency-path: |
+            contracts/go.sum
+            package-manager/go.sum
+      - name: 检查 contracts module
+        working-directory: contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          go mod verify
+          go mod tidy -diff
+          files="$(gofmt -l .)"
+          test -z "$files" || { echo "$files"; exit 1; }
+          go test ./...
+          go vet ./...
       - name: 检查 Package Manager module
         working-directory: package-manager
         shell: bash

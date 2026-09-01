@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"github.com/iancoleman/strcase"
-	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/capability"
+	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/capability"
 )
 
 // emitPython 渲染 Python SDK：client.py（实现）+ __init__.py（重新导出公共
