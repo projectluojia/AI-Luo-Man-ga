@@ -47,7 +47,7 @@ func TestChatStreamRejectsInvalidRequests(t *testing.T) {
 		code string
 	}{
 		{name: "empty text", body: `{"text":"  "}`, code: "invalid_message"},
-		{name: "unknown field", body: `{"text":"hi","mystery":1}`, code: "invalid_request"},
+		{name: "client identity field", body: `{"text":"hi","user_id":"spoofed"}`, code: "invalid_request"},
 		{name: "malformed json", body: `{"text":`, code: "invalid_request"},
 		{name: "trailing json", body: `{"text":"hi"}{}`, code: "invalid_request"},
 		{name: "legacy client field", body: `{"text":"hi","user_id":"web-user"}`, code: "invalid_request"},
