@@ -55,7 +55,8 @@ AI珞 V3 是长期维护的生产级项目。功能范围可以窄，但已实�
 - `internal/services`：业务 Service 与运行时装配；通过 `ToolDependencies` 使用 Tool。
 - 具体存储实现位于领域/内核窄端口之后；测试适配器可放 `internal/storage/memory`。
 - `contracts`：独立 Go module，提供 Core 与外部包共同消费的
-  `capability`、`packagecontract` 和 `packageio` 稳定契约；不依赖 Core `internal`。
+  `capability`、`packagecontract`、`packageio` 和 `projectcontract` 稳定契约；其中
+  `projectcontract` 定义项目依赖清单与 `ailuo.lock` 校验；不依赖 Core `internal`。
 - `package-manager`：独立 Go module，提供作者侧 `packagefmt`、安装/发布
   `packmgr`、`sdkgen` 与 `cmd/ailuo-pm`；Core 生产代码不得导入该实现。
 - `packages`：同仓运行时包工作区（当前包含 Agent 与 Campus bus），不是 Core
