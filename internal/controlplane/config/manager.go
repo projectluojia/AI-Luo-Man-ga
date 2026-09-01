@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -49,14 +50,24 @@ func (m *Service) Snapshot() Snapshot {
 }
 
 func (m *Service) Save(input SaveInput) (Snapshot, error) {
-	settings, err := normalize(input)
-	if err != nil || len(input.QQWSToken) > MaxQQTokenBytes {
+	if len(input.QQWSToken) > MaxQQTokenBytes {
 		return Snapshot{}, ErrInvalid
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if input.Revision != m.settings.Revision {
 		return Snapshot{}, ErrConflict
+	}
+	if config := bytes.TrimSpace(input.ExecutorConfig); len(config) == 0 || bytes.Equal(config, []byte("null")) {
+		if m.settings.Revision > 0 {
+			input.ExecutorConfig = append(json.RawMessage(nil), m.settings.ExecutorConfig...)
+		} else {
+			input.ExecutorConfig = json.RawMessage(`{}`)
+		}
+	}
+	settings, err := normalize(input)
+	if err != nil {
+		return Snapshot{}, ErrInvalid
 	}
 	if input.ClearQQWSToken {
 		if err := os.Remove(m.qqSecretPath); err != nil && !errors.Is(err, os.ErrNotExist) {

@@ -43,28 +43,49 @@ func TestConfigAPIStoresQQSecretWithoutReturningIt(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
-	if strings.Contains(recorder.Body.String(), "never-return-this") {
-		t.Fatal("secret leaked in configuration response")
+	if strings.Contains(recorder.Body.String(), "never-return-this") || strings.Contains(recorder.Body.String(), `"executor_config"`) {
+		t.Fatal("protected configuration leaked in response")
 	}
 	if !strings.Contains(recorder.Body.String(), `"qq_ws_token_configured":true`) {
 		t.Fatalf("body=%s", recorder.Body.String())
 	}
-	var snapshot controlconfig.Snapshot
+	var snapshot controlconfig.PublicSnapshot
 	if err := json.Unmarshal(recorder.Body.Bytes(), &snapshot); err != nil {
 		t.Fatal(err)
 	}
 	if len(snapshot.Settings.QQQuickReplies) != 1 || snapshot.Settings.QQQuickReplies[0].Reply != "pong" ||
 		len(snapshot.Settings.QQPokeReplies) != 1 || snapshot.Settings.QQPokeReplies[0] != "在呢" ||
-		snapshot.Settings.AppID != "test-app" ||
-		string(snapshot.Settings.ExecutorConfig) != `{"strategy":"test"}` {
+		snapshot.Settings.AppID != "test-app" {
 		t.Fatalf("snapshot=%+v", snapshot.Settings)
+	}
+	resolved, ok := manager.CurrentResolved()
+	if !ok || string(resolved.Settings.ExecutorConfig) != `{"strategy":"test"}` {
+		t.Fatalf("stored executor config=%q", resolved.Settings.ExecutorConfig)
 	}
 	getRequest := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:9178/api/v1/config", nil)
 	getRequest.RemoteAddr = "127.0.0.1:43000"
 	getRecorder := httptest.NewRecorder()
 	server.Handler().ServeHTTP(getRecorder, getRequest)
-	if getRecorder.Code != http.StatusOK || !strings.Contains(getRecorder.Body.String(), `"qq_poke_replies":["在呢"]`) {
+	if getRecorder.Code != http.StatusOK || !strings.Contains(getRecorder.Body.String(), `"qq_poke_replies":["在呢"]`) || strings.Contains(getRecorder.Body.String(), `"executor_config"`) {
 		t.Fatalf("status=%d body=%s", getRecorder.Code, getRecorder.Body.String())
+	}
+	payload.Revision = snapshot.Settings.Revision
+	payload.ExecutorConfig = nil
+	payload.QQWSToken = ""
+	body, err = json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondRequest := httptest.NewRequest(http.MethodPut, "http://127.0.0.1:9178/api/v1/config", bytes.NewReader(body))
+	secondRequest.RemoteAddr = "127.0.0.1:43000"
+	secondRecorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(secondRecorder, secondRequest)
+	if secondRecorder.Code != http.StatusOK {
+		t.Fatalf("second save status=%d body=%s", secondRecorder.Code, secondRecorder.Body.String())
+	}
+	resolved, ok = manager.CurrentResolved()
+	if !ok || string(resolved.Settings.ExecutorConfig) != `{"strategy":"test"}` {
+		t.Fatalf("executor config was overwritten: %q", resolved.Settings.ExecutorConfig)
 	}
 }
 
