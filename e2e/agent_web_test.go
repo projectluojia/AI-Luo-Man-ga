@@ -339,7 +339,7 @@ func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 	echoID := accepted["echo_id"]
 	eventsRecorder := httptest.NewRecorder()
 	handler.ServeHTTP(eventsRecorder, httptest.NewRequest(http.MethodGet, accepted["events_url"], nil))
-	if eventsRecorder.Code != http.StatusOK || !strings.Contains(eventsRecorder.Body.String(), "event: reply.final") {
+	if eventsRecorder.Code != http.StatusOK || !strings.Contains(eventsRecorder.Body.String(), "event: run.completed") {
 		t.Fatalf("events status=%d body=%s logs=%s", eventsRecorder.Code, eventsRecorder.Body.String(), logs.String())
 	}
 	record, events, err := store.GetEcho(ctx, campus.AppID, echoID)
