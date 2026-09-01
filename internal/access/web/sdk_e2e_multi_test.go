@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/projectluojia/AI-Luo-Man-ga/pkg/sdkgen"
+	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/sdkgen"
 	"github.com/projectluojia/AI-Luo-Man-ga/testsupport/campus"
 )
 

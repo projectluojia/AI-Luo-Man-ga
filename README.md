@@ -30,10 +30,10 @@ Web Access API
 make test-agent
 # 先设置绝对安装根，再按包清单构建并安装两个包
 export AILUO_RUNTIME_INSTALL_ROOT=/absolute/path/to/ailuo/runtime
-go run . pack packages/agent dist
-go run . pack packages/campus-bus dist
-go run . install --root "$AILUO_RUNTIME_INSTALL_ROOT" dist/agent-1.0.0.tgz
-go run . install --root "$AILUO_RUNTIME_INSTALL_ROOT" dist/campus-1.0.0.tgz
+(cd package-manager && go run ./cmd/ailuo-pm pack ../packages/agent ../dist)
+(cd package-manager && go run ./cmd/ailuo-pm pack ../packages/campus-bus ../dist)
+(cd package-manager && go run ./cmd/ailuo-pm install --root "$AILUO_RUNTIME_INSTALL_ROOT" ../dist/agent-1.0.0.tgz)
+(cd package-manager && go run ./cmd/ailuo-pm install --root "$AILUO_RUNTIME_INSTALL_ROOT" ../dist/campus-1.0.0.tgz)
 make run
 ```
 
@@ -72,6 +72,8 @@ Core 不再内置或自动播种业务演示数据；测试夹具通过通用 St
 
 ```bash
 make test
+make test-contracts
+make test-package-manager
 make test-agent
 make test-campus
 make test-race

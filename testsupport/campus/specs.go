@@ -3,7 +3,7 @@ package campus
 import (
 	"encoding/json"
 
-	"github.com/projectluojia/AI-Luo-Man-ga/pkg/capability"
+	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/capability"
 )
 
 // campus 测试夹具使用的 App 与包契约标识。业务实现位于 packages/campus-bus；

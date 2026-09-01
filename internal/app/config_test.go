@@ -16,9 +16,8 @@ import (
 	kernelecho "github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
-	"github.com/projectluojia/AI-Luo-Man-ga/pkg/capability"
-	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packagecontract"
-	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
+	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/capability"
+	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/packagecontract"
 )
 
 func TestLoadConfigUsesControlPlaneDefaults(t *testing.T) {
@@ -67,7 +66,7 @@ func TestInitialCapabilityIDsUseInstalledMetadata(t *testing.T) {
 }
 
 func TestDefaultInstallRootIsAbsoluteOrEmpty(t *testing.T) {
-	root := packmgr.DefaultInstallRoot()
+	root := defaultRuntimeInstallRoot()
 	if root == "" {
 		return
 	}
