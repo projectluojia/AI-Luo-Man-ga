@@ -3,6 +3,7 @@ package memory_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -89,5 +90,20 @@ func TestHostCallRejectsForeignScope(t *testing.T) {
 	listFn := hostFunctionByName(packstore.HostFunctions(docs, "test/pkg"), packstore.OpList)
 	if _, err := listFn.Call(context.Background(), contracts.RequestContext{}, []byte(`{"collection":"routes","limit":10}`)); err == nil {
 		t.Fatal("empty AppID call unexpectedly succeeded")
+	}
+}
+
+func TestHostCallRejectsNonCanonicalRequestJSON(t *testing.T) {
+	docs := memory.NewDocuments()
+	listFn := hostFunctionByName(packstore.HostFunctions(docs, "test/pkg"), packstore.OpList)
+	for _, payload := range []string{
+		`{"collection":"routes","limit":10,"extra":true}`,
+		`{"collection":"routes","limit":10,"limit":10}`,
+		`{"collection":"routes","limit":10} trailing`,
+	} {
+		_, err := listFn.Call(context.Background(), contracts.RequestContext{AppID: "app-a"}, []byte(payload))
+		if !errors.Is(err, packstore.ErrInvalidKey) {
+			t.Errorf("payload %q error=%v, want strict request rejection", payload, err)
+		}
 	}
 }
