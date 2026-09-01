@@ -47,6 +47,9 @@ func RegisterInstalled(ctx context.Context, manager *Manager, target *registry.R
 	serviceByPackage := make(map[string]registry.ServiceRegistration)
 	for _, record := range records {
 		manifests = append(manifests, record.Runtime)
+		if record.Runtime.Role == RoleExecutor {
+			continue
+		}
 		handler := manager.Handler(record.Runtime.ID)
 		for _, spec := range record.Tools {
 			tools = append(tools, registry.ToolRegistration{Spec: spec, Handler: handler})
@@ -58,7 +61,7 @@ func RegisterInstalled(ctx context.Context, manager *Manager, target *registry.R
 				Handler registry.Handler
 			})
 		}
-		if record.ComponentOrder == 0 {
+		if record.Service.ID != "" {
 			entry.Spec = record.Service
 		}
 		for _, spec := range record.Capabilities {
@@ -103,9 +106,8 @@ func RegisterInstalled(ctx context.Context, manager *Manager, target *registry.R
 	return nil
 }
 
-// validatePackageGroups 确保包含能力组件的包恰好有一个主 Service 记录。
-// Service 只从 ComponentOrder=0 的记录取出；缺失或重复都会让包的能力面
-// 与运行时注册结果不一致，因此必须在发布 Loader 前拒绝。
+// validatePackageGroups 确保包含能力组件的包恰好有一个主 Service 记录，
+// 且执行者组件不会混入 Registry 的能力面。
 func validatePackageGroups(records []InstalledRecord) error {
 	groups := make(map[string][]InstalledRecord)
 	for _, record := range records {
@@ -113,22 +115,23 @@ func validatePackageGroups(records []InstalledRecord) error {
 	}
 	for packageID, group := range groups {
 		hasCapabilityComponent := false
-		primaryCount := 0
+		serviceCount := 0
 		for _, record := range group {
 			if record.Runtime.Role == RoleExecutor {
+				if record.Service.ID != "" || len(record.Tools) > 0 || len(record.Capabilities) > 0 {
+					return fmt.Errorf("%w: package %q executor component carries capability metadata", ErrInvalidInstalledRecord, packageID)
+				}
 				continue
 			}
 			hasCapabilityComponent = true
-			if record.ComponentOrder == 0 {
-				primaryCount++
-				if record.Service.ID == "" {
-					return fmt.Errorf("%w: package %q primary component has no service", ErrInvalidInstalledRecord, packageID)
-				}
-			} else if record.Service.ID != "" {
-				return fmt.Errorf("%w: package %q service is not on primary component", ErrInvalidInstalledRecord, packageID)
+			if len(record.Tools) > 0 && record.Service.ID == "" {
+				return fmt.Errorf("%w: package %q tools are not attached to its service", ErrInvalidInstalledRecord, packageID)
+			}
+			if record.Service.ID != "" {
+				serviceCount++
 			}
 		}
-		if hasCapabilityComponent && primaryCount != 1 {
+		if hasCapabilityComponent && serviceCount != 1 {
 			return fmt.Errorf("%w: package %q must have exactly one primary service component", ErrInvalidInstalledRecord, packageID)
 		}
 	}
@@ -144,6 +147,9 @@ func ValidateInstalledRecord(record InstalledRecord) error {
 	// executor 记录不携带能力面：会话客户端经 executor 契约取用，
 	// 不进 Registry——注册管线对其只校验运行时清单。
 	if record.Runtime.Role == RoleExecutor {
+		if record.Service.ID != "" || len(record.Tools) > 0 || len(record.Capabilities) > 0 {
+			return ErrInvalidInstalledRecord
+		}
 		if err := ValidateManifest(record.Runtime); err != nil {
 			return errors.Join(ErrInvalidInstalledRecord, err)
 		}
@@ -171,6 +177,8 @@ func validateRecordSpecs(record InstalledRecord) error {
 				return ErrInvalidInstalledRecord
 			}
 		}
+	} else if len(record.Tools) > 0 {
+		return ErrInvalidInstalledRecord
 	}
 	for _, capability := range record.Capabilities {
 		if capability.Version != record.Runtime.Version {

@@ -30,9 +30,10 @@ func openSweepFixture(t *testing.T) (*sqlite.Store, *confirmation.Service, *task
 		ID: "echo-1", AppID: testAppID, InputMessage: "test-input", Status: kernelecho.StatusRunning, CreatedAt: now,
 	}, kernelecho.RunRecord{
 		ID: "run-1", RunGroupID: "run-1", AppID: testAppID, EchoID: "echo-1", Attempt: 1, Status: kernelecho.RunStatusQueued,
-		Model: "test-model", ModelConfigVersion: "v1", ProtocolVersion: "1.0", MaxSteps: 8, MaxToolCalls: 4,
-		MaxInputTokens: 4096, MaxOutputTokens: 2048, MaxTotalTokens: 8192, MaxOutputBytes: 65536,
-		ProviderTimeoutMS: 5000, Deadline: now.Add(time.Hour), AvailableAt: now, CreatedAt: now,
+		ExecutorID: "executor.test", ExecutorConfig: json.RawMessage(`{"strategy":"test"}`), ConfigRevision: "v1", ProtocolVersion: "1.0", MaxSteps: 8, MaxCapabilityCalls: 4,
+		InputPayload: []byte("test-input"), InputContentType: "text/plain; charset=utf-8",
+		MaxExecutionUnits: 8192, MaxOutputBytes: 65536,
+		ExecutionTimeoutMS: 5000, Deadline: now.Add(time.Hour), AvailableAt: now, CreatedAt: now,
 		RecoverableState: json.RawMessage(`{}`),
 	}, 0); err != nil || !created {
 		t.Fatal(err)

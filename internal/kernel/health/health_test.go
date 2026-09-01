@@ -26,10 +26,10 @@ func (h *healthClient) Run(_ context.Context, _ ...grpc.CallOption) (executor.Ru
 	return nil, errors.New("run not supported in health test")
 }
 
-func TestExecutorCheckerReportsProviderReadiness(t *testing.T) {
+func TestExecutorCheckerReportsReadiness(t *testing.T) {
 	checker := ExecutorChecker{Client: &healthClient{response: &executor.HealthResponse{
-		Ready: true, Provider: "test", SupportedProtocolVersions: []string{executor.Version},
-	}}, Model: "test-model"}
+		Ready: true, SupportedProtocolVersions: []string{executor.Version},
+	}}}
 	if err := checker.Ping(context.Background()); err != nil {
 		t.Fatalf("ready executor rejected: %v", err)
 	}
@@ -38,7 +38,7 @@ func TestExecutorCheckerReportsProviderReadiness(t *testing.T) {
 func TestExecutorCheckerRejectsVersionMismatch(t *testing.T) {
 	checker := ExecutorChecker{Client: &healthClient{response: &executor.HealthResponse{
 		Ready: true, SupportedProtocolVersions: []string{"9.9"},
-	}}, Model: "test-model"}
+	}}}
 	if err := checker.Ping(context.Background()); !errors.Is(err, executor.ErrVersionMismatch) {
 		t.Fatalf("mismatch error = %v, want ErrVersionMismatch", err)
 	}
@@ -47,14 +47,14 @@ func TestExecutorCheckerRejectsVersionMismatch(t *testing.T) {
 func TestExecutorCheckerRejectsUnreadyExecutor(t *testing.T) {
 	checker := ExecutorChecker{Client: &healthClient{response: &executor.HealthResponse{
 		Ready: false, SupportedProtocolVersions: []string{executor.Version},
-	}}, Model: "test-model"}
+	}}}
 	if err := checker.Ping(context.Background()); err == nil {
 		t.Fatal("unready executor must fail")
 	}
 }
 
 func TestExecutorCheckerPropagatesRPCError(t *testing.T) {
-	checker := ExecutorChecker{Client: &healthClient{err: errors.New("boom")}, Model: "test-model"}
+	checker := ExecutorChecker{Client: &healthClient{err: errors.New("boom")}}
 	if err := checker.Ping(context.Background()); err == nil {
 		t.Fatal("rpc error must propagate")
 	}
@@ -74,19 +74,13 @@ func (s staticSource) Revision(context.Context, string, string) (appconfig.Confi
 	return s.config, s.err
 }
 
-func TestExecutorAppCheckerUsesCurrentAppModel(t *testing.T) {
-	checkedModel := ""
-	client := &capturingHealthClient{respond: func(request *executor.HealthRequest) *executor.HealthResponse {
-		checkedModel = request.Model
-		return &executor.HealthResponse{
-			Ready: true, Provider: "test", SupportedProtocolVersions: []string{executor.Version},
-		}
+func TestExecutorAppCheckerUsesCurrentAppPolicy(t *testing.T) {
+	client := &healthClient{response: &executor.HealthResponse{
+		Ready: true, SupportedProtocolVersions: []string{executor.Version},
 	}}
 	config, err := appconfig.Normalize(appconfig.Config{
-		AppID: "campus-services", Enabled: true, Model: "current-model",
-		SystemPrompt: "系统提示", Timezone: "Asia/Shanghai",
-		MaxSteps: 8, MaxToolCalls: 8, MaxInputTokens: 32768, MaxOutputTokens: 8192,
-		MaxTotalTokens: 40960, MaxOutputBytes: 65536, ProviderTimeout: 30 * time.Second,
+		AppID: "campus-services", Enabled: true, ExecutorID: "executor.test", ExecutorConfig: []byte(`{"strategy":"test"}`),
+		MaxSteps: 8, MaxCapabilityCalls: 8, MaxExecutionUnits: 40960, MaxOutputBytes: 65536, ExecutionTimeout: 30 * time.Second,
 		EnabledCapabilities: []string{"campus.bus.routes.list"},
 	})
 	if err != nil {
@@ -97,17 +91,14 @@ func TestExecutorAppCheckerUsesCurrentAppModel(t *testing.T) {
 	if err := checker.Ping(context.Background()); err != nil {
 		t.Fatalf("ping: %v", err)
 	}
-	if checkedModel != "current-model" {
-		t.Fatalf("checked model = %q, want current-model", checkedModel)
-	}
 }
 
 func TestExecutorAppCheckerRejectsDisabledOrInvalidApp(t *testing.T) {
-	disabled := staticSource{config: appconfig.Config{AppID: "campus-services", Enabled: false, Model: "m", Generation: 1}}
+	disabled := staticSource{config: appconfig.Config{AppID: "campus-services", Enabled: false, ExecutorID: "m", Generation: 1}}
 	if err := (ExecutorAppChecker{Client: &healthClient{}, Source: disabled, AppID: "campus-services"}).Ping(context.Background()); err == nil {
 		t.Fatal("disabled app must fail readiness")
 	}
-	invalid := staticSource{config: appconfig.Config{AppID: "campus-services", Enabled: true, Model: "m"}}
+	invalid := staticSource{config: appconfig.Config{AppID: "campus-services", Enabled: true, ExecutorID: "m"}}
 	if err := (ExecutorAppChecker{Client: &healthClient{}, Source: invalid, AppID: "campus-services"}).Ping(context.Background()); err == nil {
 		t.Fatal("invalid app config must fail readiness")
 	}
@@ -115,17 +106,4 @@ func TestExecutorAppCheckerRejectsDisabledOrInvalidApp(t *testing.T) {
 	if err := (ExecutorAppChecker{Client: &healthClient{}, Source: missing, AppID: "campus-services"}).Ping(context.Background()); err == nil {
 		t.Fatal("source error must fail readiness")
 	}
-}
-
-// capturingHealthClient 记录 Health 请求并返回注入的响应。
-type capturingHealthClient struct {
-	respond func(*executor.HealthRequest) *executor.HealthResponse
-}
-
-func (c *capturingHealthClient) Health(_ context.Context, request *executor.HealthRequest, _ ...grpc.CallOption) (*executor.HealthResponse, error) {
-	return c.respond(request), nil
-}
-
-func (c *capturingHealthClient) Run(_ context.Context, _ ...grpc.CallOption) (executor.RunStream, error) {
-	return nil, errors.New("run not supported in health test")
 }

@@ -1,7 +1,6 @@
 package echo_test
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -14,7 +13,7 @@ import (
 	"time"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/capability"
-	executorv1 "github.com/projectluojia/AI-Luo-Man-ga/gen/executorv1"
+	executorv1 "github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/executorv1"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/appconfig"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	kernelecho "github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
@@ -85,55 +84,59 @@ func newSessionSource(t *testing.T, store *sqlite.Store) *session.Service {
 	return service
 }
 
-type fakeAgent struct {
+type fakeExecutor struct {
 	executorv1.UnimplementedExecutorRuntimeServer
 	testing *testing.T
 }
 
-type boundaryAgent struct {
+type boundaryExecutor struct {
 	executorv1.UnimplementedExecutorRuntimeServer
 	testing *testing.T
 }
 
-type duplicateCallAgent struct {
+type duplicateCallExecutor struct {
 	executorv1.UnimplementedExecutorRuntimeServer
 }
 
-type lateFrameAgent struct {
+type lateFrameExecutor struct {
 	executorv1.UnimplementedExecutorRuntimeServer
 }
 
-type missingUsageAgent struct {
+type missingUsageExecutor struct {
 	executorv1.UnimplementedExecutorRuntimeServer
 }
 
-type retryOnceAgent struct {
+type overOutputExecutor struct {
+	executorv1.UnimplementedExecutorRuntimeServer
+}
+
+type retryOnceExecutor struct {
 	executorv1.UnimplementedExecutorRuntimeServer
 	calls atomic.Int32
 }
 
-type slowSuccessAgent struct {
+type slowSuccessExecutor struct {
 	executorv1.UnimplementedExecutorRuntimeServer
 	delay time.Duration
 }
 
-type sideEffectFailureAgent struct {
+type sideEffectFailureExecutor struct {
 	executorv1.UnimplementedExecutorRuntimeServer
 }
 
-type configCaptureAgent struct {
+type configCaptureExecutor struct {
 	executorv1.UnimplementedExecutorRuntimeServer
 	starts chan *executorv1.StartRun
 }
 
-type revokingPolicyAgent struct {
+type revokingPolicyExecutor struct {
 	executorv1.UnimplementedExecutorRuntimeServer
 	testing      *testing.T
 	capabilityID string
 	revoke       func() error
 }
 
-type grantingPolicyAgent struct {
+type grantingPolicyExecutor struct {
 	executorv1.UnimplementedExecutorRuntimeServer
 	testing              *testing.T
 	acceptedCapability   string
@@ -147,153 +150,6 @@ type renewalCountingStore struct {
 	renewals atomic.Int32
 }
 
-type nestedRunAgent struct {
-	executorv1.UnimplementedExecutorRuntimeServer
-	testing   *testing.T
-	rootRunID atomic.Value
-}
-
-type cancellingNestedAgent struct {
-	executorv1.UnimplementedExecutorRuntimeServer
-	childStarted chan struct{}
-}
-
-func (a *cancellingNestedAgent) Run(stream executorv1.ExecutorRuntime_RunServer) error {
-	start, err := stream.Recv()
-	if err != nil {
-		return err
-	}
-	if start.GetStartRun().GetParentRunId() != "" {
-		if err := stream.Send(acceptedFrame(start, 1)); err != nil {
-			return err
-		}
-		close(a.childStarted)
-		<-stream.Context().Done()
-		return stream.Context().Err()
-	}
-	if err := stream.Send(acceptedFrame(start, 1)); err != nil {
-		return err
-	}
-	if err := stream.Send(&executorv1.ExecutorFrame{
-		EchoId: start.EchoId, RunId: start.RunId, Sequence: 2,
-		Body: &executorv1.ExecutorFrame_CapabilityCall{CapabilityCall: &executorv1.CapabilityCall{
-			CallId: "delegate-call", CapabilityId: kernelecho.CreateChildRunCapabilityID,
-			PayloadJson: []byte(`{"task":"等待取消","capability_ids":["demo.routes.list"]}`),
-		}},
-	}); err != nil {
-		return err
-	}
-	if _, err = stream.Recv(); err != nil {
-		return err
-	}
-	<-stream.Context().Done()
-	return stream.Context().Err()
-}
-
-func (a *nestedRunAgent) Run(stream executorv1.ExecutorRuntime_RunServer) error {
-	startFrame, err := stream.Recv()
-	if err != nil {
-		return err
-	}
-	start := startFrame.GetStartRun()
-	if start.GetParentRunId() == "" {
-		a.rootRunID.Store(startFrame.GetRunId())
-		return a.runRoot(stream, startFrame)
-	}
-	rootRunID, _ := a.rootRunID.Load().(string)
-	if start.GetParentRunId() != rootRunID || startFrame.GetRunId() == rootRunID {
-		a.testing.Errorf("child parent=%q run=%q root=%q", start.GetParentRunId(), startFrame.GetRunId(), rootRunID)
-	}
-	if start.GetInputMessage() != "只查询线路并总结" {
-		a.testing.Errorf("child input=%q", start.GetInputMessage())
-	}
-	if start.GetMaxSteps() >= 4 || start.GetMaxToolCalls() >= 8 {
-		a.testing.Errorf("child budgets steps=%d tools=%d", start.GetMaxSteps(), start.GetMaxToolCalls())
-	}
-	if len(start.GetCapabilities()) != 1 || start.GetCapabilities()[0].GetId() != routeCapabilityID {
-		a.testing.Errorf("child capabilities=%#v", start.GetCapabilities())
-	}
-	if err := stream.Send(acceptedFrame(startFrame, 1)); err != nil {
-		return err
-	}
-	if err := stream.Send(&executorv1.ExecutorFrame{
-		EchoId: startFrame.EchoId, RunId: startFrame.RunId, Sequence: 2,
-		Body: &executorv1.ExecutorFrame_CapabilityCall{CapabilityCall: &executorv1.CapabilityCall{
-			CallId: "child-route-call", CapabilityId: routeCapabilityID, PayloadJson: []byte(`{"limit":10}`),
-		}},
-	}); err != nil {
-		return err
-	}
-	result, err := stream.Recv()
-	if err != nil {
-		return err
-	}
-	if !result.GetCapabilityResult().GetSuccess() {
-		a.testing.Errorf("child capability result=%#v", result.GetCapabilityResult())
-	}
-	if err := stream.Send(&executorv1.ExecutorFrame{
-		EchoId: startFrame.EchoId, RunId: startFrame.RunId, Sequence: 3,
-		Body: &executorv1.ExecutorFrame_CapabilityCall{CapabilityCall: &executorv1.CapabilityCall{
-			CallId: "nested-delegate-call", CapabilityId: kernelecho.CreateChildRunCapabilityID, PayloadJson: []byte(`{"task":"越权嵌套"}`),
-		}},
-	}); err != nil {
-		return err
-	}
-	rejected, err := stream.Recv()
-	if err != nil {
-		return err
-	}
-	if rejected.GetCapabilityResult().GetSuccess() || rejected.GetCapabilityResult().GetErrorCode() != "capability_disabled" {
-		a.testing.Errorf("nested delegation result=%#v", rejected.GetCapabilityResult())
-	}
-	if err := stream.Send(usageFrame(startFrame, 4, 4, 2)); err != nil {
-		return err
-	}
-	return stream.Send(&executorv1.ExecutorFrame{
-		EchoId: startFrame.EchoId, RunId: startFrame.RunId, Sequence: 5,
-		Body: &executorv1.ExecutorFrame_FinalMessage{FinalMessage: &executorv1.FinalMessage{Text: "子任务完成"}},
-	})
-}
-
-func (a *nestedRunAgent) runRoot(stream executorv1.ExecutorRuntime_RunServer, start *executorv1.ExecutorFrame) error {
-	hasSubagent := false
-	for _, capability := range start.GetStartRun().GetCapabilities() {
-		if capability.GetId() == kernelecho.CreateChildRunCapabilityID {
-			hasSubagent = true
-		}
-	}
-	if !hasSubagent {
-		a.testing.Error("root did not receive agent.run")
-	}
-	if err := stream.Send(acceptedFrame(start, 1)); err != nil {
-		return err
-	}
-	if err := stream.Send(&executorv1.ExecutorFrame{
-		EchoId: start.EchoId, RunId: start.RunId, Sequence: 2,
-		Body: &executorv1.ExecutorFrame_CapabilityCall{CapabilityCall: &executorv1.CapabilityCall{
-			CallId: "delegate-call", CapabilityId: kernelecho.CreateChildRunCapabilityID,
-			PayloadJson: []byte(`{"task":"只查询线路并总结","capability_ids":["demo.routes.list"]}`),
-		}},
-	}); err != nil {
-		return err
-	}
-	result, err := stream.Recv()
-	if err != nil {
-		return err
-	}
-	if !result.GetCapabilityResult().GetSuccess() ||
-		!strings.Contains(string(result.GetCapabilityResult().GetPayloadJson()), `"status":"queued"`) {
-		a.testing.Errorf("root subagent result=%#v", result.GetCapabilityResult())
-	}
-	if err := stream.Send(usageFrame(start, 3, 6, 3)); err != nil {
-		return err
-	}
-	return stream.Send(&executorv1.ExecutorFrame{
-		EchoId: start.EchoId, RunId: start.RunId, Sequence: 4,
-		Body: &executorv1.ExecutorFrame_FinalMessage{FinalMessage: &executorv1.FinalMessage{Text: "父任务完成"}},
-	})
-}
-
 func acceptedFrame(start *executorv1.ExecutorFrame, sequence uint64) *executorv1.ExecutorFrame {
 	return &executorv1.ExecutorFrame{
 		EchoId: start.EchoId, RunId: start.RunId, Sequence: sequence,
@@ -301,11 +157,23 @@ func acceptedFrame(start *executorv1.ExecutorFrame, sequence uint64) *executorv1
 	}
 }
 
+func finalResult(text string) *executorv1.FinalResult {
+	return &executorv1.FinalResult{Payload: &executorv1.Payload{
+		ContentType: "text/plain; charset=utf-8", Data: []byte(text),
+	}}
+}
+
+func outputDelta(text string) *executorv1.OutputDelta {
+	return &executorv1.OutputDelta{Payload: &executorv1.Payload{
+		ContentType: "text/plain; charset=utf-8", Data: []byte(text),
+	}}
+}
+
 func usageFrame(start *executorv1.ExecutorFrame, sequence, inputTokens, outputTokens uint64) *executorv1.ExecutorFrame {
 	return &executorv1.ExecutorFrame{
 		EchoId: start.EchoId, RunId: start.RunId, Sequence: sequence,
-		Body: &executorv1.ExecutorFrame_RunUsage{RunUsage: &executorv1.RunUsage{
-			InputTokens: inputTokens, OutputTokens: outputTokens, TotalTokens: inputTokens + outputTokens,
+		Body: &executorv1.ExecutorFrame_ResourceUsage{ResourceUsage: &executorv1.ResourceUsage{
+			ExecutionUnits: inputTokens + outputTokens,
 		}},
 	}
 }
@@ -315,7 +183,7 @@ func (s *renewalCountingStore) RenewRunLease(ctx context.Context, run kernelecho
 	return s.Store.RenewRunLease(ctx, run, renewedAt, leaseExpiresAt)
 }
 
-func (a *retryOnceAgent) Run(stream executorv1.ExecutorRuntime_RunServer) error {
+func (a *retryOnceExecutor) Run(stream executorv1.ExecutorRuntime_RunServer) error {
 	start, err := stream.Recv()
 	if err != nil {
 		return err
@@ -330,25 +198,25 @@ func (a *retryOnceAgent) Run(stream executorv1.ExecutorRuntime_RunServer) error 
 		return stream.Send(&executorv1.ExecutorFrame{
 			EchoId: start.EchoId, RunId: start.RunId, Sequence: 2,
 			Body: &executorv1.ExecutorFrame_RunFailure{RunFailure: &executorv1.RunFailure{
-				Code: "provider_unavailable", Message: "temporary", Retryable: true,
+				Code: "execution_unavailable", Message: "temporary", Retryable: true,
 			}},
 		})
 	}
 	if err := stream.Send(&executorv1.ExecutorFrame{
 		EchoId: start.EchoId, RunId: start.RunId, Sequence: 2,
-		Body: &executorv1.ExecutorFrame_RunUsage{RunUsage: &executorv1.RunUsage{
-			InputTokens: 3, OutputTokens: 2, TotalTokens: 5,
+		Body: &executorv1.ExecutorFrame_ResourceUsage{ResourceUsage: &executorv1.ResourceUsage{
+			ExecutionUnits: 5,
 		}},
 	}); err != nil {
 		return err
 	}
 	return stream.Send(&executorv1.ExecutorFrame{
 		EchoId: start.EchoId, RunId: start.RunId, Sequence: 3,
-		Body: &executorv1.ExecutorFrame_FinalMessage{FinalMessage: &executorv1.FinalMessage{Text: "重试成功"}},
+		Body: &executorv1.ExecutorFrame_FinalResult{FinalResult: finalResult("重试成功")},
 	})
 }
 
-func (a *slowSuccessAgent) Run(stream executorv1.ExecutorRuntime_RunServer) error {
+func (a *slowSuccessExecutor) Run(stream executorv1.ExecutorRuntime_RunServer) error {
 	start, err := stream.Recv()
 	if err != nil {
 		return err
@@ -365,13 +233,13 @@ func (a *slowSuccessAgent) Run(stream executorv1.ExecutorRuntime_RunServer) erro
 		},
 		{
 			EchoId: start.EchoId, RunId: start.RunId, Sequence: 2,
-			Body: &executorv1.ExecutorFrame_RunUsage{RunUsage: &executorv1.RunUsage{
-				InputTokens: 3, OutputTokens: 2, TotalTokens: 5,
+			Body: &executorv1.ExecutorFrame_ResourceUsage{ResourceUsage: &executorv1.ResourceUsage{
+				ExecutionUnits: 5,
 			}},
 		},
 		{
 			EchoId: start.EchoId, RunId: start.RunId, Sequence: 3,
-			Body: &executorv1.ExecutorFrame_FinalMessage{FinalMessage: &executorv1.FinalMessage{Text: "续租成功"}},
+			Body: &executorv1.ExecutorFrame_FinalResult{FinalResult: finalResult("续租成功")},
 		},
 	} {
 		if err := stream.Send(frame); err != nil {
@@ -381,7 +249,7 @@ func (a *slowSuccessAgent) Run(stream executorv1.ExecutorRuntime_RunServer) erro
 	return nil
 }
 
-func (a *sideEffectFailureAgent) Run(stream executorv1.ExecutorRuntime_RunServer) error {
+func (a *sideEffectFailureExecutor) Run(stream executorv1.ExecutorRuntime_RunServer) error {
 	start, err := stream.Recv()
 	if err != nil {
 		return err
@@ -408,12 +276,12 @@ func (a *sideEffectFailureAgent) Run(stream executorv1.ExecutorRuntime_RunServer
 	return stream.Send(&executorv1.ExecutorFrame{
 		EchoId: start.EchoId, RunId: start.RunId, Sequence: 3,
 		Body: &executorv1.ExecutorFrame_RunFailure{RunFailure: &executorv1.RunFailure{
-			Code: "provider_unavailable", Message: "temporary", Retryable: true,
+			Code: "execution_unavailable", Message: "temporary", Retryable: true,
 		}},
 	})
 }
 
-func (a *configCaptureAgent) Run(stream executorv1.ExecutorRuntime_RunServer) error {
+func (a *configCaptureExecutor) Run(stream executorv1.ExecutorRuntime_RunServer) error {
 	start, err := stream.Recv()
 	if err != nil {
 		return err
@@ -426,13 +294,13 @@ func (a *configCaptureAgent) Run(stream executorv1.ExecutorRuntime_RunServer) er
 		},
 		{
 			EchoId: start.EchoId, RunId: start.RunId, Sequence: 2,
-			Body: &executorv1.ExecutorFrame_RunUsage{RunUsage: &executorv1.RunUsage{
-				InputTokens: 3, OutputTokens: 2, TotalTokens: 5,
+			Body: &executorv1.ExecutorFrame_ResourceUsage{ResourceUsage: &executorv1.ResourceUsage{
+				ExecutionUnits: 5,
 			}},
 		},
 		{
 			EchoId: start.EchoId, RunId: start.RunId, Sequence: 3,
-			Body: &executorv1.ExecutorFrame_FinalMessage{FinalMessage: &executorv1.FinalMessage{Text: "配置恢复成功"}},
+			Body: &executorv1.ExecutorFrame_FinalResult{FinalResult: finalResult("配置恢复成功")},
 		},
 	} {
 		if err := stream.Send(frame); err != nil {
@@ -442,7 +310,7 @@ func (a *configCaptureAgent) Run(stream executorv1.ExecutorRuntime_RunServer) er
 	return nil
 }
 
-func (a *revokingPolicyAgent) Run(stream executorv1.ExecutorRuntime_RunServer) error {
+func (a *revokingPolicyExecutor) Run(stream executorv1.ExecutorRuntime_RunServer) error {
 	start, err := stream.Recv()
 	if err != nil {
 		return err
@@ -484,13 +352,13 @@ func (a *revokingPolicyAgent) Run(stream executorv1.ExecutorRuntime_RunServer) e
 	for _, frame := range []*executorv1.ExecutorFrame{
 		{
 			EchoId: start.EchoId, RunId: start.RunId, Sequence: 3,
-			Body: &executorv1.ExecutorFrame_RunUsage{RunUsage: &executorv1.RunUsage{
-				InputTokens: 3, OutputTokens: 2, TotalTokens: 5,
+			Body: &executorv1.ExecutorFrame_ResourceUsage{ResourceUsage: &executorv1.ResourceUsage{
+				ExecutionUnits: 5,
 			}},
 		},
 		{
 			EchoId: start.EchoId, RunId: start.RunId, Sequence: 4,
-			Body: &executorv1.ExecutorFrame_FinalMessage{FinalMessage: &executorv1.FinalMessage{Text: "撤权已生效"}},
+			Body: &executorv1.ExecutorFrame_FinalResult{FinalResult: finalResult("撤权已生效")},
 		},
 	} {
 		if err := stream.Send(frame); err != nil {
@@ -500,7 +368,7 @@ func (a *revokingPolicyAgent) Run(stream executorv1.ExecutorRuntime_RunServer) e
 	return nil
 }
 
-func (a *grantingPolicyAgent) Run(stream executorv1.ExecutorRuntime_RunServer) error {
+func (a *grantingPolicyExecutor) Run(stream executorv1.ExecutorRuntime_RunServer) error {
 	start, err := stream.Recv()
 	if err != nil {
 		return err
@@ -557,11 +425,11 @@ func (a *grantingPolicyAgent) Run(stream executorv1.ExecutorRuntime_RunServer) e
 	}
 	return stream.Send(&executorv1.ExecutorFrame{
 		EchoId: start.EchoId, RunId: start.RunId, Sequence: 5,
-		Body: &executorv1.ExecutorFrame_FinalMessage{FinalMessage: &executorv1.FinalMessage{Text: "授权未扩张"}},
+		Body: &executorv1.ExecutorFrame_FinalResult{FinalResult: finalResult("授权未扩张")},
 	})
 }
 
-func (a *missingUsageAgent) Run(stream executorv1.ExecutorRuntime_RunServer) error {
+func (a *missingUsageExecutor) Run(stream executorv1.ExecutorRuntime_RunServer) error {
 	start, err := stream.Recv()
 	if err != nil {
 		return err
@@ -574,11 +442,39 @@ func (a *missingUsageAgent) Run(stream executorv1.ExecutorRuntime_RunServer) err
 	}
 	return stream.Send(&executorv1.ExecutorFrame{
 		EchoId: start.EchoId, RunId: start.RunId, Sequence: 2,
-		Body: &executorv1.ExecutorFrame_FinalMessage{FinalMessage: &executorv1.FinalMessage{Text: "缺少用量"}},
+		Body: &executorv1.ExecutorFrame_FinalResult{FinalResult: finalResult("缺少用量")},
 	})
 }
 
-func (a *duplicateCallAgent) Run(stream executorv1.ExecutorRuntime_RunServer) error {
+func (a *overOutputExecutor) Run(stream executorv1.ExecutorRuntime_RunServer) error {
+	start, err := stream.Recv()
+	if err != nil {
+		return err
+	}
+	if err := stream.Send(&executorv1.ExecutorFrame{
+		EchoId: start.EchoId, RunId: start.RunId, Sequence: 1,
+		Body: &executorv1.ExecutorFrame_RunAccepted{RunAccepted: &executorv1.RunAccepted{ProtocolVersion: executor.Version}},
+	}); err != nil {
+		return err
+	}
+	if err := stream.Send(&executorv1.ExecutorFrame{
+		EchoId: start.EchoId, RunId: start.RunId, Sequence: 2,
+		Body: &executorv1.ExecutorFrame_ResourceUsage{ResourceUsage: &executorv1.ResourceUsage{ExecutionUnits: 1}},
+	}); err != nil {
+		return err
+	}
+	for sequence := uint64(3); sequence <= 4; sequence++ {
+		if err := stream.Send(&executorv1.ExecutorFrame{
+			EchoId: start.EchoId, RunId: start.RunId, Sequence: sequence,
+			Body: &executorv1.ExecutorFrame_OutputDelta{OutputDelta: outputDelta(strings.Repeat("x", 3000))},
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (a *duplicateCallExecutor) Run(stream executorv1.ExecutorRuntime_RunServer) error {
 	start, err := stream.Recv()
 	if err != nil {
 		return err
@@ -594,8 +490,8 @@ func (a *duplicateCallAgent) Run(stream executorv1.ExecutorRuntime_RunServer) er
 	}
 	if err := stream.Send(&executorv1.ExecutorFrame{
 		EchoId: start.EchoId, RunId: start.RunId, Sequence: 2,
-		Body: &executorv1.ExecutorFrame_RunUsage{RunUsage: &executorv1.RunUsage{
-			InputTokens: 10, OutputTokens: 2, TotalTokens: 12,
+		Body: &executorv1.ExecutorFrame_ResourceUsage{ResourceUsage: &executorv1.ResourceUsage{
+			ExecutionUnits: 12,
 		}},
 	}); err != nil {
 		return err
@@ -615,7 +511,7 @@ func (a *duplicateCallAgent) Run(stream executorv1.ExecutorRuntime_RunServer) er
 	})
 }
 
-func (a *lateFrameAgent) Run(stream executorv1.ExecutorRuntime_RunServer) error {
+func (a *lateFrameExecutor) Run(stream executorv1.ExecutorRuntime_RunServer) error {
 	start, err := stream.Recv()
 	if err != nil {
 		return err
@@ -627,17 +523,17 @@ func (a *lateFrameAgent) Run(stream executorv1.ExecutorRuntime_RunServer) error 
 		},
 		{
 			EchoId: start.EchoId, RunId: start.RunId, Sequence: 2,
-			Body: &executorv1.ExecutorFrame_RunUsage{RunUsage: &executorv1.RunUsage{
-				InputTokens: 10, OutputTokens: 2, TotalTokens: 12,
+			Body: &executorv1.ExecutorFrame_ResourceUsage{ResourceUsage: &executorv1.ResourceUsage{
+				ExecutionUnits: 12,
 			}},
 		},
 		{
 			EchoId: start.EchoId, RunId: start.RunId, Sequence: 3,
-			Body: &executorv1.ExecutorFrame_FinalMessage{FinalMessage: &executorv1.FinalMessage{Text: "不得成为最终结果"}},
+			Body: &executorv1.ExecutorFrame_FinalResult{FinalResult: finalResult("不得成为最终结果")},
 		},
 		{
 			EchoId: start.EchoId, RunId: start.RunId, Sequence: 4,
-			Body: &executorv1.ExecutorFrame_ReplyDelta{ReplyDelta: &executorv1.ReplyDelta{Text: "迟到"}},
+			Body: &executorv1.ExecutorFrame_OutputDelta{OutputDelta: outputDelta("迟到")},
 		},
 	}
 	for _, frame := range frames {
@@ -648,7 +544,7 @@ func (a *lateFrameAgent) Run(stream executorv1.ExecutorRuntime_RunServer) error 
 	return nil
 }
 
-func (a *boundaryAgent) Run(stream executorv1.ExecutorRuntime_RunServer) error {
+func (a *boundaryExecutor) Run(stream executorv1.ExecutorRuntime_RunServer) error {
 	start, err := stream.Recv()
 	if err != nil {
 		return err
@@ -681,12 +577,12 @@ func (a *boundaryAgent) Run(stream executorv1.ExecutorRuntime_RunServer) error {
 	return stream.Send(&executorv1.ExecutorFrame{
 		EchoId: start.EchoId, RunId: start.RunId, Sequence: 3,
 		Body: &executorv1.ExecutorFrame_RunFailure{RunFailure: &executorv1.RunFailure{
-			Code: "private_failure", Message: "provider token api-key-secret", Retryable: true,
+			Code: "private_failure", Message: "upstream token api-key-secret", Retryable: true,
 		}},
 	})
 }
 
-func (f *fakeAgent) Run(stream executorv1.ExecutorRuntime_RunServer) error {
+func (f *fakeExecutor) Run(stream executorv1.ExecutorRuntime_RunServer) error {
 	start, err := stream.Recv()
 	if err != nil {
 		return err
@@ -697,9 +593,6 @@ func (f *fakeAgent) Run(stream executorv1.ExecutorRuntime_RunServer) error {
 	}); err != nil {
 		return err
 	}
-	if start.GetStartRun().GetModel() != "test-model" {
-		f.testing.Errorf("model=%q", start.GetStartRun().GetModel())
-	}
 	available := map[string]bool{}
 	for _, capability := range start.GetStartRun().GetCapabilities() {
 		available[capability.Id] = true
@@ -709,8 +602,8 @@ func (f *fakeAgent) Run(stream executorv1.ExecutorRuntime_RunServer) error {
 	}
 	if err := stream.Send(&executorv1.ExecutorFrame{
 		EchoId: start.EchoId, RunId: start.RunId, Sequence: 2,
-		Body: &executorv1.ExecutorFrame_RunUsage{RunUsage: &executorv1.RunUsage{
-			InputTokens: 10, OutputTokens: 2, TotalTokens: 12,
+		Body: &executorv1.ExecutorFrame_ResourceUsage{ResourceUsage: &executorv1.ResourceUsage{
+			ExecutionUnits: 12,
 		}},
 	}); err != nil {
 		return err
@@ -741,41 +634,28 @@ func (f *fakeAgent) Run(stream executorv1.ExecutorRuntime_RunServer) error {
 	}
 	if err := stream.Send(&executorv1.ExecutorFrame{
 		EchoId: start.EchoId, RunId: start.RunId, Sequence: 4,
-		Body: &executorv1.ExecutorFrame_ReplyDelta{ReplyDelta: &executorv1.ReplyDelta{Text: "当前有一条线路。"}},
+		Body: &executorv1.ExecutorFrame_OutputDelta{OutputDelta: outputDelta("当前有一条线路。")},
 	}); err != nil {
 		return err
 	}
 	if err := stream.Send(&executorv1.ExecutorFrame{
 		EchoId: start.EchoId, RunId: start.RunId, Sequence: 5,
-		Body: &executorv1.ExecutorFrame_RunUsage{RunUsage: &executorv1.RunUsage{
-			InputTokens: 30, OutputTokens: 5, TotalTokens: 35,
+		Body: &executorv1.ExecutorFrame_ResourceUsage{ResourceUsage: &executorv1.ResourceUsage{
+			ExecutionUnits: 35,
 		}},
 	}); err != nil {
 		return err
 	}
 	return stream.Send(&executorv1.ExecutorFrame{
 		EchoId: start.EchoId, RunId: start.RunId, Sequence: 6,
-		Body: &executorv1.ExecutorFrame_FinalMessage{FinalMessage: &executorv1.FinalMessage{Text: "当前有一条线路。"}},
+		Body: &executorv1.ExecutorFrame_FinalResult{FinalResult: finalResult("当前有一条线路。")},
 	})
 }
 
-func TestOrchestratorRejectsInvalidChildRunLimit(t *testing.T) {
-	for _, limit := range []int{-1, kernelecho.MaxChildRunsPerRoot + 1} {
-		t.Run(strconv.Itoa(limit), func(t *testing.T) {
-			defer func() {
-				if recover() == nil {
-					t.Fatal("无效 child Run 上限未触发装配失败")
-				}
-			}()
-			kernelecho.NewOrchestrator(nil, nil, nil, nil, kernelecho.StorePorts{}, kernelecho.Config{MaxChildRuns: limit})
-		})
-	}
-}
-
-func TestOrchestratorRunsAgentCapabilityLoop(t *testing.T) {
+func TestOrchestratorRunsExecutorCapabilityLoop(t *testing.T) {
 	listener := bufconn.Listen(1 << 20)
 	grpcServer := grpc.NewServer()
-	executorv1.RegisterExecutorRuntimeServer(grpcServer, &fakeAgent{testing: t})
+	executorv1.RegisterExecutorRuntimeServer(grpcServer, &fakeExecutor{testing: t})
 	go grpcServer.Serve(listener)
 	defer grpcServer.Stop()
 	ctx := context.Background()
@@ -799,10 +679,10 @@ func TestOrchestratorRunsAgentCapabilityLoop(t *testing.T) {
 	policy.Enable(testAppID, routeCapabilityID)
 	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{})
 	registerRouteCapability(t, reg, routeCalls)
-	seedOrchestratorConfig(t, store, orchestratorSeed("test-model"))
+	seedOrchestratorConfig(t, store, orchestratorSeed("executor.test"))
 	orchestrator := kernelecho.NewOrchestrator(
 		executorv1.NewExecutorRuntimeClient(connection), reg, dispatcher, policy, storePorts(store),
-		kernelecho.Config{AppID: testAppID, AppConfigSource: store, RunTimeout: 5 * time.Second, Context: newSessionSource(t, store), Prompts: testPromptRenderer{}},
+		kernelecho.Config{AppID: testAppID, AppConfigSource: store, RunTimeout: 5 * time.Second, Context: newSessionSource(t, store)},
 	)
 	events := []kernelecho.Event{}
 	echoID, err := runOrchestrator(orchestrator, ctx, kernelecho.RunRequest{Message: "有哪些线路", IdempotencyKey: "orchestrator-run"}, func(event kernelecho.Event) error {
@@ -822,23 +702,23 @@ func TestOrchestratorRunsAgentCapabilityLoop(t *testing.T) {
 	if len(events) != 6 || len(persisted) != len(events) {
 		t.Fatalf("events=%d persisted=%d", len(events), len(persisted))
 	}
-	if events[3].Type != "capability.completed" || events[len(events)-1].Type != "reply.final" {
+	if events[3].Type != "capability.completed" || events[len(events)-1].Type != "run.completed" {
 		t.Fatalf("events=%#v", events)
 	}
 	if routeCalls.Load() != 1 {
-		t.Fatalf("Agent frame invoked Tool %d times", routeCalls.Load())
+		t.Fatalf("Executor frame invoked Tool %d times", routeCalls.Load())
 	}
 	audits, err := store.ListCapabilityCalls(ctx, testAppID, echoID)
 	if err != nil || len(audits) != 1 {
-		t.Fatalf("Agent call audits=%#v err=%v", audits, err)
+		t.Fatalf("Executor call audits=%#v err=%v", audits, err)
 	}
 }
 
 func TestOrchestratorAssemblesSessionContextIntoRun(t *testing.T) {
 	listener := bufconn.Listen(1 << 20)
 	grpcServer := grpc.NewServer()
-	agentServer := &configCaptureAgent{starts: make(chan *executorv1.StartRun, 1)}
-	executorv1.RegisterExecutorRuntimeServer(grpcServer, agentServer)
+	executorServer := &configCaptureExecutor{starts: make(chan *executorv1.StartRun, 1)}
+	executorv1.RegisterExecutorRuntimeServer(grpcServer, executorServer)
 	go grpcServer.Serve(listener)
 	defer grpcServer.Stop()
 	connection, err := grpc.DialContext(t.Context(), "bufnet",
@@ -881,10 +761,10 @@ func TestOrchestratorAssemblesSessionContextIntoRun(t *testing.T) {
 	policy.Enable(testAppID, routeCapabilityID)
 	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{})
 	registerRouteCapability(t, reg, nil)
-	seedOrchestratorConfig(t, store, orchestratorSeed("test-model"))
+	seedOrchestratorConfig(t, store, orchestratorSeed("executor.test"))
 	orchestrator := kernelecho.NewOrchestrator(
 		executorv1.NewExecutorRuntimeClient(connection), reg, dispatcher, policy, storePorts(store),
-		kernelecho.Config{AppID: testAppID, AppConfigSource: store, RunTimeout: 5 * time.Second, Context: sessionService, Prompts: testPromptRenderer{}},
+		kernelecho.Config{AppID: testAppID, AppConfigSource: store, RunTimeout: 5 * time.Second, Context: sessionService},
 	)
 	events := []kernelecho.Event{}
 	echoID, err := runOrchestrator(orchestrator, t.Context(), kernelecho.RunRequest{
@@ -897,12 +777,12 @@ func TestOrchestratorAssemblesSessionContextIntoRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	start := <-agentServer.starts
-	if !strings.Contains(start.GetSystemPrompt(), "第一条历史") || !strings.Contains(start.GetSystemPrompt(), "第二条历史") {
-		t.Fatalf("StartRun 系统提示缺少会话历史: %q", start.GetSystemPrompt())
+	start := <-executorServer.starts
+	if !strings.Contains(string(start.GetContextPayload().GetData()), "第一条历史") || !strings.Contains(string(start.GetContextPayload().GetData()), "第二条历史") {
+		t.Fatalf("StartRun 系统提示缺少会话历史: %q", string(start.GetContextPayload().GetData()))
 	}
-	if strings.Contains(start.GetSystemPrompt(), "当前的问题") {
-		t.Fatalf("当前消息不得重复进入历史块: %q", start.GetSystemPrompt())
+	if strings.Contains(string(start.GetContextPayload().GetData()), "当前的问题") {
+		t.Fatalf("当前消息不得重复进入历史块: %q", string(start.GetContextPayload().GetData()))
 	}
 	runs, err := store.ListRuns(t.Context(), testAppID, echoID)
 	if err != nil || len(runs) != 1 {
@@ -933,245 +813,11 @@ func TestOrchestratorAssemblesSessionContextIntoRun(t *testing.T) {
 	}
 }
 
-func TestOrchestratorRunsOneGovernedChildWithNarrowedProjection(t *testing.T) {
-	listener := bufconn.Listen(1 << 20)
-	grpcServer := grpc.NewServer()
-	agentServer := &nestedRunAgent{testing: t}
-	executorv1.RegisterExecutorRuntimeServer(grpcServer, agentServer)
-	go grpcServer.Serve(listener)
-	defer grpcServer.Stop()
-	ctx := context.Background()
-	connection, err := grpc.DialContext(ctx, "bufnet",
-		grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) { return listener.Dial() }),
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer connection.Close()
-	store, err := sqlite.Open(filepath.Join(t.TempDir(), "subagent.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	routeCalls := &atomic.Int32{}
-	reg := registry.New()
-	policy := runtimetest.NewStaticAppPolicy()
-	policy.Enable(testAppID, routeCapabilityID)
-	policy.Enable(testAppID, kernelecho.CreateChildRunCapabilityID)
-	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{IdempotencyStore: store})
-	registerRouteCapability(t, reg, routeCalls)
-	seedOrchestratorConfig(t, store, appconfig.Config{
-		AppID: testAppID, Enabled: true, Model: "test-model", SystemPrompt: "test",
-		Timezone: "Asia/Shanghai", MaxSteps: 4, MaxToolCalls: 8, MaxInputTokens: 1000,
-		MaxOutputTokens: 500, MaxTotalTokens: 1500, MaxOutputBytes: 4096,
-		ProviderTimeout: time.Second,
-	})
-	orchestrator := kernelecho.NewOrchestrator(
-		executorv1.NewExecutorRuntimeClient(connection), reg, dispatcher, policy, storePorts(store),
-		kernelecho.Config{
-			AppID: testAppID, AppConfigSource: store, RunTimeout: 5 * time.Second,
-			Context: newSessionSource(t, store), Prompts: testPromptRenderer{},
-		},
-	)
-	if err := kernelecho.RegisterChildCapabilities(reg, orchestrator); err != nil {
-		t.Fatal(err)
-	}
-	var delivered []kernelecho.Event
-	echoID, err := runOrchestrator(orchestrator, ctx, kernelecho.RunRequest{
-		Message: "委派线路查询", IdempotencyKey: "governed-child-run",
-	}, func(event kernelecho.Event) error {
-		delivered = append(delivered, event)
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	work, err := orchestrator.Runnable(ctx, 10)
-	if err != nil || len(work) != 1 || work[0].Run.ParentRunID == "" || work[0].InputMessage != "只查询线路并总结" {
-		t.Fatalf("异步 child 队列=%#v err=%v", work, err)
-	}
-	if err := orchestrator.RunQueued(ctx, work[0], func(event kernelecho.Event) error {
-		delivered = append(delivered, event)
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	record, persisted, err := store.GetEcho(ctx, testAppID, echoID)
-	if err != nil || record.Status != kernelecho.StatusSucceeded || record.FinalMessage != "父任务完成" {
-		t.Fatalf("Echo=%#v err=%v", record, err)
-	}
-	if len(delivered) < 8 || len(persisted) != len(delivered) {
-		t.Fatalf("delivered=%#v persisted=%#v", delivered, persisted)
-	}
-	runs, err := store.ListRuns(ctx, testAppID, echoID)
-	if err != nil || len(runs) != 2 {
-		t.Fatalf("runs=%#v err=%v", runs, err)
-	}
-	var root, child kernelecho.RunRecord
-	for _, run := range runs {
-		if run.ParentRunID == "" {
-			root = run
-		} else {
-			child = run
-		}
-	}
-	if root.ID == "" || child.ParentRunID != root.ID || child.OriginCallID != "delegate-call" ||
-		child.ResultMessage != "子任务完成" || child.Status != kernelecho.RunStatusSucceeded ||
-		len(child.CapabilityScope) != 1 || child.CapabilityScope[0] != routeCapabilityID ||
-		child.MaxSteps >= root.MaxSteps || child.MaxToolCalls >= root.MaxToolCalls {
-		t.Fatalf("root=%#v child=%#v", root, child)
-	}
-	// 子 Run 是干净工作区：不携带会话上下文，但仍固化自身的上下文摘要。
-	if child.SessionID != "" || child.MessageID != "" || len(child.ContextDigest) != 64 {
-		t.Fatalf("child 会话上下文或摘要错误: %#v", child)
-	}
-	if routeCalls.Load() != 1 {
-		t.Fatalf("route calls=%d", routeCalls.Load())
-	}
-	audits, err := store.ListCapabilityCalls(ctx, testAppID, echoID)
-	if err != nil || len(audits) != 3 {
-		t.Fatalf("audits=%#v err=%v", audits, err)
-	}
-	delegationAudits := 0
-	for _, audit := range audits {
-		if audit.CapabilityID != kernelecho.CreateChildRunCapabilityID {
-			continue
-		}
-		delegationAudits++
-		var payload map[string]any
-		if err := json.Unmarshal(audit.Payload, &payload); err != nil ||
-			payload["task"] != "[已脱敏]" ||
-			bytes.Contains(audit.Payload, []byte("只查询线路并总结")) ||
-			bytes.Contains(audit.Payload, []byte("越权嵌套")) {
-			t.Fatalf("子 Run 任务审计未净化：payload=%s err=%v", audit.Payload, err)
-		}
-	}
-	if delegationAudits != 2 {
-		t.Fatalf("子 Run 审计数量=%d，audits=%#v", delegationAudits, audits)
-	}
-}
-
-func TestParentCancellationPropagatesAndPersistsChildThenRootTerminalState(t *testing.T) {
-	listener := bufconn.Listen(1 << 20)
-	grpcServer := grpc.NewServer()
-	agentServer := &cancellingNestedAgent{childStarted: make(chan struct{})}
-	executorv1.RegisterExecutorRuntimeServer(grpcServer, agentServer)
-	go grpcServer.Serve(listener)
-	defer grpcServer.Stop()
-	connection, err := grpc.DialContext(context.Background(), "bufnet",
-		grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) { return listener.Dial() }),
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer connection.Close()
-	store, err := sqlite.Open(filepath.Join(t.TempDir(), "subagent-cancel.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	reg := registry.New()
-	policy := runtimetest.NewStaticAppPolicy()
-	policy.Enable(testAppID, routeCapabilityID)
-	policy.Enable(testAppID, kernelecho.CreateChildRunCapabilityID)
-	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{IdempotencyStore: store})
-	registerRouteCapability(t, reg, nil)
-	seedOrchestratorConfig(t, store, appconfig.Config{
-		AppID: testAppID, Enabled: true, Model: "test-model", SystemPrompt: "test",
-		Timezone: "Asia/Shanghai", MaxSteps: 4, MaxToolCalls: 8, MaxInputTokens: 1000,
-		MaxOutputTokens: 500, MaxTotalTokens: 1500, MaxOutputBytes: 4096,
-		ProviderTimeout: time.Second,
-	})
-	orchestrator := kernelecho.NewOrchestrator(
-		executorv1.NewExecutorRuntimeClient(connection), reg, dispatcher, policy, storePorts(store),
-		kernelecho.Config{
-			AppID: testAppID, AppConfigSource: store, RunTimeout: 30 * time.Second,
-			Context: newSessionSource(t, store), Prompts: testPromptRenderer{},
-		},
-	)
-	if err := kernelecho.RegisterChildCapabilities(reg, orchestrator); err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go func() {
-		<-agentServer.childStarted
-		cancel()
-	}()
-	echoID, created, err := orchestrator.CreateIdempotent(ctx, kernelecho.RunRequest{
-		Message: "取消父任务", IdempotencyKey: "cancel-governed-child",
-	})
-	if err != nil || !created {
-		t.Fatalf("create Echo id=%q created=%v err=%v", echoID, created, err)
-	}
-	rootDone := make(chan error, 1)
-	go func() {
-		work, runnableErr := orchestrator.Runnable(ctx, 1)
-		if runnableErr != nil {
-			rootDone <- runnableErr
-			return
-		}
-		if len(work) != 1 || work[0].Run.EchoID != echoID || work[0].Run.ParentRunID != "" {
-			rootDone <- errors.New("root Run 未进入持久队列")
-			return
-		}
-		rootDone <- orchestrator.RunQueued(ctx, work[0], nil)
-	}()
-	var childWork kernelecho.RunWork
-	// CI -race 负载下子 Run 入队可能较慢，放宽轮询窗口（断言语义不变）。
-	deadline := time.Now().Add(10 * time.Second)
-	for childWork.Run.ID == "" && time.Now().Before(deadline) {
-		work, runnableErr := orchestrator.Runnable(context.Background(), 10)
-		if runnableErr != nil {
-			t.Fatal(runnableErr)
-		}
-		for _, item := range work {
-			if item.Run.ParentRunID != "" {
-				childWork = item
-				break
-			}
-		}
-		if childWork.Run.ID == "" {
-			time.Sleep(5 * time.Millisecond)
-		}
-	}
-	if childWork.Run.ID == "" {
-		t.Fatal("child Run 未进入持久队列")
-	}
-	childDone := make(chan error, 1)
-	go func() {
-		childDone <- orchestrator.RunQueued(ctx, childWork, nil)
-	}()
-	rootErr := <-rootDone
-	if !errors.Is(rootErr, context.Canceled) {
-		t.Fatalf("root run error=%v", rootErr)
-	}
-	childErr := <-childDone
-	if !errors.Is(childErr, context.Canceled) {
-		t.Fatalf("child run error=%v", childErr)
-	}
-	record, _, readErr := store.GetEcho(context.Background(), testAppID, echoID)
-	if readErr != nil || record.Status != kernelecho.StatusCancelled {
-		t.Fatalf("Echo=%#v err=%v", record, readErr)
-	}
-	runs, readErr := store.ListRuns(context.Background(), testAppID, echoID)
-	if readErr != nil || len(runs) != 2 {
-		t.Fatalf("runs=%#v err=%v", runs, readErr)
-	}
-	for _, run := range runs {
-		if run.Status != kernelecho.RunStatusCancelled {
-			t.Fatalf("run=%#v", run)
-		}
-	}
-}
-
 func TestOrchestratorRecoversHistoricalAppConfigRevision(t *testing.T) {
 	listener := bufconn.Listen(1 << 20)
 	grpcServer := grpc.NewServer()
-	agentServer := &configCaptureAgent{starts: make(chan *executorv1.StartRun, 1)}
-	executorv1.RegisterExecutorRuntimeServer(grpcServer, agentServer)
+	executorServer := &configCaptureExecutor{starts: make(chan *executorv1.StartRun, 1)}
+	executorv1.RegisterExecutorRuntimeServer(grpcServer, executorServer)
 	go grpcServer.Serve(listener)
 	t.Cleanup(grpcServer.Stop)
 	connection, err := grpc.DialContext(t.Context(), "bufnet",
@@ -1199,7 +845,7 @@ func TestOrchestratorRecoversHistoricalAppConfigRevision(t *testing.T) {
 	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{})
 	orchestrator := kernelecho.NewOrchestrator(
 		executorv1.NewExecutorRuntimeClient(connection), reg, dispatcher, policy, storePorts(store),
-		kernelecho.Config{AppID: testAppID, AppConfigSource: store, RunTimeout: 5 * time.Second, Context: newSessionSource(t, store), Prompts: testPromptRenderer{}},
+		kernelecho.Config{AppID: testAppID, AppConfigSource: store, RunTimeout: 5 * time.Second, Context: newSessionSource(t, store)},
 	)
 	echoID, created, err := orchestrator.CreateIdempotent(t.Context(), kernelecho.RunRequest{
 		Message: "恢复历史配置", IdempotencyKey: "historical-config",
@@ -1208,11 +854,10 @@ func TestOrchestratorRecoversHistoricalAppConfigRevision(t *testing.T) {
 		t.Fatalf("echo=%q created=%t err=%v", echoID, created, err)
 	}
 	replacement := historical
-	replacement.Model = "model-b"
-	replacement.SystemPrompt = "当前配置 B"
-	replacement.Timezone = "UTC"
+	replacement.ExecutorID = "executor.b"
+	replacement.ExecutorConfig = json.RawMessage(`{"strategy":"current-b"}`)
 	replacement.MaxSteps = 7
-	replacement.MaxToolCalls = 6
+	replacement.MaxCapabilityCalls = 6
 	current, err := store.CompareAndSwap(t.Context(), historical.Generation, replacement)
 	if err != nil {
 		t.Fatal(err)
@@ -1224,19 +869,16 @@ func TestOrchestratorRecoversHistoricalAppConfigRevision(t *testing.T) {
 	if err := orchestrator.RunQueued(t.Context(), work[0], nil); err != nil {
 		t.Fatal(err)
 	}
-	start := <-agentServer.starts
-	if start.GetModel() != historical.Model ||
-		start.GetTimezone() != historical.Timezone ||
-		start.GetMaxSteps() != historical.MaxSteps ||
-		start.GetMaxToolCalls() != historical.MaxToolCalls ||
-		!strings.Contains(start.GetSystemPrompt(), historical.SystemPrompt) ||
-		strings.Contains(start.GetSystemPrompt(), replacement.SystemPrompt) {
+	start := <-executorServer.starts
+	if start.GetMaxSteps() != historical.MaxSteps ||
+		start.GetMaxCapabilityCalls() != historical.MaxCapabilityCalls ||
+		string(start.GetExecutorConfig().GetData()) != string(historical.ExecutorConfig) {
 		t.Fatalf("StartRun 未使用历史配置：%#v", start)
 	}
 	runs, err := store.ListRuns(t.Context(), testAppID, echoID)
 	if err != nil || len(runs) != 1 ||
-		runs[0].ModelConfigVersion != historical.Revision ||
-		runs[0].ModelConfigVersion == current.Revision {
+		runs[0].ConfigRevision != historical.Revision ||
+		runs[0].ConfigRevision == current.Revision {
 		t.Fatalf("runs=%#v current=%#v err=%v", runs, current, err)
 	}
 }
@@ -1284,7 +926,7 @@ func TestOrchestratorRevalidatesCapabilityPolicyAfterProjection(t *testing.T) {
 	}
 	listener := bufconn.Listen(1 << 20)
 	grpcServer := grpc.NewServer()
-	executorv1.RegisterExecutorRuntimeServer(grpcServer, &revokingPolicyAgent{
+	executorv1.RegisterExecutorRuntimeServer(grpcServer, &revokingPolicyExecutor{
 		testing: t, capabilityID: capabilityID,
 		revoke: func() error {
 			replacement := current
@@ -1306,7 +948,7 @@ func TestOrchestratorRevalidatesCapabilityPolicyAfterProjection(t *testing.T) {
 	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{})
 	orchestrator := kernelecho.NewOrchestrator(
 		executorv1.NewExecutorRuntimeClient(connection), reg, dispatcher, policy, storePorts(store),
-		kernelecho.Config{AppID: testAppID, AppConfigSource: store, RunTimeout: 5 * time.Second, Context: newSessionSource(t, store), Prompts: testPromptRenderer{}},
+		kernelecho.Config{AppID: testAppID, AppConfigSource: store, RunTimeout: 5 * time.Second, Context: newSessionSource(t, store)},
 	)
 	if _, err := runOrchestrator(orchestrator, t.Context(), kernelecho.RunRequest{
 		Message: "验证动态撤权", IdempotencyKey: "policy-revocation",
@@ -1381,7 +1023,7 @@ func TestOrchestratorAcceptedRunScopeCannotExpandAfterGrant(t *testing.T) {
 	}
 	listener := bufconn.Listen(1 << 20)
 	grpcServer := grpc.NewServer()
-	executorv1.RegisterExecutorRuntimeServer(grpcServer, &grantingPolicyAgent{
+	executorv1.RegisterExecutorRuntimeServer(grpcServer, &grantingPolicyExecutor{
 		testing: t, acceptedCapability: acceptedCapability, newCapability: newCapability,
 		permissionCapability: permissionCapability,
 		grantNewScope: func() error {
@@ -1405,7 +1047,7 @@ func TestOrchestratorAcceptedRunScopeCannotExpandAfterGrant(t *testing.T) {
 	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{})
 	orchestrator := kernelecho.NewOrchestrator(
 		executorv1.NewExecutorRuntimeClient(connection), reg, dispatcher, policy, storePorts(store),
-		kernelecho.Config{AppID: testAppID, AppConfigSource: store, RunTimeout: 5 * time.Second, Context: newSessionSource(t, store), Prompts: testPromptRenderer{}},
+		kernelecho.Config{AppID: testAppID, AppConfigSource: store, RunTimeout: 5 * time.Second, Context: newSessionSource(t, store)},
 	)
 	echoID, err := runOrchestrator(orchestrator, t.Context(), kernelecho.RunRequest{
 		Message: "验证新增授权不能扩张既有 Run", IdempotencyKey: "policy-late-grant",
@@ -1428,31 +1070,22 @@ func TestOrchestratorAcceptedRunScopeCannotExpandAfterGrant(t *testing.T) {
 
 func orchestratorAppConfig() appconfig.Config {
 	return appconfig.Config{
-		AppID: testAppID, Enabled: true, Model: "model-a", SystemPrompt: "历史配置 A",
-		Timezone: "Asia/Shanghai", MaxSteps: 4, MaxToolCalls: 4,
-		MaxInputTokens: 1024, MaxOutputTokens: 512, MaxTotalTokens: 1536,
-		MaxOutputBytes: 4096, ProviderTimeout: 5 * time.Second,
+		AppID: testAppID, Enabled: true, ExecutorID: "executor.a",
+		ExecutorConfig: json.RawMessage(`{"strategy":"historical-a"}`), MaxSteps: 4, MaxCapabilityCalls: 4,
+		MaxExecutionUnits: 1536,
+		MaxOutputBytes:    4096, ExecutionTimeout: 5 * time.Second,
 	}
 }
 
 // orchestratorSeed 生成与历史 Orchestrator 默认预算等价的测试种子配置。
-func orchestratorSeed(model string) appconfig.Config {
+
+func orchestratorSeed(executorID string) appconfig.Config {
 	return appconfig.Config{
-		AppID: testAppID, Enabled: true, Model: model, SystemPrompt: "test",
-		Timezone: "Asia/Shanghai", MaxSteps: 4, MaxToolCalls: 8,
-		MaxInputTokens: 32768, MaxOutputTokens: 8192, MaxTotalTokens: 40960,
-		MaxOutputBytes: 65536, MaxCostMicrousd: 0, ProviderTimeout: 30 * time.Second,
+		AppID: testAppID, Enabled: true, ExecutorID: executorID,
+		ExecutorConfig: json.RawMessage(`{"strategy":"test"}`), MaxSteps: 4, MaxCapabilityCalls: 8,
+		MaxExecutionUnits: 40960,
+		MaxOutputBytes:    65536, MaxCostMicrousd: 0, ExecutionTimeout: 30 * time.Second,
 	}
-}
-
-type testPromptRenderer struct{}
-
-func (testPromptRenderer) RenderSystemPrompt(_ context.Context, request kernelecho.PromptRenderRequest) (string, error) {
-	prompt := request.BaseSystemPrompt
-	if channelPrompt := request.ChannelPrompts[request.Channel]; channelPrompt != "" {
-		prompt += "\n" + channelPrompt
-	}
-	return prompt, nil
 }
 
 // seedOrchestratorConfig 把测试种子写入持久配置，并以 store 作为 Orchestrator
@@ -1500,66 +1133,11 @@ func runOrchestrator(orchestrator *kernelecho.Orchestrator, ctx context.Context,
 	return echoID, orchestrator.RunQueued(ctx, work[0], emit)
 }
 
-// TestOrchestratorAppendsChannelPromptFromPersistedConfig 验证渠道提示来自
-// 持久化 App 配置（app_config_revisions.channel_prompts），并随 Run 渠道
-// 进入装配后的系统提示；无渠道提示时行为与迁移前一致。
-func TestOrchestratorAppendsChannelPromptFromPersistedConfig(t *testing.T) {
-	listener := bufconn.Listen(1 << 20)
-	grpcServer := grpc.NewServer()
-	agentServer := &configCaptureAgent{starts: make(chan *executorv1.StartRun, 1)}
-	executorv1.RegisterExecutorRuntimeServer(grpcServer, agentServer)
-	go grpcServer.Serve(listener)
-	t.Cleanup(grpcServer.Stop)
-	connection, err := grpc.DialContext(t.Context(), "bufnet",
-		grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) { return listener.Dial() }),
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = connection.Close() })
-	store, err := sqlite.Open(filepath.Join(t.TempDir(), "channel-prompt.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
-	seed := orchestratorAppConfig()
-	seed.ChannelPrompts = map[string]string{"qq_group": "【群聊规则】禁止 Markdown，像真实群聊。", "web": "【网页规则】适合连续阅读。"}
-	if _, _, err := store.Ensure(t.Context(), seed); err != nil {
-		t.Fatal(err)
-	}
-	policy, err := appconfig.NewPersistentPolicy(store)
-	if err != nil {
-		t.Fatal(err)
-	}
-	reg := registry.New()
-	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{})
-	orchestrator := kernelecho.NewOrchestrator(
-		executorv1.NewExecutorRuntimeClient(connection), reg, dispatcher, policy, storePorts(store),
-		kernelecho.Config{AppID: testAppID, AppConfigSource: store, RunTimeout: 5 * time.Second, Context: newSessionSource(t, store), Prompts: testPromptRenderer{}},
-	)
-	echoID, err := runOrchestrator(orchestrator, t.Context(), kernelecho.RunRequest{
-		Message: "群聊问题", IdempotencyKey: "channel-qq-group", Channel: "qq_group",
-	}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	start := <-agentServer.starts
-	if !strings.Contains(start.GetSystemPrompt(), "【群聊规则】") ||
-		strings.Contains(start.GetSystemPrompt(), "【网页规则】") {
-		t.Fatalf("群聊渠道提示未按渠道装配: %q", start.GetSystemPrompt())
-	}
-	runs, err := store.ListRuns(t.Context(), testAppID, echoID)
-	if err != nil || len(runs) != 1 || runs[0].Channel != "qq_group" {
-		t.Fatalf("runs=%#v err=%v", runs, err)
-	}
-}
-
 func TestOrchestratorDurablyRetriesOnlyRetryableRunAttempts(t *testing.T) {
 	listener := bufconn.Listen(1 << 20)
 	grpcServer := grpc.NewServer()
-	agentServer := &retryOnceAgent{}
-	executorv1.RegisterExecutorRuntimeServer(grpcServer, agentServer)
+	executorServer := &retryOnceExecutor{}
+	executorv1.RegisterExecutorRuntimeServer(grpcServer, executorServer)
 	go grpcServer.Serve(listener)
 	defer grpcServer.Stop()
 	connection, err := grpc.DialContext(context.Background(), "bufnet",
@@ -1577,13 +1155,13 @@ func TestOrchestratorDurablyRetriesOnlyRetryableRunAttempts(t *testing.T) {
 	defer store.Close()
 	reg := registry.New()
 	policy := runtimetest.NewStaticAppPolicy()
-	seedOrchestratorConfig(t, store, orchestratorSeed("test-model"))
+	seedOrchestratorConfig(t, store, orchestratorSeed("executor.test"))
 	orchestrator := kernelecho.NewOrchestrator(
 		executorv1.NewExecutorRuntimeClient(connection), reg, runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{}), policy, storePorts(store),
 		kernelecho.Config{
 			AppID: testAppID, AppConfigSource: store, RunTimeout: 5 * time.Second, MaxRunAttempts: 2,
 			RetryBaseDelay: 20 * time.Millisecond, RetryMaxDelay: 20 * time.Millisecond,
-			Context: newSessionSource(t, store), Prompts: testPromptRenderer{},
+			Context: newSessionSource(t, store),
 		},
 	)
 	events := make([]kernelecho.Event, 0)
@@ -1639,7 +1217,7 @@ func TestOrchestratorDurablyRetriesOnlyRetryableRunAttempts(t *testing.T) {
 func TestOrchestratorRenewsActiveRunLease(t *testing.T) {
 	listener := bufconn.Listen(1 << 20)
 	grpcServer := grpc.NewServer()
-	executorv1.RegisterExecutorRuntimeServer(grpcServer, &slowSuccessAgent{delay: 800 * time.Millisecond})
+	executorv1.RegisterExecutorRuntimeServer(grpcServer, &slowSuccessExecutor{delay: 800 * time.Millisecond})
 	go grpcServer.Serve(listener)
 	defer grpcServer.Stop()
 	connection, err := grpc.DialContext(context.Background(), "bufnet",
@@ -1659,12 +1237,12 @@ func TestOrchestratorRenewsActiveRunLease(t *testing.T) {
 	store := &renewalCountingStore{Store: baseStore}
 	reg := registry.New()
 	policy := runtimetest.NewStaticAppPolicy()
-	seedOrchestratorConfig(t, baseStore, orchestratorSeed("test-model"))
+	seedOrchestratorConfig(t, baseStore, orchestratorSeed("executor.test"))
 	orchestrator := kernelecho.NewOrchestrator(
 		executorv1.NewExecutorRuntimeClient(connection), reg, runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{}), policy, storePorts(store),
 		kernelecho.Config{
 			AppID: testAppID, AppConfigSource: baseStore, RunTimeout: 3 * time.Second, LeaseDuration: 400 * time.Millisecond,
-			Context: newSessionSource(t, baseStore), Prompts: testPromptRenderer{},
+			Context: newSessionSource(t, baseStore),
 		},
 	)
 	if _, err := runOrchestrator(orchestrator, context.Background(), kernelecho.RunRequest{
@@ -1680,7 +1258,7 @@ func TestOrchestratorRenewsActiveRunLease(t *testing.T) {
 func TestOrchestratorDoesNotAutomaticallyRetryAfterSideEffect(t *testing.T) {
 	listener := bufconn.Listen(1 << 20)
 	grpcServer := grpc.NewServer()
-	executorv1.RegisterExecutorRuntimeServer(grpcServer, &sideEffectFailureAgent{})
+	executorv1.RegisterExecutorRuntimeServer(grpcServer, &sideEffectFailureExecutor{})
 	go grpcServer.Serve(listener)
 	defer grpcServer.Stop()
 	connection, err := grpc.DialContext(context.Background(), "bufnet",
@@ -1722,18 +1300,18 @@ func TestOrchestratorDoesNotAutomaticallyRetryAfterSideEffect(t *testing.T) {
 		t.Fatal(err)
 	}
 	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{IdempotencyStore: store})
-	seedOrchestratorConfig(t, store, orchestratorSeed("test-model"))
+	seedOrchestratorConfig(t, store, orchestratorSeed("executor.test"))
 	orchestrator := kernelecho.NewOrchestrator(
 		executorv1.NewExecutorRuntimeClient(connection), reg, dispatcher, policy, storePorts(store),
 		kernelecho.Config{
 			AppID: testAppID, AppConfigSource: store, RunTimeout: time.Second, MaxRunAttempts: 3,
-			Context: newSessionSource(t, store), Prompts: testPromptRenderer{},
+			Context: newSessionSource(t, store),
 		},
 	)
 	echoID, err := runOrchestrator(orchestrator, context.Background(), kernelecho.RunRequest{
 		Message: "external", IdempotencyKey: "external-run",
 	}, nil)
-	if !errors.Is(err, kernelecho.ErrAgentRunFailed) || errors.Is(err, kernelecho.ErrRunRetryScheduled) {
+	if !errors.Is(err, kernelecho.ErrExecutorRunFailed) || errors.Is(err, kernelecho.ErrRunRetryScheduled) {
 		t.Fatalf("side-effect run error=%v", err)
 	}
 	runs, listErr := store.ListRuns(context.Background(), testAppID, echoID)
@@ -1742,10 +1320,10 @@ func TestOrchestratorDoesNotAutomaticallyRetryAfterSideEffect(t *testing.T) {
 	}
 }
 
-func TestOrchestratorRejectsDuplicateAgentCallBeforeSecondEffect(t *testing.T) {
+func TestOrchestratorRejectsDuplicateExecutorCallBeforeSecondEffect(t *testing.T) {
 	listener := bufconn.Listen(1 << 20)
 	grpcServer := grpc.NewServer()
-	executorv1.RegisterExecutorRuntimeServer(grpcServer, &duplicateCallAgent{})
+	executorv1.RegisterExecutorRuntimeServer(grpcServer, &duplicateCallExecutor{})
 	go grpcServer.Serve(listener)
 	defer grpcServer.Stop()
 	ctx := context.Background()
@@ -1769,10 +1347,10 @@ func TestOrchestratorRejectsDuplicateAgentCallBeforeSecondEffect(t *testing.T) {
 	policy.Enable(testAppID, routeCapabilityID)
 	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{IdempotencyStore: store})
 	registerRouteCapability(t, reg, routeCalls)
-	seedOrchestratorConfig(t, store, orchestratorSeed("test-model"))
+	seedOrchestratorConfig(t, store, orchestratorSeed("executor.test"))
 	orchestrator := kernelecho.NewOrchestrator(
 		executorv1.NewExecutorRuntimeClient(connection), reg, dispatcher, policy, storePorts(store),
-		kernelecho.Config{AppID: testAppID, AppConfigSource: store, RunTimeout: 5 * time.Second, Context: newSessionSource(t, store), Prompts: testPromptRenderer{}},
+		kernelecho.Config{AppID: testAppID, AppConfigSource: store, RunTimeout: 5 * time.Second, Context: newSessionSource(t, store)},
 	)
 	echoID, err := runOrchestrator(orchestrator, ctx, kernelecho.RunRequest{Message: "duplicate", IdempotencyKey: "duplicate-run"}, nil)
 	if !errors.Is(err, executor.ErrDuplicateCall) {
@@ -1786,7 +1364,7 @@ func TestOrchestratorRejectsDuplicateAgentCallBeforeSecondEffect(t *testing.T) {
 		t.Fatalf("record=%#v err=%v", record, getErr)
 	}
 	runs, listErr := store.ListRuns(ctx, testAppID, echoID)
-	if listErr != nil || len(runs) != 1 || runs[0].LastAgentSequence != 3 {
+	if listErr != nil || len(runs) != 1 || runs[0].LastExecutorSequence != 3 {
 		t.Fatalf("runs=%#v err=%v", runs, listErr)
 	}
 	audits, auditErr := store.ListCapabilityCalls(ctx, testAppID, echoID)
@@ -1798,7 +1376,7 @@ func TestOrchestratorRejectsDuplicateAgentCallBeforeSecondEffect(t *testing.T) {
 func TestOrchestratorRejectsFramesAfterTerminalWithoutPublishingFinal(t *testing.T) {
 	listener := bufconn.Listen(1 << 20)
 	grpcServer := grpc.NewServer()
-	executorv1.RegisterExecutorRuntimeServer(grpcServer, &lateFrameAgent{})
+	executorv1.RegisterExecutorRuntimeServer(grpcServer, &lateFrameExecutor{})
 	go grpcServer.Serve(listener)
 	defer grpcServer.Stop()
 	ctx := context.Background()
@@ -1817,10 +1395,10 @@ func TestOrchestratorRejectsFramesAfterTerminalWithoutPublishingFinal(t *testing
 	defer store.Close()
 	reg := registry.New()
 	policy := runtimetest.NewStaticAppPolicy()
-	seedOrchestratorConfig(t, store, orchestratorSeed("test-model"))
+	seedOrchestratorConfig(t, store, orchestratorSeed("executor.test"))
 	orchestrator := kernelecho.NewOrchestrator(
 		executorv1.NewExecutorRuntimeClient(connection), reg, runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{}), policy, storePorts(store),
-		kernelecho.Config{AppID: testAppID, AppConfigSource: store, RunTimeout: 5 * time.Second, Context: newSessionSource(t, store), Prompts: testPromptRenderer{}},
+		kernelecho.Config{AppID: testAppID, AppConfigSource: store, RunTimeout: 5 * time.Second, Context: newSessionSource(t, store)},
 	)
 	echoID, err := runOrchestrator(orchestrator, ctx, kernelecho.RunRequest{Message: "late", IdempotencyKey: "late-run"}, nil)
 	if !errors.Is(err, executor.ErrUnexpectedFrame) {
@@ -1831,12 +1409,12 @@ func TestOrchestratorRejectsFramesAfterTerminalWithoutPublishingFinal(t *testing
 		t.Fatalf("record=%#v err=%v", record, getErr)
 	}
 	for _, event := range events {
-		if event.Type == "reply.final" || event.Type == "reply.delta" {
+		if event.Type == "run.completed" || event.Type == "output.delta" {
 			t.Fatalf("late terminal content was published: %#v", events)
 		}
 	}
 	runs, listErr := store.ListRuns(ctx, testAppID, echoID)
-	if listErr != nil || len(runs) != 1 || runs[0].LastAgentSequence != 3 {
+	if listErr != nil || len(runs) != 1 || runs[0].LastExecutorSequence != 3 {
 		t.Fatalf("runs=%#v err=%v", runs, listErr)
 	}
 }
@@ -1844,7 +1422,7 @@ func TestOrchestratorRejectsFramesAfterTerminalWithoutPublishingFinal(t *testing
 func TestOrchestratorRejectsSuccessfulTerminalWithoutUsage(t *testing.T) {
 	listener := bufconn.Listen(1 << 20)
 	grpcServer := grpc.NewServer()
-	executorv1.RegisterExecutorRuntimeServer(grpcServer, &missingUsageAgent{})
+	executorv1.RegisterExecutorRuntimeServer(grpcServer, &missingUsageExecutor{})
 	go grpcServer.Serve(listener)
 	defer grpcServer.Stop()
 	ctx := context.Background()
@@ -1863,10 +1441,10 @@ func TestOrchestratorRejectsSuccessfulTerminalWithoutUsage(t *testing.T) {
 	defer store.Close()
 	reg := registry.New()
 	policy := runtimetest.NewStaticAppPolicy()
-	seedOrchestratorConfig(t, store, orchestratorSeed("test-model"))
+	seedOrchestratorConfig(t, store, orchestratorSeed("executor.test"))
 	orchestrator := kernelecho.NewOrchestrator(
 		executorv1.NewExecutorRuntimeClient(connection), reg, runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{}), policy, storePorts(store),
-		kernelecho.Config{AppID: testAppID, AppConfigSource: store, RunTimeout: 5 * time.Second, Context: newSessionSource(t, store), Prompts: testPromptRenderer{}},
+		kernelecho.Config{AppID: testAppID, AppConfigSource: store, RunTimeout: 5 * time.Second, Context: newSessionSource(t, store)},
 	)
 	echoID, err := runOrchestrator(orchestrator, ctx, kernelecho.RunRequest{Message: "usage", IdempotencyKey: "missing-usage-run"}, nil)
 	if !errors.Is(err, executor.ErrUnexpectedFrame) {
@@ -1877,16 +1455,62 @@ func TestOrchestratorRejectsSuccessfulTerminalWithoutUsage(t *testing.T) {
 		t.Fatalf("record=%#v err=%v", record, getErr)
 	}
 	for _, event := range events {
-		if event.Type == "reply.final" {
+		if event.Type == "run.completed" {
 			t.Fatalf("usage-free final was published: %#v", events)
 		}
 	}
 }
 
-func TestOrchestratorDoesNotExposeAgentOrCapabilityInternalErrors(t *testing.T) {
+func TestOrchestratorEnforcesCumulativeOutputBudget(t *testing.T) {
 	listener := bufconn.Listen(1 << 20)
 	grpcServer := grpc.NewServer()
-	executorv1.RegisterExecutorRuntimeServer(grpcServer, &boundaryAgent{testing: t})
+	executorv1.RegisterExecutorRuntimeServer(grpcServer, &overOutputExecutor{})
+	go grpcServer.Serve(listener)
+	defer grpcServer.Stop()
+	connection, err := grpc.DialContext(t.Context(), "bufnet",
+		grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) { return listener.Dial() }),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.Close()
+	store, err := sqlite.Open(filepath.Join(t.TempDir(), "output-budget.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	seed := orchestratorSeed("executor.test")
+	seed.MaxOutputBytes = 4096
+	seedOrchestratorConfig(t, store, seed)
+	reg := registry.New()
+	policy := runtimetest.NewStaticAppPolicy()
+	orchestrator := kernelecho.NewOrchestrator(
+		executorv1.NewExecutorRuntimeClient(connection), reg,
+		runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{}), policy, storePorts(store),
+		kernelecho.Config{AppID: testAppID, AppConfigSource: store, RunTimeout: 5 * time.Second, Context: newSessionSource(t, store)},
+	)
+	echoID, err := runOrchestrator(orchestrator, context.Background(), kernelecho.RunRequest{
+		Message: "累积输出", IdempotencyKey: "cumulative-output-budget",
+	}, nil)
+	if !errors.Is(err, kernelecho.ErrOutputBudgetExceeded) {
+		t.Fatalf("run error=%v, want ErrOutputBudgetExceeded", err)
+	}
+	record, events, getErr := store.GetEcho(context.Background(), testAppID, echoID)
+	if getErr != nil || record.Status != kernelecho.StatusFailed || record.ErrorCode != "budget_exceeded" || record.FinalMessage != "" {
+		t.Fatalf("record=%#v events=%#v err=%v", record, events, getErr)
+	}
+	for _, event := range events {
+		if event.Type == "run.completed" {
+			t.Fatalf("over-budget output was published: %#v", events)
+		}
+	}
+}
+
+func TestOrchestratorDoesNotExposeExecutorOrCapabilityInternalErrors(t *testing.T) {
+	listener := bufconn.Listen(1 << 20)
+	grpcServer := grpc.NewServer()
+	executorv1.RegisterExecutorRuntimeServer(grpcServer, &boundaryExecutor{testing: t})
 	go grpcServer.Serve(listener)
 	defer grpcServer.Stop()
 	ctx := context.Background()
@@ -1905,7 +1529,7 @@ func TestOrchestratorDoesNotExposeAgentOrCapabilityInternalErrors(t *testing.T) 
 	defer store.Close()
 	reg := registry.New()
 	policy := runtimetest.NewStaticAppPolicy()
-	seedOrchestratorConfig(t, store, orchestratorSeed("test-model"))
+	seedOrchestratorConfig(t, store, orchestratorSeed("executor.test"))
 	orchestrator := kernelecho.NewOrchestrator(
 		executorv1.NewExecutorRuntimeClient(connection),
 		reg,
@@ -1914,18 +1538,18 @@ func TestOrchestratorDoesNotExposeAgentOrCapabilityInternalErrors(t *testing.T) 
 		storePorts(store),
 		kernelecho.Config{
 			AppID: testAppID, AppConfigSource: store, RunTimeout: 5 * time.Second,
-			Context: newSessionSource(t, store), Prompts: testPromptRenderer{},
+			Context: newSessionSource(t, store),
 		},
 	)
 	echoID, err := runOrchestrator(orchestrator, ctx, kernelecho.RunRequest{Message: "trigger boundary errors", IdempotencyKey: "boundary-run"}, nil)
-	if !errors.Is(err, kernelecho.ErrAgentRunFailed) {
-		t.Fatalf("run error=%v, want ErrAgentRunFailed", err)
+	if !errors.Is(err, kernelecho.ErrExecutorRunFailed) {
+		t.Fatalf("run error=%v, want ErrExecutorRunFailed", err)
 	}
 	record, events, err := store.GetEcho(ctx, testAppID, echoID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if record.Status != kernelecho.StatusFailed || record.ErrorCode != "agent_run_failed" || record.ErrorMessage != "Agent Run 执行失败" {
+	if record.Status != kernelecho.StatusFailed || record.ErrorCode != "executor_failed" || record.ErrorMessage != "执行者 Run 执行失败" {
 		t.Fatalf("unsafe terminal record: %#v", record)
 	}
 	encoded, err := json.Marshal(events)
@@ -1946,20 +1570,11 @@ func TestOrchestratorDoesNotExposeAgentOrCapabilityInternalErrors(t *testing.T) 
 	}
 }
 
-type promptCaptureRenderer struct {
-	requests chan kernelecho.PromptRenderRequest
-}
-
-func (r promptCaptureRenderer) RenderSystemPrompt(_ context.Context, request kernelecho.PromptRenderRequest) (string, error) {
-	r.requests <- request
-	return request.BaseSystemPrompt + "\n\n【基本风格与语调】\n测试：渲染成功", nil
-}
-
-func TestOrchestratorUsesPromptServiceRenderer(t *testing.T) {
+func TestOrchestratorSendsOpaqueExecutorConfigAndNeutralContext(t *testing.T) {
 	listener := bufconn.Listen(1 << 20)
 	grpcServer := grpc.NewServer()
-	agentServer := &configCaptureAgent{starts: make(chan *executorv1.StartRun, 1)}
-	executorv1.RegisterExecutorRuntimeServer(grpcServer, agentServer)
+	executorServer := &configCaptureExecutor{starts: make(chan *executorv1.StartRun, 1)}
+	executorv1.RegisterExecutorRuntimeServer(grpcServer, executorServer)
 	go grpcServer.Serve(listener)
 	t.Cleanup(grpcServer.Stop)
 	connection, err := grpc.DialContext(t.Context(), "bufnet",
@@ -1970,13 +1585,13 @@ func TestOrchestratorUsesPromptServiceRenderer(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = connection.Close() })
-	store, err := sqlite.Open(filepath.Join(t.TempDir(), "prompt-renderer.db"))
+	store, err := sqlite.Open(filepath.Join(t.TempDir(), "neutral-executor.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
 	seed := orchestratorAppConfig()
-	seed.ChannelPrompts = map[string]string{"qq_group": "【群聊规则】"}
+	seed.ExecutorConfig = json.RawMessage(`{"strategy":"deterministic","version":1}`)
 	if _, _, err := store.Ensure(t.Context(), seed); err != nil {
 		t.Fatal(err)
 	}
@@ -1986,26 +1601,30 @@ func TestOrchestratorUsesPromptServiceRenderer(t *testing.T) {
 	}
 	reg := registry.New()
 	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{})
-	renderer := promptCaptureRenderer{requests: make(chan kernelecho.PromptRenderRequest, 1)}
 	orchestrator := kernelecho.NewOrchestrator(
 		executorv1.NewExecutorRuntimeClient(connection), reg, dispatcher, policy, storePorts(store),
 		kernelecho.Config{
 			AppID: testAppID, AppConfigSource: store, RunTimeout: 5 * time.Second,
-			Context: newSessionSource(t, store), Prompts: renderer,
+			Context: newSessionSource(t, store),
 		},
 	)
 	if _, err := runOrchestrator(orchestrator, t.Context(), kernelecho.RunRequest{
-		Message: "提示词服务测试", IdempotencyKey: "prompt-service-render", Channel: "qq_group",
+		Message: "通用执行者配置测试", IdempotencyKey: "opaque-config-render", Channel: "qq_group",
 	}, nil); err != nil {
 		t.Fatal(err)
 	}
-	request := <-renderer.requests
-	if request.AppID != testAppID || request.Channel != "qq_group" || request.ChannelPrompts["qq_group"] != "【群聊规则】" {
-		t.Fatalf("render request=%#v", request)
+	start := <-executorServer.starts
+	if string(start.GetExecutorConfig().GetData()) != string(seed.ExecutorConfig) {
+		t.Fatalf("opaque executor config changed: %q", start.GetExecutorConfig().GetData())
 	}
-	start := <-agentServer.starts
-	if !strings.Contains(start.GetSystemPrompt(), "测试：渲染成功") ||
-		strings.Contains(start.GetSystemPrompt(), "【群聊规则】") {
-		t.Fatalf("渲染结果未进入最终系统提示或渠道段被重复拼接: %q", start.GetSystemPrompt())
+	var contextPayload struct {
+		SchemaVersion string `json:"schema_version"`
+		Blocks        []struct {
+			Type string `json:"type"`
+		} `json:"blocks"`
+	}
+	if err := json.Unmarshal(start.GetContextPayload().GetData(), &contextPayload); err != nil ||
+		contextPayload.SchemaVersion != "ailuo.context.v1" || len(contextPayload.Blocks) == 0 {
+		t.Fatalf("neutral context payload=%q err=%v", start.GetContextPayload().GetData(), err)
 	}
 }

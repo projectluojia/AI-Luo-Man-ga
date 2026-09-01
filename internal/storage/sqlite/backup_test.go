@@ -43,28 +43,17 @@ func TestBackupAndRestorePreserveCompleteSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	replacement := historicalConfig
-	replacement.SystemPrompt = "备份恢复后的当前系统提示"
+	replacement.ExecutorConfig = []byte(`{"strategy":"backup-current"}`)
 	currentConfig, err := store.CompareAndSwap(t.Context(), historicalConfig.Generation, replacement)
 	if err != nil {
 		t.Fatal(err)
 	}
-	createTestEchoRun(t, store, "campus-services", "backup-echo", "task", now)
-	parent, err := store.ClaimRun(t.Context(), "campus-services", "backup-echo", "parent-lease", now, now.Add(time.Minute))
+	root := createTestEchoRun(t, store, "campus-services", "backup-echo", "task", now)
+	parent, err := store.ClaimRun(t.Context(), "campus-services", "backup-echo", root.ID, "parent-lease", now, now.Add(time.Minute))
 	if err != nil {
 		t.Fatal(err)
 	}
-	child := childRunRecord(parent, "backup-child", "backup-call", now)
-	if err := store.CreateChildRun(t.Context(), parent, child, 1); err != nil {
-		t.Fatal(err)
-	}
-	claimedChild, err := store.ClaimChildRun(t.Context(), child.AppID, child.EchoID, child.ID, parent.ID, "child-lease", now, now.Add(time.Minute))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.CompleteChildRun(t.Context(), claimedChild, kernelecho.RunStatusSucceeded, "备份子结果", publicerror.Error{}, now.Add(time.Second)); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.CompleteRun(t.Context(), parent, kernelecho.RunStatusSucceeded, kernelecho.StatusSucceeded, "备份父结果", publicerror.Error{}, now.Add(2*time.Second)); err != nil {
+	if err := store.CompleteRun(t.Context(), parent, kernelecho.RunStatusSucceeded, kernelecho.StatusSucceeded, textOutput("备份父结果"), publicerror.Error{}, now.Add(2*time.Second)); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Backup(t.Context(), backupPath); err != nil {
@@ -105,18 +94,15 @@ func TestBackupAndRestorePreserveCompleteSnapshot(t *testing.T) {
 		t.Fatalf("恢复后的当前 App 配置=%#v err=%v", restoredCurrent, err)
 	}
 	restoredHistorical, err := restored.Revision(t.Context(), "campus-services", historicalConfig.Revision)
-	if err != nil || restoredHistorical.SystemPrompt != historicalConfig.SystemPrompt {
+	if err != nil || string(restoredHistorical.ExecutorConfig) != string(historicalConfig.ExecutorConfig) {
 		t.Fatalf("恢复后的历史 App 配置=%#v err=%v", restoredHistorical, err)
 	}
 	restoredRuns, err := restored.ListRuns(t.Context(), "campus-services", "backup-echo")
-	if err != nil || len(restoredRuns) != 2 {
+	if err != nil || len(restoredRuns) != 1 {
 		t.Fatalf("恢复后的 Run 链=%#v err=%v", restoredRuns, err)
 	}
-	for _, run := range restoredRuns {
-		if run.ParentRunID != "" && (run.ParentRunID != parent.ID || run.ResultMessage != "备份子结果" ||
-			len(run.CapabilityScope) != 1 || run.CapabilityScope[0] != "capability") {
-			t.Fatalf("恢复后的子 Run=%#v", run)
-		}
+	if restoredRuns[0].ID != parent.ID || string(restoredRuns[0].Result.Data) != "备份父结果" {
+		t.Fatalf("恢复后的 Run=%#v", restoredRuns[0])
 	}
 }
 

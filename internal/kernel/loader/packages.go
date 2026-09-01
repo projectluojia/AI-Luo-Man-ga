@@ -105,7 +105,8 @@ func (m *Manager) UpgradePackage(ctx context.Context, spec PackageSpec) error {
 	candidates := make([]packageCandidate, 0, len(spec.Components))
 	for index, component := range spec.Components {
 		item := group.order[index]
-		if component.Runtime.ID != item.manifest.ID {
+		if component.Runtime.ID != item.manifest.ID || component.Runtime.Mode != item.manifest.Mode ||
+			component.Runtime.Role != item.manifest.Role {
 			stopCandidates(candidates)
 			return ErrInvalidManifest
 		}

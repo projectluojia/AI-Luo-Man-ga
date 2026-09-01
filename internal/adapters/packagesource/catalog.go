@@ -304,6 +304,14 @@ func (c *Catalog) readPackage(ctx context.Context, directory string) ([]installe
 	for index, componentID := range order {
 		orderIndex[componentID] = index
 	}
+	primaryComponentID := ""
+	for _, componentID := range order {
+		component, ok := packagecontract.FindComponent(neutral.Manifest, componentID)
+		if ok && component.Role != packagecontract.RoleExecutor {
+			primaryComponentID = componentID
+			break
+		}
+	}
 	artifactsByComponent := make(map[string]packagecontract.LockedArtifact, len(neutral.Lock.Artifacts))
 	for _, artifact := range neutral.Lock.Artifacts {
 		artifactsByComponent[artifact.ComponentID] = artifact
@@ -347,8 +355,9 @@ func (c *Catalog) readPackage(ctx context.Context, directory string) ([]installe
 			ComponentID: component.ID, ComponentOrder: orderIndex[component.ID],
 			Capabilities: capabilities,
 		}
-		// Service 与 Tools 路由到依赖拓扑第一个组件（Provider 基座）。
-		if orderIndex[component.ID] == 0 {
+		// Service 与 Tools 只挂到包内第一个能力组件；执行者组件不进入
+		// Registry，不能因为拓扑顺序靠前而吞掉包级能力面。
+		if component.ID == primaryComponentID {
 			record.Service = cloneInstalledService(extensions.Service)
 			record.Tools = cloneToolSpecs(extensions.Tools)
 		}

@@ -45,6 +45,47 @@ func TestRegisterInstalledRejectsCapabilityPackageWithoutUniquePrimaryService(t 
 	}
 }
 
+func TestRegisterInstalledSeparatesExecutorFromCapabilityService(t *testing.T) {
+	manager, err := loader.New(
+		&fakeHost{
+			runtime: &fakeRuntime{description: loader.Description{
+				ID: "mixed.capability.runtime", Version: "1.2.3", Mode: loader.ModeHosted,
+			}},
+		},
+		&fakeHost{
+			mode: loader.ModeIsolated,
+			runtime: &fakeExecutorRuntime{description: loader.Description{
+				ID: "mixed.executor", Version: "1.2.3", Mode: loader.ModeIsolated,
+			}},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := capability.ServiceSpec{ID: "mixed.service", Version: "1.2.3"}
+	capabilitySpec := capability.CapabilitySpec{
+		ID: "mixed.capability", Version: "1.2.3", ServiceID: service.ID,
+		InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
+		SideEffect:      capability.SideEffectRead,
+	}
+	executor := loader.InstalledRecord{
+		Runtime:   loader.Manifest{ID: "mixed.executor", Version: "1.2.3", Mode: loader.ModeIsolated, Role: loader.RoleExecutor, LockedDigest: digest},
+		PackageID: "mixed.package", ComponentID: "executor", ComponentOrder: 0,
+	}
+	provider := capabilityRecord("mixed.capability.runtime", "mixed.package", "capability", 1, capabilitySpec.ID, service)
+	provider.Capabilities[0] = capabilitySpec
+	target := registry.New()
+	if err := loader.RegisterInstalled(context.Background(), manager, target, []loader.InstalledRecord{executor, provider}); err != nil {
+		t.Fatalf("RegisterInstalled: %v", err)
+	}
+	if _, _, err := target.ResolveCapability(capabilitySpec.ID); err != nil {
+		t.Fatalf("capability service was not registered: %v", err)
+	}
+	if _, err := manager.Executor(context.Background(), executor.Runtime.ID); err != nil {
+		t.Fatalf("executor was not selectable: %v", err)
+	}
+}
+
 func capabilityRecord(runtimeID, packageID, componentID string, order int, capabilityID string, service capability.ServiceSpec) loader.InstalledRecord {
 	return loader.InstalledRecord{
 		Runtime: loader.Manifest{

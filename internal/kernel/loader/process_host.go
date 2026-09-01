@@ -605,8 +605,21 @@ func (r *executorRuntime) Health(ctx context.Context) error {
 	if r.process != nil && r.process.Exited() {
 		return ErrUnavailable
 	}
-	// Executor 的模型/Provider 就绪取决于当前 App 配置，由内核 health
-	// checker 在接单前用真实模型探测；Loader 这里只报告进程存活。
+	if r.client == nil {
+		return ErrUnavailable
+	}
+	response, err := r.client.Health(ctx, &executor.HealthRequest{
+		AcceptedProtocolVersions: []string{executor.Version},
+	})
+	if err != nil {
+		return err
+	}
+	if err := executor.ValidateHealthResponse(response); err != nil {
+		return errors.Join(ErrRuntimeProtocol, err)
+	}
+	if !response.Ready || !executor.Supports(response.SupportedProtocolVersions) {
+		return ErrUnavailable
+	}
 	return nil
 }
 

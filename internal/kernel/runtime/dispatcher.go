@@ -98,11 +98,11 @@ func (d *Dispatcher) InvokeCapability(ctx context.Context, request contracts.Req
 				validateInput: func(payload json.RawMessage) error {
 					return d.registry.ValidateCapabilityInput(capabilityID, payload)
 				},
-				fillChild: func(child contracts.RequestContext) contracts.RequestContext {
-					child.CapabilityID = capabilityID
-					child.ServiceID = spec.ServiceID
-					child.ToolID = spec.ToolID
-					return child
+				fillTarget: func(derived contracts.RequestContext) contracts.RequestContext {
+					derived.CapabilityID = capabilityID
+					derived.ServiceID = spec.ServiceID
+					derived.ToolID = spec.ToolID
+					return derived
 				},
 				metric: observe.DefaultMetrics().ObserveCapability,
 			}, nil
@@ -129,11 +129,11 @@ func (d *Dispatcher) UseTool(ctx context.Context, request contracts.RequestConte
 				validateInput: func(payload json.RawMessage) error {
 					return d.registry.ValidateToolInput(serviceID, toolID, payload)
 				},
-				fillChild: func(child contracts.RequestContext) contracts.RequestContext {
-					child.CapabilityID = ""
-					child.ServiceID = serviceID
-					child.ToolID = toolID
-					return child
+				fillTarget: func(derived contracts.RequestContext) contracts.RequestContext {
+					derived.CapabilityID = ""
+					derived.ServiceID = serviceID
+					derived.ToolID = toolID
+					return derived
 				},
 				metric: observe.DefaultMetrics().ObserveTool,
 			}, nil
@@ -151,7 +151,7 @@ type routedTarget struct {
 	requiredPermissions  []string
 	handler              registry.Handler
 	validateInput        func(json.RawMessage) error
-	fillChild            func(contracts.RequestContext) contracts.RequestContext
+	fillTarget           func(contracts.RequestContext) contracts.RequestContext
 	metric               func(bool, time.Duration)
 }
 
@@ -212,17 +212,17 @@ func (d *Dispatcher) route(
 		)
 		return nil, err
 	}
-	child, fingerprint, err := d.childRequest(request, targetType, target.targetID, target.version, narrowedPermissions, payload)
+	derived, fingerprint, err := d.deriveRequest(request, targetType, target.targetID, target.version, narrowedPermissions, payload)
 	if err != nil {
 		observe.Warn(ctx, "调用图治理拒绝本次调用",
 			observe.StringAttr("error", err.Error()),
 		)
 		return nil, err
 	}
-	child = target.fillChild(child)
-	child.TargetType = targetType
+	derived = target.fillTarget(derived)
+	derived.TargetType = targetType
 	result, replayed, err := d.invokeHandler(ctx, request, targetType, target.targetID, target.version, target.sideEffect, fingerprint, func(executionContext context.Context) (json.RawMessage, error) {
-		return target.handler(executionContext, child, payload)
+		return target.handler(executionContext, derived, payload)
 	})
 	if err != nil {
 		observe.Warn(ctx, "调用处理失败",
@@ -346,7 +346,7 @@ func (d *Dispatcher) invokeHandler(
 	return json.RawMessage(result), replayed, err
 }
 
-func (d *Dispatcher) childRequest(
+func (d *Dispatcher) deriveRequest(
 	request contracts.RequestContext,
 	targetType string,
 	targetID string,
@@ -363,10 +363,10 @@ func (d *Dispatcher) childRequest(
 			return contracts.RequestContext{}, "", fmt.Errorf("%w: target=%q", ErrCycleDetected, targetID)
 		}
 	}
-	child := request.Child()
-	child.PermissionScope = narrowedPermissions
-	child.CallChain = append(append([]string(nil), request.CallChain...), fingerprint)
-	return child, fingerprint, nil
+	derived := request.NextCall()
+	derived.PermissionScope = narrowedPermissions
+	derived.CallChain = append(append([]string(nil), request.CallChain...), fingerprint)
+	return derived, fingerprint, nil
 }
 
 func callFingerprint(request contracts.RequestContext, targetType, targetID, version string, payload json.RawMessage) (string, error) {

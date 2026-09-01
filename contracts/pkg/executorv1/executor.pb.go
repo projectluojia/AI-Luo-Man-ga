@@ -24,7 +24,6 @@ const (
 type HealthRequest struct {
 	state                    protoimpl.MessageState `protogen:"open.v1"`
 	AcceptedProtocolVersions []string               `protobuf:"bytes,1,rep,name=accepted_protocol_versions,json=acceptedProtocolVersions,proto3" json:"accepted_protocol_versions,omitempty"`
-	Model                    string                 `protobuf:"bytes,2,opt,name=model,proto3" json:"model,omitempty"`
 	unknownFields            protoimpl.UnknownFields
 	sizeCache                protoimpl.SizeCache
 }
@@ -66,17 +65,9 @@ func (x *HealthRequest) GetAcceptedProtocolVersions() []string {
 	return nil
 }
 
-func (x *HealthRequest) GetModel() string {
-	if x != nil {
-		return x.Model
-	}
-	return ""
-}
-
 type HealthResponse struct {
 	state                     protoimpl.MessageState `protogen:"open.v1"`
 	Ready                     bool                   `protobuf:"varint,1,opt,name=ready,proto3" json:"ready,omitempty"`
-	Provider                  string                 `protobuf:"bytes,2,opt,name=provider,proto3" json:"provider,omitempty"`
 	SupportedProtocolVersions []string               `protobuf:"bytes,3,rep,name=supported_protocol_versions,json=supportedProtocolVersions,proto3" json:"supported_protocol_versions,omitempty"`
 	StatusCode                string                 `protobuf:"bytes,4,opt,name=status_code,json=statusCode,proto3" json:"status_code,omitempty"`
 	unknownFields             protoimpl.UnknownFields
@@ -120,13 +111,6 @@ func (x *HealthResponse) GetReady() bool {
 	return false
 }
 
-func (x *HealthResponse) GetProvider() string {
-	if x != nil {
-		return x.Provider
-	}
-	return ""
-}
-
 func (x *HealthResponse) GetSupportedProtocolVersions() []string {
 	if x != nil {
 		return x.SupportedProtocolVersions
@@ -151,12 +135,12 @@ type ExecutorFrame struct {
 	//	*ExecutorFrame_StartRun
 	//	*ExecutorFrame_CapabilityCall
 	//	*ExecutorFrame_CapabilityResult
-	//	*ExecutorFrame_ReplyDelta
-	//	*ExecutorFrame_FinalMessage
+	//	*ExecutorFrame_OutputDelta
+	//	*ExecutorFrame_FinalResult
 	//	*ExecutorFrame_RunFailure
 	//	*ExecutorFrame_CancelRun
 	//	*ExecutorFrame_RunAccepted
-	//	*ExecutorFrame_RunUsage
+	//	*ExecutorFrame_ResourceUsage
 	Body          isExecutorFrame_Body `protobuf_oneof:"body"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -247,19 +231,19 @@ func (x *ExecutorFrame) GetCapabilityResult() *CapabilityResult {
 	return nil
 }
 
-func (x *ExecutorFrame) GetReplyDelta() *ReplyDelta {
+func (x *ExecutorFrame) GetOutputDelta() *OutputDelta {
 	if x != nil {
-		if x, ok := x.Body.(*ExecutorFrame_ReplyDelta); ok {
-			return x.ReplyDelta
+		if x, ok := x.Body.(*ExecutorFrame_OutputDelta); ok {
+			return x.OutputDelta
 		}
 	}
 	return nil
 }
 
-func (x *ExecutorFrame) GetFinalMessage() *FinalMessage {
+func (x *ExecutorFrame) GetFinalResult() *FinalResult {
 	if x != nil {
-		if x, ok := x.Body.(*ExecutorFrame_FinalMessage); ok {
-			return x.FinalMessage
+		if x, ok := x.Body.(*ExecutorFrame_FinalResult); ok {
+			return x.FinalResult
 		}
 	}
 	return nil
@@ -292,10 +276,10 @@ func (x *ExecutorFrame) GetRunAccepted() *RunAccepted {
 	return nil
 }
 
-func (x *ExecutorFrame) GetRunUsage() *RunUsage {
+func (x *ExecutorFrame) GetResourceUsage() *ResourceUsage {
 	if x != nil {
-		if x, ok := x.Body.(*ExecutorFrame_RunUsage); ok {
-			return x.RunUsage
+		if x, ok := x.Body.(*ExecutorFrame_ResourceUsage); ok {
+			return x.ResourceUsage
 		}
 	}
 	return nil
@@ -317,12 +301,12 @@ type ExecutorFrame_CapabilityResult struct {
 	CapabilityResult *CapabilityResult `protobuf:"bytes,12,opt,name=capability_result,json=capabilityResult,proto3,oneof"`
 }
 
-type ExecutorFrame_ReplyDelta struct {
-	ReplyDelta *ReplyDelta `protobuf:"bytes,13,opt,name=reply_delta,json=replyDelta,proto3,oneof"`
+type ExecutorFrame_OutputDelta struct {
+	OutputDelta *OutputDelta `protobuf:"bytes,13,opt,name=output_delta,json=outputDelta,proto3,oneof"`
 }
 
-type ExecutorFrame_FinalMessage struct {
-	FinalMessage *FinalMessage `protobuf:"bytes,14,opt,name=final_message,json=finalMessage,proto3,oneof"`
+type ExecutorFrame_FinalResult struct {
+	FinalResult *FinalResult `protobuf:"bytes,14,opt,name=final_result,json=finalResult,proto3,oneof"`
 }
 
 type ExecutorFrame_RunFailure struct {
@@ -337,8 +321,8 @@ type ExecutorFrame_RunAccepted struct {
 	RunAccepted *RunAccepted `protobuf:"bytes,17,opt,name=run_accepted,json=runAccepted,proto3,oneof"`
 }
 
-type ExecutorFrame_RunUsage struct {
-	RunUsage *RunUsage `protobuf:"bytes,18,opt,name=run_usage,json=runUsage,proto3,oneof"`
+type ExecutorFrame_ResourceUsage struct {
+	ResourceUsage *ResourceUsage `protobuf:"bytes,18,opt,name=resource_usage,json=resourceUsage,proto3,oneof"`
 }
 
 func (*ExecutorFrame_StartRun) isExecutorFrame_Body() {}
@@ -347,9 +331,9 @@ func (*ExecutorFrame_CapabilityCall) isExecutorFrame_Body() {}
 
 func (*ExecutorFrame_CapabilityResult) isExecutorFrame_Body() {}
 
-func (*ExecutorFrame_ReplyDelta) isExecutorFrame_Body() {}
+func (*ExecutorFrame_OutputDelta) isExecutorFrame_Body() {}
 
-func (*ExecutorFrame_FinalMessage) isExecutorFrame_Body() {}
+func (*ExecutorFrame_FinalResult) isExecutorFrame_Body() {}
 
 func (*ExecutorFrame_RunFailure) isExecutorFrame_Body() {}
 
@@ -357,30 +341,26 @@ func (*ExecutorFrame_CancelRun) isExecutorFrame_Body() {}
 
 func (*ExecutorFrame_RunAccepted) isExecutorFrame_Body() {}
 
-func (*ExecutorFrame_RunUsage) isExecutorFrame_Body() {}
+func (*ExecutorFrame_ResourceUsage) isExecutorFrame_Body() {}
 
 type StartRun struct {
-	state             protoimpl.MessageState `protogen:"open.v1"`
-	AppId             string                 `protobuf:"bytes,1,opt,name=app_id,json=appId,proto3" json:"app_id,omitempty"`
-	InputMessage      string                 `protobuf:"bytes,2,opt,name=input_message,json=inputMessage,proto3" json:"input_message,omitempty"`
-	Timezone          string                 `protobuf:"bytes,3,opt,name=timezone,proto3" json:"timezone,omitempty"`
-	Capabilities      []*Capability          `protobuf:"bytes,4,rep,name=capabilities,proto3" json:"capabilities,omitempty"`
-	Model             string                 `protobuf:"bytes,5,opt,name=model,proto3" json:"model,omitempty"`
-	SystemPrompt      string                 `protobuf:"bytes,6,opt,name=system_prompt,json=systemPrompt,proto3" json:"system_prompt,omitempty"`
-	MaxSteps          uint32                 `protobuf:"varint,7,opt,name=max_steps,json=maxSteps,proto3" json:"max_steps,omitempty"`
-	ProtocolVersion   string                 `protobuf:"bytes,8,opt,name=protocol_version,json=protocolVersion,proto3" json:"protocol_version,omitempty"`
-	MaxToolCalls      uint32                 `protobuf:"varint,9,opt,name=max_tool_calls,json=maxToolCalls,proto3" json:"max_tool_calls,omitempty"`
-	MaxInputTokens    uint64                 `protobuf:"varint,10,opt,name=max_input_tokens,json=maxInputTokens,proto3" json:"max_input_tokens,omitempty"`
-	MaxOutputTokens   uint64                 `protobuf:"varint,11,opt,name=max_output_tokens,json=maxOutputTokens,proto3" json:"max_output_tokens,omitempty"`
-	MaxTotalTokens    uint64                 `protobuf:"varint,12,opt,name=max_total_tokens,json=maxTotalTokens,proto3" json:"max_total_tokens,omitempty"`
-	MaxOutputBytes    uint64                 `protobuf:"varint,13,opt,name=max_output_bytes,json=maxOutputBytes,proto3" json:"max_output_bytes,omitempty"`
-	MaxCostMicrousd   uint64                 `protobuf:"varint,14,opt,name=max_cost_microusd,json=maxCostMicrousd,proto3" json:"max_cost_microusd,omitempty"`
-	ProviderTimeoutMs uint32                 `protobuf:"varint,15,opt,name=provider_timeout_ms,json=providerTimeoutMs,proto3" json:"provider_timeout_ms,omitempty"`
-	TraceId           string                 `protobuf:"bytes,16,opt,name=trace_id,json=traceId,proto3" json:"trace_id,omitempty"`
-	ParentSpanId      string                 `protobuf:"bytes,17,opt,name=parent_span_id,json=parentSpanId,proto3" json:"parent_span_id,omitempty"`
-	ParentRunId       string                 `protobuf:"bytes,18,opt,name=parent_run_id,json=parentRunId,proto3" json:"parent_run_id,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	state              protoimpl.MessageState `protogen:"open.v1"`
+	AppId              string                 `protobuf:"bytes,1,opt,name=app_id,json=appId,proto3" json:"app_id,omitempty"`
+	InputPayload       *Payload               `protobuf:"bytes,2,opt,name=input_payload,json=inputPayload,proto3" json:"input_payload,omitempty"`
+	Capabilities       []*Capability          `protobuf:"bytes,4,rep,name=capabilities,proto3" json:"capabilities,omitempty"`
+	MaxSteps           uint32                 `protobuf:"varint,7,opt,name=max_steps,json=maxSteps,proto3" json:"max_steps,omitempty"`
+	ProtocolVersion    string                 `protobuf:"bytes,8,opt,name=protocol_version,json=protocolVersion,proto3" json:"protocol_version,omitempty"`
+	MaxCapabilityCalls uint32                 `protobuf:"varint,9,opt,name=max_capability_calls,json=maxCapabilityCalls,proto3" json:"max_capability_calls,omitempty"`
+	TraceId            string                 `protobuf:"bytes,16,opt,name=trace_id,json=traceId,proto3" json:"trace_id,omitempty"`
+	ParentSpanId       string                 `protobuf:"bytes,17,opt,name=parent_span_id,json=parentSpanId,proto3" json:"parent_span_id,omitempty"`
+	ParentRunId        string                 `protobuf:"bytes,18,opt,name=parent_run_id,json=parentRunId,proto3" json:"parent_run_id,omitempty"`
+	ContextPayload     *Payload               `protobuf:"bytes,19,opt,name=context_payload,json=contextPayload,proto3" json:"context_payload,omitempty"`
+	MaxExecutionUnits  uint64                 `protobuf:"varint,20,opt,name=max_execution_units,json=maxExecutionUnits,proto3" json:"max_execution_units,omitempty"`
+	MaxOutputBytes     uint64                 `protobuf:"varint,21,opt,name=max_output_bytes,json=maxOutputBytes,proto3" json:"max_output_bytes,omitempty"`
+	MaxCostMicrousd    uint64                 `protobuf:"varint,22,opt,name=max_cost_microusd,json=maxCostMicrousd,proto3" json:"max_cost_microusd,omitempty"`
+	ExecutorConfig     *Payload               `protobuf:"bytes,23,opt,name=executor_config,json=executorConfig,proto3" json:"executor_config,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *StartRun) Reset() {
@@ -420,18 +400,11 @@ func (x *StartRun) GetAppId() string {
 	return ""
 }
 
-func (x *StartRun) GetInputMessage() string {
+func (x *StartRun) GetInputPayload() *Payload {
 	if x != nil {
-		return x.InputMessage
+		return x.InputPayload
 	}
-	return ""
-}
-
-func (x *StartRun) GetTimezone() string {
-	if x != nil {
-		return x.Timezone
-	}
-	return ""
+	return nil
 }
 
 func (x *StartRun) GetCapabilities() []*Capability {
@@ -439,20 +412,6 @@ func (x *StartRun) GetCapabilities() []*Capability {
 		return x.Capabilities
 	}
 	return nil
-}
-
-func (x *StartRun) GetModel() string {
-	if x != nil {
-		return x.Model
-	}
-	return ""
-}
-
-func (x *StartRun) GetSystemPrompt() string {
-	if x != nil {
-		return x.SystemPrompt
-	}
-	return ""
 }
 
 func (x *StartRun) GetMaxSteps() uint32 {
@@ -469,51 +428,9 @@ func (x *StartRun) GetProtocolVersion() string {
 	return ""
 }
 
-func (x *StartRun) GetMaxToolCalls() uint32 {
+func (x *StartRun) GetMaxCapabilityCalls() uint32 {
 	if x != nil {
-		return x.MaxToolCalls
-	}
-	return 0
-}
-
-func (x *StartRun) GetMaxInputTokens() uint64 {
-	if x != nil {
-		return x.MaxInputTokens
-	}
-	return 0
-}
-
-func (x *StartRun) GetMaxOutputTokens() uint64 {
-	if x != nil {
-		return x.MaxOutputTokens
-	}
-	return 0
-}
-
-func (x *StartRun) GetMaxTotalTokens() uint64 {
-	if x != nil {
-		return x.MaxTotalTokens
-	}
-	return 0
-}
-
-func (x *StartRun) GetMaxOutputBytes() uint64 {
-	if x != nil {
-		return x.MaxOutputBytes
-	}
-	return 0
-}
-
-func (x *StartRun) GetMaxCostMicrousd() uint64 {
-	if x != nil {
-		return x.MaxCostMicrousd
-	}
-	return 0
-}
-
-func (x *StartRun) GetProviderTimeoutMs() uint32 {
-	if x != nil {
-		return x.ProviderTimeoutMs
+		return x.MaxCapabilityCalls
 	}
 	return 0
 }
@@ -537,6 +454,41 @@ func (x *StartRun) GetParentRunId() string {
 		return x.ParentRunId
 	}
 	return ""
+}
+
+func (x *StartRun) GetContextPayload() *Payload {
+	if x != nil {
+		return x.ContextPayload
+	}
+	return nil
+}
+
+func (x *StartRun) GetMaxExecutionUnits() uint64 {
+	if x != nil {
+		return x.MaxExecutionUnits
+	}
+	return 0
+}
+
+func (x *StartRun) GetMaxOutputBytes() uint64 {
+	if x != nil {
+		return x.MaxOutputBytes
+	}
+	return 0
+}
+
+func (x *StartRun) GetMaxCostMicrousd() uint64 {
+	if x != nil {
+		return x.MaxCostMicrousd
+	}
+	return 0
+}
+
+func (x *StartRun) GetExecutorConfig() *Payload {
+	if x != nil {
+		return x.ExecutorConfig
+	}
+	return nil
 }
 
 type RunAccepted struct {
@@ -583,31 +535,29 @@ func (x *RunAccepted) GetProtocolVersion() string {
 	return ""
 }
 
-type RunUsage struct {
-	state           protoimpl.MessageState `protogen:"open.v1"`
-	InputTokens     uint64                 `protobuf:"varint,1,opt,name=input_tokens,json=inputTokens,proto3" json:"input_tokens,omitempty"`
-	OutputTokens    uint64                 `protobuf:"varint,2,opt,name=output_tokens,json=outputTokens,proto3" json:"output_tokens,omitempty"`
-	TotalTokens     uint64                 `protobuf:"varint,3,opt,name=total_tokens,json=totalTokens,proto3" json:"total_tokens,omitempty"`
-	CostMicrousd    uint64                 `protobuf:"varint,4,opt,name=cost_microusd,json=costMicrousd,proto3" json:"cost_microusd,omitempty"`
-	ProviderRetries uint32                 `protobuf:"varint,5,opt,name=provider_retries,json=providerRetries,proto3" json:"provider_retries,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+type ResourceUsage struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	ExecutionUnits uint64                 `protobuf:"varint,1,opt,name=execution_units,json=executionUnits,proto3" json:"execution_units,omitempty"`
+	CostMicrousd   uint64                 `protobuf:"varint,2,opt,name=cost_microusd,json=costMicrousd,proto3" json:"cost_microusd,omitempty"`
+	Retries        uint32                 `protobuf:"varint,3,opt,name=retries,proto3" json:"retries,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
-func (x *RunUsage) Reset() {
-	*x = RunUsage{}
+func (x *ResourceUsage) Reset() {
+	*x = ResourceUsage{}
 	mi := &file_executor_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *RunUsage) String() string {
+func (x *ResourceUsage) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*RunUsage) ProtoMessage() {}
+func (*ResourceUsage) ProtoMessage() {}
 
-func (x *RunUsage) ProtoReflect() protoreflect.Message {
+func (x *ResourceUsage) ProtoReflect() protoreflect.Message {
 	mi := &file_executor_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -619,42 +569,28 @@ func (x *RunUsage) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use RunUsage.ProtoReflect.Descriptor instead.
-func (*RunUsage) Descriptor() ([]byte, []int) {
+// Deprecated: Use ResourceUsage.ProtoReflect.Descriptor instead.
+func (*ResourceUsage) Descriptor() ([]byte, []int) {
 	return file_executor_proto_rawDescGZIP(), []int{5}
 }
 
-func (x *RunUsage) GetInputTokens() uint64 {
+func (x *ResourceUsage) GetExecutionUnits() uint64 {
 	if x != nil {
-		return x.InputTokens
+		return x.ExecutionUnits
 	}
 	return 0
 }
 
-func (x *RunUsage) GetOutputTokens() uint64 {
-	if x != nil {
-		return x.OutputTokens
-	}
-	return 0
-}
-
-func (x *RunUsage) GetTotalTokens() uint64 {
-	if x != nil {
-		return x.TotalTokens
-	}
-	return 0
-}
-
-func (x *RunUsage) GetCostMicrousd() uint64 {
+func (x *ResourceUsage) GetCostMicrousd() uint64 {
 	if x != nil {
 		return x.CostMicrousd
 	}
 	return 0
 }
 
-func (x *RunUsage) GetProviderRetries() uint32 {
+func (x *ResourceUsage) GetRetries() uint32 {
 	if x != nil {
-		return x.ProviderRetries
+		return x.Retries
 	}
 	return 0
 }
@@ -879,27 +815,28 @@ func (x *CapabilityResult) GetErrorMessage() string {
 	return ""
 }
 
-type ReplyDelta struct {
+type Payload struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Text          string                 `protobuf:"bytes,1,opt,name=text,proto3" json:"text,omitempty"`
+	ContentType   string                 `protobuf:"bytes,1,opt,name=content_type,json=contentType,proto3" json:"content_type,omitempty"`
+	Data          []byte                 `protobuf:"bytes,2,opt,name=data,proto3" json:"data,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *ReplyDelta) Reset() {
-	*x = ReplyDelta{}
+func (x *Payload) Reset() {
+	*x = Payload{}
 	mi := &file_executor_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *ReplyDelta) String() string {
+func (x *Payload) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*ReplyDelta) ProtoMessage() {}
+func (*Payload) ProtoMessage() {}
 
-func (x *ReplyDelta) ProtoReflect() protoreflect.Message {
+func (x *Payload) ProtoReflect() protoreflect.Message {
 	mi := &file_executor_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -911,39 +848,46 @@ func (x *ReplyDelta) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use ReplyDelta.ProtoReflect.Descriptor instead.
-func (*ReplyDelta) Descriptor() ([]byte, []int) {
+// Deprecated: Use Payload.ProtoReflect.Descriptor instead.
+func (*Payload) Descriptor() ([]byte, []int) {
 	return file_executor_proto_rawDescGZIP(), []int{9}
 }
 
-func (x *ReplyDelta) GetText() string {
+func (x *Payload) GetContentType() string {
 	if x != nil {
-		return x.Text
+		return x.ContentType
 	}
 	return ""
 }
 
-type FinalMessage struct {
+func (x *Payload) GetData() []byte {
+	if x != nil {
+		return x.Data
+	}
+	return nil
+}
+
+type OutputDelta struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Text          string                 `protobuf:"bytes,1,opt,name=text,proto3" json:"text,omitempty"`
+	Payload       *Payload               `protobuf:"bytes,1,opt,name=payload,proto3" json:"payload,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *FinalMessage) Reset() {
-	*x = FinalMessage{}
+func (x *OutputDelta) Reset() {
+	*x = OutputDelta{}
 	mi := &file_executor_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *FinalMessage) String() string {
+func (x *OutputDelta) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*FinalMessage) ProtoMessage() {}
+func (*OutputDelta) ProtoMessage() {}
 
-func (x *FinalMessage) ProtoReflect() protoreflect.Message {
+func (x *OutputDelta) ProtoReflect() protoreflect.Message {
 	mi := &file_executor_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -955,16 +899,60 @@ func (x *FinalMessage) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use FinalMessage.ProtoReflect.Descriptor instead.
-func (*FinalMessage) Descriptor() ([]byte, []int) {
+// Deprecated: Use OutputDelta.ProtoReflect.Descriptor instead.
+func (*OutputDelta) Descriptor() ([]byte, []int) {
 	return file_executor_proto_rawDescGZIP(), []int{10}
 }
 
-func (x *FinalMessage) GetText() string {
+func (x *OutputDelta) GetPayload() *Payload {
 	if x != nil {
-		return x.Text
+		return x.Payload
 	}
-	return ""
+	return nil
+}
+
+type FinalResult struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Payload       *Payload               `protobuf:"bytes,1,opt,name=payload,proto3" json:"payload,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FinalResult) Reset() {
+	*x = FinalResult{}
+	mi := &file_executor_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FinalResult) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FinalResult) ProtoMessage() {}
+
+func (x *FinalResult) ProtoReflect() protoreflect.Message {
+	mi := &file_executor_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FinalResult.ProtoReflect.Descriptor instead.
+func (*FinalResult) Descriptor() ([]byte, []int) {
+	return file_executor_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *FinalResult) GetPayload() *Payload {
+	if x != nil {
+		return x.Payload
+	}
+	return nil
 }
 
 type RunFailure struct {
@@ -978,7 +966,7 @@ type RunFailure struct {
 
 func (x *RunFailure) Reset() {
 	*x = RunFailure{}
-	mi := &file_executor_proto_msgTypes[11]
+	mi := &file_executor_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -990,7 +978,7 @@ func (x *RunFailure) String() string {
 func (*RunFailure) ProtoMessage() {}
 
 func (x *RunFailure) ProtoReflect() protoreflect.Message {
-	mi := &file_executor_proto_msgTypes[11]
+	mi := &file_executor_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1003,7 +991,7 @@ func (x *RunFailure) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RunFailure.ProtoReflect.Descriptor instead.
 func (*RunFailure) Descriptor() ([]byte, []int) {
-	return file_executor_proto_rawDescGZIP(), []int{11}
+	return file_executor_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *RunFailure) GetCode() string {
@@ -1036,7 +1024,7 @@ type CancelRun struct {
 
 func (x *CancelRun) Reset() {
 	*x = CancelRun{}
-	mi := &file_executor_proto_msgTypes[12]
+	mi := &file_executor_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1048,7 +1036,7 @@ func (x *CancelRun) String() string {
 func (*CancelRun) ProtoMessage() {}
 
 func (x *CancelRun) ProtoReflect() protoreflect.Message {
-	mi := &file_executor_proto_msgTypes[12]
+	mi := &file_executor_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1061,7 +1049,7 @@ func (x *CancelRun) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CancelRun.ProtoReflect.Descriptor instead.
 func (*CancelRun) Descriptor() ([]byte, []int) {
-	return file_executor_proto_rawDescGZIP(), []int{12}
+	return file_executor_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *CancelRun) GetReason() string {
@@ -1075,16 +1063,14 @@ var File_executor_proto protoreflect.FileDescriptor
 
 const file_executor_proto_rawDesc = "" +
 	"\n" +
-	"\x0eexecutor.proto\x12\x11ailuo.executor.v1\"c\n" +
+	"\x0eexecutor.proto\x12\x11ailuo.executor.v1\"S\n" +
 	"\rHealthRequest\x12<\n" +
-	"\x1aaccepted_protocol_versions\x18\x01 \x03(\tR\x18acceptedProtocolVersions\x12\x14\n" +
-	"\x05model\x18\x02 \x01(\tR\x05model\"\xa3\x01\n" +
+	"\x1aaccepted_protocol_versions\x18\x01 \x03(\tR\x18acceptedProtocolVersionsJ\x04\b\x02\x10\x03\"\x8d\x01\n" +
 	"\x0eHealthResponse\x12\x14\n" +
-	"\x05ready\x18\x01 \x01(\bR\x05ready\x12\x1a\n" +
-	"\bprovider\x18\x02 \x01(\tR\bprovider\x12>\n" +
+	"\x05ready\x18\x01 \x01(\bR\x05ready\x12>\n" +
 	"\x1bsupported_protocol_versions\x18\x03 \x03(\tR\x19supportedProtocolVersions\x12\x1f\n" +
 	"\vstatus_code\x18\x04 \x01(\tR\n" +
-	"statusCode\"\xcd\x05\n" +
+	"statusCodeJ\x04\b\x02\x10\x03\"\xdc\x05\n" +
 	"\rExecutorFrame\x12\x17\n" +
 	"\aecho_id\x18\x01 \x01(\tR\x06echoId\x12\x15\n" +
 	"\x06run_id\x18\x02 \x01(\tR\x05runId\x12\x1a\n" +
@@ -1092,45 +1078,38 @@ const file_executor_proto_rawDesc = "" +
 	"\tstart_run\x18\n" +
 	" \x01(\v2\x1b.ailuo.executor.v1.StartRunH\x00R\bstartRun\x12L\n" +
 	"\x0fcapability_call\x18\v \x01(\v2!.ailuo.executor.v1.CapabilityCallH\x00R\x0ecapabilityCall\x12R\n" +
-	"\x11capability_result\x18\f \x01(\v2#.ailuo.executor.v1.CapabilityResultH\x00R\x10capabilityResult\x12@\n" +
-	"\vreply_delta\x18\r \x01(\v2\x1d.ailuo.executor.v1.ReplyDeltaH\x00R\n" +
-	"replyDelta\x12F\n" +
-	"\rfinal_message\x18\x0e \x01(\v2\x1f.ailuo.executor.v1.FinalMessageH\x00R\ffinalMessage\x12@\n" +
+	"\x11capability_result\x18\f \x01(\v2#.ailuo.executor.v1.CapabilityResultH\x00R\x10capabilityResult\x12C\n" +
+	"\foutput_delta\x18\r \x01(\v2\x1e.ailuo.executor.v1.OutputDeltaH\x00R\voutputDelta\x12C\n" +
+	"\ffinal_result\x18\x0e \x01(\v2\x1e.ailuo.executor.v1.FinalResultH\x00R\vfinalResult\x12@\n" +
 	"\vrun_failure\x18\x0f \x01(\v2\x1d.ailuo.executor.v1.RunFailureH\x00R\n" +
 	"runFailure\x12=\n" +
 	"\n" +
 	"cancel_run\x18\x10 \x01(\v2\x1c.ailuo.executor.v1.CancelRunH\x00R\tcancelRun\x12C\n" +
-	"\frun_accepted\x18\x11 \x01(\v2\x1e.ailuo.executor.v1.RunAcceptedH\x00R\vrunAccepted\x12:\n" +
-	"\trun_usage\x18\x12 \x01(\v2\x1b.ailuo.executor.v1.RunUsageH\x00R\brunUsageB\x06\n" +
-	"\x04body\"\xb9\x05\n" +
+	"\frun_accepted\x18\x11 \x01(\v2\x1e.ailuo.executor.v1.RunAcceptedH\x00R\vrunAccepted\x12I\n" +
+	"\x0eresource_usage\x18\x12 \x01(\v2 .ailuo.executor.v1.ResourceUsageH\x00R\rresourceUsageB\x06\n" +
+	"\x04body\"\xca\x05\n" +
 	"\bStartRun\x12\x15\n" +
-	"\x06app_id\x18\x01 \x01(\tR\x05appId\x12#\n" +
-	"\rinput_message\x18\x02 \x01(\tR\finputMessage\x12\x1a\n" +
-	"\btimezone\x18\x03 \x01(\tR\btimezone\x12A\n" +
-	"\fcapabilities\x18\x04 \x03(\v2\x1d.ailuo.executor.v1.CapabilityR\fcapabilities\x12\x14\n" +
-	"\x05model\x18\x05 \x01(\tR\x05model\x12#\n" +
-	"\rsystem_prompt\x18\x06 \x01(\tR\fsystemPrompt\x12\x1b\n" +
+	"\x06app_id\x18\x01 \x01(\tR\x05appId\x12?\n" +
+	"\rinput_payload\x18\x02 \x01(\v2\x1a.ailuo.executor.v1.PayloadR\finputPayload\x12A\n" +
+	"\fcapabilities\x18\x04 \x03(\v2\x1d.ailuo.executor.v1.CapabilityR\fcapabilities\x12\x1b\n" +
 	"\tmax_steps\x18\a \x01(\rR\bmaxSteps\x12)\n" +
-	"\x10protocol_version\x18\b \x01(\tR\x0fprotocolVersion\x12$\n" +
-	"\x0emax_tool_calls\x18\t \x01(\rR\fmaxToolCalls\x12(\n" +
-	"\x10max_input_tokens\x18\n" +
-	" \x01(\x04R\x0emaxInputTokens\x12*\n" +
-	"\x11max_output_tokens\x18\v \x01(\x04R\x0fmaxOutputTokens\x12(\n" +
-	"\x10max_total_tokens\x18\f \x01(\x04R\x0emaxTotalTokens\x12(\n" +
-	"\x10max_output_bytes\x18\r \x01(\x04R\x0emaxOutputBytes\x12*\n" +
-	"\x11max_cost_microusd\x18\x0e \x01(\x04R\x0fmaxCostMicrousd\x12.\n" +
-	"\x13provider_timeout_ms\x18\x0f \x01(\rR\x11providerTimeoutMs\x12\x19\n" +
+	"\x10protocol_version\x18\b \x01(\tR\x0fprotocolVersion\x120\n" +
+	"\x14max_capability_calls\x18\t \x01(\rR\x12maxCapabilityCalls\x12\x19\n" +
 	"\btrace_id\x18\x10 \x01(\tR\atraceId\x12$\n" +
 	"\x0eparent_span_id\x18\x11 \x01(\tR\fparentSpanId\x12\"\n" +
-	"\rparent_run_id\x18\x12 \x01(\tR\vparentRunId\"8\n" +
+	"\rparent_run_id\x18\x12 \x01(\tR\vparentRunId\x12C\n" +
+	"\x0fcontext_payload\x18\x13 \x01(\v2\x1a.ailuo.executor.v1.PayloadR\x0econtextPayload\x12.\n" +
+	"\x13max_execution_units\x18\x14 \x01(\x04R\x11maxExecutionUnits\x12(\n" +
+	"\x10max_output_bytes\x18\x15 \x01(\x04R\x0emaxOutputBytes\x12*\n" +
+	"\x11max_cost_microusd\x18\x16 \x01(\x04R\x0fmaxCostMicrousd\x12C\n" +
+	"\x0fexecutor_config\x18\x17 \x01(\v2\x1a.ailuo.executor.v1.PayloadR\x0eexecutorConfigJ\x04\b\x03\x10\x04J\x04\b\x05\x10\x06J\x04\b\x06\x10\aJ\x04\b\n" +
+	"\x10\vJ\x04\b\v\x10\fJ\x04\b\f\x10\rJ\x04\b\r\x10\x0eJ\x04\b\x0e\x10\x0fJ\x04\b\x0f\x10\x10\"8\n" +
 	"\vRunAccepted\x12)\n" +
-	"\x10protocol_version\x18\x01 \x01(\tR\x0fprotocolVersion\"\xc5\x01\n" +
-	"\bRunUsage\x12!\n" +
-	"\finput_tokens\x18\x01 \x01(\x04R\vinputTokens\x12#\n" +
-	"\routput_tokens\x18\x02 \x01(\x04R\foutputTokens\x12!\n" +
-	"\ftotal_tokens\x18\x03 \x01(\x04R\vtotalTokens\x12#\n" +
-	"\rcost_microusd\x18\x04 \x01(\x04R\fcostMicrousd\x12)\n" +
-	"\x10provider_retries\x18\x05 \x01(\rR\x0fproviderRetries\"\x98\x01\n" +
+	"\x10protocol_version\x18\x01 \x01(\tR\x0fprotocolVersion\"w\n" +
+	"\rResourceUsage\x12'\n" +
+	"\x0fexecution_units\x18\x01 \x01(\x04R\x0eexecutionUnits\x12#\n" +
+	"\rcost_microusd\x18\x02 \x01(\x04R\fcostMicrousd\x12\x18\n" +
+	"\aretries\x18\x03 \x01(\rR\aretries\"\x98\x01\n" +
 	"\n" +
 	"Capability\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x18\n" +
@@ -1149,12 +1128,14 @@ const file_executor_proto_rawDesc = "" +
 	"\fpayload_json\x18\x04 \x01(\fR\vpayloadJson\x12\x1d\n" +
 	"\n" +
 	"error_code\x18\x05 \x01(\tR\terrorCode\x12#\n" +
-	"\rerror_message\x18\x06 \x01(\tR\ferrorMessage\" \n" +
-	"\n" +
-	"ReplyDelta\x12\x12\n" +
-	"\x04text\x18\x01 \x01(\tR\x04text\"\"\n" +
-	"\fFinalMessage\x12\x12\n" +
-	"\x04text\x18\x01 \x01(\tR\x04text\"X\n" +
+	"\rerror_message\x18\x06 \x01(\tR\ferrorMessage\"@\n" +
+	"\aPayload\x12!\n" +
+	"\fcontent_type\x18\x01 \x01(\tR\vcontentType\x12\x12\n" +
+	"\x04data\x18\x02 \x01(\fR\x04data\"C\n" +
+	"\vOutputDelta\x124\n" +
+	"\apayload\x18\x01 \x01(\v2\x1a.ailuo.executor.v1.PayloadR\apayload\"C\n" +
+	"\vFinalResult\x124\n" +
+	"\apayload\x18\x01 \x01(\v2\x1a.ailuo.executor.v1.PayloadR\apayload\"X\n" +
 	"\n" +
 	"RunFailure\x12\x12\n" +
 	"\x04code\x18\x01 \x01(\tR\x04code\x12\x18\n" +
@@ -1164,7 +1145,7 @@ const file_executor_proto_rawDesc = "" +
 	"\x06reason\x18\x01 \x01(\tR\x06reason2\xaf\x01\n" +
 	"\x0fExecutorRuntime\x12M\n" +
 	"\x03Run\x12 .ailuo.executor.v1.ExecutorFrame\x1a .ailuo.executor.v1.ExecutorFrame(\x010\x01\x12M\n" +
-	"\x06Health\x12 .ailuo.executor.v1.HealthRequest\x1a!.ailuo.executor.v1.HealthResponseBBZ@github.com/projectluojia/AI-Luo-Man-ga/gen/executorv1;executorv1b\x06proto3"
+	"\x06Health\x12 .ailuo.executor.v1.HealthRequest\x1a!.ailuo.executor.v1.HealthResponseBLZJgithub.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/executorv1;executorv1b\x06proto3"
 
 var (
 	file_executor_proto_rawDescOnce sync.Once
@@ -1178,42 +1159,48 @@ func file_executor_proto_rawDescGZIP() []byte {
 	return file_executor_proto_rawDescData
 }
 
-var file_executor_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
+var file_executor_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
 var file_executor_proto_goTypes = []any{
 	(*HealthRequest)(nil),    // 0: ailuo.executor.v1.HealthRequest
 	(*HealthResponse)(nil),   // 1: ailuo.executor.v1.HealthResponse
 	(*ExecutorFrame)(nil),    // 2: ailuo.executor.v1.ExecutorFrame
 	(*StartRun)(nil),         // 3: ailuo.executor.v1.StartRun
 	(*RunAccepted)(nil),      // 4: ailuo.executor.v1.RunAccepted
-	(*RunUsage)(nil),         // 5: ailuo.executor.v1.RunUsage
+	(*ResourceUsage)(nil),    // 5: ailuo.executor.v1.ResourceUsage
 	(*Capability)(nil),       // 6: ailuo.executor.v1.Capability
 	(*CapabilityCall)(nil),   // 7: ailuo.executor.v1.CapabilityCall
 	(*CapabilityResult)(nil), // 8: ailuo.executor.v1.CapabilityResult
-	(*ReplyDelta)(nil),       // 9: ailuo.executor.v1.ReplyDelta
-	(*FinalMessage)(nil),     // 10: ailuo.executor.v1.FinalMessage
-	(*RunFailure)(nil),       // 11: ailuo.executor.v1.RunFailure
-	(*CancelRun)(nil),        // 12: ailuo.executor.v1.CancelRun
+	(*Payload)(nil),          // 9: ailuo.executor.v1.Payload
+	(*OutputDelta)(nil),      // 10: ailuo.executor.v1.OutputDelta
+	(*FinalResult)(nil),      // 11: ailuo.executor.v1.FinalResult
+	(*RunFailure)(nil),       // 12: ailuo.executor.v1.RunFailure
+	(*CancelRun)(nil),        // 13: ailuo.executor.v1.CancelRun
 }
 var file_executor_proto_depIdxs = []int32{
 	3,  // 0: ailuo.executor.v1.ExecutorFrame.start_run:type_name -> ailuo.executor.v1.StartRun
 	7,  // 1: ailuo.executor.v1.ExecutorFrame.capability_call:type_name -> ailuo.executor.v1.CapabilityCall
 	8,  // 2: ailuo.executor.v1.ExecutorFrame.capability_result:type_name -> ailuo.executor.v1.CapabilityResult
-	9,  // 3: ailuo.executor.v1.ExecutorFrame.reply_delta:type_name -> ailuo.executor.v1.ReplyDelta
-	10, // 4: ailuo.executor.v1.ExecutorFrame.final_message:type_name -> ailuo.executor.v1.FinalMessage
-	11, // 5: ailuo.executor.v1.ExecutorFrame.run_failure:type_name -> ailuo.executor.v1.RunFailure
-	12, // 6: ailuo.executor.v1.ExecutorFrame.cancel_run:type_name -> ailuo.executor.v1.CancelRun
+	10, // 3: ailuo.executor.v1.ExecutorFrame.output_delta:type_name -> ailuo.executor.v1.OutputDelta
+	11, // 4: ailuo.executor.v1.ExecutorFrame.final_result:type_name -> ailuo.executor.v1.FinalResult
+	12, // 5: ailuo.executor.v1.ExecutorFrame.run_failure:type_name -> ailuo.executor.v1.RunFailure
+	13, // 6: ailuo.executor.v1.ExecutorFrame.cancel_run:type_name -> ailuo.executor.v1.CancelRun
 	4,  // 7: ailuo.executor.v1.ExecutorFrame.run_accepted:type_name -> ailuo.executor.v1.RunAccepted
-	5,  // 8: ailuo.executor.v1.ExecutorFrame.run_usage:type_name -> ailuo.executor.v1.RunUsage
-	6,  // 9: ailuo.executor.v1.StartRun.capabilities:type_name -> ailuo.executor.v1.Capability
-	2,  // 10: ailuo.executor.v1.ExecutorRuntime.Run:input_type -> ailuo.executor.v1.ExecutorFrame
-	0,  // 11: ailuo.executor.v1.ExecutorRuntime.Health:input_type -> ailuo.executor.v1.HealthRequest
-	2,  // 12: ailuo.executor.v1.ExecutorRuntime.Run:output_type -> ailuo.executor.v1.ExecutorFrame
-	1,  // 13: ailuo.executor.v1.ExecutorRuntime.Health:output_type -> ailuo.executor.v1.HealthResponse
-	12, // [12:14] is the sub-list for method output_type
-	10, // [10:12] is the sub-list for method input_type
-	10, // [10:10] is the sub-list for extension type_name
-	10, // [10:10] is the sub-list for extension extendee
-	0,  // [0:10] is the sub-list for field type_name
+	5,  // 8: ailuo.executor.v1.ExecutorFrame.resource_usage:type_name -> ailuo.executor.v1.ResourceUsage
+	9,  // 9: ailuo.executor.v1.StartRun.input_payload:type_name -> ailuo.executor.v1.Payload
+	6,  // 10: ailuo.executor.v1.StartRun.capabilities:type_name -> ailuo.executor.v1.Capability
+	9,  // 11: ailuo.executor.v1.StartRun.context_payload:type_name -> ailuo.executor.v1.Payload
+	9,  // 12: ailuo.executor.v1.StartRun.executor_config:type_name -> ailuo.executor.v1.Payload
+	9,  // 13: ailuo.executor.v1.OutputDelta.payload:type_name -> ailuo.executor.v1.Payload
+	9,  // 14: ailuo.executor.v1.FinalResult.payload:type_name -> ailuo.executor.v1.Payload
+	2,  // 15: ailuo.executor.v1.ExecutorRuntime.Run:input_type -> ailuo.executor.v1.ExecutorFrame
+	0,  // 16: ailuo.executor.v1.ExecutorRuntime.Health:input_type -> ailuo.executor.v1.HealthRequest
+	2,  // 17: ailuo.executor.v1.ExecutorRuntime.Run:output_type -> ailuo.executor.v1.ExecutorFrame
+	1,  // 18: ailuo.executor.v1.ExecutorRuntime.Health:output_type -> ailuo.executor.v1.HealthResponse
+	17, // [17:19] is the sub-list for method output_type
+	15, // [15:17] is the sub-list for method input_type
+	15, // [15:15] is the sub-list for extension type_name
+	15, // [15:15] is the sub-list for extension extendee
+	0,  // [0:15] is the sub-list for field type_name
 }
 
 func init() { file_executor_proto_init() }
@@ -1225,12 +1212,12 @@ func file_executor_proto_init() {
 		(*ExecutorFrame_StartRun)(nil),
 		(*ExecutorFrame_CapabilityCall)(nil),
 		(*ExecutorFrame_CapabilityResult)(nil),
-		(*ExecutorFrame_ReplyDelta)(nil),
-		(*ExecutorFrame_FinalMessage)(nil),
+		(*ExecutorFrame_OutputDelta)(nil),
+		(*ExecutorFrame_FinalResult)(nil),
 		(*ExecutorFrame_RunFailure)(nil),
 		(*ExecutorFrame_CancelRun)(nil),
 		(*ExecutorFrame_RunAccepted)(nil),
-		(*ExecutorFrame_RunUsage)(nil),
+		(*ExecutorFrame_ResourceUsage)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -1238,7 +1225,7 @@ func file_executor_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_executor_proto_rawDesc), len(file_executor_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   13,
+			NumMessages:   14,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

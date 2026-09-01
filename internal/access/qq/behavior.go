@@ -16,7 +16,7 @@ const (
 
 var ErrInvalidBehavior = errors.New("invalid QQ access behavior configuration")
 
-// QuickReply 是 QQ Access 的精确快速回复规则；它不进入 Agent、Service 或 Tool。
+// QuickReply 是 QQ Access 的精确快速回复规则；它不进入 Executor、Service 或 Tool。
 type QuickReply struct {
 	Trigger string `json:"trigger"`
 	Reply   string `json:"reply"`

@@ -70,14 +70,14 @@ func seedEchoRun(t *testing.T, store *sqlite.Store, appID, echoID, runID string)
 	}, kernelecho.RunRecord{
 		ID: runID, RunGroupID: runID, AppID: appID, EchoID: echoID,
 		Attempt: 1, Status: kernelecho.RunStatusQueued,
-		Model: "test-model", ModelConfigVersion: "v1", ProtocolVersion: "1.0",
-		MaxSteps: 8, MaxToolCalls: 4, MaxInputTokens: 4096, MaxOutputTokens: 2048,
-		MaxTotalTokens: 8192, MaxOutputBytes: 65536, MaxCostMicrousd: 0,
-		ProviderTimeoutMS: 5000,
-		Deadline:          now.Add(time.Hour),
-		AvailableAt:       now,
-		CreatedAt:         now,
-		RecoverableState:  json.RawMessage(`{}`),
+		ExecutorID: "executor.test", ExecutorConfig: json.RawMessage(`{"strategy":"test"}`), ConfigRevision: "v1", ProtocolVersion: "1.0",
+		InputPayload: []byte("test-input"), InputContentType: "text/plain; charset=utf-8",
+		MaxSteps: 8, MaxCapabilityCalls: 4, MaxExecutionUnits: 8192, MaxOutputBytes: 65536, MaxCostMicrousd: 0,
+		ExecutionTimeoutMS: 5000,
+		Deadline:           now.Add(time.Hour),
+		AvailableAt:        now,
+		CreatedAt:          now,
+		RecoverableState:   json.RawMessage(`{}`),
 	}, 0)
 	if err != nil {
 		t.Fatalf("seed echo/run: %v", err)

@@ -52,7 +52,7 @@ func (c RequestContext) Validate(now time.Time) error {
 	}
 }
 
-func (c RequestContext) Child() RequestContext {
+func (c RequestContext) NextCall() RequestContext {
 	c.CallDepth++
 	return c
 }

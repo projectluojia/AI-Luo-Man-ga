@@ -2,14 +2,17 @@
 package config
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
+	"io"
 	"strings"
 	"time"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access/qq"
 	qqsettings "github.com/projectluojia/AI-Luo-Man-ga/internal/access/qq/settings"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/id"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/identity"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/promptcatalog"
 )
 
 const (
@@ -25,7 +28,8 @@ var (
 type Settings struct {
 	Revision                uint64                  `json:"revision"`
 	AppID                   string                  `json:"app_id"`
-	Model                   string                  `json:"model"`
+	ExecutorID              string                  `json:"executor_id"`
+	ExecutorConfig          json.RawMessage         `json:"executor_config"`
 	ExecutorTimeoutSeconds  float64                 `json:"executor_timeout_seconds"`
 	QQEnabled               bool                    `json:"qq_enabled"`
 	QQWSURL                 string                  `json:"qq_ws_url"`
@@ -34,10 +38,7 @@ type Settings struct {
 	QQAllowedPrivateUserIDs []string                `json:"qq_allowed_private_user_ids"`
 	QQQuickReplies          []QQQuickReply          `json:"qq_quick_replies"`
 	QQPokeReplies           []string                `json:"qq_poke_replies"`
-	PromptCatalog           promptcatalog.Catalog   `json:"prompt_catalog"`
-	BaseSystemPrompt        string                  `json:"base_system_prompt"`
-	ChannelPrompts          map[string]string       `json:"channel_prompts"`
-	AgentRun                AgentRunSettings        `json:"agent_run"`
+	Execution               ExecutionSettings       `json:"execution"`
 	Orchestration           OrchestrationSettings   `json:"orchestration"`
 	ContextAssembly         ContextAssemblySettings `json:"context_assembly"`
 	Scheduler               SchedulerSettings       `json:"scheduler"`
@@ -51,7 +52,8 @@ type Settings struct {
 type SaveInput struct {
 	Revision                uint64                  `json:"revision"`
 	AppID                   string                  `json:"app_id"`
-	Model                   string                  `json:"model"`
+	ExecutorID              string                  `json:"executor_id"`
+	ExecutorConfig          json.RawMessage         `json:"executor_config"`
 	ExecutorTimeoutSeconds  float64                 `json:"executor_timeout_seconds"`
 	QQEnabled               bool                    `json:"qq_enabled"`
 	QQWSURL                 string                  `json:"qq_ws_url"`
@@ -62,10 +64,7 @@ type SaveInput struct {
 	QQAllowedPrivateUserIDs []string                `json:"qq_allowed_private_user_ids"`
 	QQQuickReplies          []QQQuickReply          `json:"qq_quick_replies"`
 	QQPokeReplies           []string                `json:"qq_poke_replies"`
-	PromptCatalog           promptcatalog.Catalog   `json:"prompt_catalog"`
-	BaseSystemPrompt        string                  `json:"base_system_prompt"`
-	ChannelPrompts          map[string]string       `json:"channel_prompts"`
-	AgentRun                AgentRunSettings        `json:"agent_run"`
+	Execution               ExecutionSettings       `json:"execution"`
 	Orchestration           OrchestrationSettings   `json:"orchestration"`
 	ContextAssembly         ContextAssemblySettings `json:"context_assembly"`
 	Scheduler               SchedulerSettings       `json:"scheduler"`
@@ -103,51 +102,36 @@ type Resolved struct {
 func DefaultSettings() Settings {
 	return Settings{
 		ExecutorTimeoutSeconds: 30,
+		ExecutorConfig:         json.RawMessage(`{}`),
 		QQAllowedGroupIDs:      []string{}, QQAllowedPrivateUserIDs: []string{},
 		QQQuickReplies: []QQQuickReply{}, QQPokeReplies: qq.DefaultPokeReplies(),
-		PromptCatalog:    promptcatalog.Default(),
-		BaseSystemPrompt: promptcatalog.DefaultBaseSystemPrompt,
-		ChannelPrompts:   promptcatalog.DefaultChannelPrompts(),
-		AgentRun:         defaultAgentRunSettings(),
-		Orchestration:    defaultOrchestrationSettings(),
-		ContextAssembly:  defaultContextAssemblySettings(),
-		Scheduler:        defaultSchedulerSettings(),
-		QQConnection:     defaultQQConnectionSettings(),
-		RuntimeProcess:   defaultRuntimeProcessSettings(),
-		Governance:       defaultGovernanceSettings(),
+		Execution:       defaultExecutionSettings(),
+		Orchestration:   defaultOrchestrationSettings(),
+		ContextAssembly: defaultContextAssemblySettings(),
+		Scheduler:       defaultSchedulerSettings(),
+		QQConnection:    defaultQQConnectionSettings(),
+		RuntimeProcess:  defaultRuntimeProcessSettings(),
+		Governance:      defaultGovernanceSettings(),
 	}
 }
 
 func normalize(input SaveInput) (Settings, error) {
 	settings := Settings{
-		Revision: input.Revision, AppID: strings.TrimSpace(input.AppID), Model: strings.TrimSpace(input.Model),
+		Revision: input.Revision, AppID: strings.TrimSpace(input.AppID), ExecutorID: strings.TrimSpace(input.ExecutorID),
+		ExecutorConfig:         append(json.RawMessage(nil), input.ExecutorConfig...),
 		ExecutorTimeoutSeconds: input.ExecutorTimeoutSeconds, QQEnabled: input.QQEnabled, QQWSURL: strings.TrimSpace(input.QQWSURL),
 		QQBotID: strings.TrimSpace(input.QQBotID), QQAllowedGroupIDs: input.QQAllowedGroupIDs,
 		QQAllowedPrivateUserIDs: input.QQAllowedPrivateUserIDs, QQQuickReplies: input.QQQuickReplies,
-		QQPokeReplies: input.QQPokeReplies, PromptCatalog: input.PromptCatalog,
-		BaseSystemPrompt: input.BaseSystemPrompt,
-		ChannelPrompts:   input.ChannelPrompts,
-		AgentRun:         input.AgentRun,
-		Orchestration:    input.Orchestration,
-		ContextAssembly:  input.ContextAssembly,
-		Scheduler:        input.Scheduler,
-		QQConnection:     input.QQConnection,
-		RuntimeProcess:   input.RuntimeProcess,
-		Governance:       input.Governance,
+		QQPokeReplies:   input.QQPokeReplies,
+		Execution:       input.Execution,
+		Orchestration:   input.Orchestration,
+		ContextAssembly: input.ContextAssembly,
+		Scheduler:       input.Scheduler,
+		QQConnection:    input.QQConnection,
+		RuntimeProcess:  input.RuntimeProcess,
+		Governance:      input.Governance,
 	}
-	promptCatalog, err := promptcatalog.Normalize(input.PromptCatalog)
-	if err != nil {
-		return Settings{}, ErrInvalid
-	}
-	baseSystemPrompt, err := promptcatalog.NormalizeBaseSystemPrompt(input.BaseSystemPrompt)
-	if err != nil {
-		return Settings{}, ErrInvalid
-	}
-	channelPrompts, err := promptcatalog.NormalizeChannelPrompts(input.ChannelPrompts)
-	if err != nil {
-		return Settings{}, ErrInvalid
-	}
-	agentRun, err := normalizeAgentRun(input.AgentRun)
+	execution, err := normalizeExecution(input.Execution)
 	if err != nil {
 		return Settings{}, ErrInvalid
 	}
@@ -175,14 +159,12 @@ func normalize(input SaveInput) (Settings, error) {
 	if err != nil {
 		return Settings{}, ErrInvalid
 	}
-	if identity.ValidateAppID(settings.AppID) != nil || len(settings.Model) == 0 || len(settings.Model) > 256 ||
+	if identity.ValidateAppID(settings.AppID) != nil || !id.AppID.MatchString(settings.ExecutorID) ||
+		len(settings.ExecutorConfig) == 0 || len(settings.ExecutorConfig) > 64<<10 || !json.Valid(settings.ExecutorConfig) ||
 		settings.ExecutorTimeoutSeconds < 0.1 || settings.ExecutorTimeoutSeconds > 120 {
 		return Settings{}, ErrInvalid
 	}
-	settings.PromptCatalog = promptCatalog
-	settings.BaseSystemPrompt = baseSystemPrompt
-	settings.ChannelPrompts = channelPrompts
-	settings.AgentRun = agentRun
+	settings.Execution = execution
 	settings.Orchestration = orchestration
 	settings.ContextAssembly = contextAssembly
 	settings.Scheduler = scheduler
@@ -220,19 +202,33 @@ func normalize(input SaveInput) (Settings, error) {
 
 func validateStored(settings Settings) (Settings, error) {
 	return normalize(SaveInput{
-		Revision: settings.Revision, AppID: settings.AppID, Model: settings.Model,
+		Revision: settings.Revision, AppID: settings.AppID, ExecutorID: settings.ExecutorID,
+		ExecutorConfig:         settings.ExecutorConfig,
 		ExecutorTimeoutSeconds: settings.ExecutorTimeoutSeconds, QQEnabled: settings.QQEnabled, QQWSURL: settings.QQWSURL,
 		QQBotID: settings.QQBotID, QQAllowedGroupIDs: settings.QQAllowedGroupIDs,
 		QQAllowedPrivateUserIDs: settings.QQAllowedPrivateUserIDs, QQQuickReplies: settings.QQQuickReplies,
-		QQPokeReplies: settings.QQPokeReplies, PromptCatalog: settings.PromptCatalog,
-		BaseSystemPrompt: settings.BaseSystemPrompt,
-		ChannelPrompts:   settings.ChannelPrompts,
-		AgentRun:         settings.AgentRun,
-		Orchestration:    settings.Orchestration,
-		ContextAssembly:  settings.ContextAssembly,
-		Scheduler:        settings.Scheduler,
-		QQConnection:     settings.QQConnection,
-		RuntimeProcess:   settings.RuntimeProcess,
-		Governance:       settings.Governance,
+		QQPokeReplies:   settings.QQPokeReplies,
+		Execution:       settings.Execution,
+		Orchestration:   settings.Orchestration,
+		ContextAssembly: settings.ContextAssembly,
+		Scheduler:       settings.Scheduler,
+		QQConnection:    settings.QQConnection,
+		RuntimeProcess:  settings.RuntimeProcess,
+		Governance:      settings.Governance,
 	})
+}
+
+// decodeStoredSettings 严格读取最终配置契约；旧模型、提示词和 Agent 字段不
+// 再转换或回退到 ExecutorConfig，避免历史配置改变当前执行语义。
+func decodeStoredSettings(data []byte) (Settings, error) {
+	var settings Settings
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&settings); err != nil {
+		return Settings{}, err
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return Settings{}, errors.New("local configuration contains trailing data")
+	}
+	return settings, nil
 }

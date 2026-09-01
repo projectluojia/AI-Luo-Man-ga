@@ -18,7 +18,6 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packageio"
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/projectcontract"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access/configui"
-	kernelecho "github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 )
@@ -59,10 +58,7 @@ func TestInitialCapabilityIDsUseInstalledMetadata(t *testing.T) {
 	ids := initialCapabilityIDs(registry.New(), []loader.InstalledRecord{{Capabilities: []capability.CapabilitySpec{
 		{ID: "z.capability"}, {ID: "a.capability"}, {ID: "z.capability"},
 	}}})
-	want := []string{
-		"a.capability", kernelecho.CreateChildRunCapabilityID,
-		kernelecho.GetChildStatusCapabilityID, "z.capability",
-	}
+	want := []string{"a.capability", "z.capability"}
 	if !slices.Equal(ids, want) {
 		t.Fatalf("initial capabilities=%v, want %v", ids, want)
 	}
