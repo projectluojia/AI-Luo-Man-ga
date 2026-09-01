@@ -643,7 +643,6 @@ func (o *Orchestrator) executeClaimedRun(ctx context.Context, request RunRequest
 		return errors.Join(err, o.fail(ctx, run, "context_unavailable", true))
 	}
 	basePrompt := renderedPrompt
-	basePrompt += "\n只能根据 Capability 返回的数据回答，不得编造班次、站点或线路。"
 	if run.ParentRunID != "" {
 		basePrompt += "\n这是受治理的子 Run。只完成父 Run 指定任务；最终结果仅返回父 Run，不直接面向用户。"
 	}
