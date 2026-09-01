@@ -252,24 +252,32 @@ func TestInstallRejectsBreakingReverseDependency(t *testing.T) {
 func TestInstallRejectsInvalidSource(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
+	writeManifest := func(dir string, contents []byte) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, "manifest.json"), contents, 0o640); err != nil {
+			t.Fatal(err)
+		}
+	}
 	cases := []struct {
 		name   string
 		mutate func(string)
 	}{
 		{name: "missing manifest", mutate: func(_ string) {}},
 		{name: "invalid manifest json", mutate: func(dir string) {
-			os.WriteFile(filepath.Join(dir, "manifest.json"), []byte("{"), 0o640)
+			writeManifest(dir, []byte("{"))
 		}},
 		{name: "missing artifact", mutate: func(dir string) {
 			writeSourcePackage(t, dir, "demo.pkg", "1.0.0", packagecontract.ModeHosted, "app.wasm", nil)
-			os.Remove(filepath.Join(dir, "app.wasm"))
+			if err := os.Remove(filepath.Join(dir, "app.wasm")); err != nil {
+				t.Fatal(err)
+			}
 		}},
 		{name: "entrypoint escapes source dir", mutate: func(dir string) {
 			manifest := []byte(`{"schema_version":"ailuo.package.v3","id":"demo.pkg","version":"1.0.0","components":[{"id":"core","mode":"hosted","entrypoint":"../outside"}]}`)
-			os.WriteFile(filepath.Join(dir, "manifest.json"), manifest, 0o640)
+			writeManifest(dir, manifest)
 		}},
 		{name: "entrypoint uses foreign separator", mutate: func(dir string) {
-			os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(`{"schema_version":"ailuo.package.v3","id":"demo.pkg","version":"1.0.0","components":[{"id":"core","mode":"hosted","entrypoint":"..\\outside"}]}`), 0o640)
+			writeManifest(dir, []byte(`{"schema_version":"ailuo.package.v3","id":"demo.pkg","version":"1.0.0","components":[{"id":"core","mode":"hosted","entrypoint":"..\\outside"}]}`))
 		}},
 	}
 	for _, tc := range cases {
