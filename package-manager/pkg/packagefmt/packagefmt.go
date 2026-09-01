@@ -3,9 +3,10 @@
 // 与安装实现位于 packmgr，本包只负责作者侧源格式。
 //
 // ailuo.toml 采用继承式精简：tool 以 `[tool.<id>]` 表声明（id 即键，不重复）；
-// capability 只声明 id 与引用的 tool，其余字段（schema、side_effect、name、
-// description）全部继承自 tool；service 段省略时自动生成（id/version/description
-// 继承 package，tool_dependencies 默认为全部 tool id）。
+// dependency 以 `[dependencies.<id>]` 表声明版本约束与显式来源；capability 只
+// 声明 id 与引用的 tool，其余字段（schema、side_effect、name、description）全部
+// 继承自 tool；service 段省略时自动生成（id/version/description 继承 package，
+// tool_dependencies 默认为全部 tool id）。
 package packagefmt
 
 import (
