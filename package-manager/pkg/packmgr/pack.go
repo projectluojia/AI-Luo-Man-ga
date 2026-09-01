@@ -22,8 +22,7 @@ import (
 
 const maxTarEntries = 4096
 
-// PackFromSource 用调用方提供的清单（如从 ailuo.toml 源清单或 schemaextract
-// 自动提取）打包：校验清单与源目录工件，生成 tarball 并附带按工件 SHA-256
+// PackFromSource 用调用方提供的清单（通常来自 ailuo.toml）打包：校验清单与源目录工件，生成 tarball 并附带按工件 SHA-256
 // 锁定的 lock.json。清单来源由调用方决定，本函数不读取 manifest.json。
 func PackFromSource(ctx context.Context, sourceDir, outputDir string, manifest packagecontract.Manifest, manifestBytes []byte) (string, error) {
 	if err := packagecontract.ValidateManifest(manifest); err != nil {
@@ -118,12 +117,16 @@ func PackFromSource(ctx context.Context, sourceDir, outputDir string, manifest p
 		})
 	}
 	manifestDigest := sha256.Sum256(manifestBytes)
-	lockBytes, err := json.Marshal(packagecontract.Lock{
+	archiveLock := packagecontract.Lock{
 		SchemaVersion: packagecontract.SchemaVersion, PackageID: manifest.ID,
 		PackageVersion: manifest.Version,
 		ManifestSHA256: hex.EncodeToString(manifestDigest[:]),
 		Artifacts:      lockEntries,
-	})
+	}
+	if err := packagecontract.ValidateArchiveLock(archiveLock, manifest); err != nil {
+		return "", err
+	}
+	lockBytes, err := json.Marshal(archiveLock)
 	if err != nil {
 		return "", err
 	}

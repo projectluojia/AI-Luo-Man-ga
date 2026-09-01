@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -234,17 +233,8 @@ func (r *resolver) load(ctx context.Context, id string, source sourceRef, constr
 	)
 	switch {
 	case source.path != "":
-		version := ""
-		if _, err := os.Stat(packagefmt.SourcePath(source.path)); errors.Is(err, fs.ErrNotExist) {
-			version, err = exactVersion(constraints)
-			if err != nil {
-				return candidate{}, err
-			}
-		} else if err != nil {
-			return candidate{}, err
-		}
 		var err error
-		manifest, manifestBytes, err = packagefmt.Resolve(ctx, source.path, version)
+		manifest, manifestBytes, err = packagefmt.Resolve(ctx, source.path)
 		if err != nil {
 			return candidate{}, err
 		}
@@ -349,24 +339,6 @@ func dependencyOrder(candidates map[string]candidate) ([]string, error) {
 }
 
 func installCandidate(ctx context.Context, root string, candidate candidate) error {
-	target := filepath.Join(root, candidate.manifest.ID)
-	if _, err := os.Lstat(target); err == nil {
-		existing, err := packageio.ReadInstalled(ctx, target)
-		if err != nil {
-			return fmt.Errorf("已安装包 %s 校验失败: %w", candidate.manifest.ID, err)
-		}
-		if existing.Manifest.Version != candidate.manifest.Version {
-			_, err := packmgr.Install(ctx, root, candidate.installSource)
-			return err
-		}
-		manifestDigest, err := packageio.HashFile(ctx, filepath.Join(target, "manifest.json"), packagecontract.MaxManifestBytes)
-		if err != nil || manifestDigest != candidate.manifestDigest {
-			return fmt.Errorf("包 %s 已存在同版本但清单摘要不一致", candidate.manifest.ID)
-		}
-		return nil
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
 	_, err := packmgr.Install(ctx, root, candidate.installSource)
 	return err
 }
@@ -495,23 +467,4 @@ func sortedStrings(values map[string]struct{}) []string {
 	}
 	sort.Strings(result)
 	return result
-}
-
-func exactVersion(constraints []string) (string, error) {
-	if len(constraints) == 0 {
-		return "", fmt.Errorf("%w: 零声明包缺少版本约束", ErrResolutionFailed)
-	}
-	var exact string
-	for _, raw := range constraints {
-		version, err := packagecontract.ParseVersion(raw)
-		if err != nil {
-			return "", fmt.Errorf("%w: 零声明包必须使用同一个精确版本，收到 %q", ErrResolutionFailed, raw)
-		}
-		if exact == "" {
-			exact = version.String()
-		} else if exact != version.String() {
-			return "", fmt.Errorf("%w: 零声明包存在冲突版本 %s 与 %s", ErrResolutionFailed, exact, version)
-		}
-	}
-	return exact, nil
 }

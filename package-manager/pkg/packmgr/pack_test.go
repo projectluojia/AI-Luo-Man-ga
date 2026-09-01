@@ -5,6 +5,8 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -107,5 +109,57 @@ func TestPackFromSourceRejectsMismatchedManifestBytes(t *testing.T) {
 	mismatched = bytes.Replace(mismatched, []byte(`"demo.pkg"`), []byte(`"other.pkg"`), 1)
 	if _, err := packmgr.PackFromSource(context.Background(), source, t.TempDir(), manifest, mismatched); err == nil {
 		t.Fatal("PackFromSource accepted mismatched manifest bytes")
+	}
+}
+
+func TestInstallRejectsArchiveLockDigestMismatch(t *testing.T) {
+	manifest := packagecontract.Manifest{
+		SchemaVersion: packagecontract.SchemaVersion, ID: "demo.pkg", Version: "1.0.0",
+		Components: []packagecontract.Component{{ID: "main", Mode: packagecontract.ModeHosted, Entrypoint: "app.wasm"}},
+	}
+	manifestBytes, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifact := []byte("actual artifact")
+	manifestDigest := sha256.Sum256(manifestBytes)
+	wrongDigest := sha256.Sum256([]byte("different artifact"))
+	lockBytes, err := json.Marshal(packagecontract.Lock{
+		SchemaVersion: packagecontract.SchemaVersion, PackageID: manifest.ID,
+		PackageVersion: manifest.Version, ManifestSHA256: hex.EncodeToString(manifestDigest[:]),
+		Artifacts: []packagecontract.LockedArtifact{{
+			ComponentID: "main", Path: "app.wasm", SHA256: hex.EncodeToString(wrongDigest[:]),
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := &bytes.Buffer{}
+	gzipWriter := gzip.NewWriter(payload)
+	tarWriter := tar.NewWriter(gzipWriter)
+	write := func(name string, data []byte) {
+		t.Helper()
+		if err := tarWriter.WriteHeader(&tar.Header{Name: name, Mode: 0o640, Size: int64(len(data)), Typeflag: tar.TypeReg}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tarWriter.Write(data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("manifest.json", manifestBytes)
+	write("app.wasm", artifact)
+	write("lock.json", lockBytes)
+	if err := tarWriter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gzipWriter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	archive := filepath.Join(t.TempDir(), "demo.pkg-1.0.0.tgz")
+	if err := os.WriteFile(archive, payload.Bytes(), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := packmgr.Install(context.Background(), t.TempDir(), archive); err == nil {
+		t.Fatal("Install accepted archive lock with a mismatched artifact digest")
 	}
 }

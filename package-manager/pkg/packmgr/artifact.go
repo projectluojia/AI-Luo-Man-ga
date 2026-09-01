@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packagecontract"
+	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packageio"
 )
 
 // copyArtifact 复制文件或目录工件到阶段目录；目录内只接受普通文件和目录，
@@ -40,6 +41,13 @@ func copyArtifact(sourcePath, destinationPath string) error {
 			return packagecontract.ErrInvalidFormat
 		}
 		if relative == "." {
+			return nil
+		}
+		relative = filepath.ToSlash(relative)
+		if packageio.IsIgnoredArtifactPath(relative) {
+			if entry.IsDir() {
+				return fs.SkipDir
+			}
 			return nil
 		}
 		target := filepath.Join(destinationPath, relative)

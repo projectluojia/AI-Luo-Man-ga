@@ -103,6 +103,11 @@ func RecoverInstallRoot(ctx context.Context, root string) error {
 	if root == "" {
 		return packagecontract.ErrInvalidFormat
 	}
+	absoluteRoot, err := filepath.Abs(root)
+	if err != nil {
+		return err
+	}
+	root = absoluteRoot
 	entries, err := os.ReadDir(root)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
@@ -129,7 +134,7 @@ func RecoverInstallRoot(ctx context.Context, root string) error {
 
 func recoverInstallBackup(ctx context.Context, root, name string) error {
 	backup := filepath.Join(root, name)
-	source, err := readManifest(backup)
+	source, err := validateInstallBackup(ctx, root, backup)
 	if err != nil {
 		children, readErr := os.ReadDir(backup)
 		if readErr == nil && len(children) == 0 {
@@ -163,6 +168,66 @@ func recoverInstallBackup(ctx context.Context, root, name string) error {
 		}
 	}
 	return nil
+}
+
+func validateInstallBackup(ctx context.Context, root, backup string) (InstalledRecord, error) {
+	source, err := readManifest(backup)
+	if err != nil {
+		return InstalledRecord{}, err
+	}
+	lockBytes, err := ReadFileLimited(filepath.Join(backup, "lock.json"), packagecontract.MaxLockBytes)
+	if err != nil {
+		return InstalledRecord{}, err
+	}
+	var lock packagecontract.Lock
+	if err := packagecontract.DecodeStrictJSON(lockBytes, &lock); err != nil {
+		return InstalledRecord{}, err
+	}
+	manifestDigest := sha256.Sum256(source.manifestBytes)
+	if lock.ManifestSHA256 != hex.EncodeToString(manifestDigest[:]) ||
+		packagecontract.ValidateLock(lock, source.Manifest) != nil {
+		return InstalledRecord{}, packagecontract.ErrInvalidFormat
+	}
+	originalRoot := filepath.Join(root, source.Manifest.ID)
+	relocated := lock
+	relocated.Artifacts = append([]packagecontract.LockedArtifact(nil), lock.Artifacts...)
+	for index := range relocated.Artifacts {
+		artifact := &relocated.Artifacts[index]
+		artifact.Path, err = relocatePath(originalRoot, backup, artifact.Path)
+		if err != nil {
+			return InstalledRecord{}, err
+		}
+		if artifact.Process != nil {
+			process := *artifact.Process
+			process.Path, err = relocatePath(originalRoot, backup, process.Path)
+			if err != nil {
+				return InstalledRecord{}, err
+			}
+			process.WorkDir, err = relocatePath(originalRoot, backup, process.WorkDir)
+			if err != nil {
+				return InstalledRecord{}, err
+			}
+			artifact.Process = &process
+		}
+	}
+	if err := packagecontract.ValidateLock(relocated, source.Manifest); err != nil {
+		return InstalledRecord{}, err
+	}
+	if err := VerifyInstalledArtifacts(ctx, backup, relocated.Artifacts); err != nil {
+		return InstalledRecord{}, err
+	}
+	return InstalledRecord{Directory: backup, Manifest: source.Manifest, Lock: lock}, nil
+}
+
+func relocatePath(from, to, value string) (string, error) {
+	if value == "" || !filepath.IsAbs(value) || filepath.Clean(value) != value {
+		return "", packagecontract.ErrInvalidFormat
+	}
+	relative, err := filepath.Rel(from, value)
+	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return "", packagecontract.ErrInvalidFormat
+	}
+	return filepath.Join(to, relative), nil
 }
 
 // ListInstalled 列出安装根目录内的全部已安装包（按 ID 排序）。

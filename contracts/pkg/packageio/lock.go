@@ -14,7 +14,7 @@ import (
 
 // CanonicalLockDigest 计算安装 lock 的路径无关摘要。安装 lock 为了让宿主直接
 // 执行而保存绝对路径，但项目 ailuo.lock 必须能在不同安装根复用，因此摘要把
-// 工件与进程路径归一化为包目录相对路径。
+// 工件、进程路径和包内 Unix socket 地址归一化为包目录相对路径。
 func CanonicalLockDigest(ctx context.Context, directory string, lock packagecontract.Lock) (string, error) {
 	root, err := filepath.Abs(directory)
 	if err != nil {
@@ -41,6 +41,7 @@ func CanonicalLockDigest(ctx context.Context, directory string, lock packagecont
 			if err != nil {
 				return "", err
 			}
+			process.Address = canonicalAddress(root, process.Address)
 			artifact.Process = &process
 		}
 	}
@@ -53,6 +54,18 @@ func CanonicalLockDigest(ctx context.Context, directory string, lock packagecont
 	}
 	digest := sha256.Sum256(encoded)
 	return hex.EncodeToString(digest[:]), nil
+}
+
+func canonicalAddress(root, address string) string {
+	if !strings.HasPrefix(address, "unix:") {
+		return address
+	}
+	socketPath := strings.TrimPrefix(address, "unix:")
+	relative, err := filepath.Rel(root, socketPath)
+	if err != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return address
+	}
+	return "unix:" + filepath.ToSlash(relative)
 }
 
 func relativePath(root, value string, allowRoot bool) (string, error) {
