@@ -86,12 +86,3 @@ func catalogProjectLockForIDs(t testing.TB, root string, ids ...string) projectc
 	}
 	return lock
 }
-
-func encodeProjectLock(t testing.TB, lock projectcontract.Lock) []byte {
-	t.Helper()
-	encoded, err := json.Marshal(lock)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return encoded
-}

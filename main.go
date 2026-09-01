@@ -237,9 +237,13 @@ func serveRuntimeHost(installRoot, projectRoot, address string, output io.Writer
 		return fmt.Errorf("discover installed runtimes: %w", err)
 	}
 	hostedCount := 0
+	allowedRuntimes := make([]loader.BackendIdentity, 0, len(records))
 	for _, record := range records {
 		if record.Runtime.Mode == loader.ModeHosted {
 			hostedCount++
+			allowedRuntimes = append(allowedRuntimes, loader.BackendIdentity{
+				ID: record.Runtime.ID, Version: record.Runtime.Version,
+			})
 		}
 	}
 	if hostedCount == 0 {
@@ -250,7 +254,8 @@ func serveRuntimeHost(installRoot, projectRoot, address string, output io.Writer
 		return fmt.Errorf("create hosted backend: %w", err)
 	}
 	protocolServer, err := loader.NewRuntimeHostProtocolServer(loader.RuntimeHostServerConfig{
-		Mode: loader.ModeHosted, Backend: backend, MaxRuntimes: hostedCount, MaxConcurrent: 64,
+		Mode: loader.ModeHosted, Backend: backend, AllowedRuntimes: allowedRuntimes,
+		MaxRuntimes: hostedCount, MaxConcurrent: 64,
 	})
 	if err != nil {
 		return fmt.Errorf("create runtime host protocol server: %w", err)
