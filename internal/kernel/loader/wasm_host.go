@@ -393,15 +393,21 @@ type hostedEnvelope struct {
 	Message string          `json:"message,omitempty"`
 }
 
-// parseHostedEnvelope 解析结果信封：成功返回业务结果，失败按闭式错误码映射到
-// 稳定内部错误（数据治理错误保留类别），guest 提供的消息只记入日志不外泄。
+// parseHostedEnvelope 严格解析并校验结果信封：成功返回业务结果，失败按闭式错误码
+// 映射到稳定内部错误（数据治理错误保留类别），guest 提供的消息只记入日志不外泄。
 func parseHostedEnvelope(runtimeID string, output []byte) (json.RawMessage, error) {
 	var envelope hostedEnvelope
-	if err := json.Unmarshal(output, &envelope); err != nil {
+	if err := packagecontract.DecodeStrictJSON(output, &envelope); err != nil {
 		return nil, errors.Join(ErrRuntimeProtocol, err)
 	}
 	if envelope.OK {
+		if len(envelope.Result) == 0 || envelope.Code != "" || envelope.Message != "" {
+			return nil, ErrRuntimeProtocol
+		}
 		return envelope.Result, nil
+	}
+	if len(envelope.Result) != 0 || envelope.Code == "" {
+		return nil, ErrRuntimeProtocol
 	}
 	observe.Warn(context.Background(), "hosted 包拒绝了调用",
 		observe.StringAttr("runtime_id", runtimeID),
