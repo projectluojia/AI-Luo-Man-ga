@@ -129,6 +129,14 @@ func TestBuildRejectsInvalidComponentTargets(t *testing.T) {
 			}
 		})
 	}
+	t.Run("duplicate across plans", func(t *testing.T) {
+		if err := Build(context.Background(), t.TempDir(), manifest, []BuildSpec{
+			{Tool: BuildToolGoWasm, Components: []string{"prefs"}},
+			{Tool: BuildToolAssemblyScript, Components: []string{"prefs"}},
+		}); err == nil {
+			t.Fatal("component targeted by multiple build plans was accepted")
+		}
+	})
 }
 
 // TestBuildUnknownToolFailsClosed 验证未知构建器被拒绝（不静默跳过构建）。
