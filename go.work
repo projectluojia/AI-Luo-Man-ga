@@ -1,0 +1,8 @@
+go 1.26
+
+use (
+	.
+	./contracts
+	./package-manager
+	./packages/campus-bus
+)
