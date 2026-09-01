@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -52,7 +53,6 @@ func runPackageCommand(parent context.Context, arguments []string, output io.Wri
 	root := flags.String("root", "", "安装根目录（默认 AILUO_PACKAGE_INSTALL_ROOT，再默认用户配置目录 ailuo/runtime）")
 	project := flags.String("project", ".", "项目目录或 ailuo.toml 路径（sync 使用）")
 	repo := flags.String("repo", "", "GitHub 仓库（owner/repo），publish 使用")
-	version := flags.String("version", "", "零声明包自动生成的 semver 版本")
 	if err := flags.Parse(arguments[1:]); err != nil {
 		return fmt.Errorf("configuration error: %s", err)
 	}
@@ -62,7 +62,7 @@ func runPackageCommand(parent context.Context, arguments []string, output io.Wri
 	if *root == "" {
 		*root = packmgr.DefaultInstallRoot()
 	}
-	if *root == "" && command != "pack" && command != "publish" && command != "sdk-go" && command != "sdk-py" && command != "sdk-ts" {
+	if *root == "" && command != "pack" && command != "publish" && command != "inspect" && command != "sdk-go" && command != "sdk-py" && command != "sdk-ts" {
 		return fmt.Errorf("configuration error: %s requires --root 或 AILUO_PACKAGE_INSTALL_ROOT", command)
 	}
 	ctx, cancel := context.WithTimeout(parent, 2*time.Minute)
@@ -96,28 +96,12 @@ func runPackageCommand(parent context.Context, arguments []string, output io.Wri
 		} else if sourceErr != nil {
 			return sourceErr
 		} else {
-			info, statErr := os.Stat(source)
-			if statErr != nil {
-				return statErr
+			packageSource, cleanup, prepareErr := preparePackageSource(ctx, source)
+			if prepareErr != nil {
+				return prepareErr
 			}
-			if !info.IsDir() {
-				record, err = packmgr.Install(ctx, *root, source)
-			} else {
-				manifest, manifestBytes, resolveErr := resolveSource(ctx, source, *version)
-				if resolveErr != nil {
-					return resolveErr
-				}
-				stage, stageErr := os.MkdirTemp("", "ailuo-install-")
-				if stageErr != nil {
-					return stageErr
-				}
-				defer func() { _ = os.RemoveAll(stage) }()
-				archive, packErr := packmgr.PackFromSource(ctx, source, stage, manifest, manifestBytes)
-				if packErr != nil {
-					return packErr
-				}
-				record, err = packmgr.Install(ctx, *root, archive)
-			}
+			defer cleanup()
+			record, err = packmgr.Install(ctx, *root, packageSource)
 		}
 		if err != nil {
 			return err
@@ -130,7 +114,12 @@ func runPackageCommand(parent context.Context, arguments []string, output io.Wri
 		if flags.NArg() != 2 {
 			return fmt.Errorf("configuration error: upgrade requires package id and source package directory")
 		}
-		record, err := packmgr.Upgrade(ctx, *root, flags.Arg(0), flags.Arg(1))
+		packageSource, cleanup, prepareErr := preparePackageSource(ctx, flags.Arg(1))
+		if prepareErr != nil {
+			return prepareErr
+		}
+		defer cleanup()
+		record, err := packmgr.Upgrade(ctx, *root, flags.Arg(0), packageSource)
 		if err != nil {
 			return err
 		}
@@ -157,7 +146,7 @@ func runPackageCommand(parent context.Context, arguments []string, output io.Wri
 		if flags.NArg() == 2 {
 			outputDir = flags.Arg(1)
 		}
-		manifest, manifestBytes, err := resolveSource(ctx, flags.Arg(0), *version)
+		manifest, manifestBytes, err := resolveSource(ctx, flags.Arg(0))
 		if err != nil {
 			return err
 		}
@@ -167,6 +156,15 @@ func runPackageCommand(parent context.Context, arguments []string, output io.Wri
 		}
 		_, err = fmt.Fprintf(output, "已打包 %s\n", tarballPath)
 		return err
+	case "inspect":
+		if flags.NArg() != 1 {
+			return fmt.Errorf("configuration error: inspect requires source package directory")
+		}
+		metadata, err := inspectSource(flags.Arg(0))
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(output).Encode(metadata)
 	case "publish":
 		if flags.NArg() != 1 {
 			return fmt.Errorf("configuration error: publish requires exactly one source package directory or .tgz")
@@ -181,7 +179,7 @@ func runPackageCommand(parent context.Context, arguments []string, output io.Wri
 		if strings.HasSuffix(strings.ToLower(flags.Arg(0)), ".tgz") {
 			htmlURL, err = client.PublishTarball(ctx, owner, name, flags.Arg(0))
 		} else {
-			manifest, manifestBytes, resolveErr := resolveSource(ctx, flags.Arg(0), *version)
+			manifest, manifestBytes, resolveErr := resolveSource(ctx, flags.Arg(0))
 			if resolveErr != nil {
 				return resolveErr
 			}
@@ -203,7 +201,7 @@ func runPackageCommand(parent context.Context, arguments []string, output io.Wri
 		if command == "sdk-ts" {
 			language = sdkgen.LanguageTypeScript
 		}
-		packageID, extensions, err := resolveSDKSource(ctx, flags.Arg(0))
+		packageID, extensions, err := resolveSDKSource(flags.Arg(0))
 		if err != nil {
 			return err
 		}
@@ -302,36 +300,76 @@ func splitRegistryRef(source string) (owner, repo, constraint string, ok bool) {
 	return match[1], match[2], match[3], true
 }
 
-// resolveSource 解析源包目录：优先 ailuo.toml（显式声明，含宿主函数/存储），
-// 无则从源码自动提取清单并构建（作者零声明，纯计算包）。组件声明 [component.build] 时
-// 先执行构建再返回（pack/publish 共用，构建失败即报错，不打包残缺工件）。
-func resolveSource(ctx context.Context, sourceDir, version string) (manifest packagecontract.Manifest, manifestBytes []byte, err error) {
-	return packagefmt.Resolve(ctx, sourceDir, version)
+// resolveSource 解析源包目录中的显式 ailuo.toml，并执行清单声明的构建计划。
+func resolveSource(ctx context.Context, sourceDir string) (manifest packagecontract.Manifest, manifestBytes []byte, err error) {
+	return packagefmt.Resolve(ctx, sourceDir)
 }
 
-// resolveSDKSource 读取显式源清单，或只提取零声明源码的 extensions；SDK 生成不构建
-// guest 工件，也不需要虚构一个包版本。
-func resolveSDKSource(ctx context.Context, sourceDir string) (string, json.RawMessage, error) {
+// preparePackageSource 将作者侧 ailuo.toml 源目录一次性打成临时发布物；已有
+// manifest.json 目录或 tarball 直接交给 packmgr，避免 CLI 复制安装/升级逻辑。
+func preparePackageSource(ctx context.Context, source string) (string, func(), error) {
+	info, err := os.Stat(source)
+	if err != nil {
+		return "", func() {}, err
+	}
+	if !info.IsDir() {
+		return source, func() {}, nil
+	}
+	manifestPath := packagefmt.SourcePath(source)
+	if _, err := os.Stat(manifestPath); errors.Is(err, fs.ErrNotExist) {
+		return source, func() {}, nil
+	} else if err != nil {
+		return "", func() {}, err
+	}
+	manifest, manifestBytes, err := resolveSource(ctx, source)
+	if err != nil {
+		return "", func() {}, err
+	}
+	stage, err := os.MkdirTemp("", "ailuo-package-source-")
+	if err != nil {
+		return "", func() {}, err
+	}
+	cleanup := func() { _ = os.RemoveAll(stage) }
+	archive, err := packmgr.PackFromSource(ctx, source, stage, manifest, manifestBytes)
+	if err != nil {
+		cleanup()
+		return "", func() {}, err
+	}
+	return archive, cleanup, nil
+}
+
+type sourceMetadata struct {
+	ID         string   `json:"id"`
+	Version    string   `json:"version"`
+	BuildTools []string `json:"build_tools,omitempty"`
+}
+
+// inspectSource 只解析显式源清单，不执行构建；workflow 用它从同一份清单
+// 判断需要准备的语言工具链，避免调用方重复声明构建器。
+func inspectSource(sourceDir string) (sourceMetadata, error) {
+	manifest, _, builds, err := packagefmt.Parse(packagefmt.SourcePath(sourceDir))
+	if err != nil {
+		return sourceMetadata{}, err
+	}
+	seen := make(map[string]struct{}, len(builds))
+	tools := make([]string, 0, len(builds))
+	for _, build := range builds {
+		if _, exists := seen[build.Tool]; exists {
+			continue
+		}
+		seen[build.Tool] = struct{}{}
+		tools = append(tools, build.Tool)
+	}
+	sort.Strings(tools)
+	return sourceMetadata{ID: manifest.ID, Version: manifest.Version, BuildTools: tools}, nil
+}
+
+// resolveSDKSource 读取显式源清单中的宿主扩展段；SDK 生成不构建 guest 工件。
+func resolveSDKSource(sourceDir string) (string, json.RawMessage, error) {
 	path := packagefmt.SourcePath(sourceDir)
-	_, statErr := os.Stat(path)
-	if statErr == nil {
-		manifest, _, _, err := packagefmt.Parse(path)
-		return manifest.ID, manifest.Extensions, err
-	}
-	if !errors.Is(statErr, fs.ErrNotExist) {
-		return "", nil, fmt.Errorf("读取源清单失败: %w", statErr)
-	}
-	absolute, err := filepath.Abs(sourceDir)
+	manifest, _, _, err := packagefmt.Parse(path)
 	if err != nil {
 		return "", nil, err
 	}
-	capabilities, _, err := packagefmt.AutoExtract(ctx, sourceDir)
-	if err != nil {
-		return "", nil, err
-	}
-	extensions, err := packagefmt.ExtensionsFromCapabilities(filepath.Base(absolute), capabilities)
-	if err != nil {
-		return "", nil, err
-	}
-	return filepath.Base(absolute), extensions, nil
+	return manifest.ID, manifest.Extensions, nil
 }

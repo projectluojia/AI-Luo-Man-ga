@@ -37,8 +37,14 @@ func Inspect(ctx context.Context, sourcePath string) (packagecontract.Manifest, 
 	if err != nil {
 		return packagecontract.Manifest{}, nil, err
 	}
-	if _, err := readSourceArtifacts(ctx, sourceDir, source.Manifest); err != nil {
+	artifacts, err := readSourceArtifacts(ctx, sourceDir, source.Manifest)
+	if err != nil {
 		return packagecontract.Manifest{}, nil, err
+	}
+	if strings.HasSuffix(strings.ToLower(sourcePath), ".tgz") {
+		if err := validateArchiveLock(ctx, sourceDir, source.Manifest, artifacts); err != nil {
+			return packagecontract.Manifest{}, nil, err
+		}
 	}
 	return source.Manifest, source.manifestBytes, nil
 }
@@ -69,6 +75,11 @@ func Install(ctx context.Context, root, sourcePath string) (InstalledRecord, err
 	artifacts, err := readSourceArtifacts(ctx, sourceDir, source.Manifest)
 	if err != nil {
 		return InstalledRecord{}, err
+	}
+	if strings.HasSuffix(strings.ToLower(sourcePath), ".tgz") {
+		if err := validateArchiveLock(ctx, sourceDir, source.Manifest, artifacts); err != nil {
+			return InstalledRecord{}, err
+		}
 	}
 	if err := os.MkdirAll(root, 0o750); err != nil {
 		return InstalledRecord{}, err
@@ -137,7 +148,7 @@ func Install(ctx context.Context, root, sourcePath string) (InstalledRecord, err
 			SHA256:      stageDigest,
 		}
 		if component, ok := packagecontract.FindComponent(source.Manifest, artifact.componentID); ok && component.Mode == packagecontract.ModeIsolated {
-			locked.Process, err = defaultProcessSpec(component, filepath.Join(targetDir, artifactName), targetDir, artifact.directory)
+			locked.Process, err = resolveProcessSpec(component, filepath.Join(targetDir, artifactName), targetDir, artifact.directory)
 			if err != nil {
 				return InstalledRecord{}, err
 			}
@@ -231,9 +242,11 @@ func reserveBackupDir(root, targetDir string) (string, error) {
 	return backupDir, nil
 }
 
-// defaultProcessSpec 把 isolated 组件的相对进程模板解析为安装期绝对规格。
-// 没有模板时保持原有约定：工件本身是可执行文件，工作目录是包目录。
-func defaultProcessSpec(component packagecontract.Component, artifactPath, packageDir string, artifactDirectory bool) (*packagecontract.ProcessSpec, error) {
+// resolveProcessSpec 把 isolated 组件显式声明的相对进程模板解析为安装期绝对规格。
+func resolveProcessSpec(component packagecontract.Component, artifactPath, packageDir string, artifactDirectory bool) (*packagecontract.ProcessSpec, error) {
+	if component.Process == nil {
+		return nil, packagecontract.ErrInvalidFormat
+	}
 	artifactRoot := packageDir
 	if artifactDirectory {
 		artifactRoot = artifactPath
@@ -242,12 +255,6 @@ func defaultProcessSpec(component packagecontract.Component, artifactPath, packa
 	process := &packagecontract.ProcessSpec{
 		Path: artifactPath, WorkDir: packageDir,
 		Address: "unix:" + filepath.Join(packageDir, base+"-"+component.ID+".sock"),
-	}
-	if component.Process == nil {
-		if artifactDirectory {
-			return nil, packagecontract.ErrInvalidFormat
-		}
-		return process, nil
 	}
 	executable, err := resolveProcessPath(artifactRoot, component.Process.Path)
 	if err != nil {
@@ -284,8 +291,8 @@ func resolveProcessPath(artifactRoot, relative string) (string, error) {
 	return path, nil
 }
 
-// Upgrade 要求包已安装且源目录版本号不同，然后安装。
-func Upgrade(ctx context.Context, root, id, sourceDir string) (InstalledRecord, error) {
+// Upgrade 要求包已安装且源包版本号不同，然后安装。
+func Upgrade(ctx context.Context, root, id, sourcePath string) (InstalledRecord, error) {
 	if root == "" || !capability.IsStableID(id) {
 		return InstalledRecord{}, fmt.Errorf("包 %q 标识非法", id)
 	}
@@ -300,17 +307,17 @@ func Upgrade(ctx context.Context, root, id, sourceDir string) (InstalledRecord, 
 	if err != nil {
 		return InstalledRecord{}, fmt.Errorf("包 %q 未安装", id)
 	}
-	source, err := readManifest(sourceDir)
+	manifest, _, err := Inspect(ctx, sourcePath)
 	if err != nil {
 		return InstalledRecord{}, err
 	}
-	if source.Manifest.ID != id {
-		return InstalledRecord{}, fmt.Errorf("源目录包 ID %q 与升级目标 %q 不一致", source.Manifest.ID, id)
+	if manifest.ID != id {
+		return InstalledRecord{}, fmt.Errorf("源包 ID %q 与升级目标 %q 不一致", manifest.ID, id)
 	}
-	if source.Manifest.Version == existing.Manifest.Version {
+	if manifest.Version == existing.Manifest.Version {
 		return InstalledRecord{}, fmt.Errorf("包 %s 已安装版本 %s，升级目标版本相同", id, existing.Manifest.Version)
 	}
-	return Install(ctx, root, sourceDir)
+	return Install(ctx, root, sourcePath)
 }
 
 // Uninstall 删除已安装包目录。仅当目录包含 manifest.json 时删除（安全防护）。
@@ -415,6 +422,33 @@ func readSourceArtifacts(ctx context.Context, sourceDir string, manifest package
 		})
 	}
 	return artifacts, nil
+}
+
+// validateArchiveLock 校验发布归档中的 lock，并把每个工件摘要与实际解压内容
+// 对照。安装 lock 会在目标目录重新生成，因此归档 lock 只接受包根相对路径。
+func validateArchiveLock(ctx context.Context, directory string, manifest packagecontract.Manifest, artifacts []sourceArtifact) error {
+	lockBytes, err := packageio.ReadFileLimited(filepath.Join(directory, "lock.json"), packagecontract.MaxLockBytes)
+	if err != nil {
+		return err
+	}
+	var lock packagecontract.Lock
+	if err := packagecontract.DecodeStrictJSON(lockBytes, &lock); err != nil {
+		return err
+	}
+	if err := packagecontract.ValidateArchiveLock(lock, manifest); err != nil {
+		return err
+	}
+	artifactByID := make(map[string]sourceArtifact, len(artifacts))
+	for _, artifact := range artifacts {
+		artifactByID[artifact.componentID] = artifact
+	}
+	for _, locked := range lock.Artifacts {
+		artifact, ok := artifactByID[locked.ComponentID]
+		if !ok || artifact.digest != locked.SHA256 {
+			return packagecontract.ErrInvalidFormat
+		}
+	}
+	return nil
 }
 
 // sameInstalledPackage 判断同版本安装是否是同一份发布内容。版本一旦发布，

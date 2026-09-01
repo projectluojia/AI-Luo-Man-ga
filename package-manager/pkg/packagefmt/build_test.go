@@ -110,7 +110,8 @@ func TestBuildRejectsInvalidComponentTargets(t *testing.T) {
 		ID:            "mixed.pkg",
 		Version:       "1.0.0",
 		Components: []packagecontract.Component{
-			{ID: "brain", Mode: packagecontract.ModeIsolated, Role: packagecontract.RoleExecutor, Entrypoint: "brain"},
+			{ID: "brain", Mode: packagecontract.ModeIsolated, Role: packagecontract.RoleExecutor, Entrypoint: "brain",
+				Process: &packagecontract.ProcessTemplate{Path: "brain", Address: "127.0.0.1:50051"}},
 			{ID: "prefs", Mode: packagecontract.ModeHosted, Entrypoint: "prefs.wasm"},
 		},
 	}
@@ -129,6 +130,15 @@ func TestBuildRejectsInvalidComponentTargets(t *testing.T) {
 			}
 		})
 	}
+	t.Run("no matching component", func(t *testing.T) {
+		hostedOnly := packagecontract.Manifest{
+			SchemaVersion: packagecontract.SchemaVersion, ID: "hosted.pkg", Version: "1.0.0",
+			Components: []packagecontract.Component{{ID: "main", Mode: packagecontract.ModeHosted, Entrypoint: "main.wasm"}},
+		}
+		if err := Build(context.Background(), t.TempDir(), hostedOnly, []BuildSpec{{Tool: BuildToolGoNative}}); err == nil {
+			t.Fatal("build plan without a matching component was accepted")
+		}
+	})
 	t.Run("duplicate across plans", func(t *testing.T) {
 		if err := Build(context.Background(), t.TempDir(), manifest, []BuildSpec{
 			{Tool: BuildToolGoWasm, Components: []string{"prefs"}},
@@ -156,12 +166,8 @@ entrypoint = "demo.wasm"
 [component.build]
 tool = "rust-wasm"
 `)
-	manifest, _, builds, err := Parse(path)
-	if err != nil {
-		t.Fatalf("Parse: %v", err)
-	}
-	if err := Build(context.Background(), dir, manifest, builds); err == nil {
-		t.Fatal("unknown build tool = nil, want error")
+	if _, _, _, err := Parse(path); err == nil {
+		t.Fatal("unknown build tool was accepted by Parse")
 	}
 }
 
@@ -214,6 +220,41 @@ source = "guest"
 	}
 }
 
+// TestBuildGoNativeBuildsExecutable 验证 Go isolated 构建器输出当前平台的可执行
+// 工件，并使用包自身的 go.mod，不依赖仓库根模块。
+func TestBuildGoNativeBuildsExecutable(t *testing.T) {
+	sourceDir := t.TempDir()
+	mainDir := filepath.Join(sourceDir, "cmd", "native-executor")
+	if err := os.MkdirAll(mainDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	writeSource(t, filepath.Join(mainDir, "main.go"), `package main
+
+func main() {}
+`)
+	writeSource(t, filepath.Join(sourceDir, "go.mod"), "module demo.executor\n\ngo 1.24\n")
+	manifest := packagecontract.Manifest{
+		SchemaVersion: packagecontract.SchemaVersion, ID: "demo.executor", Version: "1.0.0",
+		Components: []packagecontract.Component{{
+			ID: "executor", Mode: packagecontract.ModeIsolated, Role: packagecontract.RoleExecutor,
+			Entrypoint: "native-executor",
+			Process:    &packagecontract.ProcessTemplate{Path: "native-executor", Address: "127.0.0.1:50051"},
+		}},
+	}
+	if err := Build(context.Background(), sourceDir, manifest, []BuildSpec{{
+		Tool: BuildToolGoNative, Source: "cmd/native-executor", Components: []string{"executor"},
+	}}); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	info, err := os.Stat(filepath.Join(sourceDir, "native-executor"))
+	if err != nil {
+		t.Fatalf("native executable missing: %v", err)
+	}
+	if !info.Mode().IsRegular() || info.Size() == 0 {
+		t.Fatalf("native executable is invalid: size=%d", info.Size())
+	}
+}
+
 // TestBuildRejectsEscapingSource 验证源码目录逃逸包目录被拒绝（包自包含边界）。
 func TestBuildRejectsEscapingSource(t *testing.T) {
 	dir := t.TempDir()
@@ -232,11 +273,7 @@ entrypoint = "demo.wasm"
 tool = "go-wasm"
 source = "../outside"
 `)
-	manifest, _, builds, err := Parse(path)
-	if err != nil {
-		t.Fatalf("Parse: %v", err)
-	}
-	if err := Build(context.Background(), dir, manifest, builds); err == nil {
-		t.Fatal("escaping source = nil, want error")
+	if _, _, _, err := Parse(path); err == nil {
+		t.Fatal("escaping build source was accepted by Parse")
 	}
 }

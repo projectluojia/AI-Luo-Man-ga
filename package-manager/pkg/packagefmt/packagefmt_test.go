@@ -5,11 +5,34 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packagecontract"
 	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/packmgr"
 )
+
+func TestParseRejectsUnknownBuildTool(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, SourceFileName)
+	writeSource(t, path, `
+[package]
+id = "demo.pkg"
+version = "1.0.0"
+
+[[component]]
+id = "core"
+mode = "hosted"
+entrypoint = "demo.wasm"
+
+[component.build]
+tool = "unknown-builder"
+`)
+
+	if _, _, _, err := Parse(path); err == nil || !strings.Contains(err.Error(), "unsupported build tool") {
+		t.Fatalf("Parse unknown build tool error=%v, want fail-closed build validation", err)
+	}
+}
 
 // 完整源清单：验证继承规则（capability 继承 tool、service 自动生成）。
 func TestParseInheritsToolAndService(t *testing.T) {

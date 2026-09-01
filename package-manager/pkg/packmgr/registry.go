@@ -124,32 +124,17 @@ func validateTarball(ctx context.Context, tarballPath string) (packagecontract.M
 		if !packagecontract.IsPackagePath(lock.Artifacts[index].Path) || lock.Artifacts[index].Path == "." {
 			return packagecontract.Manifest{}, packagecontract.ErrInvalidFormat
 		}
-		lock.Artifacts[index].Path = filepath.Join(sourceDir, lock.Artifacts[index].Path)
 	}
-	if err := validatePackagedLock(lock, source.Manifest); err != nil {
+	if err := packagecontract.ValidateArchiveLock(lock, source.Manifest); err != nil {
 		return packagecontract.Manifest{}, err
+	}
+	for index := range lock.Artifacts {
+		lock.Artifacts[index].Path = filepath.Join(sourceDir, lock.Artifacts[index].Path)
 	}
 	if err := packageio.VerifyInstalledArtifacts(ctx, sourceDir, lock.Artifacts); err != nil {
 		return packagecontract.Manifest{}, err
 	}
 	return source.Manifest, nil
-}
-
-func validatePackagedLock(lock packagecontract.Lock, manifest packagecontract.Manifest) error {
-	for _, artifact := range lock.Artifacts {
-		if component, ok := packagecontract.FindComponent(manifest, artifact.ComponentID); ok &&
-			component.Mode == packagecontract.ModeIsolated && artifact.Process != nil {
-			return packagecontract.ErrInvalidFormat
-		}
-	}
-	packaged := manifest
-	packaged.Components = append([]packagecontract.Component(nil), manifest.Components...)
-	for index := range packaged.Components {
-		if packaged.Components[index].Mode == packagecontract.ModeIsolated {
-			packaged.Components[index].Mode = packagecontract.ModeHosted
-		}
-	}
-	return packagecontract.ValidateLock(lock, packaged)
 }
 
 func (c *GitHubClient) publishTarball(ctx context.Context, owner, repo, tarballPath string, manifest packagecontract.Manifest) (string, error) {
@@ -356,6 +341,12 @@ func (c *GitHubClient) DownloadRelease(ctx context.Context, assetURL, dest strin
 	if written > packagecontract.MaxArtifactBytes {
 		return packagecontract.ErrInvalidFormat
 	}
+	if err := file.Sync(); err != nil {
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -374,12 +365,7 @@ func InstallFromRelease(ctx context.Context, root string, client *GitHubClient, 
 	if err := client.DownloadRelease(ctx, assetURL, tarball); err != nil {
 		return InstalledRecord{}, err
 	}
-	sourceDir, cleanup, err := unpackSource(tarball)
-	if err != nil {
-		return InstalledRecord{}, err
-	}
-	defer cleanup()
-	source, err := readManifest(sourceDir)
+	manifest, _, err := Inspect(ctx, tarball)
 	if err != nil {
 		return InstalledRecord{}, err
 	}
@@ -387,11 +373,13 @@ func InstallFromRelease(ctx context.Context, root string, client *GitHubClient, 
 	if err != nil {
 		return InstalledRecord{}, err
 	}
-	manifestVersion, err := packagecontract.ParseVersion(source.Manifest.Version)
+	manifestVersion, err := packagecontract.ParseVersion(manifest.Version)
 	if err != nil || packagecontract.CompareVersions(resolved, manifestVersion) != 0 {
-		return InstalledRecord{}, fmt.Errorf("发布包版本 %s 与解析版本 %s 不一致", source.Manifest.Version, version)
+		return InstalledRecord{}, fmt.Errorf("发布包版本 %s 与解析版本 %s 不一致", manifest.Version, version)
 	}
-	record, err := Install(ctx, root, sourceDir)
+	// 传入原始 tarball，确保 Install 再次验证归档 lock，而不是把已解包目录
+	// 当作无 lock 的本地源绕过发布物完整性校验。
+	record, err := Install(ctx, root, tarball)
 	if err != nil {
 		return InstalledRecord{}, err
 	}

@@ -14,7 +14,7 @@ import (
 )
 
 // 包格式版本：清单与 lock 共用的 schema 版本。
-const SchemaVersion = "ailuo.package.v2"
+const SchemaVersion = "ailuo.package.v3"
 
 // 执行形态与托管策略的闭式取值。
 const (

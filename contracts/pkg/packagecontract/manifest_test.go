@@ -67,12 +67,16 @@ func TestValidateManifestRejectsInvalidCore(t *testing.T) {
 		mutate func(*packagecontract.Manifest)
 	}{
 		{name: "wrong schema version", mutate: func(m *packagecontract.Manifest) { m.SchemaVersion = "ailuo.package.v1" }},
+		{name: "old schema version", mutate: func(m *packagecontract.Manifest) { m.SchemaVersion = "ailuo.package.v2" }},
 		{name: "invalid id", mutate: func(m *packagecontract.Manifest) { m.ID = "Campus.Bus" }},
 		{name: "invalid version", mutate: func(m *packagecontract.Manifest) { m.Version = "1.2" }},
 		{name: "excessive idle ttl", mutate: func(m *packagecontract.Manifest) { m.IdleTTLMS = 30*24*3600*1000 + 1 }},
 		{name: "empty components", mutate: func(m *packagecontract.Manifest) { m.Components = nil }},
 		{name: "unsupported mode", mutate: func(m *packagecontract.Manifest) {
 			m.Components[0].Mode = "embedded"
+		}},
+		{name: "isolated process template required", mutate: func(m *packagecontract.Manifest) {
+			m.Components[0].Mode = packagecontract.ModeIsolated
 		}},
 		{name: "missing entrypoint", mutate: func(m *packagecontract.Manifest) { m.Components[0].Entrypoint = "" }},
 		{name: "absolute entrypoint", mutate: func(m *packagecontract.Manifest) {
@@ -86,6 +90,15 @@ func TestValidateManifestRejectsInvalidCore(t *testing.T) {
 		}},
 		{name: "invalid export id", mutate: func(m *packagecontract.Manifest) {
 			m.Components[0].Exports = []string{"Campus.bus.query"}
+		}},
+		{name: "executor exports capability", mutate: func(m *packagecontract.Manifest) {
+			m.Components[0].Role = packagecontract.RoleExecutor
+			m.Components[0].Mode = packagecontract.ModeIsolated
+			m.Components[0].Exports = []string{"campus.bus.query"}
+		}},
+		{name: "isolated host function", mutate: func(m *packagecontract.Manifest) {
+			m.Components[0].Mode = packagecontract.ModeIsolated
+			m.Components[0].HostFunctions = []packagecontract.HostedFunctionDecl{{Module: "ailuo.host", Name: "call"}}
 		}},
 		{name: "duplicate host function", mutate: func(m *packagecontract.Manifest) {
 			m.Components[0].HostFunctions = []packagecontract.HostedFunctionDecl{
@@ -136,6 +149,7 @@ func TestComponentOrderRespectsDependencyTopology(t *testing.T) {
 		{ID: "bus.core", Mode: packagecontract.ModeHosted, Entrypoint: "core.wasm",
 			Imports: []string{"campus.bus.transport"}},
 		{ID: "bus.adapter", Mode: packagecontract.ModeIsolated, Entrypoint: "adapter",
+			Process: &packagecontract.ProcessTemplate{Path: "adapter", Address: "127.0.0.1:50051"},
 			Exports: []string{"campus.bus.transport"}},
 		{ID: "bus.standalone", Mode: packagecontract.ModeHosted, Entrypoint: "solo.wasm"},
 	}
@@ -175,7 +189,8 @@ func TestValidateLockMatchesComponents(t *testing.T) {
 		SchemaVersion: packagecontract.SchemaVersion, ID: "campus.bus", Version: "1.0.0",
 		Components: []packagecontract.Component{
 			{ID: "bus.core", Mode: packagecontract.ModeHosted, Entrypoint: "bus-core.wasm"},
-			{ID: "bus.adapter", Mode: packagecontract.ModeIsolated, Entrypoint: "bus-adapter"},
+			{ID: "bus.adapter", Mode: packagecontract.ModeIsolated, Entrypoint: "bus-adapter",
+				Process: &packagecontract.ProcessTemplate{Path: "bus-adapter", Address: "127.0.0.1:50051"}},
 		},
 	}
 	lock := packagecontract.Lock{
@@ -227,6 +242,30 @@ func TestValidateLockMatchesComponents(t *testing.T) {
 	}
 }
 
+func TestValidateArchiveLockRequiresRelativeComponentArtifacts(t *testing.T) {
+	manifest := packagecontract.Manifest{
+		SchemaVersion: packagecontract.SchemaVersion, ID: "demo.pkg", Version: "1.0.0",
+		Components: []packagecontract.Component{{
+			ID: "main", Mode: packagecontract.ModeHosted, Entrypoint: "main.wasm",
+		}},
+	}
+	lock := packagecontract.Lock{
+		SchemaVersion: packagecontract.SchemaVersion, PackageID: manifest.ID,
+		PackageVersion: manifest.Version,
+		ManifestSHA256: strings.Repeat("a", 64),
+		Artifacts: []packagecontract.LockedArtifact{{
+			ComponentID: "main", Path: "main.wasm", SHA256: strings.Repeat("b", 64),
+		}},
+	}
+	if err := packagecontract.ValidateArchiveLock(lock, manifest); err != nil {
+		t.Fatalf("ValidateArchiveLock: %v", err)
+	}
+	lock.Artifacts[0].Path = filepath.Join("/tmp", "main.wasm")
+	if err := packagecontract.ValidateArchiveLock(lock, manifest); err == nil {
+		t.Fatal("ValidateArchiveLock accepted absolute artifact path")
+	}
+}
+
 func TestValidateProcessSpecRejectsNonLoopback(t *testing.T) {
 	spec := packagecontract.ProcessSpec{Address: "192.0.2.1:9000"}
 	if err := packagecontract.ValidateProcessSpec(spec); err == nil {
@@ -248,8 +287,8 @@ func TestLocalRuntimeAddressPolicy(t *testing.T) {
 }
 
 func TestSchemaVersionConstantIsNeutral(t *testing.T) {
-	if packagecontract.SchemaVersion != "ailuo.package.v2" {
-		t.Fatalf("SchemaVersion = %q, want ailuo.package.v2", packagecontract.SchemaVersion)
+	if packagecontract.SchemaVersion != "ailuo.package.v3" {
+		t.Fatalf("SchemaVersion = %q, want ailuo.package.v3", packagecontract.SchemaVersion)
 	}
 }
 

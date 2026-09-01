@@ -21,6 +21,10 @@ import (
 // GOOS/GOARCH，不依赖 shell），Go 工具链是仓库门禁既有前提。
 const BuildToolGoWasm = "go-wasm"
 
+// BuildToolGoNative 是 Go isolated 组件的本机构建器：输出当前目标平台的
+// 可执行文件，不携带任何 Core 或具体业务依赖。
+const BuildToolGoNative = "go-native"
+
 // BuildToolAssemblyScript 是 TypeScript→wasm 构建器：调用 AssemblyScript
 // 编译器（npx --package assemblyscript asc，node 生态成熟工具链）。
 // 需 node/npx 环境；guest 用 AssemblyScript 语法（TS 严格子集）。
@@ -51,20 +55,12 @@ type BuildSpec struct {
 const BuildToolPythonUV = "python-uv"
 
 // Build 执行 component 级构建计划：为包生成声明的 hosted 工件或 isolated 运行环境。
-// 支持 go-wasm（Go，内置）、python-uv（Python，内置）与 ts-as（TypeScript，
-// AssemblyScript 编译器）；未知工具 fail-closed。源码目录相对包目录解析，
-// 校验不逃逸包目录。
+// 支持 go-wasm（Go，内置）、go-native（Go，内置）、python-uv（Python，内置）
+// 与 ts-as（TypeScript，AssemblyScript 编译器）；未知工具 fail-closed。源码
+// 目录相对包目录解析，校验不逃逸包目录。
 func Build(ctx context.Context, sourceDir string, manifest packagecontract.Manifest, specs []BuildSpec) error {
-	plannedComponents := make(map[string]struct{})
-	for _, spec := range specs {
-		switch spec.Tool {
-		case BuildToolGoWasm, BuildToolPythonUV, BuildToolAssemblyScript:
-		default:
-			return fmt.Errorf("%w: %q（支持：go-wasm、python-uv、ts-as）", ErrBuildUnsupported, spec.Tool)
-		}
-		if err := validateBuildTargets(manifest, spec, plannedComponents); err != nil {
-			return err
-		}
+	if err := validateBuildSpecs(manifest, specs); err != nil {
+		return err
 	}
 
 	builtPythonSources := make(map[string]struct{})
@@ -72,6 +68,10 @@ func Build(ctx context.Context, sourceDir string, manifest packagecontract.Manif
 		switch spec.Tool {
 		case BuildToolGoWasm:
 			if err := buildGoWasm(ctx, sourceDir, manifest, spec); err != nil {
+				return err
+			}
+		case BuildToolGoNative:
+			if err := buildGoNative(ctx, sourceDir, manifest, spec); err != nil {
 				return err
 			}
 		case BuildToolPythonUV:
@@ -91,8 +91,28 @@ func Build(ctx context.Context, sourceDir string, manifest packagecontract.Manif
 			if err := buildAssemblyScript(ctx, sourceDir, manifest, spec); err != nil {
 				return err
 			}
+		}
+	}
+	return nil
+}
+
+func validateBuildSpecs(manifest packagecontract.Manifest, specs []BuildSpec) error {
+	plannedComponents := make(map[string]struct{})
+	for _, spec := range specs {
+		switch spec.Tool {
+		case BuildToolGoWasm, BuildToolGoNative, BuildToolPythonUV, BuildToolAssemblyScript:
 		default:
-			return fmt.Errorf("%w: %q（支持：go-wasm、python-uv、ts-as）", ErrBuildUnsupported, spec.Tool)
+			return fmt.Errorf("%w: %q（支持：go-wasm、go-native、python-uv、ts-as）", ErrBuildUnsupported, spec.Tool)
+		}
+		if err := validateBuildTargets(manifest, spec, plannedComponents); err != nil {
+			return err
+		}
+		source := spec.Source
+		if source == "" {
+			source = "."
+		}
+		if !packagecontract.IsPackagePath(source) {
+			return fmt.Errorf("%w: 源码目录非法 %q", ErrBuildFailed, source)
 		}
 	}
 	return nil
@@ -101,21 +121,19 @@ func Build(ctx context.Context, sourceDir string, manifest packagecontract.Manif
 func validateBuildTargets(manifest packagecontract.Manifest, spec BuildSpec, planned map[string]struct{}) error {
 	targets := spec.Components
 	if len(targets) == 0 {
-		targetMode := packagecontract.ModeHosted
-		if spec.Tool == BuildToolPythonUV {
-			targetMode = packagecontract.ModeIsolated
-		}
+		targetMode := buildMode(spec.Tool)
 		for _, component := range manifest.Components {
 			if component.Mode == targetMode {
 				targets = append(targets, component.ID)
 			}
 		}
 	}
+	if len(targets) == 0 {
+		return fmt.Errorf("%w: 构建计划没有可用的 %s 组件", ErrBuildFailed, buildMode(spec.Tool))
+	}
 	for _, componentID := range targets {
 		component, ok := packagecontract.FindComponent(manifest, componentID)
-		if !ok ||
-			(spec.Tool == BuildToolPythonUV && component.Mode != packagecontract.ModeIsolated) ||
-			(spec.Tool != BuildToolPythonUV && component.Mode != packagecontract.ModeHosted) {
+		if !ok || component.Mode != buildMode(spec.Tool) {
 			return fmt.Errorf("%w: 构建计划引用了不适用的组件 %q", ErrBuildFailed, componentID)
 		}
 		if _, duplicate := planned[componentID]; duplicate {
@@ -135,11 +153,23 @@ func buildGoWasm(ctx context.Context, sourceDir string, manifest packagecontract
 	if runtime.GOARCH == "wasm" {
 		return fmt.Errorf("%w: 当前平台自身是 wasm，无法交叉编译", ErrBuildFailed)
 	}
-	return buildHostedComponents(ctx, sourceDir, manifest, spec,
+	return buildComponents(ctx, sourceDir, manifest, spec, packagecontract.ModeHosted,
 		func(ctx context.Context, workDir string, _ packagecontract.Component, output string) ([]byte, error) {
 			command := exec.CommandContext(ctx, "go", "build", "-trimpath", "-o", output, ".")
 			command.Dir = workDir
 			command.Env = append(os.Environ(), "GOOS=wasip1", "GOARCH=wasm")
+			return command.CombinedOutput()
+		})
+}
+
+// buildGoNative 用 Go 工具链构建 isolated 组件的本机可执行文件。命令不经
+// shell，也不注入 Core 或部署配置中的环境变量；包作者的构建依赖由其 go.mod
+// 自己声明。
+func buildGoNative(ctx context.Context, sourceDir string, manifest packagecontract.Manifest, spec BuildSpec) error {
+	return buildComponents(ctx, sourceDir, manifest, spec, packagecontract.ModeIsolated,
+		func(ctx context.Context, workDir string, _ packagecontract.Component, output string) ([]byte, error) {
+			command := exec.CommandContext(ctx, "go", "build", "-trimpath", "-o", output, ".")
+			command.Dir = workDir
 			return command.CombinedOutput()
 		})
 }
@@ -161,7 +191,6 @@ func buildPythonUV(ctx context.Context, sourceDir string, spec BuildSpec) error 
 	}
 	command := exec.CommandContext(ctx, "uv", "sync", "--locked", "--no-dev", "--link-mode=copy")
 	command.Dir = filepath.Join(absoluteSourceDir, source)
-	command.Env = os.Environ()
 	if output, err := command.CombinedOutput(); err != nil {
 		return fmt.Errorf("%w: uv sync: %v\n%s", ErrBuildFailed, err, output)
 	}
@@ -356,9 +385,9 @@ func pathWithinDirectory(root, candidate string) bool {
 // buildAssemblyScript 用 AssemblyScript 编译器编译每个 hosted 组件：
 // npx --yes --package assemblyscript asc <入口>.ts -o <entrypoint>，
 // 在源码目录内执行（需 node/npx 环境）。入口约定：entrypoint 声明为
-// <名>.wasm，对应源码 <名>.ts（与 schemaextract 的 main.ts 约定一致）。
+// <名>.wasm，对应源码 <名>.ts。
 func buildAssemblyScript(ctx context.Context, sourceDir string, manifest packagecontract.Manifest, spec BuildSpec) error {
-	return buildHostedComponents(ctx, sourceDir, manifest, spec,
+	return buildComponents(ctx, sourceDir, manifest, spec, packagecontract.ModeHosted,
 		func(ctx context.Context, workDir string, component packagecontract.Component, output string) ([]byte, error) {
 			// 源码名 = entrypoint 去 .wasm 后缀 + .ts（main.wasm → main.ts）。
 			input := filepath.Join(workDir, strings.TrimSuffix(filepath.Base(component.Entrypoint), ".wasm")+".ts")
@@ -368,12 +397,13 @@ func buildAssemblyScript(ctx context.Context, sourceDir string, manifest package
 		})
 }
 
-// buildHostedComponents 统一校验包路径、输出目录并逐个构建 hosted 组件。
-func buildHostedComponents(
+// buildComponents 统一校验包路径、输出目录并逐个构建同一运行模式的组件。
+func buildComponents(
 	ctx context.Context,
 	sourceDir string,
 	manifest packagecontract.Manifest,
 	spec BuildSpec,
+	mode string,
 	build func(context.Context, string, packagecontract.Component, string) ([]byte, error),
 ) error {
 	absoluteSourceDir, err := filepath.Abs(sourceDir)
@@ -389,7 +419,7 @@ func buildHostedComponents(
 	}
 	workDir := filepath.Join(absoluteSourceDir, source)
 	for _, component := range manifest.Components {
-		if component.Mode != packagecontract.ModeHosted {
+		if component.Mode != mode {
 			continue
 		}
 		if len(spec.Components) > 0 && !slices.Contains(spec.Components, component.ID) {
@@ -408,4 +438,11 @@ func buildHostedComponents(
 		}
 	}
 	return nil
+}
+
+func buildMode(tool string) string {
+	if tool == BuildToolGoNative || tool == BuildToolPythonUV {
+		return packagecontract.ModeIsolated
+	}
+	return packagecontract.ModeHosted
 }

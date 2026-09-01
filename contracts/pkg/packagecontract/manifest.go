@@ -44,7 +44,7 @@ type Component struct {
 	// 部署策略要求 executor 包经过签名信任。
 	Role       string `json:"role,omitempty"`
 	Entrypoint string `json:"entrypoint"`
-	// Process 是 isolated 组件的包内相对进程模板；安装时由 packmgr 解析为
+	// Process 是 isolated 组件必需的包内相对进程模板；安装时由 packmgr 解析为
 	// lock 中的绝对 ProcessSpec。模板不包含凭据，Provider 等部署配置不属于
 	// Core 包契约。
 	Process       *ProcessTemplate     `json:"process,omitempty"`
@@ -54,7 +54,8 @@ type Component struct {
 }
 
 // ProcessTemplate 是包作者声明的 isolated 进程启动模板。Path 与 WorkDir
-// 相对组件工件目录，Address 只允许本机地址；安装器负责转换为绝对路径。
+// 相对组件工件目录，Address 只允许本机地址；WorkDir/Address 省略时由安装器
+// 使用工件根目录和包内 Unix Socket 的确定性默认值，再转换为绝对路径。
 type ProcessTemplate struct {
 	Path    string   `json:"path"`
 	Args    []string `json:"args,omitempty"`
@@ -68,7 +69,9 @@ const (
 	RoleExecutor   = "executor"
 )
 
-// Lock 是安装目录的锁定记录：固定包版本、清单摘要与每组件工件/进程规格。
+// Lock 是包发布归档或安装目录的锁定记录：固定包版本、清单摘要与每组件工件。
+// 归档使用包根相对路径且不含 Process；安装目录使用绝对路径并为 isolated
+// 组件固化完整进程规格，分别由 ValidateArchiveLock/ValidateLock 校验。
 type Lock struct {
 	SchemaVersion  string           `json:"schema_version"`
 	PackageID      string           `json:"package_id"`
@@ -153,7 +156,8 @@ func ValidateManifest(manifest Manifest) error {
 		case "", RoleCapability:
 		case RoleExecutor:
 			// wasm 沙箱零出站，装不下认知运行时：executor 必须 isolated。
-			if component.Mode != ModeIsolated {
+			// executor 只驱动 Run，不向 Registry 提供 Capability。
+			if component.Mode != ModeIsolated || len(component.Exports) > 0 {
 				return ErrInvalidFormat
 			}
 		default:
@@ -163,7 +167,11 @@ func ValidateManifest(manifest Manifest) error {
 			component.Entrypoint == "manifest.json" || component.Entrypoint == "lock.json" {
 			return ErrInvalidFormat
 		}
-		if component.Mode != ModeIsolated && component.Process != nil {
+		if (component.Mode == ModeHosted && component.Process != nil) ||
+			(component.Mode == ModeIsolated && component.Process == nil) {
+			return ErrInvalidFormat
+		}
+		if component.Mode != ModeHosted && len(component.HostFunctions) > 0 {
 			return ErrInvalidFormat
 		}
 		if component.Process != nil {
@@ -310,6 +318,30 @@ func ValidateLock(lock Lock, manifest Manifest) error {
 		default:
 			return ErrInvalidFormat
 		}
+	}
+	return nil
+}
+
+// ValidateArchiveLock 校验发布 tarball 内的相对路径 lock。归档 lock 只绑定
+// manifest 与发布工件摘要；安装器在目标目录内重新生成带绝对路径和进程规格的
+// 安装 lock，不能把归档 lock 当作安装 lock 直接执行。
+func ValidateArchiveLock(lock Lock, manifest Manifest) error {
+	if lock.SchemaVersion != SchemaVersion || lock.PackageID != manifest.ID ||
+		lock.PackageVersion != manifest.Version || !capability.IsStableID(lock.PackageID) ||
+		!IsSHA256Hex(lock.ManifestSHA256) || len(lock.Artifacts) != len(manifest.Components) {
+		return ErrInvalidFormat
+	}
+	seen := make(map[string]struct{}, len(lock.Artifacts))
+	for _, artifact := range lock.Artifacts {
+		component, ok := FindComponent(manifest, artifact.ComponentID)
+		if !ok || !IsPackageEntrypoint(artifact.Path) || artifact.Path != component.Entrypoint ||
+			artifact.Process != nil || !IsSHA256Hex(artifact.SHA256) {
+			return ErrInvalidFormat
+		}
+		if _, duplicate := seen[artifact.ComponentID]; duplicate {
+			return ErrInvalidFormat
+		}
+		seen[artifact.ComponentID] = struct{}{}
 	}
 	return nil
 }

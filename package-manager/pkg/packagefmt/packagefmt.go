@@ -152,6 +152,9 @@ func Parse(path string) (manifest packagecontract.Manifest, manifestBytes []byte
 			Components: []string{component.ID},
 		})
 	}
+	if err := validateBuildSpecs(manifest, builds); err != nil {
+		return packagecontract.Manifest{}, nil, nil, fmt.Errorf("%w: %w", ErrSourceInvalid, err)
+	}
 	return manifest, manifestBytes, builds, nil
 }
 
