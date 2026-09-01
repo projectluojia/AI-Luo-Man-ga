@@ -404,7 +404,7 @@ func TestWebAccessCopiesRequestContextIntoBackgroundRun(t *testing.T) {
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Idempotency-Key", "background-run")
 	request.Header.Set("X-Request-ID", "request-background")
-	request.Header.Set("X-Trace-ID", "1234567890abcdef1234567890abcdef")
+	request.Header.Set("traceparent", "00-1234567890abcdef1234567890abcdef-1111111111111111-01")
 	response := httptest.NewRecorder()
 
 	handler.ServeHTTP(response, request)

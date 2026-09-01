@@ -2,7 +2,7 @@ openapi: 3.1.0
 info:
   title: AI珞（爱珞） V3 Web Access API
   version: 2.0.0
-  description: Every HTTP response carries X-Request-ID, X-Trace-ID, and a W3C traceparent generated from validated input correlation headers.
+  description: Every HTTP response carries X-Request-ID, X-Trace-ID, and a W3C traceparent. An incoming W3C traceparent is validated and continued; a missing or invalid value starts a new trace root.
 servers:
   - url: http://127.0.0.1:8080
 paths:
