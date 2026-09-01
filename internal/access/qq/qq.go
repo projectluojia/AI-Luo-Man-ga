@@ -342,6 +342,7 @@ func publicErrorCode(err error) string {
 func terminalReply(event kernelecho.Event) *string {
 	switch event.Type {
 	case "run.completed":
+		message := "处理完成，但结果暂不支持展示"
 		var payload struct {
 			ContentType string `json:"content_type"`
 			Data        []byte `json:"data"`
@@ -352,6 +353,7 @@ func terminalReply(event kernelecho.Event) *string {
 			text := string(payload.Data)
 			return &text
 		}
+		return &message
 	case "run.failed":
 		message := "处理失败"
 		var payload struct {

@@ -110,6 +110,10 @@ type overOutputExecutor struct {
 	executorv1.UnimplementedExecutorRuntimeServer
 }
 
+type duplicateOutputExecutor struct {
+	executorv1.UnimplementedExecutorRuntimeServer
+}
+
 type retryOnceExecutor struct {
 	executorv1.UnimplementedExecutorRuntimeServer
 	calls atomic.Int32
@@ -470,6 +474,30 @@ func (a *overOutputExecutor) Run(stream executorv1.ExecutorRuntime_RunServer) er
 			EchoId: start.EchoId, RunId: start.RunId, Sequence: sequence,
 			Body: &executorv1.ExecutorFrame_OutputDelta{OutputDelta: outputDelta(strings.Repeat("x", 3000))},
 		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (a *duplicateOutputExecutor) Run(stream executorv1.ExecutorRuntime_RunServer) error {
+	start, err := stream.Recv()
+	if err != nil {
+		return err
+	}
+	for _, frame := range []*executorv1.ExecutorFrame{
+		acceptedFrame(start, 1),
+		usageFrame(start, 2, 1, 0),
+		{
+			EchoId: start.EchoId, RunId: start.RunId, Sequence: 3,
+			Body: &executorv1.ExecutorFrame_OutputDelta{OutputDelta: outputDelta("answer")},
+		},
+		{
+			EchoId: start.EchoId, RunId: start.RunId, Sequence: 4,
+			Body: &executorv1.ExecutorFrame_FinalResult{FinalResult: finalResult("answer")},
+		},
+	} {
+		if err := stream.Send(frame); err != nil {
 			return err
 		}
 	}
@@ -1524,6 +1552,47 @@ func TestOrchestratorEnforcesCumulativeOutputBudget(t *testing.T) {
 		if event.Type == "run.completed" {
 			t.Fatalf("over-budget output was published: %#v", events)
 		}
+	}
+}
+
+func TestOrchestratorDoesNotDoubleCountFinalResult(t *testing.T) {
+	listener := bufconn.Listen(1 << 20)
+	grpcServer := grpc.NewServer()
+	executorv1.RegisterExecutorRuntimeServer(grpcServer, &duplicateOutputExecutor{})
+	go grpcServer.Serve(listener)
+	defer grpcServer.Stop()
+	connection, err := grpc.DialContext(t.Context(), "bufnet",
+		grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) { return listener.Dial() }),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.Close()
+	store, err := sqlite.Open(filepath.Join(t.TempDir(), "duplicate-output.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	seed := orchestratorSeed("executor.test")
+	seed.MaxOutputBytes = 8
+	seedOrchestratorConfig(t, store, seed)
+	reg := registry.New()
+	policy := runtimetest.NewStaticAppPolicy()
+	orchestrator := kernelecho.NewOrchestrator(
+		executorv1.NewExecutorRuntimeClient(connection), reg,
+		runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{}), policy, storePorts(store),
+		kernelecho.Config{AppID: testAppID, AppConfigSource: store, RunTimeout: 5 * time.Second, Context: newSessionSource(t, store)},
+	)
+	echoID, err := runOrchestrator(orchestrator, t.Context(), kernelecho.RunRequest{
+		Message: "重复输出不应重复计费", IdempotencyKey: "duplicate-final-output",
+	}, nil)
+	if err != nil {
+		t.Fatalf("run error=%v", err)
+	}
+	record, _, err := store.GetEcho(t.Context(), testAppID, echoID)
+	if err != nil || record.Status != kernelecho.StatusSucceeded || record.FinalMessage != "answer" {
+		t.Fatalf("record=%#v err=%v", record, err)
 	}
 }
 
