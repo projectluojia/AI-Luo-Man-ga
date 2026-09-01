@@ -385,38 +385,64 @@ func (r *wasmRuntime) Invoke(ctx context.Context, request contracts.RequestConte
 	return parseHostedEnvelope(r.id, stdout.Buffer())
 }
 
-// hostedEnvelope 是 hosted 包的统一结果信封：成功携带 result，失败携带闭式错误码。
-type hostedEnvelope struct {
-	OK      bool            `json:"ok"`
-	Result  json.RawMessage `json:"result,omitempty"`
-	Code    string          `json:"code,omitempty"`
-	Message string          `json:"message,omitempty"`
-}
-
 // parseHostedEnvelope 严格解析并校验结果信封：成功返回业务结果，失败按闭式错误码
 // 映射到稳定内部错误（数据治理错误保留类别），guest 提供的消息只记入日志不外泄。
 func parseHostedEnvelope(runtimeID string, output []byte) (json.RawMessage, error) {
-	var envelope hostedEnvelope
-	if err := packagecontract.DecodeStrictJSON(output, &envelope); err != nil {
+	var fields map[string]json.RawMessage
+	if err := packagecontract.DecodeStrictJSON(output, &fields); err != nil {
 		return nil, errors.Join(ErrRuntimeProtocol, err)
 	}
-	if envelope.OK {
-		if len(envelope.Result) == 0 || envelope.Code != "" || envelope.Message != "" {
+	for key := range fields {
+		switch key {
+		case "ok", "result", "code", "message":
+		default:
 			return nil, ErrRuntimeProtocol
 		}
-		return envelope.Result, nil
 	}
-	if len(envelope.Result) != 0 || envelope.Code == "" {
+	okValue, okPresent := fields["ok"]
+	if !okPresent {
+		return nil, ErrRuntimeProtocol
+	}
+	var ok *bool
+	if err := json.Unmarshal(okValue, &ok); err != nil || ok == nil {
+		return nil, ErrRuntimeProtocol
+	}
+	result, resultPresent := fields["result"]
+	codeValue, codePresent := fields["code"]
+	messageValue, messagePresent := fields["message"]
+	var code string
+	if codePresent {
+		var value *string
+		if err := json.Unmarshal(codeValue, &value); err != nil || value == nil {
+			return nil, ErrRuntimeProtocol
+		}
+		code = *value
+	}
+	var message string
+	if messagePresent {
+		var value *string
+		if err := json.Unmarshal(messageValue, &value); err != nil || value == nil {
+			return nil, ErrRuntimeProtocol
+		}
+		message = *value
+	}
+	if *ok {
+		if !resultPresent || len(result) == 0 || codePresent || messagePresent {
+			return nil, ErrRuntimeProtocol
+		}
+		return result, nil
+	}
+	if resultPresent || !codePresent || code == "" {
 		return nil, ErrRuntimeProtocol
 	}
 	observe.Warn(context.Background(), "hosted 包拒绝了调用",
 		observe.StringAttr("runtime_id", runtimeID),
-		observe.StringAttr("hosted_error_code", envelope.Code),
-		observe.StringAttr("reason", envelope.Message),
+		observe.StringAttr("hosted_error_code", code),
+		observe.StringAttr("reason", message),
 	)
-	switch envelope.Code {
+	switch code {
 	case "data_unavailable", "data_incomplete", "data_expired":
-		return nil, errors.Join(ErrHostedCallRejected, InvocationError{Code: envelope.Code})
+		return nil, errors.Join(ErrHostedCallRejected, InvocationError{Code: code})
 	case "data_untrusted":
 		return nil, errors.Join(ErrHostedCallRejected, InvocationError{Code: "data_non_authoritative"})
 	case "invalid_argument":
