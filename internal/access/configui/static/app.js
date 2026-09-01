@@ -34,7 +34,9 @@ function render(snapshot, preserveInputs = false) {
   if (!preserveInputs) {
     byId('app-id').value = settings.app_id || '';
     byId('executor-id').value = settings.executor_id || '';
-    byId('executor-config').value = JSON.stringify(settings.executor_config || {}, null, 2);
+    if (Object.prototype.hasOwnProperty.call(settings, 'executor_config')) {
+      byId('executor-config').value = JSON.stringify(settings.executor_config || {}, null, 2);
+    }
     byId('executor-timeout').value = settings.executor_timeout_seconds;
     byId('qq-enabled').checked = settings.qq_enabled;
     byId('qq-ws-url').value = settings.qq_ws_url || '';
@@ -94,11 +96,14 @@ form.addEventListener('submit', async event => {
   setNotice('正在安全保存，并通知主进程应用配置…');
   let quickReplies;
   let executorConfig;
+  const executorConfigText = byId('executor-config').value.trim();
   try {
     quickReplies = parseQuickReplies(byId('qq-quick-replies').value);
-    executorConfig = JSON.parse(byId('executor-config').value);
-    if (!executorConfig || typeof executorConfig !== 'object' || Array.isArray(executorConfig)) {
-      throw new Error('执行者配置必须是 JSON 对象');
+    if (executorConfigText) {
+      executorConfig = JSON.parse(executorConfigText);
+      if (!executorConfig || typeof executorConfig !== 'object' || Array.isArray(executorConfig)) {
+        throw new Error('执行者配置必须是 JSON 对象');
+      }
     }
   } catch (error) {
     setNotice(error.message, 'error');
@@ -109,7 +114,6 @@ form.addEventListener('submit', async event => {
     revision,
     app_id: byId('app-id').value.trim(),
     executor_id: byId('executor-id').value.trim(),
-    executor_config: executorConfig,
     executor_timeout_seconds: Number(byId('executor-timeout').value),
     qq_enabled: byId('qq-enabled').checked,
     qq_ws_url: byId('qq-ws-url').value.trim(),
@@ -158,6 +162,7 @@ form.addEventListener('submit', async event => {
       confirmation_sweep_seconds: Number(byId('governance-confirmation-sweep').value)
     }
   };
+  if (executorConfigText) payload.executor_config = executorConfig;
   try {
     const snapshot = await readJSON(await fetch('/api/v1/config', {method: 'PUT', headers: {'Content-Type': 'application/json', Accept: 'application/json'}, body: JSON.stringify(payload)}));
     byId('qq-token').value = '';
