@@ -269,16 +269,26 @@ class OpenAICompatibleProvider:
 
 
 def _usage(value: Any) -> ModelUsage:
-    input_tokens = int(getattr(value, "prompt_tokens", 0) or 0)
-    output_tokens = int(getattr(value, "completion_tokens", 0) or 0)
-    total_tokens = int(getattr(value, "total_tokens", input_tokens + output_tokens) or 0)
+    input_tokens = getattr(value, "prompt_tokens", None)
+    output_tokens = getattr(value, "completion_tokens", None)
+    total_tokens = getattr(value, "total_tokens", None)
+    if (
+        type(input_tokens) is not int
+        or type(output_tokens) is not int
+        or type(total_tokens) is not int
+        or input_tokens < 0
+        or output_tokens < 0
+        or total_tokens != input_tokens + output_tokens
+    ):
+        raise ProviderFailure("provider_protocol_error", False)
     raw_cost = getattr(value, "cost_microusd", None)
-    cost_microusd = int(raw_cost) if raw_cost is not None else None
+    if raw_cost is not None and (type(raw_cost) is not int or raw_cost < 0):
+        raise ProviderFailure("provider_protocol_error", False)
     return ModelUsage(
         input_tokens=input_tokens,
         output_tokens=output_tokens,
         total_tokens=total_tokens,
-        cost_microusd=cost_microusd,
+        cost_microusd=raw_cost,
     )
 
 

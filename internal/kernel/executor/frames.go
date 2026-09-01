@@ -3,7 +3,7 @@
 package executor
 
 import (
-	executorv1 "github.com/projectluojia/AI-Luo-Man-ga/gen/executorv1"
+	executorv1 "github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/executorv1"
 )
 
 type (
@@ -12,19 +12,20 @@ type (
 	Frame_RunAccepted      = executorv1.ExecutorFrame_RunAccepted
 	Frame_CapabilityCall   = executorv1.ExecutorFrame_CapabilityCall
 	Frame_CapabilityResult = executorv1.ExecutorFrame_CapabilityResult
-	Frame_ReplyDelta       = executorv1.ExecutorFrame_ReplyDelta
-	Frame_FinalMessage     = executorv1.ExecutorFrame_FinalMessage
+	Frame_OutputDelta      = executorv1.ExecutorFrame_OutputDelta
+	Frame_FinalResult      = executorv1.ExecutorFrame_FinalResult
 	Frame_RunFailure       = executorv1.ExecutorFrame_RunFailure
-	Frame_RunUsage         = executorv1.ExecutorFrame_RunUsage
+	Frame_ResourceUsage    = executorv1.ExecutorFrame_ResourceUsage
 
 	StartRun         = executorv1.StartRun
+	Payload          = executorv1.Payload
 	Capability       = executorv1.Capability
 	CapabilityCall   = executorv1.CapabilityCall
 	CapabilityResult = executorv1.CapabilityResult
-	ReplyDelta       = executorv1.ReplyDelta
-	FinalMessage     = executorv1.FinalMessage
+	OutputDelta      = executorv1.OutputDelta
+	FinalResult      = executorv1.FinalResult
 	RunFailure       = executorv1.RunFailure
-	RunUsage         = executorv1.RunUsage
+	ResourceUsage    = executorv1.ResourceUsage
 	HealthRequest    = executorv1.HealthRequest
 	HealthResponse   = executorv1.HealthResponse
 )

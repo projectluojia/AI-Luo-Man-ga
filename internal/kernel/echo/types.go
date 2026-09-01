@@ -11,9 +11,6 @@ import (
 )
 
 const (
-	CreateChildRunCapabilityID = "run.create_child"
-	GetChildStatusCapabilityID = "run.get_child_status"
-
 	StatusRunning   = "running"
 	StatusSucceeded = "succeeded"
 	StatusFailed    = "failed"
@@ -31,7 +28,6 @@ var (
 	ErrEchoNotFound       = errors.New("echo not found")
 	ErrRunNotFound        = errors.New("run not found")
 	ErrQueueFull          = errors.New("run queue is full")
-	ErrChildRunLimit      = errors.New("child run limit reached")
 	ErrRunRetryScheduled  = errors.New("run retry was durably scheduled")
 	ErrInvalidTransition  = errors.New("invalid state transition")
 	ErrInvalidEchoRecord  = errors.New("invalid echo record")
@@ -46,6 +42,7 @@ type Record struct {
 	InputMessage string     `json:"input_message"`
 	Status       string     `json:"status"`
 	FinalMessage string     `json:"final_message,omitempty"`
+	Result       Output     `json:"result,omitempty"`
 	ErrorCode    string     `json:"error_code,omitempty"`
 	ErrorMessage string     `json:"error_message,omitempty"`
 	CreatedAt    time.Time  `json:"created_at"`
@@ -53,56 +50,62 @@ type Record struct {
 }
 
 type RunRecord struct {
-	ID                  string          `json:"run_id"`
-	RunGroupID          string          `json:"run_group_id"`
-	AppID               string          `json:"app_id"`
-	EchoID              string          `json:"echo_id"`
-	ParentRunID         string          `json:"parent_run_id,omitempty"`
-	OriginCallID        string          `json:"origin_call_id,omitempty"`
-	SessionID           string          `json:"session_id,omitempty"`
-	UserID              string          `json:"user_id,omitempty"`
-	MessageID           string          `json:"message_id,omitempty"`
-	Channel             string          `json:"channel,omitempty"` // 平台渠道，恢复重装配时按原渠道追加提示
-	Attempt             uint32          `json:"attempt"`
-	Status              string          `json:"status"`
-	Model               string          `json:"model"`
-	ModelConfigVersion  string          `json:"model_config_version"`
-	ProtocolVersion     string          `json:"protocol_version"`
-	ContextDigest       string          `json:"context_digest,omitempty"`
-	ContextSources      json.RawMessage `json:"-"`
-	TaskMessage         string          `json:"-"`
-	MaxSteps            uint32          `json:"max_steps"`
-	MaxCapabilityCalls  uint32          `json:"max_capability_calls"`
-	MaxInputTokens      uint64          `json:"max_input_tokens"`
-	MaxOutputTokens     uint64          `json:"max_output_tokens"`
-	MaxTotalTokens      uint64          `json:"max_total_tokens"`
-	MaxOutputBytes      uint64          `json:"max_output_bytes"`
-	MaxCostMicrousd     uint64          `json:"max_cost_microusd"`
-	ProviderTimeoutMS   uint32          `json:"provider_timeout_ms"`
-	UsedInputTokens     uint64          `json:"used_input_tokens"`
-	UsedOutputTokens    uint64          `json:"used_output_tokens"`
-	UsedTotalTokens     uint64          `json:"used_total_tokens"`
-	UsedCostMicrousd    uint64          `json:"used_cost_microusd"`
-	UsedProviderRetries uint32          `json:"used_provider_retries"`
-	Deadline            time.Time       `json:"deadline"`
-	AvailableAt         time.Time       `json:"available_at"`
-	LeaseToken          string          `json:"-"`
-	LeaseExpiresAt      *time.Time      `json:"lease_expires_at,omitempty"`
-	LastAgentSequence   uint64          `json:"last_agent_sequence"`
-	CapabilityScope     []string        `json:"capability_scope,omitempty"`
-	PermissionScope     []string        `json:"-"`
-	RecoverableState    json.RawMessage `json:"-"`
-	ResultMessage       string          `json:"-"`
-	ErrorCode           string          `json:"error_code,omitempty"`
-	ErrorMessage        string          `json:"error_message,omitempty"`
-	CreatedAt           time.Time       `json:"created_at"`
-	StartedAt           *time.Time      `json:"started_at,omitempty"`
-	CompletedAt         *time.Time      `json:"completed_at,omitempty"`
+	ID         string `json:"run_id"`
+	RunGroupID string `json:"run_group_id"`
+	AppID      string `json:"app_id"`
+	EchoID     string `json:"echo_id"`
+	// ParentRunID 和 OriginCallID 只记录通用执行因果关系；Core 不为某种
+	// Executor 定义子任务语义。
+	ParentRunID          string          `json:"parent_run_id,omitempty"`
+	OriginCallID         string          `json:"origin_call_id,omitempty"`
+	SessionID            string          `json:"session_id,omitempty"`
+	UserID               string          `json:"user_id,omitempty"`
+	MessageID            string          `json:"message_id,omitempty"`
+	Channel              string          `json:"channel,omitempty"` // 平台渠道，恢复重装配时传入执行上下文
+	Attempt              uint32          `json:"attempt"`
+	Status               string          `json:"status"`
+	ExecutorID           string          `json:"executor_id"`
+	ConfigRevision       string          `json:"config_revision"`
+	ProtocolVersion      string          `json:"protocol_version"`
+	ExecutorConfig       json.RawMessage `json:"-"`
+	InputPayload         []byte          `json:"-"`
+	InputContentType     string          `json:"-"`
+	ContextDigest        string          `json:"context_digest,omitempty"`
+	ContextSources       json.RawMessage `json:"-"`
+	MaxSteps             uint32          `json:"max_steps"`
+	MaxCapabilityCalls   uint32          `json:"max_capability_calls"`
+	MaxExecutionUnits    uint64          `json:"max_execution_units"`
+	MaxOutputBytes       uint64          `json:"max_output_bytes"`
+	MaxCostMicrousd      uint64          `json:"max_cost_microusd"`
+	ExecutionTimeoutMS   uint32          `json:"execution_timeout_ms"`
+	UsedExecutionUnits   uint64          `json:"used_execution_units"`
+	UsedCostMicrousd     uint64          `json:"used_cost_microusd"`
+	UsedRetries          uint32          `json:"used_retries"`
+	Deadline             time.Time       `json:"deadline"`
+	AvailableAt          time.Time       `json:"available_at"`
+	LeaseToken           string          `json:"-"`
+	LeaseExpiresAt       *time.Time      `json:"lease_expires_at,omitempty"`
+	LastExecutorSequence uint64          `json:"last_executor_sequence"`
+	CapabilityScope      []string        `json:"capability_scope,omitempty"`
+	PermissionScope      []string        `json:"-"`
+	RecoverableState     json.RawMessage `json:"-"`
+	Result               Output          `json:"-"`
+	ErrorCode            string          `json:"error_code,omitempty"`
+	ErrorMessage         string          `json:"error_message,omitempty"`
+	CreatedAt            time.Time       `json:"created_at"`
+	StartedAt            *time.Time      `json:"started_at,omitempty"`
+	CompletedAt          *time.Time      `json:"completed_at,omitempty"`
 }
 
 type RunWork struct {
-	Run          RunRecord `json:"run"`
-	InputMessage string    `json:"input_message"`
+	Run RunRecord `json:"run"`
+}
+
+// Output 是 Executor 返回的最终或中间输出。Core 只保存并转发 payload，
+// 由具体 Access 决定是否把某种 content type 渲染为文本。
+type Output struct {
+	ContentType string `json:"content_type"`
+	Data        []byte `json:"data"`
 }
 
 type Event struct {
@@ -124,37 +127,7 @@ type RunRequest struct {
 	SessionID      string `json:"-"`
 	UserID         string `json:"-"`
 	MessageID      string `json:"-"`
-	Channel        string `json:"-"` // 平台渠道（web/qq 群聊/qq 私聊），用于渠道化系统提示
-}
-
-type ChildRunRequest struct {
-	ParentRunID     string
-	OriginCallID    string
-	Task            string
-	CapabilityScope []string
-}
-
-type ChildRunResult struct {
-	RunID  string `json:"run_id"`
-	Status string `json:"status"`
-	Result string `json:"result,omitempty"`
-}
-
-type ChildStatusRequest struct {
-	ParentRunID string
-	RunID       string
-}
-
-type ChildStatusResult struct {
-	RunID        string     `json:"run_id"`
-	ParentRunID  string     `json:"parent_run_id"`
-	Status       string     `json:"status"`
-	Result       string     `json:"result,omitempty"`
-	ErrorCode    string     `json:"error_code,omitempty"`
-	ErrorMessage string     `json:"error_message,omitempty"`
-	CreatedAt    time.Time  `json:"created_at"`
-	StartedAt    *time.Time `json:"started_at,omitempty"`
-	CompletedAt  *time.Time `json:"completed_at,omitempty"`
+	Channel        string `json:"-"` // 平台渠道（web/qq 群聊/qq 私聊），用于执行上下文
 }
 
 type PublicRun struct {
@@ -163,7 +136,7 @@ type PublicRun struct {
 }
 
 func PublicRunRecord(run RunRecord) PublicRun {
-	return PublicRun{RunRecord: run, Result: run.ResultMessage}
+	return PublicRun{RunRecord: run, Result: string(run.Result.Data)}
 }
 
 type CapabilityAuditRecord struct {
@@ -187,18 +160,15 @@ type EchoCreationStore interface {
 
 // RunExecutionStore 是 Run 领取、执行进度和终态转换的端口。
 type RunExecutionStore interface {
-	CreateChildRun(ctx context.Context, parent, child RunRecord, maxChildRuns int) error
 	GetRun(ctx context.Context, appID, runID string) (RunRecord, error)
-	ClaimRun(ctx context.Context, appID, echoID, leaseToken string, startedAt, leaseExpiresAt time.Time) (RunRecord, error)
-	ClaimChildRun(ctx context.Context, appID, echoID, runID, parentRunID, leaseToken string, startedAt, leaseExpiresAt time.Time) (RunRecord, error)
+	ClaimRun(ctx context.Context, appID, echoID, runID, leaseToken string, startedAt, leaseExpiresAt time.Time) (RunRecord, error)
 	RenewRunLease(ctx context.Context, run RunRecord, renewedAt, leaseExpiresAt time.Time) error
-	AdvanceRunAgentSequence(ctx context.Context, run RunRecord, sequence uint64) error
-	AdvanceRunAgentSequenceWithUsage(ctx context.Context, run RunRecord, sequence, inputTokens, outputTokens, totalTokens, costMicrousd uint64, providerRetries uint32) error
+	AdvanceRunExecutorSequence(ctx context.Context, run RunRecord, sequence uint64) error
+	AdvanceRunExecutorSequenceWithUsage(ctx context.Context, run RunRecord, sequence, executionUnits, costMicrousd uint64, retries uint32) error
 	// SetRunContext 固化 Run 的上下文摘要与来源版本（每次执行只可设置一次）。
 	SetRunContext(ctx context.Context, run RunRecord, digest string, sources json.RawMessage) error
 	RetryRun(ctx context.Context, current, next RunRecord, failure publicerror.Error, completedAt time.Time) error
-	CompleteRun(ctx context.Context, run RunRecord, runStatus, echoStatus, finalMessage string, failure publicerror.Error, completedAt time.Time) error
-	CompleteChildRun(ctx context.Context, run RunRecord, runStatus, resultMessage string, failure publicerror.Error, completedAt time.Time) error
+	CompleteRun(ctx context.Context, run RunRecord, runStatus, echoStatus string, output Output, failure publicerror.Error, completedAt time.Time) error
 }
 
 // RunRecoveryStore 是启动恢复和持久队列读取的端口。

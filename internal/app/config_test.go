@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -50,6 +51,16 @@ func TestLoadConfigRejectsRelativeRuntimeInstallRoot(t *testing.T) {
 	t.Setenv("AILUO_RUNTIME_INSTALL_ROOT", "relative/runtime")
 	if _, err := loadConfig(); err == nil || !strings.Contains(err.Error(), "clean absolute path") {
 		t.Fatalf("error=%v", err)
+	}
+}
+
+func TestInitialCapabilityIDsUseInstalledMetadata(t *testing.T) {
+	ids := initialCapabilityIDs(registry.New(), []loader.InstalledRecord{{Capabilities: []capability.CapabilitySpec{
+		{ID: "z.capability"}, {ID: "a.capability"}, {ID: "z.capability"},
+	}}})
+	want := []string{"a.capability", "z.capability"}
+	if !slices.Equal(ids, want) {
+		t.Fatalf("initial capabilities=%v, want %v", ids, want)
 	}
 }
 
@@ -211,14 +222,21 @@ func writeInstalledPackage(t *testing.T, root, packageID string) {
 	if err := os.WriteFile(artifact, artifactBody, 0o640); err != nil {
 		t.Fatal(err)
 	}
+	extensions, err := json.Marshal(map[string]any{
+		"service": capability.ServiceSpec{ID: "main.extension", Version: "1.0.0", Description: "主程序扩展接线测试"},
+		"capabilities": []capability.CapabilitySpec{{
+			ID: "main.extension.query", Version: "1.0.0", Name: "扩展查询", Description: "查询测试扩展",
+			ServiceID: "main.extension", InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
+			SideEffect: capability.SideEffectRead,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	manifestBytes, err := json.Marshal(packagecontract.Manifest{
 		SchemaVersion: packagecontract.SchemaVersion, ID: "main.extension", Version: "1.0.0", Pin: true,
-		Capabilities: []capability.CapabilitySpec{{
-			ID: "main.extension.query", Version: "1.0.0", Name: "扩展查询", Description: "查询测试扩展",
-			InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
-			SideEffect:      capability.SideEffectRead,
-		}},
-		Components: []packagecontract.Component{{ID: "main.extension", Mode: loader.ModeHosted, Role: packagecontract.RoleProvider, Entrypoint: "runtime-artifact", Exports: []string{"main.extension.query"}}},
+		Extensions: extensions,
+		Components: []packagecontract.Component{{ID: "main.extension", Mode: loader.ModeHosted, Entrypoint: "runtime-artifact", Exports: []string{"main.extension.query"}}},
 	})
 	if err != nil {
 		t.Fatal(err)

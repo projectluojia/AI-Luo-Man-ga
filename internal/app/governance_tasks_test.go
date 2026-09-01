@@ -30,9 +30,10 @@ func openSweepFixture(t *testing.T) (*sqlite.Store, *confirmation.Service, *task
 		ID: "echo-1", AppID: testAppID, InputMessage: "test-input", Status: kernelecho.StatusRunning, CreatedAt: now,
 	}, kernelecho.RunRecord{
 		ID: "run-1", RunGroupID: "run-1", AppID: testAppID, EchoID: "echo-1", Attempt: 1, Status: kernelecho.RunStatusQueued,
-		Model: "test-model", ModelConfigVersion: "v1", ProtocolVersion: "1.0", MaxSteps: 8, MaxCapabilityCalls: 4,
-		MaxInputTokens: 4096, MaxOutputTokens: 2048, MaxTotalTokens: 8192, MaxOutputBytes: 65536,
-		ProviderTimeoutMS: 5000, Deadline: now.Add(time.Hour), AvailableAt: now, CreatedAt: now,
+		ExecutorID: "executor.test", ExecutorConfig: json.RawMessage(`{"strategy":"test"}`), ConfigRevision: "v1", ProtocolVersion: "1.0", MaxSteps: 8, MaxCapabilityCalls: 4,
+		InputPayload: []byte("test-input"), InputContentType: "text/plain; charset=utf-8",
+		MaxExecutionUnits: 8192, MaxOutputBytes: 65536,
+		ExecutionTimeoutMS: 5000, Deadline: now.Add(time.Hour), AvailableAt: now, CreatedAt: now,
 		RecoverableState: json.RawMessage(`{}`),
 	}, 0); err != nil || !created {
 		t.Fatal(err)
@@ -55,8 +56,8 @@ func insertExpiredConfirmation(t *testing.T, store *sqlite.Store) {
 	}
 	if err := store.Create(context.Background(), confirmation.Confirmation{
 		AppID: testAppID, ConfirmationID: "confirmation-1", EchoID: "echo-1", RunID: "run-1", CallID: "call-1",
-		CapabilityID: "test.notify",
-		SideEffect:   confirmation.SideEffectExternal, IdempotencyKey: "operation-1", ArgumentDigest: digest,
+		CapabilityID: "test.notify", TargetType: confirmation.TargetTypeCapability, TargetID: "test.notify",
+		SideEffect: confirmation.SideEffectExternal, IdempotencyKey: "operation-1", ArgumentDigest: digest,
 		Status: confirmation.StatusWaiting, ExpiresAt: created.Add(time.Minute), CreatedAt: created,
 	}); err != nil {
 		t.Fatal(err)

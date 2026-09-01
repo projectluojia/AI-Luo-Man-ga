@@ -140,6 +140,11 @@ type qqFakeOrchestrator struct {
 	echoID      string
 }
 
+func textOutputPayload(value string) []byte {
+	encoded, _ := json.Marshal(kernelecho.Output{ContentType: "text/plain", Data: []byte(value)})
+	return encoded
+}
+
 type noOpEchoCreator struct{}
 
 func (noOpEchoCreator) CreateIdempotent(context.Context, kernelecho.RunRequest) (string, bool, error) {
@@ -162,10 +167,11 @@ func (f *qqFakeOrchestrator) CreateIdempotent(ctx context.Context, request kerne
 		kernelecho.Record{ID: id, AppID: "campus-services", InputMessage: request.Message, Status: kernelecho.StatusRunning, CreatedAt: now},
 		kernelecho.RunRecord{
 			ID: "run-" + id, RunGroupID: "run-" + id, AppID: "campus-services", EchoID: id, Attempt: 1,
-			Status: kernelecho.RunStatusQueued, Model: "test-model", ModelConfigVersion: "test-config",
+			Status: kernelecho.RunStatusQueued, ExecutorID: "executor.test", ExecutorConfig: []byte(`{"strategy":"test"}`), ConfigRevision: "test-config",
+			InputPayload: []byte(request.Message), InputContentType: "text/plain; charset=utf-8",
 			ProtocolVersion: "1.0", MaxSteps: 4, MaxCapabilityCalls: 4,
-			MaxInputTokens: 1000, MaxOutputTokens: 1000, MaxTotalTokens: 2000,
-			MaxOutputBytes: 4096, ProviderTimeoutMS: 5000, Deadline: now.Add(time.Minute), AvailableAt: now,
+			MaxExecutionUnits: 2000,
+			MaxOutputBytes:    4096, ExecutionTimeoutMS: 5000, Deadline: now.Add(time.Minute), AvailableAt: now,
 			RecoverableState: []byte(`{}`), CreatedAt: now,
 		},
 		0,
@@ -234,13 +240,17 @@ func TestQQAdapterIntakesAndReplies(t *testing.T) {
 	// 事件双路径送达：先按真实调度流程认领 Run（running），再写持久化事件
 	// 并发布实时事件。
 	now := time.Now().UTC()
-	run, err := store.ClaimRun(ctx, "campus-services", orchestrator.echoID, "lease-test", now, now.Add(time.Minute))
+	runs, err := store.ListRuns(ctx, "campus-services", orchestrator.echoID)
+	if err != nil || len(runs) != 1 {
+		t.Fatal("expected one persisted Run")
+	}
+	run, err := store.ClaimRun(ctx, "campus-services", orchestrator.echoID, runs[0].ID, "lease-test", now, now.Add(time.Minute))
 	if err != nil {
 		t.Fatal(err)
 	}
 	event := kernelecho.Event{
 		AppID: "campus-services", EchoID: orchestrator.echoID, RunID: run.ID,
-		Type: "reply.final", Payload: []byte(`{"text":"你好呀"}`), CreatedAt: now,
+		Type: "run.completed", Payload: textOutputPayload("你好呀"), CreatedAt: now,
 	}
 	stored, err := store.AppendEchoEvent(ctx, event)
 	if err != nil {
@@ -263,94 +273,7 @@ func TestQQAdapterIntakesAndReplies(t *testing.T) {
 	}
 }
 
-func TestQQAdapterForwardsEverySubagentTerminalReply(t *testing.T) {
-	store := newQQTestStore(t, "qq-subagents.db")
-	bot := newFakeOneBot(t)
-	hub := newQQTestHub(t, store, stubResolver{user: "user-1"})
-	events := access.NewEventHub()
-	orchestrator := &qqFakeOrchestrator{store: store, created: make(chan struct{})}
-	adapter, err := New(Config{
-		AppID: "campus-services", WSURL: bot.wsURL(), BotQQID: testBotQQID,
-		AllowedGroupIDs: []string{"12345"}, Provisioner: testProvisioner{}, Admission: newQQAdmission(orchestrator),
-		DialTimeout: 2 * time.Second, ReconnectDelay: 50 * time.Millisecond, RunTimeout: 5 * time.Second,
-	}, hub, events, store)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go func() { _ = adapter.Run(ctx) }()
-	select {
-	case <-bot.authHeader:
-	case <-time.After(5 * time.Second):
-		t.Fatal("adapter did not connect")
-	}
-	bot.sendEvent(t, `{"post_type":"message","message_type":"group","group_id":12345,"user_id":67890,"message_id":"qq-subagents-1","message":[{"type":"at","data":{"qq":"2647414417"}},{"type":"text","data":{"text":"创建四个子代理并立刻结束"}}]}`)
-	select {
-	case <-orchestrator.created:
-	case <-time.After(5 * time.Second):
-		t.Fatal("orchestrator was not invoked")
-	}
-	now := time.Now().UTC()
-	root, err := store.ClaimRun(ctx, "campus-services", orchestrator.echoID, "lease-root", now, now.Add(time.Minute))
-	if err != nil {
-		t.Fatal(err)
-	}
-	appendAndPublish := func(runID, eventType, payload string) {
-		t.Helper()
-		stored, appendErr := store.AppendEchoEvent(ctx, kernelecho.Event{
-			AppID: "campus-services", EchoID: orchestrator.echoID, RunID: runID,
-			Type: eventType, Payload: []byte(payload), CreatedAt: time.Now().UTC(),
-		})
-		if appendErr != nil {
-			t.Fatal(appendErr)
-		}
-		events.Publish(stored)
-	}
-	for index := 1; index <= 4; index++ {
-		appendAndPublish(root.ID, "subagent.created", fmt.Sprintf(`{"run_id":"child-%d","parent_run_id":%q,"status":"queued"}`, index, root.ID))
-	}
-	appendAndPublish(root.ID, "reply.final", `{"text":"四个子 Agent 已派出"}`)
-	for _, index := range []int{2, 1, 4, 3} {
-		appendAndPublish(root.ID, "subagent.completed", fmt.Sprintf(`{"run_id":"child-%d","parent_run_id":%q,"status":"succeeded","text":"结果%d"}`, index, root.ID, index))
-	}
-
-	terminalReplies := make(map[string]bool, 4)
-	for received := 0; received < 9; received++ {
-		select {
-		case action := <-bot.received:
-			params, _ := action["params"].(map[string]any)
-			message := params["message"]
-			text, plain := message.(string)
-			if !plain {
-				continue
-			}
-			for index := 1; index <= 4; index++ {
-				expected := fmt.Sprintf("子 Agent 已完成：结果%d", index)
-				if text == expected {
-					terminalReplies[expected] = true
-				}
-			}
-		case <-time.After(5 * time.Second):
-			t.Fatalf("only received terminal replies=%v", terminalReplies)
-		}
-	}
-	if len(terminalReplies) != 4 {
-		t.Fatalf("terminal replies=%v, want all four", terminalReplies)
-	}
-}
-
-func TestSubagentReplyLifecycleHandlesTerminalBeforeCreated(t *testing.T) {
-	lifecycle := newSubagentReplyLifecycle()
-	lifecycle.observe(kernelecho.Event{Type: "subagent.completed", Payload: []byte(`{"run_id":"child-fast"}`)})
-	lifecycle.observe(kernelecho.Event{Type: "subagent.created", Payload: []byte(`{"run_id":"child-fast"}`)})
-	lifecycle.rootTerminal = true
-	if !lifecycle.complete() {
-		t.Fatal("terminal observed before created left the child pending")
-	}
-}
-
-func TestQQAdapterQuickReplySkipsAgentAndDoesNotMentionSender(t *testing.T) {
+func TestQQAdapterQuickReplySkipsExecutorAndDoesNotMentionSender(t *testing.T) {
 	store := newQQTestStore(t, "qq-quick-reply.db")
 	bot := newFakeOneBot(t)
 	hub := newQQTestHub(t, store, stubResolver{user: "user-1"})
@@ -383,7 +306,7 @@ func TestQQAdapterQuickReplySkipsAgentAndDoesNotMentionSender(t *testing.T) {
 	}
 	select {
 	case <-orchestrator.created:
-		t.Fatal("quick reply invoked the Agent orchestrator")
+		t.Fatal("quick reply invoked the Executor orchestrator")
 	default:
 	}
 }

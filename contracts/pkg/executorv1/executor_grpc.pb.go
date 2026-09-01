@@ -27,8 +27,8 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
-// ExecutorRuntime 是内核 AI 执行者会话协议：内核与执行者（LLM 智能体、
-// 规划器、工作流引擎等任何可驱动受治理 Run 会话的实现）之间协商执行。
+// ExecutorRuntime 是内核执行者会话协议：内核与任意能够驱动受治理 Run 会话的
+// 执行者实现之间协商执行。执行者可以是规划器、工作流引擎或其他运行时。
 type ExecutorRuntimeClient interface {
 	Run(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[ExecutorFrame, ExecutorFrame], error)
 	Health(ctx context.Context, in *HealthRequest, opts ...grpc.CallOption) (*HealthResponse, error)
@@ -69,8 +69,8 @@ func (c *executorRuntimeClient) Health(ctx context.Context, in *HealthRequest, o
 // All implementations must embed UnimplementedExecutorRuntimeServer
 // for forward compatibility.
 //
-// ExecutorRuntime 是内核 AI 执行者会话协议：内核与执行者（LLM 智能体、
-// 规划器、工作流引擎等任何可驱动受治理 Run 会话的实现）之间协商执行。
+// ExecutorRuntime 是内核执行者会话协议：内核与任意能够驱动受治理 Run 会话的
+// 执行者实现之间协商执行。执行者可以是规划器、工作流引擎或其他运行时。
 type ExecutorRuntimeServer interface {
 	Run(grpc.BidiStreamingServer[ExecutorFrame, ExecutorFrame]) error
 	Health(context.Context, *HealthRequest) (*HealthResponse, error)

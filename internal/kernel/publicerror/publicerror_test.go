@@ -120,35 +120,39 @@ func TestCapabilityDataGovernanceErrorsAreStableAndSafe(t *testing.T) {
 	}
 }
 
-func TestAgentErrorRejectsUntrustedCodeAndMessageShape(t *testing.T) {
-	public := publicerror.Agent("provider_body_/srv/private", true)
-	if public.Code != "agent_run_failed" || public.Message != "Agent Run 执行失败" || !public.Retryable {
+func TestExecutorErrorRejectsUntrustedCodeAndMessageShape(t *testing.T) {
+	public := publicerror.Executor("untrusted_body_/srv/private", true)
+	if public.Code != "executor_failed" || public.Message != "执行者 Run 执行失败" || !public.Retryable {
 		t.Fatalf("unexpected public error: %#v", public)
 	}
 }
 
-func TestAgentProviderFailuresKeepStableRetrySemantics(t *testing.T) {
+func TestExecutorFailuresKeepStableRetrySemantics(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
 		code      string
 		retryable bool
 	}{
-		{code: "provider_timeout", retryable: true},
-		{code: "rate_limited", retryable: true},
-		{code: "provider_unavailable", retryable: true},
-		{code: "provider_rejected"},
-		{code: "provider_failure"},
-		{code: "provider_protocol_error"},
+		{code: "execution_timeout", retryable: true},
+		{code: "execution_rate_limited", retryable: true},
+		{code: "execution_unavailable", retryable: true},
+		{code: "execution_rejected"},
+		{code: "execution_failed"},
+		{code: "execution_protocol_error"},
 		{code: "budget_exceeded"},
 	}
 	for _, test := range tests {
-		agentFailure := publicerror.Agent(test.code, test.retryable)
-		if agentFailure.Code != test.code || agentFailure.Retryable != test.retryable {
-			t.Fatalf("Agent error %q normalized to %#v", test.code, agentFailure)
+		executorFailure := publicerror.Executor(test.code, test.retryable)
+		expectedCode := test.code
+		if test.code == "execution_unavailable" {
+			expectedCode = "executor_unavailable"
 		}
-		echoFailure := publicerror.Echo(agentFailure.Code)
-		if echoFailure.Code != test.code || echoFailure.Retryable != test.retryable {
+		if executorFailure.Code != expectedCode || executorFailure.Retryable != test.retryable {
+			t.Fatalf("executor error %q normalized to %#v", test.code, executorFailure)
+		}
+		echoFailure := publicerror.Echo(executorFailure.Code)
+		if echoFailure.Code != expectedCode || echoFailure.Retryable != test.retryable {
 			t.Fatalf("Echo error %q normalized to %#v", test.code, echoFailure)
 		}
 		if strings.Contains(echoFailure.Message, "private") || strings.Contains(echoFailure.Message, "secret") {

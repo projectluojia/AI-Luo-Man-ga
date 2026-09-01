@@ -29,7 +29,7 @@ func TestStartFrameContract(t *testing.T) {
 		{
 			name: "version mismatch",
 			mutate: func(frame *executor.Frame) {
-				frame.GetStartRun().ProtocolVersion = "4.0"
+				frame.GetStartRun().ProtocolVersion = "3.0"
 			},
 			target: executor.ErrVersionMismatch,
 		},
@@ -50,7 +50,7 @@ func TestStartFrameContract(t *testing.T) {
 		{
 			name: "oversized input",
 			mutate: func(frame *executor.Frame) {
-				frame.GetStartRun().InputMessage = strings.Repeat("x", executor.MaxInputMessageBytes+1)
+				frame.GetStartRun().InputPayload.Data = []byte(strings.Repeat("x", executor.MaxInputPayloadBytes+1))
 			},
 			target: executor.ErrInvalidFrame,
 		},
@@ -90,11 +90,11 @@ func TestStartFrameContract(t *testing.T) {
 			target: executor.ErrInvalidFrame,
 		},
 		{
-			name: "oversized frame",
+			name: "oversized context payload",
 			mutate: func(frame *executor.Frame) {
-				frame.GetStartRun().SystemPrompt = strings.Repeat("x", executor.MaxFrameBytes)
+				frame.GetStartRun().ContextPayload.Data = []byte(strings.Repeat("x", executor.MaxContextPayloadBytes+1))
 			},
-			target: executor.ErrFrameTooLarge,
+			target: executor.ErrInvalidFrame,
 		},
 	}
 	for _, test := range tests {
@@ -146,10 +146,10 @@ func TestInboundFramePayloadContracts(t *testing.T) {
 			t.Fatalf("invalid call %#v error=%v", call, err)
 		}
 	}
-	if err := executor.ValidateReplyDelta(&executor.ReplyDelta{}); !errors.Is(err, executor.ErrInvalidFrame) {
+	if err := executor.ValidateOutputDelta(&executor.OutputDelta{}); !errors.Is(err, executor.ErrInvalidFrame) {
 		t.Fatalf("empty delta error=%v", err)
 	}
-	if err := executor.ValidateFinalMessage(&executor.FinalMessage{Text: strings.Repeat("x", executor.MaxFinalMessageBytes+1)}); !errors.Is(err, executor.ErrInvalidFrame) {
+	if err := executor.ValidateFinalResult(&executor.FinalResult{Payload: &executor.Payload{ContentType: "text/plain", Data: []byte(strings.Repeat("x", executor.MaxOutputPayloadBytes+1))}}); !errors.Is(err, executor.ErrInvalidFrame) {
 		t.Fatalf("oversized final error=%v", err)
 	}
 	if err := executor.ValidateRunFailure(&executor.RunFailure{Code: "unsafe/code", Message: "secret"}); !errors.Is(err, executor.ErrInvalidFrame) {
@@ -189,23 +189,23 @@ func TestCapabilityResultContract(t *testing.T) {
 	}
 }
 
-func TestRunUsageContract(t *testing.T) {
+func TestResourceUsageContract(t *testing.T) {
 	t.Parallel()
 
-	valid := &executor.RunUsage{InputTokens: 10, OutputTokens: 2, TotalTokens: 12, CostMicrousd: 3, ProviderRetries: 1}
-	if err := executor.ValidateRunUsage(valid, 5, 1, 6, 2, 0, 100, 100, 200, 10); err != nil {
+	valid := &executor.ResourceUsage{ExecutionUnits: 12, CostMicrousd: 3, Retries: 1}
+	if err := executor.ValidateResourceUsage(valid, 6, 2, 0, 100, 10); err != nil {
 		t.Fatalf("valid usage error=%v", err)
 	}
-	tests := []*executor.RunUsage{
+	tests := []*executor.ResourceUsage{
 		nil,
-		{InputTokens: 4, OutputTokens: 2, TotalTokens: 6, CostMicrousd: 3},
-		{InputTokens: 10, OutputTokens: 2, TotalTokens: 13, CostMicrousd: 3},
-		{InputTokens: 101, OutputTokens: 2, TotalTokens: 103, CostMicrousd: 3},
-		{InputTokens: 10, OutputTokens: 2, TotalTokens: 12, CostMicrousd: 11},
-		{InputTokens: 10, OutputTokens: 2, TotalTokens: 12, CostMicrousd: 3, ProviderRetries: 321},
+		{ExecutionUnits: 5, CostMicrousd: 3},
+		{ExecutionUnits: 6, CostMicrousd: 1},
+		{ExecutionUnits: 101, CostMicrousd: 3},
+		{ExecutionUnits: 12, CostMicrousd: 11},
+		{ExecutionUnits: 12, CostMicrousd: 3, Retries: 321},
 	}
 	for _, usage := range tests {
-		if err := executor.ValidateRunUsage(usage, 5, 1, 6, 2, 0, 100, 100, 200, 10); !errors.Is(err, executor.ErrInvalidFrame) {
+		if err := executor.ValidateResourceUsage(usage, 6, 2, 0, 100, 10); !errors.Is(err, executor.ErrInvalidFrame) {
 			t.Fatalf("invalid usage %#v error=%v", usage, err)
 		}
 	}
@@ -215,10 +215,10 @@ func startFrame() *executor.Frame {
 	return &executor.Frame{
 		EchoId: "echo", RunId: "run", Sequence: 1,
 		Body: &executor.Frame_StartRun{StartRun: &executor.StartRun{
-			AppId: "app", InputMessage: "message", Timezone: "Asia/Shanghai",
-			Model: "model", SystemPrompt: "prompt", MaxSteps: 4, ProtocolVersion: executor.Version,
-			MaxCapabilityCalls: 4, MaxInputTokens: 1000, MaxOutputTokens: 1000,
-			MaxTotalTokens: 2000, MaxOutputBytes: 4096, ProviderTimeoutMs: 5000,
+			AppId: "app", InputPayload: &executor.Payload{ContentType: "text/plain", Data: []byte("message")},
+			ContextPayload: &executor.Payload{ContentType: "application/ailuo.context+json", Data: []byte(`{"schema_version":"ailuo.context.v1","blocks":[]}`)},
+			MaxSteps:       4, ProtocolVersion: executor.Version,
+			MaxCapabilityCalls: 4, MaxExecutionUnits: 2000, MaxOutputBytes: 4096,
 			TraceId: "11111111111111111111111111111111", ParentSpanId: "2222222222222222",
 			Capabilities: []*executor.Capability{{
 				Id: "capability", Version: "1.0.0", Name: "能力", Description: "description",

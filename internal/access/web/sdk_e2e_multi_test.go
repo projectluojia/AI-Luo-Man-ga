@@ -8,9 +8,6 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
-
-	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/sdkgen"
-	"github.com/projectluojia/AI-Luo-Man-ga/testsupport/campus"
 )
 
 // assertJourneysResult 解析 SDK 返回的行程结果并断言顺序（多语言共用）。
@@ -32,23 +29,11 @@ func assertJourneysResult(t *testing.T, output []byte) {
 // TestGeneratedPythonSDKInvokesRealCapability 端到端：生成的 Python SDK 经真实
 // HTTP 端点调用真实 hosted campus capability（与 Go 版本同装配，验证运行时行为）。
 func TestGeneratedPythonSDKInvokesRealCapability(t *testing.T) {
-	testServer, capabilitiesJSON := newCampusE2E(t)
+	testServer, _ := newCampusE2E(t)
 	defer testServer.Close()
 
-	files, err := sdkgen.Generate(capabilitiesJSON, sdkgen.Options{Language: sdkgen.LanguagePython, PackageID: campus.PackageID})
-	if err != nil {
-		t.Fatalf("Generate: %v", err)
-	}
 	dir := t.TempDir()
-	for _, f := range files {
-		path := filepath.Join(dir, f.Path)
-		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path, f.Code, 0644); err != nil {
-			t.Fatal(err)
-		}
-	}
+	generateSDKWithCLI(t, "sdk-py", dir)
 	main := `import json
 import sys
 from datetime import datetime, timedelta
@@ -85,20 +70,11 @@ func TestGeneratedTypeScriptSDKInvokesRealCapability(t *testing.T) {
 	if _, err := exec.LookPath("npx"); err != nil {
 		t.Skip("npx 不可用，跳过 TS 端到端")
 	}
-	testServer, capabilitiesJSON := newCampusE2E(t)
+	testServer, _ := newCampusE2E(t)
 	defer testServer.Close()
 
-	files, err := sdkgen.Generate(capabilitiesJSON, sdkgen.Options{Language: sdkgen.LanguageTypeScript, PackageID: campus.PackageID})
-	if err != nil {
-		t.Fatalf("Generate: %v", err)
-	}
 	dir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(dir, "campus"), 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "campus", "client.ts"), files[0].Code, 0644); err != nil {
-		t.Fatal(err)
-	}
+	generateSDKWithCLI(t, "sdk-ts", dir)
 	main := `import { CampusClient } from "./campus/client";
 
 async function main(): Promise<void> {

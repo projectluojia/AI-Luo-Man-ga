@@ -6,11 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/capability"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/id"
@@ -24,26 +22,23 @@ var (
 
 var (
 	stableIDPattern = id.AppID
-	modelPattern    = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$`)
 )
 
+// Config 是 App 的持久配置。ExecutorConfig 是只由具体 Executor 解释的
+// 不透明 JSON；Core 只负责限制大小、验证 JSON 和参与修订摘要，不解析其中字段。
 type Config struct {
 	AppID               string
 	Revision            string
 	Generation          uint64
 	Enabled             bool
-	Model               string
-	SystemPrompt        string
-	ChannelPrompts      map[string]string // 渠道提示段（channel → 提示）；装配时按 Run 渠道追加
-	Timezone            string
+	ExecutorID          string
+	ExecutorConfig      json.RawMessage
 	MaxSteps            uint32
 	MaxCapabilityCalls  uint32
-	MaxInputTokens      uint64
-	MaxOutputTokens     uint64
-	MaxTotalTokens      uint64
+	MaxExecutionUnits   uint64
 	MaxOutputBytes      uint64
 	MaxCostMicrousd     uint64
-	ProviderTimeout     time.Duration
+	ExecutionTimeout    time.Duration
 	EnabledCapabilities []string
 	PermissionScope     []string
 	CreatedAt           time.Time
@@ -112,41 +107,39 @@ func Snapshot(config Config) PolicySnapshot {
 
 func Normalize(config Config) (Config, error) {
 	config.AppID = strings.TrimSpace(config.AppID)
-	config.Model = strings.TrimSpace(config.Model)
-	config.Timezone = strings.TrimSpace(config.Timezone)
+	config.ExecutorID = strings.TrimSpace(config.ExecutorID)
+	if len(config.ExecutorConfig) == 0 {
+		config.ExecutorConfig = json.RawMessage(`{}`)
+	} else {
+		config.ExecutorConfig = append(json.RawMessage(nil), config.ExecutorConfig...)
+	}
 	if len(config.EnabledCapabilities) > 256 || len(config.PermissionScope) > 256 {
 		return Config{}, ErrInvalid
 	}
 	config.EnabledCapabilities = canonical(config.EnabledCapabilities)
 	config.PermissionScope = canonical(config.PermissionScope)
-	config.ChannelPrompts = canonicalChannelPrompts(config.ChannelPrompts)
 	if err := Validate(config); err != nil {
 		return Config{}, err
 	}
 	revisionInput := struct {
 		AppID               string
 		Enabled             bool
-		Model               string
-		SystemPrompt        string
-		ChannelPrompts      map[string]string `json:",omitempty"` // 空时省略，旧行摘要与迁移前一致
-		Timezone            string
+		ExecutorID          string
+		ExecutorConfig      json.RawMessage
 		MaxSteps            uint32
 		MaxCapabilityCalls  uint32
-		MaxInputTokens      uint64
-		MaxOutputTokens     uint64
-		MaxTotalTokens      uint64
+		MaxExecutionUnits   uint64
 		MaxOutputBytes      uint64
 		MaxCostMicrousd     uint64
-		ProviderTimeoutMS   int64
+		ExecutionTimeoutMS  int64
 		EnabledCapabilities []string
 		PermissionScope     []string
 	}{
-		AppID: config.AppID, Enabled: config.Enabled, Model: config.Model,
-		SystemPrompt: config.SystemPrompt, ChannelPrompts: config.ChannelPrompts, Timezone: config.Timezone,
-		MaxSteps: config.MaxSteps, MaxCapabilityCalls: config.MaxCapabilityCalls,
-		MaxInputTokens: config.MaxInputTokens, MaxOutputTokens: config.MaxOutputTokens,
-		MaxTotalTokens: config.MaxTotalTokens, MaxOutputBytes: config.MaxOutputBytes,
-		MaxCostMicrousd: config.MaxCostMicrousd, ProviderTimeoutMS: config.ProviderTimeout.Milliseconds(),
+		AppID: config.AppID, Enabled: config.Enabled, ExecutorID: config.ExecutorID,
+		ExecutorConfig: config.ExecutorConfig, MaxSteps: config.MaxSteps,
+		MaxCapabilityCalls: config.MaxCapabilityCalls, MaxExecutionUnits: config.MaxExecutionUnits,
+		MaxOutputBytes: config.MaxOutputBytes, MaxCostMicrousd: config.MaxCostMicrousd,
+		ExecutionTimeoutMS:  config.ExecutionTimeout.Milliseconds(),
 		EnabledCapabilities: config.EnabledCapabilities, PermissionScope: config.PermissionScope,
 	}
 	encoded, err := json.Marshal(revisionInput)
@@ -158,31 +151,17 @@ func Normalize(config Config) (Config, error) {
 }
 
 func Validate(config Config) error {
-	if !stableIDPattern.MatchString(config.AppID) || !modelPattern.MatchString(config.Model) ||
-		len(config.SystemPrompt) == 0 || strings.TrimSpace(config.SystemPrompt) == "" || len(config.SystemPrompt) > 16<<10 ||
-		!utf8.ValidString(config.SystemPrompt) || strings.ContainsRune(config.SystemPrompt, '\x00') ||
-		len(config.Timezone) == 0 || len(config.Timezone) > 128 ||
+	if !stableIDPattern.MatchString(config.AppID) || !stableIDPattern.MatchString(config.ExecutorID) ||
+		len(config.ExecutorConfig) == 0 || len(config.ExecutorConfig) > 64<<10 || !json.Valid(config.ExecutorConfig) ||
 		config.MaxSteps < 1 || config.MaxSteps > 64 ||
-		config.MaxCapabilityCalls < 1 || config.MaxCapabilityCalls > 128 ||
-		config.MaxInputTokens < 1 || config.MaxInputTokens > 10_000_000 ||
-		config.MaxOutputTokens < 1 || config.MaxOutputTokens > 1_000_000 ||
-		config.MaxTotalTokens < config.MaxInputTokens || config.MaxTotalTokens > 11_000_000 ||
+		config.MaxCapabilityCalls < 1 || config.MaxCapabilityCalls > 256 ||
+		config.MaxExecutionUnits < 1 || config.MaxExecutionUnits > 1_000_000_000 ||
 		config.MaxOutputBytes < 1 || config.MaxOutputBytes > 256<<10 ||
-		config.MaxCostMicrousd > 1_000_000_000_000 ||
-		config.ProviderTimeout < 100*time.Millisecond || config.ProviderTimeout > 5*time.Minute ||
+		config.MaxCostMicrousd > 1_000_000_000_000_000 ||
+		config.ExecutionTimeout < 100*time.Millisecond || config.ExecutionTimeout > 5*time.Minute ||
 		len(config.EnabledCapabilities) > 256 || len(config.PermissionScope) > 256 ||
 		!validValues(config.EnabledCapabilities, capability.IsStableID) ||
 		!validValues(config.PermissionScope, id.IsPermission) {
-		return ErrInvalid
-	}
-	for channel, prompt := range config.ChannelPrompts {
-		if !capability.IsStableID(channel) || len(channel) > 64 ||
-			strings.TrimSpace(prompt) == "" || len(prompt) > 8<<10 || !utf8.ValidString(prompt) ||
-			strings.ContainsRune(prompt, '\x00') {
-			return ErrInvalid
-		}
-	}
-	if _, err := time.LoadLocation(config.Timezone); err != nil {
 		return ErrInvalid
 	}
 	return nil
@@ -232,19 +211,6 @@ func canonical(values []string) []string {
 	result := make([]string, len(values))
 	copy(result, values)
 	sort.Strings(result)
-	return result
-}
-
-// canonicalChannelPrompts 复制渠道提示映射，防止调用方后续修改影响已归一化
-// 的配置；JSON 序列化对 map 按键排序，摘要哈希因此是确定的。
-func canonicalChannelPrompts(prompts map[string]string) map[string]string {
-	if len(prompts) == 0 {
-		return nil
-	}
-	result := make(map[string]string, len(prompts))
-	for channel, prompt := range prompts {
-		result[channel] = prompt
-	}
 	return result
 }
 

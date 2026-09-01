@@ -20,7 +20,6 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime/runtimetest"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/memory"
-	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/sdkgen"
 	"github.com/projectluojia/AI-Luo-Man-ga/testsupport/campus"
 	"github.com/projectluojia/AI-Luo-Man-ga/testsupport/campus/campustest"
 )
@@ -43,24 +42,14 @@ func (sdkTestWebAuthenticator) Authenticate(request *http.Request) (web.Authenti
 // 全程不 mock 被调函数：capability 由 campustest 按安装目录路径注册。
 func TestGeneratedGoSDKInvokesRealCapability(t *testing.T) {
 	// 1. 装配真实端点 + 权威契约（多语言端到端共用）。
-	testServer, capabilitiesJSON := newCampusE2E(t)
+	testServer, _ := newCampusE2E(t)
 	defer testServer.Close()
 
 	// 2. 生成 Go SDK。
-	files, err := sdkgen.Generate(capabilitiesJSON, sdkgen.Options{Language: sdkgen.LanguageGo, PackageID: campus.PackageID})
-	if err != nil {
-		t.Fatalf("Generate: %v", err)
-	}
-
 	// 5. 临时模块：生成的 client + 调用 journeys.search 的 main。
 	dir := t.TempDir()
+	generateSDKWithCLI(t, "sdk-go", dir)
 	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module sdk-e2e\n\ngo 1.23\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Join(dir, "campus"), 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "campus", "client.go"), files[0].Code, 0644); err != nil {
 		t.Fatal(err)
 	}
 	main := `package main
@@ -93,6 +82,7 @@ func main() {
 	}
 	fmt.Println(string(result))
 }
+
 `
 	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte(main), 0644); err != nil {
 		t.Fatal(err)
@@ -179,7 +169,7 @@ func newCampusE2E(t *testing.T) (*httptest.Server, json.RawMessage) {
 	// 权威数据播种：快照元数据与行程文档经 packstore 一次性原子写入。
 	docs := memory.NewDocuments()
 	now := time.Now().UTC()
-	scope := packstore.Scope{AppID: campus.AppID, PackageID: campus.PackageID, Namespace: campus.StorageNamespace}
+	scope := packstore.Scope{AppID: campus.AppID, Namespace: campus.StorageNamespace}
 	baseTime := time.Date(2026, time.July, 24, 8, 0, 0, 0, time.FixedZone("Asia/Shanghai", 8*60*60))
 	revision := "e2e-revision"
 	journeys := []journeyDoc{
@@ -217,10 +207,10 @@ func newCampusE2E(t *testing.T) (*httptest.Server, json.RawMessage) {
 		web.WithDispatcher(dispatcher),
 	)
 	testServer := httptest.NewServer(server.Handler())
-	capabilitiesJSON, err := campus.CapabilitiesJSON()
+	extensions, err := campus.Extensions()
 	if err != nil {
 		testServer.Close()
-		t.Fatalf("构造 Capability 契约: %v", err)
+		t.Fatalf("构造 extensions: %v", err)
 	}
-	return testServer, capabilitiesJSON
+	return testServer, extensions
 }

@@ -114,7 +114,7 @@ func TestLoaderRejectsExecutorRoleWithoutContract(t *testing.T) {
 	}
 }
 
-func TestManagerExecutorResolvesUniqueExecutor(t *testing.T) {
+func TestManagerExecutorResolvesConfiguredExecutor(t *testing.T) {
 	description := loader.Description{ID: "exec.unique", Version: "1.0.0", Mode: loader.ModeIsolated}
 	manager, err := loader.New(&fakeHost{mode: loader.ModeIsolated, runtime: &fakeExecutorRuntime{description: description}})
 	if err != nil {
@@ -129,7 +129,7 @@ func TestManagerExecutorResolvesUniqueExecutor(t *testing.T) {
 	if err := manager.Warmup(context.Background(), []string{description.ID}, 1); err != nil {
 		t.Fatalf("warmup: %v", err)
 	}
-	lease, err := manager.Executor(context.Background())
+	lease, err := manager.Executor(context.Background(), description.ID)
 	if err != nil {
 		t.Fatalf("Executor: %v", err)
 	}
@@ -142,7 +142,7 @@ func TestManagerExecutorResolvesUniqueExecutor(t *testing.T) {
 	}
 }
 
-func TestManagerExecutorFailsClosedWithoutExecutor(t *testing.T) {
+func TestManagerExecutorFailsClosedWithoutConfiguredExecutor(t *testing.T) {
 	manager, err := loader.New(&fakeHost{runtime: &fakeRuntime{description: loader.Description{ID: "cap.test", Version: "1.0.0", Mode: loader.ModeHosted}}})
 	if err != nil {
 		t.Fatal(err)
@@ -153,12 +153,15 @@ func TestManagerExecutorFailsClosedWithoutExecutor(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := manager.Executor(context.Background()); !errors.Is(err, loader.ErrNotFound) {
+	if _, err := manager.Executor(context.Background(), "missing.executor"); !errors.Is(err, loader.ErrNotFound) {
 		t.Fatalf("Executor error=%v, want ErrNotFound", err)
+	}
+	if _, err := manager.Executor(context.Background(), "cap.test"); !errors.Is(err, loader.ErrInvalidManifest) {
+		t.Fatalf("capability selected as Executor error=%v, want ErrInvalidManifest", err)
 	}
 }
 
-func TestManagerExecutorFailsClosedWithMultipleExecutors(t *testing.T) {
+func TestManagerExecutorSelectsOneOfMultipleExecutors(t *testing.T) {
 	host := &idKeyedHost{mode: loader.ModeIsolated, runtimes: map[string]loader.Runtime{
 		"exec.one": &fakeExecutorRuntime{description: loader.Description{ID: "exec.one", Version: "1.0.0", Mode: loader.ModeIsolated}},
 		"exec.two": &fakeExecutorRuntime{description: loader.Description{ID: "exec.two", Version: "1.0.0", Mode: loader.ModeIsolated}},
@@ -175,8 +178,16 @@ func TestManagerExecutorFailsClosedWithMultipleExecutors(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := manager.Executor(context.Background()); !errors.Is(err, loader.ErrInvalidManifest) {
-		t.Fatalf("Executor error=%v, want ErrInvalidManifest", err)
+	if err := manager.Warmup(context.Background(), []string{"exec.one", "exec.two"}, 2); err != nil {
+		t.Fatalf("warmup: %v", err)
+	}
+	lease, err := manager.Executor(context.Background(), "exec.two")
+	if err != nil {
+		t.Fatalf("Executor: %v", err)
+	}
+	defer lease.Release()
+	if lease.ID() != "exec.two" {
+		t.Fatalf("executor id=%q, want exec.two", lease.ID())
 	}
 }
 

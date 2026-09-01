@@ -1,13 +1,10 @@
 package config
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -124,22 +121,6 @@ func (m *Service) WaitReady(ctx context.Context) (Resolved, error) {
 	}
 }
 
-func decodeStoredSettings(data []byte) (Settings, error) {
-	var settings Settings
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&settings); err != nil {
-		return Settings{}, err
-	}
-	var extra any
-	if err := decoder.Decode(&extra); err == nil {
-		return Settings{}, errors.New("settings file contains multiple JSON values")
-	} else if !errors.Is(err, io.EOF) {
-		return Settings{}, err
-	}
-	return settings, nil
-}
-
 func (m *Service) load() error {
 	data, err := os.ReadFile(m.settingsPath)
 	if errors.Is(err, os.ErrNotExist) {
@@ -212,7 +193,6 @@ func cloneSettings(settings Settings) Settings {
 	settings.QQAllowedPrivateUserIDs = slices.Clone(settings.QQAllowedPrivateUserIDs)
 	settings.QQQuickReplies = slices.Clone(settings.QQQuickReplies)
 	settings.QQPokeReplies = slices.Clone(settings.QQPokeReplies)
-	settings.PromptCatalog = settings.PromptCatalog.Clone()
-	settings.ChannelPrompts = maps.Clone(settings.ChannelPrompts)
+	settings.ExecutorConfig = append(json.RawMessage(nil), settings.ExecutorConfig...)
 	return settings
 }

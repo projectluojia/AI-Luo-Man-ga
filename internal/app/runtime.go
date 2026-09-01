@@ -31,7 +31,6 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/session"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/task"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
-	promptservice "github.com/projectluojia/AI-Luo-Man-ga/internal/providers/prompt"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/blob"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite"
 )
@@ -144,7 +143,7 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 	}()
 	observe.Info(ctx, "正在启动AI珞（爱珞）内核",
 		observe.StringAttr("http_address", config.httpAddress),
-		observe.StringAttr("model", config.model),
+		observe.StringAttr("executor_id", config.executorID),
 	)
 	if config.databasePath != ":memory:" {
 		if err := os.MkdirAll(filepath.Dir(config.databasePath), 0o750); err != nil {
@@ -168,10 +167,6 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 	}
 
 	reg := registry.New()
-	promptProvider := promptservice.NewProvider(config.promptCatalog, store)
-	if err := promptservice.Register(reg, promptProvider); err != nil {
-		return fmt.Errorf("register prompt Provider: %w", err)
-	}
 	installedHosts, installedRecords, err := configureInstalledRuntimes(ctx, config, store.PackageDocuments())
 	if err != nil {
 		return err
@@ -180,30 +175,26 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 		return fmt.Errorf("未发现已安装运行时：请先安装 executor 包")
 	}
 	app, created, err := store.Ensure(ctx, appconfig.Config{
-		AppID: config.appID, Enabled: true, Model: config.model,
-		SystemPrompt: config.baseSystemPrompt, ChannelPrompts: config.channelPrompts,
-		Timezone: config.agentRun.Timezone, MaxSteps: config.agentRun.MaxSteps,
-		MaxCapabilityCalls: config.agentRun.MaxCapabilityCalls, MaxInputTokens: config.agentRun.MaxInputTokens,
-		MaxOutputTokens: config.agentRun.MaxOutputTokens, MaxTotalTokens: config.agentRun.MaxTotalTokens,
-		MaxOutputBytes: config.agentRun.MaxOutputBytes, ProviderTimeout: config.executorTimeout,
-		EnabledCapabilities: nil,
+		AppID: config.appID, Enabled: true, ExecutorID: config.executorID,
+		ExecutorConfig: config.executorConfig, MaxSteps: config.execution.MaxSteps,
+		MaxCapabilityCalls: config.execution.MaxCapabilityCalls, MaxExecutionUnits: config.execution.MaxExecutionUnits,
+		MaxOutputBytes: config.execution.MaxOutputBytes, MaxCostMicrousd: config.execution.MaxCostMicrousd,
+		ExecutionTimeout:    config.executorTimeout,
+		EnabledCapabilities: initialCapabilityIDs(reg, installedRecords),
 	})
 	if err != nil {
 		return fmt.Errorf("ensure App config: %w", err)
 	}
 	if !created {
 		replacement := app
-		replacement.Model = config.model
-		replacement.ProviderTimeout = config.executorTimeout
-		replacement.Timezone = config.agentRun.Timezone
-		replacement.MaxSteps = config.agentRun.MaxSteps
-		replacement.MaxCapabilityCalls = config.agentRun.MaxCapabilityCalls
-		replacement.MaxInputTokens = config.agentRun.MaxInputTokens
-		replacement.MaxOutputTokens = config.agentRun.MaxOutputTokens
-		replacement.MaxTotalTokens = config.agentRun.MaxTotalTokens
-		replacement.MaxOutputBytes = config.agentRun.MaxOutputBytes
-		replacement.SystemPrompt = config.baseSystemPrompt
-		replacement.ChannelPrompts = config.channelPrompts
+		replacement.ExecutorID = config.executorID
+		replacement.ExecutorConfig = config.executorConfig
+		replacement.ExecutionTimeout = config.executorTimeout
+		replacement.MaxSteps = config.execution.MaxSteps
+		replacement.MaxCapabilityCalls = config.execution.MaxCapabilityCalls
+		replacement.MaxExecutionUnits = config.execution.MaxExecutionUnits
+		replacement.MaxOutputBytes = config.execution.MaxOutputBytes
+		replacement.MaxCostMicrousd = config.execution.MaxCostMicrousd
 		app, err = store.CompareAndSwap(ctx, app.Generation, replacement)
 		if err != nil {
 			return fmt.Errorf("update App configuration: %w", err)
@@ -235,9 +226,9 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 	if err := runtimeLoader.Warmup(ctx, pinnedRuntimes, min(len(pinnedRuntimes), 4)); err != nil {
 		return fmt.Errorf("warm pinned runtimes: %w", err)
 	}
-	executorLease, err := runtimeLoader.Executor(ctx)
+	executorLease, err := runtimeLoader.Executor(ctx, config.executorID)
 	if err != nil {
-		return fmt.Errorf("resolve AI executor runtime: %w", err)
+		return fmt.Errorf("resolve executor runtime: %w", err)
 	}
 	lifecycle.executorLease = executorLease
 	executorRuntime := executorLease.Runtime()
@@ -251,13 +242,13 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 			go func() {
 				<-lifecycle.Done()
 				if processErr := lifecycle.Err(); processErr != nil && ctx.Err() == nil {
-					observe.Error(ctx, "AI 执行者进程异常退出", processErr)
+					observe.Error(ctx, "执行者进程异常退出", processErr)
 					stop()
 				}
 			}()
 		}
 	}
-	observe.Info(ctx, "AI 执行者已经就绪",
+	observe.Info(ctx, "执行者已经就绪",
 		observe.StringAttr("runtime_id", executorLease.ID()),
 		observe.BoolAttr("managed_process", config.manageExecutor),
 	)
@@ -269,17 +260,13 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 		AppID: config.appID, AppConfigSource: store, Context: sessionService,
 		ContextBudget: contextasm.Budget{
 			MaxMessages: config.contextAssembly.MaxMessages, MaxCharsPerMsg: config.contextAssembly.MaxCharsPerMsg,
-			MaxTotalChars: config.contextAssembly.MaxTotalChars, MaxPromptBytes: config.contextAssembly.MaxPromptBytes,
+			MaxTotalChars: config.contextAssembly.MaxTotalChars, MaxContextBytes: config.contextAssembly.MaxContextBytes,
 		},
-		Prompts:        promptProviderRenderer{promptProvider},
 		RunTimeout:     secondsDuration(config.orchestration.RunTimeoutSeconds),
 		MaxRunAttempts: config.orchestration.MaxRunAttempts, QueueCapacity: config.orchestration.QueueCapacity,
-		MaxChildRuns: int(config.agentRun.MaxChildRuns),
 	})
-	if err := kernelecho.RegisterChildCapabilities(reg, orchestrator); err != nil {
-		return fmt.Errorf("register governed child Run capabilities: %w", err)
-	}
-	observe.Info(ctx, "已安装 Capability 与受治理子 Run Capability 注册完成",
+	observe.Info(ctx, "已安装服务与执行 Capability 注册完成",
+		observe.IntAttr("service_count", len(reg.Services())), observe.IntAttr("tool_count", len(reg.Tools())),
 		observe.IntAttr("capability_count", len(reg.Capabilities())),
 	)
 	taskTypes := task.NewTypeRegistry()
