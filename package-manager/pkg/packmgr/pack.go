@@ -29,6 +29,18 @@ func PackFromSource(ctx context.Context, sourceDir, outputDir string, manifest p
 	if err := packagecontract.ValidateManifest(manifest); err != nil {
 		return "", err
 	}
+	if len(manifestBytes) == 0 || int64(len(manifestBytes)) > packagecontract.MaxManifestBytes {
+		return "", packagecontract.ErrInvalidFormat
+	}
+	var encoded packagecontract.Manifest
+	if err := packagecontract.DecodeStrictJSON(manifestBytes, &encoded); err != nil {
+		return "", packagecontract.ErrInvalidFormat
+	}
+	expected, err := json.Marshal(manifest)
+	actual, actualErr := json.Marshal(encoded)
+	if err != nil || actualErr != nil || !bytes.Equal(expected, actual) {
+		return "", packagecontract.ErrInvalidFormat
+	}
 	artifacts, err := readSourceArtifacts(ctx, sourceDir, manifest)
 	if err != nil {
 		return "", err
