@@ -527,7 +527,6 @@ components:
         - revision
         - app_id
         - executor_id
-        - executor_config
         - executor_timeout_seconds
         - execution
         - orchestration
@@ -557,6 +556,7 @@ components:
           minLength: 1
           maxLength: 256
         executor_config:
+          writeOnly: true
           description: Opaque JSON interpreted only by the selected Executor package.
         execution:
           $ref: "#/components/schemas/ExecutionSettings"
@@ -642,7 +642,6 @@ components:
             - revision
             - app_id
             - executor_id
-            - executor_config
             - executor_timeout_seconds
             - qq_enabled
             - qq_ws_url
@@ -670,8 +669,6 @@ components:
               description: Empty only before the first local configuration is saved.
             executor_id:
               type: string
-            executor_config:
-              description: Opaque JSON interpreted only by the selected Executor package.
             executor_timeout_seconds:
               type: number
             qq_enabled:
