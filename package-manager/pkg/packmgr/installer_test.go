@@ -273,10 +273,12 @@ func TestInstallRejectsInvalidSource(t *testing.T) {
 			}
 		}},
 		{name: "entrypoint escapes source dir", mutate: func(dir string) {
+			writeSourcePackage(t, dir, "demo.pkg", "1.0.0", packagecontract.ModeHosted, "app.wasm", nil)
 			manifest := []byte(`{"schema_version":"ailuo.package.v3","id":"demo.pkg","version":"1.0.0","components":[{"id":"core","mode":"hosted","entrypoint":"../outside"}]}`)
 			writeManifest(dir, manifest)
 		}},
 		{name: "entrypoint uses foreign separator", mutate: func(dir string) {
+			writeSourcePackage(t, dir, "demo.pkg", "1.0.0", packagecontract.ModeHosted, "app.wasm", nil)
 			writeManifest(dir, []byte(`{"schema_version":"ailuo.package.v3","id":"demo.pkg","version":"1.0.0","components":[{"id":"core","mode":"hosted","entrypoint":"..\\outside"}]}`))
 		}},
 	}
