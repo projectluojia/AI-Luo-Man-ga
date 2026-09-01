@@ -49,11 +49,19 @@ type CapabilitySpec struct {
 	ToolID string `json:"tool_id,omitempty"`
 }
 
+// CapabilityImport 是 Service 对另一 Service Capability 的精确版本依赖。
+// 运行时只把该声明投影给当前 Service，并由 Dispatcher 逐跳重新授权。
+type CapabilityImport struct {
+	ID      string `json:"id"`
+	Version string `json:"version"`
+}
+
 // ServiceSpec 是业务 Service 的公共规格。
 type ServiceSpec struct {
-	ID                   string   `json:"id"`
-	Version              string   `json:"version"`
-	Description          string   `json:"description"`
-	ToolDependencies     []string `json:"tool_dependencies,omitempty"`
-	RequestedPermissions []string `json:"requested_permissions,omitempty"`
+	ID                   string             `json:"id"`
+	Version              string             `json:"version"`
+	Description          string             `json:"description"`
+	ToolDependencies     []string           `json:"tool_dependencies,omitempty"`
+	RequestedPermissions []string           `json:"requested_permissions,omitempty"`
+	CapabilityImports    []CapabilityImport `json:"capability_imports,omitempty"`
 }

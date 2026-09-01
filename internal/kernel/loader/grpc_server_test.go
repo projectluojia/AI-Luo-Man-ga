@@ -137,9 +137,11 @@ func TestRuntimeHostProtocolServerRoundTrip(t *testing.T) {
 	if err := manager.Register(context.Background(), runtimeManifest("hosted.server", loader.ModeHosted)); err != nil {
 		t.Fatal(err)
 	}
-	result, err := manager.Handler("hosted.server")(
-		context.Background(), governedRuntimeRequest(), json.RawMessage(`{"value":1}`),
-	)
+	request := governedRuntimeRequest()
+	request.ImportedCapabilities = []contracts.CapabilityProjection{{
+		ID: "provider.capability", Version: "1.0.0", InputSchemaJSON: `{}`, RequiredPermissions: []string{"test.read"},
+	}}
+	result, err := manager.Handler("hosted.server")(context.Background(), request, json.RawMessage(`{"value":1}`))
 	if err != nil || string(result) != `{"ok":true}` {
 		t.Fatalf("result=%s err=%v", result, err)
 	}
@@ -148,7 +150,9 @@ func TestRuntimeHostProtocolServerRoundTrip(t *testing.T) {
 	backend.mu.Unlock()
 	if len(contexts) != 1 || contexts[0].AppID != "app.test" || contexts[0].CallID != "call-1" ||
 		contexts[0].TargetType != "capability" || contexts[0].CapabilityID != "test.capability" ||
-		contexts[0].ServiceID != "test.service" || contexts[0].ToolID != "" {
+		contexts[0].ServiceID != "test.service" || contexts[0].ToolID != "" ||
+		len(contexts[0].ImportedCapabilities) != 1 || contexts[0].ImportedCapabilities[0].ID != "provider.capability" ||
+		contexts[0].ImportedCapabilities[0].Version != "1.0.0" || contexts[0].ImportedCapabilities[0].InputSchemaJSON != `{}` {
 		t.Fatalf("contexts=%#v", contexts)
 	}
 	if err := manager.Shutdown(context.Background()); err != nil {
@@ -168,7 +172,7 @@ func TestRuntimeHostProtocolServerRejectsInvalidOrderingIdentityAndCapacity(t *t
 		t.Fatalf("invoke before start error=%v", err)
 	}
 	invalid := lifecycleRequest("hosted.one")
-	invalid.Identity.ProtocolVersion = "3.0"
+	invalid.Identity.ProtocolVersion = "4.0"
 	if _, err := server.Start(context.Background(), invalid); status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("protocol mismatch error=%v", err)
 	}

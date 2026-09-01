@@ -156,6 +156,7 @@ paths:
   /api/v1/capabilities:
     get:
       summary: List capabilities enabled for the current App
+      description: Internal Capability imports are governed by the Dispatcher and are not added to this public projection.
       responses:
         "200":
           description: Capability list

@@ -76,12 +76,14 @@ AI珞 V3 是长期维护的生产级项目。功能范围可以窄，但已实�
 - 生产 Executor 必须遵循版本化执行协议；包内部的认知、模型和 Provider 实现不进入 Core。
 - Go 为每个 Run 计算精确 Capability 投影；Executor 拒绝未投影调用、畸形参数、重复 call ID 和错配结果。
 - Go 在信任边界按注册 Schema 再次验证 CapabilityCall 参数；Executor 内部的模型原生 ToolCall 只能在 Executor 内部转换，Provider strict mode 不是安全边界。
+- Service/组件跨边界调用必须声明精确版本的 `CapabilityImports`；Dispatcher 每跳重新解析、授权和投影，公开 `ServiceID` 不能伪造消费方身份。
 - Run 必须具备 deadline、步骤、CapabilityCall、载荷、输出、执行单元和可用成本预算。
 - Executor 调用具备超时、取消传播、稳定错误分类和确定的重试语义；不安全副作用不自动重试。
 - readiness 反映 Executor 及其必要依赖的真实能力，不得只检查对象构造成功。
 - 原始上游响应、Headers、ExecutorConfig、消息和凭据不得进入日志或公共 API。
 - 多 CapabilityCall 的顺序与并发语义必须确定并有测试。
-- Protobuf 是版本化契约；修改 `proto/executor.proto` 后重新生成并提交 Go/Python 生成物，禁止手改生成文件。
+- Protobuf 是版本化契约；修改 `proto/*.proto` 后重新生成并提交对应 Go/Python 生成物，禁止手改生成文件。
+- `runtime_host.proto` 的 Capability 投影属于版本化协议；不支持当前协议版本的 Runtime Host 必须拒绝连接，不保留旧版本回退。
 
 ## Security And Data
 

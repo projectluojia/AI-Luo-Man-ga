@@ -101,10 +101,16 @@ type sourceTool struct {
 }
 
 // sourceService 继承 package 的 id/version/description；tool_dependencies 省略
-// 时默认为全部 tool id（按字母序）。
+// 时默认为全部 tool id（按字母序），Capability import 使用精确版本声明。
 type sourceService struct {
-	ToolDependencies     []string `toml:"tool_dependencies,omitempty"`
-	RequestedPermissions []string `toml:"requested_permissions,omitempty"`
+	ToolDependencies     []string                 `toml:"tool_dependencies,omitempty"`
+	RequestedPermissions []string                 `toml:"requested_permissions,omitempty"`
+	CapabilityImports    []sourceCapabilityImport `toml:"capability_import,omitempty"`
+}
+
+type sourceCapabilityImport struct {
+	ID      string `toml:"id"`
+	Version string `toml:"version"`
 }
 
 // sourceCapability 引用 tool 并继承其 schema/side_effect/name/description。
@@ -254,6 +260,22 @@ func (s sourceManifest) buildExtensions() (json.RawMessage, error) {
 	if s.Service != nil {
 		service.ToolDependencies = s.Service.ToolDependencies
 		service.RequestedPermissions = s.Service.RequestedPermissions
+		seenImports := make(map[string]struct{}, len(s.Service.CapabilityImports))
+		for _, imported := range s.Service.CapabilityImports {
+			if !capability.IsStableID(imported.ID) {
+				return nil, fmt.Errorf("%w: Capability import ID 无效: %q", ErrSourceInvalid, imported.ID)
+			}
+			if _, err := packagecontract.ParseVersion(imported.Version); err != nil {
+				return nil, fmt.Errorf("%w: Capability import %q 版本无效", ErrSourceInvalid, imported.ID)
+			}
+			if _, exists := seenImports[imported.ID]; exists {
+				return nil, fmt.Errorf("%w: Capability import %q 重复", ErrSourceInvalid, imported.ID)
+			}
+			seenImports[imported.ID] = struct{}{}
+			service.CapabilityImports = append(service.CapabilityImports, capability.CapabilityImport{
+				ID: imported.ID, Version: imported.Version,
+			})
+		}
 	}
 	if len(service.ToolDependencies) == 0 {
 		service.ToolDependencies = append([]string(nil), toolIDs...)

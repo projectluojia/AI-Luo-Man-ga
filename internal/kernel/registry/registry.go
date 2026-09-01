@@ -19,13 +19,14 @@ import (
 )
 
 var (
-	ErrDuplicateID        = errors.New("registry id already exists")
-	ErrInvalidSpec        = errors.New("invalid registry spec")
-	ErrToolNotFound       = errors.New("tool is not registered")
-	ErrServiceNotFound    = errors.New("service is not registered")
-	ErrCapabilityNotFound = errors.New("capability is not registered")
-	ErrSchemaValidation   = errors.New("payload does not satisfy registered JSON Schema")
-	ErrPermissionDenied   = errors.New("required permission is not granted")
+	ErrDuplicateID           = errors.New("registry id already exists")
+	ErrInvalidSpec           = errors.New("invalid registry spec")
+	ErrToolNotFound          = errors.New("tool is not registered")
+	ErrServiceNotFound       = errors.New("service is not registered")
+	ErrCapabilityNotFound    = errors.New("capability is not registered")
+	ErrSchemaValidation      = errors.New("payload does not satisfy registered JSON Schema")
+	ErrPermissionDenied      = errors.New("required permission is not granted")
+	ErrCapabilityNotImported = errors.New("capability is not imported by service")
 )
 
 // 治理目标类型：Dispatcher 子请求与 Runtime Host 协议共用的闭式取值。
@@ -130,6 +131,7 @@ func (r *Registry) RegisterBatch(tools []ToolRegistration, services []ServiceReg
 		serviceIDs[registration.Spec.ID] = struct{}{}
 		registration.Spec.ToolDependencies = canonicalStrings(registration.Spec.ToolDependencies)
 		registration.Spec.RequestedPermissions = canonicalStrings(registration.Spec.RequestedPermissions)
+		registration.Spec.CapabilityImports = canonicalCapabilityImports(registration.Spec.CapabilityImports)
 		schemas := make(map[string]*jsonschema.Schema, len(registration.Capabilities))
 		for capabilityID, capability := range registration.Capabilities {
 			if _, duplicate := capabilityIDs[capabilityID]; duplicate {
@@ -182,6 +184,24 @@ func (r *Registry) RegisterBatch(tools []ToolRegistration, services []ServiceReg
 			if !permissionSubset(tool.spec.RequiredPermissions, registration.Spec.RequestedPermissions) {
 				r.mu.Unlock()
 				return fmt.Errorf("%w: tool %q permissions exceed service %q requested permissions", ErrInvalidSpec, toolID, registration.Spec.ID)
+			}
+		}
+		for _, imported := range registration.Spec.CapabilityImports {
+			provider, exists := r.capabilities[imported.ID]
+			if !exists {
+				for _, candidate := range preparedServices {
+					if value, found := candidate.registration.Capabilities[imported.ID]; found {
+						provider = registeredCapability{spec: value.Spec}
+						exists = true
+						break
+					}
+				}
+			}
+			if !exists || provider.spec.Version != imported.Version ||
+				provider.spec.ServiceID == registration.Spec.ID ||
+				!permissionSubset(provider.spec.RequiredPermissions, registration.Spec.RequestedPermissions) {
+				r.mu.Unlock()
+				return fmt.Errorf("%w: service %q imports capability %q", ErrInvalidSpec, registration.Spec.ID, imported.ID)
 			}
 		}
 	}
@@ -243,6 +263,8 @@ func validateServiceSpec(spec capability.ServiceSpec, capabilityCount int) error
 		return fmt.Errorf("%w: service %q has invalid tool dependencies", ErrInvalidSpec, spec.ID)
 	case !validPermissionList(spec.RequestedPermissions):
 		return fmt.Errorf("%w: service %q has invalid requested permissions", ErrInvalidSpec, spec.ID)
+	case !validCapabilityImports(spec.CapabilityImports):
+		return fmt.Errorf("%w: service %q has invalid capability imports", ErrInvalidSpec, spec.ID)
 	default:
 		return nil
 	}
@@ -327,6 +349,26 @@ func canonicalStrings(values []string) []string {
 	return copied
 }
 
+func canonicalCapabilityImports(values []capability.CapabilityImport) []capability.CapabilityImport {
+	copied := append([]capability.CapabilityImport(nil), values...)
+	sort.Slice(copied, func(i, j int) bool { return copied[i].ID < copied[j].ID })
+	return copied
+}
+
+func validCapabilityImports(values []capability.CapabilityImport) bool {
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		if !validStableID(value.ID) || !validVersion(value.Version) {
+			return false
+		}
+		if _, exists := seen[value.ID]; exists {
+			return false
+		}
+		seen[value.ID] = struct{}{}
+	}
+	return true
+}
+
 func permissionSubset(required, granted []string) bool {
 	grantedSet := make(map[string]struct{}, len(granted))
 	for _, permission := range granted {
@@ -358,6 +400,53 @@ func (r *Registry) ResolveCapability(id string) (capability.CapabilitySpec, Hand
 		return capability.CapabilitySpec{}, nil, fmt.Errorf("%w: %q", ErrCapabilityNotFound, id)
 	}
 	return cloneCapabilitySpec(registered.spec), registered.handler, nil
+}
+
+// IsCapabilityImported 判断 consumerService 是否显式导入了 Capability。
+// 该查询只返回声明结果，不暴露 Provider 处理器或运行时地址。
+func (r *Registry) IsCapabilityImported(consumerService, capabilityID string) (bool, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	service, exists := r.services[consumerService]
+	if !exists {
+		return false, fmt.Errorf("%w: %q", ErrServiceNotFound, consumerService)
+	}
+	provider, exists := r.capabilities[capabilityID]
+	if !exists {
+		return false, fmt.Errorf("%w: %q", ErrCapabilityNotFound, capabilityID)
+	}
+	if provider.spec.ServiceID == consumerService {
+		return true, nil
+	}
+	for _, imported := range service.CapabilityImports {
+		if imported.ID == capabilityID && imported.Version == provider.spec.Version {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// ImportedCapabilityProjection 返回 Service 声明的精确导入快照。
+// 快照只包含调用所需的公共规格，不包含 Provider 处理器或地址。
+func (r *Registry) ImportedCapabilityProjection(serviceID string) ([]contracts.CapabilityProjection, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	service, exists := r.services[serviceID]
+	if !exists {
+		return nil, fmt.Errorf("%w: %q", ErrServiceNotFound, serviceID)
+	}
+	projection := make([]contracts.CapabilityProjection, 0, len(service.CapabilityImports))
+	for _, imported := range service.CapabilityImports {
+		provider, exists := r.capabilities[imported.ID]
+		if !exists || provider.spec.Version != imported.Version {
+			return nil, fmt.Errorf("%w: service %q imports capability %q", ErrCapabilityNotImported, serviceID, imported.ID)
+		}
+		projection = append(projection, contracts.CapabilityProjection{
+			ID: imported.ID, Version: imported.Version, InputSchemaJSON: provider.spec.InputSchemaJSON,
+			RequiredPermissions: append([]string(nil), provider.spec.RequiredPermissions...),
+		})
+	}
+	return projection, nil
 }
 
 func (r *Registry) ResolveTool(serviceID, toolID string) (capability.ToolSpec, Handler, error) {
@@ -437,6 +526,7 @@ func (r *Registry) Capabilities() []capability.CapabilitySpec {
 func cloneServiceSpec(spec capability.ServiceSpec) capability.ServiceSpec {
 	spec.ToolDependencies = append([]string(nil), spec.ToolDependencies...)
 	spec.RequestedPermissions = append([]string(nil), spec.RequestedPermissions...)
+	spec.CapabilityImports = append([]capability.CapabilityImport(nil), spec.CapabilityImports...)
 	return spec
 }
 

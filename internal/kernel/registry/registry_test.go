@@ -328,6 +328,82 @@ func TestRegistryMetadataSnapshotsAreImmutable(t *testing.T) {
 	}
 }
 
+func TestRegisterBatchBindsCapabilityImportsAndProjectsProviderSpec(t *testing.T) {
+	t.Parallel()
+
+	provider := serviceRegistration("provider", "provider.capability", "")
+	provider.Spec.ToolDependencies = nil
+	provider.Spec.RequestedPermissions = []string{"bus.read"}
+	providerCapability := provider.Capabilities["provider.capability"]
+	providerCapability.Spec.RequiredPermissions = []string{"bus.read"}
+	provider.Capabilities["provider.capability"] = providerCapability
+
+	consumer := serviceRegistration("consumer", "consumer.capability", "")
+	consumer.Spec.ToolDependencies = nil
+	consumer.Spec.RequestedPermissions = []string{"bus.read"}
+	consumer.Spec.CapabilityImports = []capability.CapabilityImport{{ID: "provider.capability", Version: "1.0.0"}}
+
+	reg := registry.New()
+	if err := reg.RegisterBatch(nil, []registry.ServiceRegistration{consumer, provider}); err != nil {
+		t.Fatalf("RegisterBatch: %v", err)
+	}
+	ok, err := reg.IsCapabilityImported("consumer", "provider.capability")
+	if err != nil || !ok {
+		t.Fatalf("import lookup = %v, %v", ok, err)
+	}
+	projection, err := reg.ImportedCapabilityProjection("consumer")
+	if err != nil {
+		t.Fatalf("projection: %v", err)
+	}
+	if len(projection) != 1 || projection[0].ID != "provider.capability" ||
+		projection[0].Version != "1.0.0" || projection[0].InputSchemaJSON != strictEmptySchema ||
+		!reflect.DeepEqual(projection[0].RequiredPermissions, []string{"bus.read"}) {
+		t.Fatalf("projection = %#v", projection)
+	}
+	projection[0].RequiredPermissions[0] = "mutated"
+	again, err := reg.ImportedCapabilityProjection("consumer")
+	if err != nil || again[0].RequiredPermissions[0] != "bus.read" {
+		t.Fatalf("projection snapshot was mutated: %#v, %v", again, err)
+	}
+}
+
+func TestCapabilityImportsRequireExactVersionAndPermissionSubset(t *testing.T) {
+	t.Parallel()
+
+	provider := serviceRegistration("provider", "provider.capability", "")
+	provider.Spec.ToolDependencies = nil
+	provider.Spec.RequestedPermissions = []string{"bus.read", "bus.admin"}
+	providerCapability := provider.Capabilities["provider.capability"]
+	providerCapability.Spec.RequiredPermissions = []string{"bus.read", "bus.admin"}
+	provider.Capabilities["provider.capability"] = providerCapability
+
+	for _, test := range []struct {
+		name        string
+		version     string
+		permissions []string
+	}{
+		{name: "version mismatch", version: "2.0.0", permissions: []string{"bus.read", "bus.admin"}},
+		{name: "permission escalation", version: "1.0.0", permissions: []string{"bus.read"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			reg := registry.New()
+			if err := reg.RegisterService(provider); err != nil {
+				t.Fatalf("register provider: %v", err)
+			}
+			consumer := serviceRegistration("consumer", "consumer.capability", "")
+			consumer.Spec.ToolDependencies = nil
+			consumer.Spec.RequestedPermissions = test.permissions
+			consumer.Spec.CapabilityImports = []capability.CapabilityImport{{ID: "provider.capability", Version: test.version}}
+			if err := reg.RegisterService(consumer); !errors.Is(err, registry.ErrInvalidSpec) {
+				t.Fatalf("RegisterService = %v, want ErrInvalidSpec", err)
+			}
+			if len(reg.Services()) != 1 {
+				t.Fatalf("failed import registration changed service state: %#v", reg.Services())
+			}
+		})
+	}
+}
+
 const strictEmptySchema = `{"type":"object","additionalProperties":false}`
 
 var noopHandler registry.Handler = func(context.Context, contracts.RequestContext, json.RawMessage) (json.RawMessage, error) {

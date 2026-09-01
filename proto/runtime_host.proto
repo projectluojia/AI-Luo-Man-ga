@@ -60,6 +60,15 @@ message GovernedRequestContext {
   string capability_id = 18;
   string service_id = 19;
   string tool_id = 20;
+  repeated CapabilityProjection imported_capabilities = 21;
+}
+
+// CapabilityProjection 是 Go 内核投影给组件的版本化、只读能力描述。
+message CapabilityProjection {
+  string id = 1;
+  string version = 2;
+  string input_schema_json = 3;
+  repeated string required_permissions = 4;
 }
 
 message InvokeRequest {

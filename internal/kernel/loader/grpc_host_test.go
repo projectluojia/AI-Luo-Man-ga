@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -186,7 +187,11 @@ func TestHostedGRPCHostSharesConnectionAndPreservesGovernedContext(t *testing.T)
 	}
 
 	handler := manager.Handler("hosted.one")
-	result, err := handler(context.Background(), governedRuntimeRequest(), json.RawMessage(`{"route_id":"route-1"}`))
+	request := governedRuntimeRequest()
+	request.ImportedCapabilities = []contracts.CapabilityProjection{{
+		ID: "provider.capability", Version: "1.0.0", InputSchemaJSON: `{}`, RequiredPermissions: []string{"test.read"},
+	}}
+	result, err := handler(context.Background(), request, json.RawMessage(`{"route_id":"route-1"}`))
 	if err != nil || string(result) != `{"ok":true}` {
 		t.Fatalf("result=%s err=%v", result, err)
 	}
@@ -199,7 +204,10 @@ func TestHostedGRPCHostSharesConnectionAndPreservesGovernedContext(t *testing.T)
 		got.CallId != "call-1" || got.CallDepth != 2 || got.DeadlineUnixMs != 0 ||
 		got.TargetType != "capability" || got.CapabilityId != "test.capability" ||
 		got.ServiceId != "test.service" || got.ToolId != "" ||
-		len(got.PermissionScope) != 1 || got.PermissionScope[0] != "test.read" {
+		len(got.PermissionScope) != 1 || got.PermissionScope[0] != "test.read" ||
+		len(got.ImportedCapabilities) != 1 || got.ImportedCapabilities[0].Id != "provider.capability" ||
+		got.ImportedCapabilities[0].Version != "1.0.0" || got.ImportedCapabilities[0].InputSchemaJson != `{}` ||
+		!reflect.DeepEqual(got.ImportedCapabilities[0].RequiredPermissions, []string{"test.read"}) {
 		t.Fatalf("governed context=%#v", got)
 	}
 
@@ -243,7 +251,7 @@ func TestIsolatedGRPCHostUsesOwnedConnectionsAndRejectsLoadAfterClose(t *testing
 
 func TestGRPCHostRejectsProtocolMismatchAndCleansLoadedRuntime(t *testing.T) {
 	implementation := &fakeRuntimeHostServer{
-		mode: loader.ModeHosted, describeProtocols: []string{"3.0"},
+		mode: loader.ModeHosted, describeProtocols: []string{"4.0"},
 	}
 	dialer, _ := startRuntimeHost(t, implementation)
 	var verifies atomic.Int32

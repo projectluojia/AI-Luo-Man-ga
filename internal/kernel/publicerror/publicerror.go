@@ -29,7 +29,8 @@ func Capability(err error) Error {
 		return capabilityCodeTable["deadline_exceeded"]
 	case errors.Is(err, contracts.ErrMissingAppID),
 		errors.Is(err, contracts.ErrMissingEchoID),
-		errors.Is(err, contracts.ErrMissingRequestID):
+		errors.Is(err, contracts.ErrMissingRequestID),
+		errors.Is(err, contracts.ErrInvalidCapabilityProjection):
 		return capabilityCodeTable["invalid_request_context"]
 	case errors.Is(err, runtime.ErrCapabilityDisabled):
 		return capabilityCodeTable["capability_disabled"]
@@ -43,6 +44,8 @@ func Capability(err error) Error {
 		return capabilityCodeTable["invalid_arguments"]
 	case errors.Is(err, registry.ErrPermissionDenied):
 		return capabilityCodeTable["permission_denied"]
+	case errors.Is(err, runtime.ErrCapabilityNotImported), errors.Is(err, registry.ErrCapabilityNotImported):
+		return capabilityCodeTable["capability_not_imported"]
 	case errors.Is(err, runtime.ErrIdempotencyKeyRequired):
 		return capabilityCodeTable["idempotency_key_required"]
 	case errors.Is(err, runtime.ErrIdempotencyUnavailable):
@@ -94,6 +97,7 @@ var capabilityCodeTable = map[string]Error{
 	"call_depth_exceeded":          {Code: "call_depth_exceeded", Message: "Capability 调用深度超过限制"},
 	"cycle_detected":               {Code: "cycle_detected", Message: "Capability 调用形成了无进展循环"},
 	"permission_denied":            {Code: "permission_denied", Message: "Capability 权限不足"},
+	"capability_not_imported":      {Code: "capability_not_imported", Message: "调用方未导入该 Capability"},
 	"idempotency_key_required":     {Code: "idempotency_key_required", Message: "Capability 副作用调用缺少幂等键"},
 	"idempotency_unavailable":      {Code: "idempotency_unavailable", Message: "Capability 幂等保障暂时不可用", Retryable: true},
 	"invalid_idempotency_key":      {Code: "invalid_idempotency_key", Message: "Capability 幂等参数无效"},

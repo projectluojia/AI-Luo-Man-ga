@@ -436,5 +436,6 @@ func cloneCapabilitySpec(spec capability.CapabilitySpec) capability.CapabilitySp
 func cloneInstalledService(spec capability.ServiceSpec) capability.ServiceSpec {
 	spec.ToolDependencies = slices.Clone(spec.ToolDependencies)
 	spec.RequestedPermissions = slices.Clone(spec.RequestedPermissions)
+	spec.CapabilityImports = slices.Clone(spec.CapabilityImports)
 	return spec
 }
