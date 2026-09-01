@@ -14,6 +14,7 @@ generate:
 
 test:
 	go test ./...
+	$(MAKE) test-contracts
 
 test-contracts:
 	cd contracts && go test ./...
