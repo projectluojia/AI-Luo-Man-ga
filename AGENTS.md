@@ -75,7 +75,7 @@ AI珞 V3 是长期维护的生产级项目。功能范围可以窄，但已实�
 
 - 生产 Executor 必须遵循版本化执行协议；包内部的认知、模型和 Provider 实现不进入 Core。
 - Go 为每个 Run 计算精确 Capability 投影；Executor 拒绝未投影调用、畸形参数、重复 call ID 和错配结果。
-- ToolCall 参数在 Go 信任边界再次按注册 Schema 验证；Provider strict mode 不是安全边界。
+- Go 在信任边界按注册 Schema 再次验证 CapabilityCall 参数；Executor 内部的模型原生 ToolCall 只能在 Executor 内部转换，Provider strict mode 不是安全边界。
 - Run 必须具备 deadline、步骤、CapabilityCall、载荷、输出、执行单元和可用成本预算。
 - Executor 调用具备超时、取消传播、稳定错误分类和确定的重试语义；不安全副作用不自动重试。
 - readiness 反映 Executor 及其必要依赖的真实能力，不得只检查对象构造成功。
