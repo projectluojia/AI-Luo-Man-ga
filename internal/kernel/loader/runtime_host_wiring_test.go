@@ -90,7 +90,7 @@ func TestRuntimeHostProductionWiring(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	records, err := catalog.Discover(t.Context())
+	records, err := discoverCatalogLocked(t, catalog, root)
 	if err != nil || len(records) != 1 || records[0].Runtime.ID != testRuntimeID {
 		t.Fatalf("discover records=%#v err=%v", records, err)
 	}
