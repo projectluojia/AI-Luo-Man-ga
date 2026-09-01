@@ -17,12 +17,7 @@ func HTTPMiddleware(component string, next http.Handler) http.Handler {
 		requestID := validIDOrNew(request.Header.Get("X-Request-ID"))
 		traceID, parentSpanID, ok := ParseTraceparent(request.Header.Get("traceparent"))
 		if !ok {
-			candidate := strings.ToLower(strings.TrimSpace(request.Header.Get("X-Trace-ID")))
-			if validTraceID(candidate) {
-				traceID = candidate
-			} else {
-				traceID = newTraceID()
-			}
+			traceID = newTraceID()
 		}
 		ctx := With(request.Context(),
 			slog.String("component", component),

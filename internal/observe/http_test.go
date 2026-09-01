@@ -18,7 +18,7 @@ func TestHTTPMiddlewarePropagatesCorrelationIDs(t *testing.T) {
 	}))
 	request := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	request.Header.Set("X-Request-ID", "request-123")
-	request.Header.Set("X-Trace-ID", "0123456789abcdef0123456789abcdef")
+	request.Header.Set("traceparent", "00-0123456789abcdef0123456789abcdef-1111111111111111-01")
 	response := httptest.NewRecorder()
 
 	handler.ServeHTTP(response, request)
@@ -34,7 +34,7 @@ func TestHTTPMiddlewarePropagatesCorrelationIDs(t *testing.T) {
 	}
 }
 
-func TestHTTPMiddlewareAcceptsValidTraceparentAndRejectsMalformedTraceID(t *testing.T) {
+func TestHTTPMiddlewareAcceptsValidTraceparentAndIgnoresLegacyTraceHeader(t *testing.T) {
 	var traceID string
 	var parentSpanID string
 	handler := observe.HTTPMiddleware("test_access", http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -51,11 +51,12 @@ func TestHTTPMiddlewareAcceptsValidTraceparentAndRejectsMalformedTraceID(t *test
 	}
 
 	request = httptest.NewRequest(http.MethodGet, "/", nil)
-	request.Header.Set("X-Trace-ID", "secret-or-malformed")
+	request.Header.Set("traceparent", "malformed")
+	request.Header.Set("X-Trace-ID", "0123456789abcdef0123456789abcdef")
 	response = httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
-	if response.Header().Get("X-Trace-ID") == "secret-or-malformed" || len(response.Header().Get("X-Trace-ID")) != 32 {
-		t.Fatalf("畸形追踪标识未被替换：%v", response.Header())
+	if response.Header().Get("X-Trace-ID") == "0123456789abcdef0123456789abcdef" || len(response.Header().Get("X-Trace-ID")) != 32 {
+		t.Fatalf("旧 X-Trace-ID 输入未被忽略：%v", response.Header())
 	}
 }
 
