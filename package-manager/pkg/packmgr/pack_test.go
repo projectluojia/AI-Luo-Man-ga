@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -86,5 +87,25 @@ func TestPackFromSourceRoundTripsThroughInstall(t *testing.T) {
 	}
 	if record.Manifest.ID != "demo.pkg" || record.Manifest.Version != "1.4.2" {
 		t.Fatalf("installed = %s@%s, want demo.pkg@1.4.2", record.Manifest.ID, record.Manifest.Version)
+	}
+}
+
+func TestPackFromSourceRejectsMismatchedManifestBytes(t *testing.T) {
+	source := t.TempDir()
+	manifest := packagecontract.Manifest{
+		SchemaVersion: packagecontract.SchemaVersion, ID: "demo.pkg", Version: "1.0.0",
+		Components: []packagecontract.Component{{ID: "core", Mode: packagecontract.ModeHosted, Entrypoint: "app.wasm"}},
+	}
+	manifestBytes, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "app.wasm"), []byte("artifact"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	mismatched := append([]byte(nil), manifestBytes...)
+	mismatched = bytes.Replace(mismatched, []byte(`"demo.pkg"`), []byte(`"other.pkg"`), 1)
+	if _, err := packmgr.PackFromSource(context.Background(), source, t.TempDir(), manifest, mismatched); err == nil {
+		t.Fatal("PackFromSource accepted mismatched manifest bytes")
 	}
 }
