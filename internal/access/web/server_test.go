@@ -85,6 +85,14 @@ type testOrchestrator interface {
 	kernelecho.Creator
 }
 
+type noRunOrchestrator struct {
+	*fakeOrchestrator
+}
+
+func (noRunOrchestrator) Runnable(context.Context, int) ([]kernelecho.RunWork, error) {
+	return nil, nil
+}
+
 type testWebServer struct {
 	*web.Server
 	scheduler *kernelecho.Scheduler
@@ -635,7 +643,7 @@ func TestEchoCreationPersistsStandardMessageToSessionStore(t *testing.T) {
 	store := newWebFileStore(t, "session-message.db")
 	reg := registry.New()
 	policy := runtimetest.NewStaticAppPolicy()
-	backend := &fakeOrchestrator{store: store}
+	backend := noRunOrchestrator{fakeOrchestrator: &fakeOrchestrator{store: store}}
 	handler := newAuthenticatedServer(t, context.Background(), backend, store, store, reg, policy, "campus-services", newTestHub(store, "campus-services")).Handler()
 	first := createEchoRequest(t, handler, "有哪些校巴线路？", "persist-message")
 	if first.Code != http.StatusAccepted {
