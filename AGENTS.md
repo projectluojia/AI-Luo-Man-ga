@@ -26,11 +26,12 @@ AI珞 V3 是长期维护的生产级项目。功能范围可以窄，但已实�
 架构、协议、持久化、Agent Runtime 或安全改动前依次阅读：
 
 1. `AGENTS.md`
-2. `docs/v3_overall_design.md`
+2. `docs/系统架构说明.md`
 3. `docs/仓库状态与路线图.md`
-4. `docs/校巴场景设计.md`
-5. `docs/日志与可观测性设计.md`
-6. `docs/数据需求与授权清单.md`（真实数据或采集工作）
+4. `docs/包管理器设计.md`
+5. `docs/校巴场景设计.md`
+6. `docs/日志与可观测性设计.md`
+7. `docs/数据需求与授权清单.md`（真实数据或采集工作）
 
 设计文档不是实现证据；必须检查当前代码与测试。
 
@@ -45,14 +46,16 @@ AI珞 V3 是长期维护的生产级项目。功能范围可以窄，但已实�
 - 跨进程通信使用版本化 gRPC/Protobuf，不引入私有传输协议。
 - 逻辑边界不等于一组件一进程、一端口、一队列或一数据库。
 - 可变业务状态不得只存在内存。Go 在 Agent、Tool Host、客户端或进程崩溃后仍保持权威。
-- Subagent 是 Go 创建的持久 child Run，具有 `parent_run_id`、收窄权限、独立预算、受治理取消和显式结果路由；root 可并行创建多个直接 child（默认最多 4 个，受配置上限约束），但 child 不得再创建 Subagent，Python 不得私建未跟踪子任务。
+- Core 只负责 Run 的持久化、调度与治理，不定义某个 Executor 专用的递归或子任务特例。Executor 若需要递归执行，由自身实现调用自身；对 Core 的请求必须继承当前取消、deadline、Capability 投影和预算上限，不得扩大权限或绕过 Core 的 Capability 执行边界。
+- Workflow/fake Executor 只允许作为测试替身验证通用执行循环；不得作为 `packages/` 产品包、生产运行时、包发布物或独立生产 CI 的业务对象。
 
 ## Repository Layout
 
 - `internal/kernel`：治理、编排、协议、Registry、Loader 和领域端口。
 - `internal/access`、`internal/storage`、`internal/observe`：平台基础设施。
 - `internal/tools`：跨 Service 可复用的原子 Tool，绝不反向依赖 Service。
-- `internal/services`：业务 Service 与运行时装配；通过 `ToolDependencies` 使用 Tool。
+- Service、Tool 与 Executor 的具体实现属于包；Core 只保留 Registry、Dispatcher、Loader
+  和通用治理端口，不为某个业务包保留内部实现目录。
 - 具体存储实现位于领域/内核窄端口之后；测试适配器可放 `internal/storage/memory`。
 - `contracts`：独立 Go module，提供 Core 与外部包共同消费的
   `capability`、`packagecontract`、`packageio` 和 `projectcontract` 稳定契约；其中
@@ -73,10 +76,10 @@ AI珞 V3 是长期维护的生产级项目。功能范围可以窄，但已实�
 - 生产 Executor 必须遵循版本化执行协议；包内部的认知、模型和 Provider 实现不进入 Core。
 - Go 为每个 Run 计算精确 Capability 投影；Executor 拒绝未投影调用、畸形参数、重复 call ID 和错配结果。
 - ToolCall 参数在 Go 信任边界再次按注册 Schema 验证；Provider strict mode 不是安全边界。
-- Run 必须具备 deadline、步骤、ToolCall、载荷、输出、Token 和可用成本预算。
+- Run 必须具备 deadline、步骤、CapabilityCall、载荷、输出、执行单元和可用成本预算。
 - Executor 调用具备超时、取消传播、稳定错误分类和确定的重试语义；不安全副作用不自动重试。
 - readiness 反映 Executor 及其必要依赖的真实能力，不得只检查对象构造成功。
-- 原始上游响应、Headers、提示词、消息和凭据不得进入日志或公共 API。
+- 原始上游响应、Headers、ExecutorConfig、消息和凭据不得进入日志或公共 API。
 - 多 CapabilityCall 的顺序与并发语义必须确定并有测试。
 - Protobuf 是版本化契约；修改 `proto/executor.proto` 后重新生成并提交 Go/Python 生成物，禁止手改生成文件。
 
@@ -94,7 +97,7 @@ AI珞 V3 是长期维护的生产级项目。功能范围可以窄，但已实�
 ## Durable State
 
 - Echo、Run、Task、Confirmation 等使用显式持久状态机；转换原子化，拒绝非法转换和重复终态写。
-- Run 持久化身份、父子关系、状态、attempt、deadline、配置版本、序号、预算和恢复元数据，不只是 goroutine。
+- Run 持久化身份、状态、attempt、deadline、配置版本、序号、预算和恢复元数据，不只是 goroutine；可选因果标识不能触发某种 Executor 专用状态机。
 - Echo 创建与 Run 入队必须跨崩溃安全；调度使用持久 work/lease，不只依赖 `go func`。
 - 启动时确定性处理遗留 `running` 记录；重试、恢复、取消或失败策略必须明确。
 - 写入和外部副作用使用幂等键并支持重放安全；未知执行结果不得伪报成功或失败。
@@ -124,6 +127,7 @@ AI珞 V3 是长期维护的生产级项目。功能范围可以窄，但已实�
 - 优先标准库；仅在维护良好的依赖显著降低风险时引入，并有意锁定版本。
 - 所有阻塞或外部 Go 操作传递 `context.Context`；Python async 保留取消和 deadline。
 - Isolated Runtime 只使用安装锁中的进程规格；Core 不继承自身环境，也不向包注入 Provider 或其他业务环境变量。
+- 需要 Provider 或其他秘密的 Executor 由其自身 Deployment/监督器启动并提供配置；Core 托管启动只适用于不依赖部署秘密的自包含进程，不通过环境继承绕过该边界。
 - 生产请求路径不 panic；启动不变量失败返回明确可行动错误。
 - 保留 dirty worktree 中的用户改动，不改无关代码；不提交凭据、`.env`、本地数据库、真实校方数据、缓存、虚拟环境或临时输出。
 
@@ -157,7 +161,7 @@ AI珞 V3 是长期维护的生产级项目。功能范围可以窄，但已实�
 ## Validation
 
 修改后先跑最相关的检查；修复当前改动导致的失败后再重跑。不能运行的相关检查必须说明具体原因，不得把跳过或部分通过描述为通过；不得为了变绿而削弱测试。完成前复核完整 diff，只保留当前任务相关改动。
-CI 完整门禁还包括 Core 的 `ci-required` 聚合检查、`go mod verify`、`go mod tidy -diff`、staticcheck、actionlint、Protobuf 生成物漂移检查、contracts/Package Manager 嵌套 Go module 检查，以及 Agent/Campus 独立包 workflow 各自的 Ruff/WASI、`pack → install → list` smoke 和 Agent 安装后 e2e；任何一项未运行都要在交付说明中明确标注。以下是本地可运行的主要门禁子集，不等同于 CI 完整门禁；Protobuf 漂移、包发布物 `pack → install → list`、Agent 安装后 e2e、CodeQL 和安全扫描仍以 CI 结果为准。
+CI 完整门禁还包括 Core 的 `ci-required` 聚合检查、`go mod verify`、`go mod tidy -diff`、staticcheck、actionlint、Protobuf 生成物漂移检查，以及 contracts/Package Manager 嵌套 Go module 检查；任何一项未运行都要在交付说明中明确标注。以下是本地可运行的主要门禁子集，不等同于 CI 完整门禁；Protobuf 漂移、包发布物 `pack → install → list`、Agent 安装后 e2e、CodeQL 和安全扫描仍以 CI 结果为准。
 
 新增功能按适用范围覆盖：严格边界、App 隔离、权限收窄、幂等、状态转换、重启恢复、取消/超时、事件顺序、SSE 重连、背压、协议违例、并发/race、迁移/备份恢复和敏感信息不泄露。
 
@@ -184,7 +188,7 @@ go test ./...
   go vet ./...
 )
 make test-campus
-go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 '-checks=inherit,-SA1019' ./...
+go run honnef.co/go/tools/cmd/staticcheck@v0.8.1 '-checks=inherit,-SA1019' ./...
 actionlint .github/workflows/*.yml
 uv sync --project packages/agent/runtime --locked
 uv run --project packages/agent/runtime --locked python -m compileall -q packages/agent/runtime
