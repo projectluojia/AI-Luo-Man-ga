@@ -1,5 +1,5 @@
 # campus.bus 作者侧源清单（ailuo.toml）。
-# 构建：`ailuo pack . dist` 经 [build] 自动交叉编译（源码在包目录内）。
+# 构建：`ailuo-pm pack . dist` 经 component.build 自动交叉编译（源码在包目录内）。
 
 [package]
 id = "campus"
@@ -18,7 +18,7 @@ module = "ailuo.store"
 name = "list"
 purpose = "分页读取包命名空间内的集合并携带一致的快照治理元数据（App 隔离在宿主侧强制）"
 
-[build]
+[component.build]
 tool = "go-wasm"
 source = "src"
 

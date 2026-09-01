@@ -40,7 +40,7 @@ func TestBuildPythonUVCreatesVirtualEnvironment(t *testing.T) {
 		}},
 	}
 	if err := packagefmt.Build(context.Background(), sourceDir, manifest,
-		packagefmt.BuildSpec{Tool: packagefmt.BuildToolPythonUV}); err != nil {
+		[]packagefmt.BuildSpec{{Tool: packagefmt.BuildToolPythonUV}}); err != nil {
 		t.Fatalf("Build: %v", err)
 	}
 	python := filepath.Join(sourceDir, ".venv", "bin", "python")
@@ -51,7 +51,7 @@ func TestBuildPythonUVCreatesVirtualEnvironment(t *testing.T) {
 		t.Fatalf("venv 解释器缺失: %v", err)
 	}
 	if err := packagefmt.Build(context.Background(), sourceDir, manifest,
-		packagefmt.BuildSpec{Tool: "unknown-tool"}); err == nil {
+		[]packagefmt.BuildSpec{{Tool: "unknown-tool"}}); err == nil {
 		t.Fatal("未知构建器被接受")
 	}
 }
