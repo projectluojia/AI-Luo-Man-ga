@@ -51,7 +51,7 @@ func (h ExecutorChecker) Ping(ctx context.Context) error {
 			observe.Component("executor_health"),
 			observe.Duration(started),
 		)
-		return fmt.Errorf("AI 执行者健康检查：%w", err)
+		return fmt.Errorf("执行者健康检查：%w", err)
 	}
 	if err := executor.ValidateHealthResponse(response); err != nil {
 		return fmt.Errorf("执行者健康响应无效：%w", err)

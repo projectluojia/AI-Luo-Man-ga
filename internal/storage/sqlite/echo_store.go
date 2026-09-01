@@ -463,9 +463,16 @@ func (s *Store) CompleteRun(ctx context.Context, run kernelecho.RunRecord, runSt
 }
 
 func finalizeEchoFromRun(ctx context.Context, tx *sql.Tx, appID, echoID string, completedAt time.Time) error {
+	var primaryRunGroupID string
+	if err := tx.QueryRowContext(ctx, `
+SELECT run_group_id FROM runs
+WHERE app_id=? AND echo_id=? AND parent_run_id IS NULL
+ORDER BY created_at,run_id LIMIT 1`, appID, echoID).Scan(&primaryRunGroupID); err != nil {
+		return fmt.Errorf("read primary Run group: %w", err)
+	}
 	var activeRuns int
-	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM runs WHERE app_id=? AND echo_id=? AND status IN (?,?)`,
-		appID, echoID, kernelecho.RunStatusQueued, kernelecho.RunStatusRunning,
+	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM runs WHERE app_id=? AND echo_id=? AND run_group_id=? AND status IN (?,?)`,
+		appID, echoID, primaryRunGroupID, kernelecho.RunStatusQueued, kernelecho.RunStatusRunning,
 	).Scan(&activeRuns); err != nil {
 		return fmt.Errorf("check active Echo Runs: %w", err)
 	}
@@ -476,8 +483,8 @@ func finalizeEchoFromRun(ctx context.Context, tx *sql.Tx, appID, echoID string, 
 	var resultPayload []byte
 	if err := tx.QueryRowContext(ctx, `
 SELECT status,result_payload,result_content_type,coalesce(error_code,''),coalesce(error_message,'')
-FROM runs WHERE app_id=? AND echo_id=?
-ORDER BY attempt DESC LIMIT 1`, appID, echoID,
+FROM runs WHERE app_id=? AND echo_id=? AND run_group_id=?
+ORDER BY attempt DESC LIMIT 1`, appID, echoID, primaryRunGroupID,
 	).Scan(&rootStatus, &resultPayload, &resultContentType, &errorCode, &errorMessage); err != nil {
 		return fmt.Errorf("read terminal Run state: %w", err)
 	}
@@ -688,15 +695,22 @@ func (s *Store) loadRunWork(ctx context.Context, runs []kernelecho.RunRecord) ([
 	now := time.Now().UTC()
 	for _, run := range runs {
 		if len(run.InputPayload) == 0 || run.InputContentType == "" {
-			return nil, kernelecho.ErrInvalidRunRecord
+			if failErr := s.failQueuedRun(ctx, run, now); failErr != nil {
+				observe.Warn(ctx, "排队 Run 确定性失败",
+					observe.StringAttr("app_id", run.AppID),
+					observe.StringAttr("echo_id", run.EchoID),
+					observe.StringAttr("run_id", run.ID),
+				)
+			}
+			continue
 		}
 		var status string
 		if err := s.db.QueryRowContext(ctx, `SELECT status FROM echoes WHERE app_id=? AND echo_id=? AND status=?`, run.AppID, run.EchoID, kernelecho.StatusRunning).Scan(&status); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				// Echo 已进入终态而 Run 仍排队（取消/崩溃窗口等边缘路径）：确定性
 				// 失败该 Run，避免孤儿排队 Run 永久占用唯一槽位。
-				if failErr := s.failOrphanQueuedRun(ctx, run, now); failErr != nil {
-					observe.Warn(ctx, "孤儿排队 Run 确定性失败失败",
+				if failErr := s.failQueuedRun(ctx, run, now); failErr != nil {
+					observe.Warn(ctx, "孤儿排队 Run 确定性失败",
 						observe.StringAttr("app_id", run.AppID),
 						observe.StringAttr("echo_id", run.EchoID),
 						observe.StringAttr("run_id", run.ID),
@@ -711,11 +725,16 @@ func (s *Store) loadRunWork(ctx context.Context, runs []kernelecho.RunRecord) ([
 	return work, nil
 }
 
-// failOrphanQueuedRun 把 Echo 已进入终态的排队 Run 确定性转移为失败
-// （仅从 queued 转移，幂等；并发已转移时 RowsAffected 为 0）。
-func (s *Store) failOrphanQueuedRun(ctx context.Context, run kernelecho.RunRecord, now time.Time) error {
+// failQueuedRun 把无法安全执行的排队 Run 确定性转移为失败；
+// 若 Echo 仍在运行，则在同一事务中同步收敛 Echo。
+func (s *Store) failQueuedRun(ctx context.Context, run kernelecho.RunRecord, now time.Time) (resultErr error) {
+	tx, err := s.beginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin queued Run recovery: %w", err)
+	}
+	defer s.finishTx(tx, &resultErr, "recover queued Run")
 	public := publicerror.Echo("recovery_failed")
-	result, err := s.db.ExecContext(ctx, `
+	result, err := tx.ExecContext(ctx, `
 	UPDATE runs SET status=?,lease_token=NULL,lease_expires_at=NULL,result_payload='',result_content_type='',error_code=?,error_message=?,completed_at=?
 WHERE app_id=? AND run_id=? AND status=?`,
 		kernelecho.RunStatusFailed, public.Code, public.Message, now.Format(time.RFC3339Nano),
@@ -729,11 +748,29 @@ WHERE app_id=? AND run_id=? AND status=?`,
 		return fmt.Errorf("read orphan run update count: %w", err)
 	}
 	if affected == 1 {
-		observe.Info(ctx, "孤儿排队 Run 已确定性失败（Echo 已进入终态）",
-			observe.StringAttr("app_id", run.AppID),
-			observe.StringAttr("echo_id", run.EchoID),
-			observe.StringAttr("run_id", run.ID),
-		)
+		var echoStatus string
+		if err := tx.QueryRowContext(ctx, `SELECT status FROM echoes WHERE app_id=? AND echo_id=?`, run.AppID, run.EchoID).Scan(&echoStatus); err != nil {
+			return fmt.Errorf("read recovered Run Echo status: %w", err)
+		}
+		if echoStatus == kernelecho.StatusRunning {
+			if err := finalizeEchoFromRun(ctx, tx, run.AppID, run.EchoID, now); err != nil {
+				return fmt.Errorf("finalize recovered Run Echo: %w", err)
+			}
+			observe.Info(ctx, "排队 Run 和 Echo 已确定性失败",
+				observe.StringAttr("app_id", run.AppID),
+				observe.StringAttr("echo_id", run.EchoID),
+				observe.StringAttr("run_id", run.ID),
+			)
+		} else {
+			observe.Info(ctx, "孤儿排队 Run 已确定性失败（Echo 已进入终态）",
+				observe.StringAttr("app_id", run.AppID),
+				observe.StringAttr("echo_id", run.EchoID),
+				observe.StringAttr("run_id", run.ID),
+			)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit queued Run recovery: %w", err)
 	}
 	return nil
 }

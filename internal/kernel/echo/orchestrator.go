@@ -743,9 +743,9 @@ func (o *Orchestrator) executeClaimedRun(ctx context.Context, emit EventEmitter,
 				firstOutputObserved = true
 			}
 			finalOutput = outputFromPayload(body.FinalResult.Payload)
-			if err := addOutput(finalOutput); err != nil {
+			if uint64(len(finalOutput.Data)) > run.MaxOutputBytes {
 				observe.Warn(ctx, "执行者最终输出超过 Run 预算", observe.Int64Attr("output_bytes", int64(outputBytes)))
-				return errors.Join(err, o.fail(ctx, run, "budget_exceeded", false))
+				return errors.Join(ErrOutputBudgetExceeded, o.fail(ctx, run, "budget_exceeded", false))
 			}
 		case *executor.Frame_RunFailure:
 			public := publicerror.Executor(body.RunFailure.Code, body.RunFailure.Retryable)
