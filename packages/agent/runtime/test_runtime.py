@@ -83,6 +83,39 @@ class RuntimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(unavailable.ready)
         self.assertEqual(unavailable.status_code, "provider_unavailable")
 
+    async def test_run_reports_missing_model_as_configuration_error(self) -> None:
+        runtime = ExecutorRuntime(RuntimeModel(), model_name="test-model")
+        runtime._model_name = ""
+
+        async def request_iterator():
+            yield self._start_frame()
+
+        output = runtime.Run(request_iterator(), None)
+        accepted = await anext(output)
+        failure = await anext(output)
+        self.assertEqual(accepted.sequence, 1)
+        self.assertEqual(failure.sequence, 2)
+        self.assertEqual(failure.run_failure.code, "executor_configuration_unavailable")
+
+    async def test_run_clamps_zero_usage_to_valid_execution_units(self) -> None:
+        class ZeroUsageModel(ModelProvider):
+            async def stream_turn(self, **kwargs):
+                yield TurnCompleted(
+                    text="完成",
+                    assistant_message={"role": "assistant", "content": "完成"},
+                    usage=ModelUsage(input_tokens=0, output_tokens=0, total_tokens=0),
+                )
+
+        async def request_iterator():
+            yield self._start_frame()
+
+        output = ExecutorRuntime(ZeroUsageModel(), model_name="test-model").Run(request_iterator(), None)
+        await anext(output)
+        usage = await anext(output)
+        final = await anext(output)
+        self.assertEqual(usage.resource_usage.execution_units, 1)
+        self.assertEqual(final.final_result.payload.data.decode(), "完成")
+
     async def test_grpc_frames_wrap_real_model_loop(self) -> None:
         requests: asyncio.Queue[executor_pb2.ExecutorFrame] = asyncio.Queue()
 
