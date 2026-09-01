@@ -1,4 +1,4 @@
 id: 1
-event: reply.delta
-data: {"app_id":"campus-services","echo_id":"echo-1","run_id":"run-1","sequence":1,"type":"reply.delta","payload":{"text":"正在查询"},"created_at":"2026-08-12T00:00:00Z"}
+event: output.delta
+data: {"app_id":"campus-services","echo_id":"echo-1","run_id":"run-1","sequence":1,"type":"output.delta","payload":{"text":"正在查询"},"created_at":"2026-08-12T00:00:00Z"}
 

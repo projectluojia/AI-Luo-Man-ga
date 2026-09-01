@@ -10,7 +10,7 @@ import (
 )
 
 // TestChatStreamTranslatesEchoEvents 验证前端流式契约：标准链路创建 Echo 后，
-// 内核 reply.delta/reply.final 被翻译为 text_delta/final 并最终发送 done。
+// 内核 output.delta/run.completed 被翻译为 text_delta/final 并最终发送 done。
 func TestChatStreamTranslatesEchoEvents(t *testing.T) {
 	handler, _ := newTestServer(t, false)
 	response := httptest.NewRecorder()

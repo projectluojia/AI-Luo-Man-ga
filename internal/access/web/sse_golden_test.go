@@ -22,7 +22,7 @@ func TestSSEEnvelopeGolden(t *testing.T) {
 		EchoID:    "echo-1",
 		RunID:     "run-1",
 		Sequence:  1,
-		Type:      "reply.delta",
+		Type:      "output.delta",
 		Payload:   json.RawMessage(`{"text":"正在查询"}`),
 		CreatedAt: time.Date(2026, 8, 12, 0, 0, 0, 0, time.UTC),
 	}
