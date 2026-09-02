@@ -101,9 +101,6 @@ form.addEventListener('submit', async event => {
     quickReplies = parseQuickReplies(byId('qq-quick-replies').value);
     if (executorConfigText) {
       executorConfig = JSON.parse(executorConfigText);
-      if (!executorConfig || typeof executorConfig !== 'object' || Array.isArray(executorConfig)) {
-        throw new Error('执行者配置必须是 JSON 对象');
-      }
     }
   } catch (error) {
     setNotice(error.message, 'error');
