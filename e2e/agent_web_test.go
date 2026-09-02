@@ -175,6 +175,7 @@ func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 		t.Fatalf("写入测试模型密钥: %v", err)
 	}
 	deploymentSpec.Env = append(os.Environ(),
+		"PYTHONDONTWRITEBYTECODE=1",
 		"AILUO_MODEL_NAME=test-model",
 		"AILUO_MODEL_API_KEY_FILE="+secretPath,
 		"AILUO_MODEL_BASE_URL="+modelServer.URL+"/v1",
