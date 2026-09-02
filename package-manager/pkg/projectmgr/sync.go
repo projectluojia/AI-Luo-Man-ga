@@ -341,13 +341,17 @@ func (r *resolver) resolveSource(baseDir, source string) (sourceRef, error) {
 			return sourceRef{}, fmt.Errorf("%w: 本地依赖来源缺少基准目录", ErrResolutionFailed)
 		}
 		relative := strings.TrimPrefix(source, "path:")
-		absolute, err := filepath.Abs(filepath.Join(baseDir, filepath.FromSlash(relative)))
+		absolute, err := packagefmt.ResolveLocalDependencyPath(r.projectDir, baseDir, relative)
 		if err != nil {
-			return sourceRef{}, err
+			return sourceRef{}, fmt.Errorf("%w: 本地依赖路径无法安全解析: %v", ErrResolutionFailed, err)
 		}
-		projectRelative, err := filepath.Rel(r.projectDir, absolute)
-		if err != nil || projectRelative == ".." || strings.HasPrefix(projectRelative, ".."+string(filepath.Separator)) {
-			return sourceRef{}, fmt.Errorf("%w: 本地依赖路径逃逸项目目录", ErrResolutionFailed)
+		logicalAbsolute, err := filepath.Abs(filepath.Join(baseDir, filepath.FromSlash(relative)))
+		if err != nil {
+			return sourceRef{}, fmt.Errorf("%w: 本地依赖路径无法解析: %v", ErrResolutionFailed, err)
+		}
+		projectRelative, err := filepath.Rel(r.projectDir, logicalAbsolute)
+		if err != nil {
+			return sourceRef{}, fmt.Errorf("%w: 本地依赖路径无法转换为项目相对路径: %v", ErrResolutionFailed, err)
 		}
 		return sourceRef{
 			key: "path:" + filepath.ToSlash(projectRelative), path: absolute,

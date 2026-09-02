@@ -76,3 +76,26 @@ func TestParseProjectPathUsesPackagePathRules(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestParseProjectRejectsSymlinkEscapingProject(t *testing.T) {
+	projectDir := t.TempDir()
+	outsideDir := t.TempDir()
+	link := filepath.Join(projectDir, "linked")
+	if err := os.Symlink(outsideDir, link); err != nil {
+		t.Skipf("当前平台不允许创建目录符号链接: %v", err)
+	}
+	path := filepath.Join(projectDir, ProjectFileName)
+	if err := os.WriteFile(path, []byte(`
+[project]
+id = "ailuo"
+
+[dependencies."demo.pkg"]
+version = "1.0.0"
+path = "linked"
+`), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ParseProject(path); !errors.Is(err, ErrSourceInvalid) {
+		t.Fatalf("ParseProject(symlink escape) = %v, want ErrSourceInvalid", err)
+	}
+}
