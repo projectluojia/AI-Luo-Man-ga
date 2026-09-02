@@ -5,7 +5,8 @@ on:
     types: [opened, edited, reopened, synchronize]
 
 permissions:
-  pull-requests: write
+  contents: read
+  pull-requests: read
 
 concurrency:
   group: pr-title-${{ github.event.pull_request.number || github.ref }}
@@ -55,6 +56,7 @@ jobs:
           footer_key_pattern = re.compile(r"^(?:BREAKING CHANGE|[A-Za-z0-9-]+)(?:\s+#\d+)?\s*:")
 
           def has_breaking_footer(message: str) -> bool:
+              message = message.rstrip()
               if "\n\n" not in message:
                   return False
               footer_lines = message.rsplit("\n\n", 1)[1].splitlines()
@@ -68,6 +70,11 @@ jobs:
                   and bool(line[len("BREAKING CHANGE:"):].strip())
                   for line in footer_lines
               )
+
+          def strip_coderabbit_release_notes(message: str) -> str:
+              # CodeRabbit 追加的自动摘要不是作者正文，先移除再校验正文 footer。
+              marker = "<!-- This is an auto-generated comment: release notes by coderabbit.ai -->"
+              return message.split(marker, 1)[0]
 
           response = subprocess.run(
               [
@@ -107,7 +114,9 @@ jobs:
           title = os.environ["PR_TITLE"]
           title_match = header_pattern.fullmatch(title)
           title_has_bang = bool(title_match and title_match.group(2))
-          body_has_footer = has_breaking_footer(os.environ.get("PR_BODY", ""))
+          body_has_footer = has_breaking_footer(
+              strip_coderabbit_release_notes(os.environ.get("PR_BODY", ""))
+          )
           if title_has_bang and not body_has_footer:
               errors.append("PR 标题使用 ! 时，正文 footer 必须包含 BREAKING CHANGE: <说明>")
           elif body_has_footer and not title_has_bang:
