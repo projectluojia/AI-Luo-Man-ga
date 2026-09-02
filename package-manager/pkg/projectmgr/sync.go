@@ -349,24 +349,6 @@ func dependencyOrder(candidates map[string]candidate) ([]string, error) {
 }
 
 func installCandidate(ctx context.Context, root string, candidate candidate) error {
-	target := filepath.Join(root, candidate.manifest.ID)
-	if _, err := os.Lstat(target); err == nil {
-		existing, err := packageio.ReadInstalled(ctx, target)
-		if err != nil {
-			return fmt.Errorf("已安装包 %s 校验失败: %w", candidate.manifest.ID, err)
-		}
-		if existing.Manifest.Version != candidate.manifest.Version {
-			_, err := packmgr.Install(ctx, root, candidate.installSource)
-			return err
-		}
-		manifestDigest, err := packageio.HashFile(ctx, filepath.Join(target, "manifest.json"), packagecontract.MaxManifestBytes)
-		if err != nil || manifestDigest != candidate.manifestDigest {
-			return fmt.Errorf("包 %s 已存在同版本但清单摘要不一致", candidate.manifest.ID)
-		}
-		return nil
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
 	_, err := packmgr.Install(ctx, root, candidate.installSource)
 	return err
 }

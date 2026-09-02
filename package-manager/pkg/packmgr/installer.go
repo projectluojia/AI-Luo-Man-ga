@@ -46,7 +46,7 @@ func Inspect(ctx context.Context, sourcePath string) (packagecontract.Manifest, 
 // Install 从源包目录或发布 tarball 安装到安装根目录（以整个 Package 为单位）：
 // 校验源（manifest + 每组件 entrypoint 工件）、解析依赖、原子发布
 // manifest+lock+全部组件工件，并回读验证。目标已有同 ID 且版本不同时替换；
-// 版本相同视为重复安装并返回错误。
+// 版本相同且内容相同则幂等返回，否则拒绝覆盖已发布内容。
 func Install(ctx context.Context, root, sourcePath string) (InstalledRecord, error) {
 	if root == "" {
 		return InstalledRecord{}, packagecontract.ErrInvalidFormat
@@ -91,7 +91,14 @@ func Install(ctx context.Context, root, sourcePath string) (InstalledRecord, err
 			return InstalledRecord{}, fmt.Errorf("已安装包 %s 校验失败: %w", source.Manifest.ID, err)
 		}
 		if existing.Manifest.Version == source.Manifest.Version {
-			return InstalledRecord{}, fmt.Errorf("包 %s@%s 已安装", source.Manifest.ID, source.Manifest.Version)
+			same, err := sameInstalledPackage(ctx, existing, source.manifestBytes, artifacts)
+			if err != nil {
+				return InstalledRecord{}, err
+			}
+			if same {
+				return existing, nil
+			}
+			return InstalledRecord{}, fmt.Errorf("包 %s@%s 已安装且内容不一致", source.Manifest.ID, source.Manifest.Version)
 		}
 		if err := validateDependents(ctx, root, source.Manifest.ID, source.Manifest.Version); err != nil {
 			return InstalledRecord{}, err
@@ -117,14 +124,10 @@ func Install(ctx context.Context, root, sourcePath string) (InstalledRecord, err
 		if err := copyArtifact(artifact.path, stageArtifact); err != nil {
 			return InstalledRecord{}, err
 		}
-		artifactDigest, err := packageio.HashArtifact(ctx, stageArtifact, packagecontract.MaxArtifactBytes)
-		if err != nil {
-			return InstalledRecord{}, err
-		}
 		locked := packagecontract.LockedArtifact{
 			ComponentID: artifact.componentID,
 			Path:        filepath.Join(targetDir, artifactName),
-			SHA256:      artifactDigest,
+			SHA256:      artifact.digest,
 		}
 		if component, ok := packagecontract.FindComponent(source.Manifest, artifact.componentID); ok && component.Mode == packagecontract.ModeIsolated {
 			locked.Process, err = defaultProcessSpec(component, filepath.Join(targetDir, artifactName), targetDir, artifact.directory)
@@ -357,6 +360,7 @@ type sourceArtifact struct {
 	componentID string
 	path        string
 	directory   bool
+	digest      string
 }
 
 // readManifest 读取包目录的 manifest.json 并校验。
@@ -389,7 +393,8 @@ func readSourceArtifacts(ctx context.Context, sourceDir string, manifest package
 		if info.Mode()&os.ModeSymlink != 0 || (!info.Mode().IsRegular() && !info.IsDir()) {
 			return nil, fmt.Errorf("组件 %s entrypoint 工件类型不受支持", component.ID)
 		}
-		if _, err := packageio.HashArtifact(ctx, artifactPath, packagecontract.MaxArtifactBytes); err != nil {
+		digest, err := packageio.HashArtifact(ctx, artifactPath, packagecontract.MaxArtifactBytes)
+		if err != nil {
 			return nil, fmt.Errorf("组件 %s entrypoint 工件无效: %w", component.ID, err)
 		}
 		name := filepath.Base(artifactPath)
@@ -399,10 +404,33 @@ func readSourceArtifacts(ctx context.Context, sourceDir string, manifest package
 		}
 		ownerByName[name] = component.ID
 		artifacts = append(artifacts, sourceArtifact{
-			componentID: component.ID, path: artifactPath, directory: info.IsDir(),
+			componentID: component.ID, path: artifactPath, directory: info.IsDir(), digest: digest,
 		})
 	}
 	return artifacts, nil
+}
+
+// sameInstalledPackage 判断同版本安装是否是同一份发布内容。版本一旦发布，
+// 同版本不同清单或工件必须拒绝覆盖；完全相同则允许 sync 幂等重放。
+func sameInstalledPackage(ctx context.Context, existing InstalledRecord, manifestBytes []byte, artifacts []sourceArtifact) (bool, error) {
+	manifestDigest := sha256.Sum256(manifestBytes)
+	if existing.Lock.ManifestSHA256 != hex.EncodeToString(manifestDigest[:]) || len(existing.Lock.Artifacts) != len(artifacts) {
+		return false, nil
+	}
+	lockedByID := make(map[string]packagecontract.LockedArtifact, len(existing.Lock.Artifacts))
+	for _, artifact := range existing.Lock.Artifacts {
+		lockedByID[artifact.ComponentID] = artifact
+	}
+	for _, artifact := range artifacts {
+		locked, ok := lockedByID[artifact.componentID]
+		if !ok || locked.SHA256 != artifact.digest {
+			return false, nil
+		}
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+	}
+	return true, nil
 }
 
 // unpackSource 解析安装源：目录直接使用；.tgz 发布物严格解压到临时目录。
