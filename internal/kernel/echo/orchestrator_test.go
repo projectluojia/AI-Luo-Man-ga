@@ -1693,3 +1693,15 @@ func TestOrchestratorSendsOpaqueExecutorConfigAndNeutralContext(t *testing.T) {
 		t.Fatalf("neutral context payload=%q err=%v", start.GetContextPayload().GetData(), err)
 	}
 }
+
+func TestNewOrchestratorRejectsNegativeLeaseDuration(t *testing.T) {
+	defer func() {
+		if recovered := recover(); recovered != "orchestrator lease duration must be positive" {
+			t.Fatalf("panic=%v", recovered)
+		}
+	}()
+	kernelecho.NewOrchestrator(nil, nil, nil, nil, kernelecho.StorePorts{}, kernelecho.Config{
+		LeaseDuration: -time.Second,
+	})
+	t.Fatal("negative lease duration was accepted")
+}
