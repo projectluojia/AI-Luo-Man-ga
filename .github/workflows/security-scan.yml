@@ -61,9 +61,31 @@ jobs:
           go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
       - name: 运行 govulncheck
+        id: govulncheck
         shell: bash
         run: |
-          set -euo pipefail
+          set -uo pipefail
+          vulnerability_found=0
+          scan_failed=0
+          run_scan() {
+            local module="$1"
+            local exit_code
+            shift
+            echo "检查 Go module: $module"
+            if (cd "$module" && "$@"); then
+              return 0
+            else
+              exit_code=$?
+            fi
+            case "$exit_code" in
+              3)
+                vulnerability_found=1
+                ;;
+              *)
+                scan_failed=1
+                ;;
+            esac
+          }
           while IFS= read -r -d '' go_mod; do
             module="${go_mod%/go.mod}"
             echo "检查 Go module: $module"
@@ -72,22 +94,32 @@ jobs:
               host_packages=""
             fi
             if [[ -n "$host_packages" ]]; then
-              (cd "$module" && govulncheck ./...)
+              run_scan "$module" govulncheck ./...
             else
               wasi_packages=""
               if ! wasi_packages="$(cd "$module" && GOOS=wasip1 GOARCH=wasm go list ./... 2>/dev/null)"; then
                 wasi_packages=""
               fi
               if [[ -n "$wasi_packages" ]]; then
-                (cd "$module" && GOOS=wasip1 GOARCH=wasm govulncheck ./...)
+                run_scan "$module" env GOOS=wasip1 GOARCH=wasm govulncheck ./...
               else
                 echo "Go module 没有可扫描的 package: $module" >&2
-                exit 1
+                scan_failed=1
               fi
             fi
           done < <(find . -name go.mod -not -path './.git/*' -print0 | sort -z)
+          if (( scan_failed )); then
+            status=error
+          elif (( vulnerability_found )); then
+            status=vulnerable
+          else
+            status=ok
+          fi
+          echo "status=$status" >> "$GITHUB_OUTPUT"
       # 扫描 Core 与同仓包工作区内的 Go/Python 锁定依赖。
       - uses: google/osv-scanner-action/osv-scanner-action@6e4298ebc4db23e847df9b2e2de2939d6f066c67 # v2.5.1
+        id: osv
+        continue-on-error: true
         with:
           scan-args: |-
             --format=sarif
@@ -95,12 +127,27 @@ jobs:
             --recursive
             .
       - name: 上传扫描结果为构建产物
+        id: upload
+        if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: sarif-results
           path: results.sarif
           if-no-files-found: error
           retention-days: 7
+      - name: 报告扫描结果
+        if: always()
+        env:
+          GOVULNCHECK_STATUS: ${{ steps.govulncheck.outputs.status }}
+          OSV_OUTCOME: ${{ steps.osv.outcome }}
+          UPLOAD_OUTCOME: ${{ steps.upload.outcome }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GOVULNCHECK_STATUS" != ok || "$OSV_OUTCOME" != success || "$UPLOAD_OUTCOME" != success ]]; then
+            echo "安全扫描失败：govulncheck=$GOVULNCHECK_STATUS osv=$OSV_OUTCOME upload=$UPLOAD_OUTCOME" >&2
+            exit 1
+          fi
 
   upload:
     name: upload
@@ -110,7 +157,7 @@ jobs:
     permissions:
       actions: read # 读取前一个 job 上传的 SARIF 工件。
       security-events: write # 将扫描结果写入 GitHub Code Scanning。
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    if: ${{ always() && needs.scan.result != 'cancelled' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
     steps:
       - name: 下载扫描结果
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
