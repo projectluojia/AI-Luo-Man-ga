@@ -57,11 +57,17 @@ jobs:
           while IFS= read -r -d '' go_mod; do
             module="${go_mod%/go.mod}"
             echo "检查 Go module: $module"
-            host_packages="$(cd "$module" && go list ./... 2>/dev/null || true)"
+            host_packages=""
+            if ! host_packages="$(cd "$module" && go list ./... 2>/dev/null)"; then
+              host_packages=""
+            fi
             if [[ -n "$host_packages" ]]; then
               (cd "$module" && govulncheck ./...)
             else
-              wasi_packages="$(cd "$module" && GOOS=wasip1 GOARCH=wasm go list ./... 2>/dev/null || true)"
+              wasi_packages=""
+              if ! wasi_packages="$(cd "$module" && GOOS=wasip1 GOARCH=wasm go list ./... 2>/dev/null)"; then
+                wasi_packages=""
+              fi
               if [[ -n "$wasi_packages" ]]; then
                 (cd "$module" && GOOS=wasip1 GOARCH=wasm govulncheck ./...)
               else
