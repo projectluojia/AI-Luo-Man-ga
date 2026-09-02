@@ -3,7 +3,6 @@ package packagesource
 import (
 	"context"
 	"errors"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -85,9 +84,6 @@ func (c *Catalog) DiscoverLocked(ctx context.Context, projectLock projectcontrac
 	if len(projectLock.Packages) > loader.MaxRegisteredRuntimes {
 		return nil, ErrInvalidCatalog
 	}
-	if err := validateSecureDirectory(c.root); err != nil {
-		return nil, errors.Join(ErrInvalidCatalog, err)
-	}
 	if err := packageio.RecoverInstallRoot(ctx, c.root); err != nil {
 		return nil, errors.Join(ErrInvalidCatalog, err)
 	}
@@ -110,9 +106,6 @@ func (c *Catalog) DiscoverLocked(ctx context.Context, projectLock projectcontrac
 		}
 		locked := lockedIDs[id]
 		directory := filepath.Join(c.root, id)
-		if err := validateSecureDirectory(directory); err != nil {
-			return nil, errors.Join(ErrInvalidCatalog, err)
-		}
 		installed, err := packageio.ReadInstalled(ctx, directory)
 		if err != nil {
 			return nil, errors.Join(ErrInvalidCatalog, err)
@@ -221,9 +214,6 @@ func (c *Catalog) readRecordByID(ctx context.Context, id string) (installedRecor
 	if c == nil || !capability.IsStableID(id) {
 		return installedRecord{}, ErrInvalidCatalog
 	}
-	if err := validateSecureDirectory(c.root); err != nil {
-		return installedRecord{}, errors.Join(ErrInvalidCatalog, err)
-	}
 	if err := packageio.RecoverInstallRoot(ctx, c.root); err != nil {
 		return installedRecord{}, errors.Join(ErrInvalidCatalog, err)
 	}
@@ -267,28 +257,12 @@ func (c *Catalog) readRecordByID(ctx context.Context, id string) (installedRecor
 }
 
 // readPackage 读取一个包目录并产出每组件一条的内核记录。中性格式（manifest +
-// lock + 每组件工件哈希）由 packageio.ReadInstalled 完成；本函数叠加部署属主
-// 校验、解析 AI珞 扩展段并按组件 exports 映射 Capability 到组件运行时。
+// lock + 每组件工件哈希）由 packageio.ReadInstalled 完成；本函数解析 AI珞
+// 扩展段并按组件 exports 映射 Capability 到组件运行时。
 func (c *Catalog) readPackage(ctx context.Context, directory string) ([]installedRecord, error) {
-	if err := validateSecureDirectory(directory); err != nil {
-		return nil, errors.Join(ErrInvalidCatalog, err)
-	}
-	// 部署级属主/权限校验叠加在格式层读取之上。
-	for _, name := range []string{installManifestName, installLockName} {
-		filePath := filepath.Join(directory, name)
-		info, err := os.Lstat(filePath)
-		if err != nil || !ownerMatchesProcess(filePath, info) || groupOrWorldWritable(info) {
-			return nil, ErrInvalidCatalog
-		}
-	}
 	neutral, err := packageio.ReadInstalled(ctx, directory)
 	if err != nil {
 		return nil, errors.Join(ErrInvalidCatalog, err)
-	}
-	for _, artifact := range neutral.Lock.Artifacts {
-		if err := validateSecureArtifact(ctx, artifact.Path); err != nil {
-			return nil, errors.Join(ErrInvalidCatalog, err)
-		}
 	}
 	var extensions aiLuoExtensions
 	if len(neutral.Manifest.Extensions) > 0 {
@@ -374,37 +348,6 @@ func (c *Catalog) readPackage(ctx context.Context, directory string) ([]installe
 		})
 	}
 	return records, nil
-}
-
-func validateSecureDirectory(path string) error {
-	info, err := os.Lstat(path)
-	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 ||
-		groupOrWorldWritable(info) || !ownerMatchesProcess(path, info) {
-		return ErrInvalidCatalog
-	}
-	return nil
-}
-
-// validateSecureArtifact 复核目录工件中的每个节点。根目录属主一致并不能保护
-// 目录内部被其他账户替换的解释器、源码或依赖文件。
-func validateSecureArtifact(ctx context.Context, path string) error {
-	return filepath.WalkDir(path, func(current string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if entry.Type()&os.ModeSymlink != 0 {
-			return ErrInvalidCatalog
-		}
-		info, err := entry.Info()
-		if err != nil || (!info.IsDir() && !info.Mode().IsRegular()) ||
-			!ownerMatchesProcess(current, info) || groupOrWorldWritable(info) {
-			return ErrInvalidCatalog
-		}
-		return nil
-	})
 }
 
 func cloneProcessSpec(spec packagecontract.ProcessSpec) packagecontract.ProcessSpec {

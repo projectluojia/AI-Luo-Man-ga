@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packagecontract"
+	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packageio"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/executor"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
@@ -701,11 +702,14 @@ func validateProcessSpec(spec packagecontract.ProcessSpec) error {
 	if err := packagecontract.ValidateProcessSpec(spec); err != nil {
 		return ErrInvalidProcessSpec
 	}
-	info, err := os.Lstat(spec.Path)
-	if err != nil || !info.Mode().IsRegular() || !executableFile(info) || unsafePermissions(info) {
+	if err := packageio.ValidateSecurePath(spec.Path); err != nil {
 		return ErrInvalidProcessSpec
 	}
-	if info, err = os.Lstat(spec.WorkDir); err != nil || !info.IsDir() || unsafePermissions(info) {
+	info, err := os.Lstat(spec.Path)
+	if err != nil || !executableFile(info) {
+		return ErrInvalidProcessSpec
+	}
+	if err := packageio.ValidateSecureDirectory(spec.WorkDir); err != nil {
 		return ErrInvalidProcessSpec
 	}
 	if strings.HasPrefix(spec.Address, "unix:") {

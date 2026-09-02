@@ -44,12 +44,14 @@ func IsTransientInstallDirectory(name string) bool {
 	return strings.HasPrefix(name, StagePrefix) || strings.HasPrefix(name, BackupPrefix)
 }
 
-// ReadInstalled 从中性角度读取安装目录：严格解析 manifest + lock、校验内部
-// 一致性与每个组件的工件哈希。部署级安全（目录属主/符号链接/权限位）由宿主
-// 在发现时叠加校验，本函数面向 CLI 工具、依赖解析与安装回读验证。
+// ReadInstalled 读取安装目录：严格解析 manifest + lock、校验内部一致性、
+// 每个组件的工件哈希和统一的文件系统安全策略。
 func ReadInstalled(ctx context.Context, directory string) (InstalledRecord, error) {
 	if directory == "" {
 		return InstalledRecord{}, packagecontract.ErrInvalidFormat
+	}
+	if err := ValidateSecureTree(ctx, directory); err != nil {
+		return InstalledRecord{}, err
 	}
 	root, err := filepath.Abs(directory)
 	if err != nil {
@@ -108,10 +110,15 @@ func RecoverInstallRoot(ctx context.Context, root string) error {
 		return err
 	}
 	root = absoluteRoot
-	entries, err := os.ReadDir(root)
-	if errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Lstat(root); errors.Is(err, os.ErrNotExist) {
 		return nil
+	} else if err != nil {
+		return err
 	}
+	if err := ValidateSecureDirectory(root); err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(root)
 	if err != nil {
 		return err
 	}
@@ -171,6 +178,9 @@ func recoverInstallBackup(ctx context.Context, root, name string) error {
 }
 
 func validateInstallBackup(ctx context.Context, root, backup string) (InstalledRecord, error) {
+	if err := ValidateSecureTree(ctx, backup); err != nil {
+		return InstalledRecord{}, err
+	}
 	source, err := readManifest(backup)
 	if err != nil {
 		return InstalledRecord{}, err
