@@ -118,7 +118,7 @@ func TestValidateSecureTreeRejectsUntrustedWriteACE(t *testing.T) {
 func TestValidateSecureTreeAllowsUntrustedDenyACE(t *testing.T) {
 	root := newSecureTestDir(t)
 	userSID := currentTestUserSID(t)
-	untrustedSID := "S-1-5-21-1111111111-2222222222-3333333333-4444444444"
+	untrustedSID := "S-1-5-21-1111111111-2222222222-3333333333-4000000000"
 	entries := fmt.Sprintf("(D;OICI;GW;;;%s)(A;OICI;GA;;;%s)", untrustedSID, userSID)
 	if err := setTestDACL(root, entries); err != nil {
 		t.Fatal(err)
