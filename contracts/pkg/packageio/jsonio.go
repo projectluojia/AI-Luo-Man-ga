@@ -11,7 +11,8 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packagecontract"
 )
 
-// 文件完整性原语：部署级属主、权限位和目录边界由宿主适配器叠加校验。
+// 文件完整性原语只负责格式与内容；安装目录的安全策略由
+// ValidateSecurePath/ValidateSecureTree 统一提供。
 
 // ReadFileLimited 受限读取单文件：常规文件、非符号链接、大小受限，并在读取
 // 后复核同一文件（防 TOCTOU 替换）。

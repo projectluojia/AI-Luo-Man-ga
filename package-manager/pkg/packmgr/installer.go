@@ -199,6 +199,19 @@ func install(ctx context.Context, root, sourcePath, expectedID, expectedVersion 
 // 的备份目录：任一步失败都把备份恢复回原位，成功后才删除备份。
 // （Windows 不支持 rename 覆盖已存在目录，因此走"移走旧的→移入新的"两步。）
 func publishStage(ctx context.Context, root, targetDir, stageDir string) (InstalledRecord, error) {
+	if err := packageio.ValidateSecureDirectory(root); err != nil {
+		return InstalledRecord{}, err
+	}
+	if err := packageio.ValidateSecureTree(ctx, stageDir); err != nil {
+		return InstalledRecord{}, err
+	}
+	if _, err := os.Lstat(targetDir); err == nil {
+		if err := packageio.ValidateSecureTree(ctx, targetDir); err != nil {
+			return InstalledRecord{}, err
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return InstalledRecord{}, err
+	}
 	backupDir, err := reserveBackupDir(root, targetDir)
 	if err != nil {
 		return InstalledRecord{}, err
@@ -405,6 +418,9 @@ func Uninstall(ctx context.Context, root, id string) (err error) {
 		return fmt.Errorf("目录 %q 不是安装包（缺少 manifest.json）", target)
 	}
 	if err := validateDependents(ctx, absoluteRoot, id, ""); err != nil {
+		return err
+	}
+	if err := packageio.ValidateSecureTree(ctx, target); err != nil {
 		return err
 	}
 	return os.RemoveAll(target)

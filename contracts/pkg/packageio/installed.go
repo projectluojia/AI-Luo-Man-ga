@@ -134,12 +134,14 @@ func IsTransientInstallDirectory(name string) bool {
 	return strings.HasPrefix(name, StagePrefix) || strings.HasPrefix(name, BackupPrefix)
 }
 
-// ReadInstalled 从中性角度读取安装目录：严格解析 manifest + lock、校验内部
-// 一致性与每个组件的工件哈希。部署级安全（目录属主/符号链接/权限位）由宿主
-// 在发现时叠加校验，本函数面向 CLI 工具、依赖解析与安装回读验证。
+// ReadInstalled 读取安装目录：严格解析 manifest + lock、校验内部一致性、
+// 每个组件的工件哈希和统一的文件系统安全策略。
 func ReadInstalled(ctx context.Context, directory string) (InstalledRecord, error) {
 	if directory == "" {
 		return InstalledRecord{}, packagecontract.ErrInvalidFormat
+	}
+	if err := ValidateSecureTree(ctx, directory); err != nil {
+		return InstalledRecord{}, err
 	}
 	root, err := filepath.Abs(directory)
 	if err != nil {
@@ -193,10 +195,20 @@ func RecoverInstallRoot(ctx context.Context, root string) error {
 	if root == "" {
 		return packagecontract.ErrInvalidFormat
 	}
-	entries, err := os.ReadDir(root)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
+	absoluteRoot, err := filepath.Abs(root)
+	if err != nil {
+		return err
 	}
+	root = absoluteRoot
+	if _, err := os.Lstat(root); errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	if err := ValidateSecureDirectory(root); err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(root)
 	if err != nil {
 		return err
 	}
@@ -253,6 +265,69 @@ func recoverInstallBackup(ctx context.Context, root, name string) error {
 		}
 	}
 	return nil
+}
+
+func validateInstallBackup(ctx context.Context, root, backup string) (InstalledRecord, error) {
+	if err := ValidateSecureTree(ctx, backup); err != nil {
+		return InstalledRecord{}, err
+	}
+	source, err := readManifest(backup)
+	if err != nil {
+		return InstalledRecord{}, err
+	}
+	lockBytes, err := ReadFileLimited(filepath.Join(backup, "lock.json"), packagecontract.MaxLockBytes)
+	if err != nil {
+		return InstalledRecord{}, err
+	}
+	var lock packagecontract.Lock
+	if err := packagecontract.DecodeStrictJSON(lockBytes, &lock); err != nil {
+		return InstalledRecord{}, err
+	}
+	manifestDigest := sha256.Sum256(source.manifestBytes)
+	if lock.ManifestSHA256 != hex.EncodeToString(manifestDigest[:]) ||
+		packagecontract.ValidateLock(lock, source.Manifest) != nil {
+		return InstalledRecord{}, packagecontract.ErrInvalidFormat
+	}
+	originalRoot := filepath.Join(root, source.Manifest.ID)
+	relocated := lock
+	relocated.Artifacts = append([]packagecontract.LockedArtifact(nil), lock.Artifacts...)
+	for index := range relocated.Artifacts {
+		artifact := &relocated.Artifacts[index]
+		artifact.Path, err = relocatePath(originalRoot, backup, artifact.Path)
+		if err != nil {
+			return InstalledRecord{}, err
+		}
+		if artifact.Process != nil {
+			process := *artifact.Process
+			process.Path, err = relocatePath(originalRoot, backup, process.Path)
+			if err != nil {
+				return InstalledRecord{}, err
+			}
+			process.WorkDir, err = relocatePath(originalRoot, backup, process.WorkDir)
+			if err != nil {
+				return InstalledRecord{}, err
+			}
+			artifact.Process = &process
+		}
+	}
+	if err := packagecontract.ValidateLock(relocated, source.Manifest); err != nil {
+		return InstalledRecord{}, err
+	}
+	if err := VerifyInstalledArtifacts(ctx, backup, relocated.Artifacts); err != nil {
+		return InstalledRecord{}, err
+	}
+	return InstalledRecord{Directory: backup, Manifest: source.Manifest, Lock: lock}, nil
+}
+
+func relocatePath(from, to, value string) (string, error) {
+	if value == "" || !filepath.IsAbs(value) || filepath.Clean(value) != value {
+		return "", packagecontract.ErrInvalidFormat
+	}
+	relative, err := filepath.Rel(from, value)
+	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return "", packagecontract.ErrInvalidFormat
+	}
+	return filepath.Join(to, relative), nil
 }
 
 // ListInstalled 列出安装根目录内的全部已安装包（按 ID 排序）。
