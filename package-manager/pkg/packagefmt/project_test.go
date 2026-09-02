@@ -99,3 +99,33 @@ path = "linked"
 		t.Fatalf("ParseProject(symlink escape) = %v, want ErrSourceInvalid", err)
 	}
 }
+
+func TestParseProjectAcceptsSymlinkWithinProject(t *testing.T) {
+	projectDir := t.TempDir()
+	packageDir := filepath.Join(projectDir, "packages", "demo")
+	if err := os.MkdirAll(packageDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(projectDir, "linked")
+	if err := os.Symlink(packageDir, link); err != nil {
+		t.Skipf("当前平台不允许创建目录符号链接: %v", err)
+	}
+	path := filepath.Join(projectDir, ProjectFileName)
+	if err := os.WriteFile(path, []byte(`
+[project]
+id = "ailuo"
+
+[dependencies."demo.pkg"]
+version = "1.0.0"
+path = "linked"
+`), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := ParseProject(path)
+	if err != nil {
+		t.Fatalf("ParseProject(in-project symlink) = %v", err)
+	}
+	if got := manifest.Dependencies[0].Source; got != "path:linked" {
+		t.Fatalf("source = %q, want path:linked", got)
+	}
+}

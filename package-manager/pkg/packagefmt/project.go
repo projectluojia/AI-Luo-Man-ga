@@ -133,7 +133,7 @@ func ResolveLocalDependencyPath(projectRoot, baseDir, relative string) (string, 
 	if err != nil {
 		return "", err
 	}
-	if !pathWithin(root, base) || !pathWithin(base, candidate) {
+	if !pathWithin(root, base) || !pathWithin(root, candidate) {
 		return "", fmt.Errorf("%w: 本地依赖路径逃逸项目目录", ErrSourceInvalid)
 	}
 	return candidate, nil
