@@ -38,7 +38,11 @@ func NewService(root string) (*Service, error) {
 		changes: make(chan struct{}, 1),
 	}
 	if err := service.load(); err != nil {
-		return nil, err
+		if !errors.Is(err, ErrInvalid) {
+			return nil, err
+		}
+		service.refreshSecrets()
+		service.runtime = RuntimeState{State: "setup_required", Message: "本地配置已失效，请重新配置"}
 	}
 	return service, nil
 }
