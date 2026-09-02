@@ -20,6 +20,9 @@ func HashArtifact(ctx context.Context, path string, maximum int64) (string, erro
 	if err != nil || info.Mode()&os.ModeSymlink != 0 {
 		return "", packagecontract.ErrInvalidFormat
 	}
+	if IsIgnoredArtifactPath(filepath.Base(path)) {
+		return "", packagecontract.ErrInvalidFormat
+	}
 	if info.Mode().IsRegular() {
 		return HashFile(ctx, path, maximum)
 	}
