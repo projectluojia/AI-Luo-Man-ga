@@ -1094,6 +1094,10 @@ func (o *Orchestrator) renewLease(ctx context.Context, cancel context.CancelFunc
 	if interval <= 0 {
 		interval = time.Millisecond
 	}
+	renewBudget := o.config.LeaseDuration + interval
+	if renewBudget < o.config.LeaseDuration {
+		renewBudget = o.config.LeaseDuration
+	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -1104,7 +1108,7 @@ func (o *Orchestrator) renewLease(ctx context.Context, cancel context.CancelFunc
 			// 续期预算取完整租约窗口（而非 1/3）：续期只需在租约到期前完成，
 			// 1/3 窗口在负载下会把瞬时存储慢写误判为续期失败并取消整个 Run。
 			// 每次续期把租约延长到 renewedAt+LeaseDuration，慢续期不丢所有权。
-			renewContext, renewCancel := context.WithTimeout(ctx, o.config.LeaseDuration)
+			renewContext, renewCancel := context.WithTimeout(ctx, renewBudget)
 			err := o.ports.Execution.RenewRunLease(renewContext, run, renewedAt.UTC(), renewedAt.UTC().Add(o.config.LeaseDuration))
 			renewCancel()
 			if err != nil {
