@@ -114,7 +114,8 @@ type retryOnceAgent struct {
 
 type slowSuccessAgent struct {
 	executorv1.UnimplementedExecutorRuntimeServer
-	delay time.Duration
+	ready   chan struct{}
+	release chan struct{}
 }
 
 type sideEffectFailureAgent struct {
@@ -353,8 +354,9 @@ func (a *slowSuccessAgent) Run(stream executorv1.ExecutorRuntime_RunServer) erro
 	if err != nil {
 		return err
 	}
+	close(a.ready)
 	select {
-	case <-time.After(a.delay):
+	case <-a.release:
 	case <-stream.Context().Done():
 		return stream.Context().Err()
 	}
@@ -1639,7 +1641,8 @@ func TestOrchestratorDurablyRetriesOnlyRetryableRunAttempts(t *testing.T) {
 func TestOrchestratorRenewsActiveRunLease(t *testing.T) {
 	listener := bufconn.Listen(1 << 20)
 	grpcServer := grpc.NewServer()
-	executorv1.RegisterExecutorRuntimeServer(grpcServer, &slowSuccessAgent{delay: 800 * time.Millisecond})
+	executor := &slowSuccessAgent{ready: make(chan struct{}), release: make(chan struct{})}
+	executorv1.RegisterExecutorRuntimeServer(grpcServer, executor)
 	go grpcServer.Serve(listener)
 	defer grpcServer.Stop()
 	connection, err := grpc.DialContext(context.Background(), "bufnet",
@@ -1667,13 +1670,30 @@ func TestOrchestratorRenewsActiveRunLease(t *testing.T) {
 			Context: newSessionSource(t, baseStore), Prompts: testPromptRenderer{},
 		},
 	)
-	if _, err := runOrchestrator(orchestrator, context.Background(), kernelecho.RunRequest{
-		Message: "renew", IdempotencyKey: "renew-run",
-	}, nil); err != nil {
-		t.Fatal(err)
+	runDone := make(chan error, 1)
+	go func() {
+		_, runErr := runOrchestrator(orchestrator, context.Background(), kernelecho.RunRequest{
+			Message: "renew", IdempotencyKey: "renew-run",
+		}, nil)
+		runDone <- runErr
+	}()
+	select {
+	case <-executor.ready:
+	case <-time.After(2 * time.Second):
+		t.Fatal("executor did not receive Run")
 	}
-	if store.renewals.Load() < 2 {
-		t.Fatalf("lease renewals=%d, want at least 2", store.renewals.Load())
+	deadline := time.Now().Add(2 * time.Second)
+	for store.renewals.Load() < 2 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if renewals := store.renewals.Load(); renewals < 2 {
+		close(executor.release)
+		<-runDone
+		t.Fatalf("lease renewals=%d, want at least 2", renewals)
+	}
+	close(executor.release)
+	if err := <-runDone; err != nil {
+		t.Fatal(err)
 	}
 }
 
