@@ -226,19 +226,21 @@ func (f webPolicyFunc) Snapshot(ctx context.Context, appID string) (appconfig.Po
 	return f(ctx, appID)
 }
 
-func (f *fakeOrchestrator) run(ctx context.Context, echoID string, emit kernelecho.EventEmitter) error {
+func (f *fakeOrchestrator) run(ctx context.Context, echoID string, emit kernelecho.EventEmitter) (resultErr error) {
 	if f.observed != nil {
 		f.observed <- observedContext{
 			requestID: observe.String(ctx, "request_id"),
 			traceID:   observe.String(ctx, "trace_id"),
 		}
 	}
+	persistenceContext, persistenceCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer persistenceCancel()
 	now := time.Now().UTC()
-	runs, err := f.store.ListRuns(ctx, "campus-services", echoID)
+	runs, err := f.store.ListRuns(persistenceContext, "campus-services", echoID)
 	if err != nil || len(runs) != 1 {
 		return errors.New("expected one persisted Run")
 	}
-	run, err := f.store.ClaimRun(ctx, "campus-services", echoID, runs[0].ID, "lease-"+echoID, now, now.Add(time.Minute))
+	run, err := f.store.ClaimRun(persistenceContext, "campus-services", echoID, runs[0].ID, "lease-"+echoID, now, now.Add(time.Minute))
 	if err != nil {
 		return err
 	}
@@ -246,7 +248,16 @@ func (f *fakeOrchestrator) run(ctx context.Context, echoID string, emit kernelec
 		close(f.runClaimed)
 	}
 	active := f.activeRuns.Add(1)
-	defer f.activeRuns.Add(-1)
+	completed := false
+	defer func() {
+		f.activeRuns.Add(-1)
+		if completed || ctx.Err() == nil {
+			return
+		}
+		if err := f.store.CompleteRun(persistenceContext, run, kernelecho.RunStatusCancelled, kernelecho.StatusCancelled, kernelecho.Output{}, publicerror.Echo("cancelled"), time.Now().UTC()); err != nil {
+			resultErr = errors.Join(resultErr, err)
+		}
+	}()
 	for {
 		maximum := f.maxActiveRuns.Load()
 		if active <= maximum || f.maxActiveRuns.CompareAndSwap(maximum, active) {
@@ -257,12 +268,12 @@ func (f *fakeOrchestrator) run(ctx context.Context, echoID string, emit kernelec
 		select {
 		case <-f.runGate:
 		case <-ctx.Done():
-			return f.store.CompleteRun(context.Background(), run, kernelecho.RunStatusCancelled, kernelecho.StatusCancelled, kernelecho.Output{}, publicerror.Echo("cancelled"), time.Now().UTC())
+			return ctx.Err()
 		}
 	}
 	if f.block {
 		<-ctx.Done()
-		return f.store.CompleteRun(context.Background(), run, kernelecho.RunStatusCancelled, kernelecho.StatusCancelled, kernelecho.Output{}, publicerror.Echo("cancelled"), time.Now().UTC())
+		return ctx.Err()
 	}
 	events := []kernelecho.Event{
 		{AppID: "campus-services", EchoID: echoID, RunID: run.ID, Type: "output.delta", Payload: outputEvent("你好"), CreatedAt: time.Now().UTC()},
@@ -270,14 +281,24 @@ func (f *fakeOrchestrator) run(ctx context.Context, echoID string, emit kernelec
 	}
 	storedEvents := make([]kernelecho.Event, 0, len(events))
 	for _, event := range events {
-		stored, err := f.store.AppendEchoEvent(ctx, event)
+		stored, err := f.store.AppendEchoEvent(persistenceContext, event)
 		if err != nil {
 			return err
 		}
 		storedEvents = append(storedEvents, stored)
 	}
-	if err := f.store.CompleteRun(ctx, run, kernelecho.RunStatusSucceeded, kernelecho.StatusSucceeded, kernelecho.Output{ContentType: "text/plain", Data: []byte("你好")}, publicerror.Error{}, time.Now().UTC()); err != nil {
+	runStatus, echoStatus := kernelecho.RunStatusSucceeded, kernelecho.StatusSucceeded
+	output := kernelecho.Output{ContentType: "text/plain", Data: []byte("你好")}
+	failure := publicerror.Error{}
+	if ctx.Err() != nil {
+		runStatus, echoStatus, output, failure = kernelecho.RunStatusCancelled, kernelecho.StatusCancelled, kernelecho.Output{}, publicerror.Echo("cancelled")
+	}
+	if err := f.store.CompleteRun(persistenceContext, run, runStatus, echoStatus, output, failure, time.Now().UTC()); err != nil {
 		return err
+	}
+	completed = true
+	if ctx.Err() != nil {
+		return ctx.Err()
 	}
 	for _, event := range storedEvents {
 		if err := emit(event); err != nil {
