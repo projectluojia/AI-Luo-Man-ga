@@ -41,9 +41,11 @@ func validatePlatformPath(path string, _ os.FileInfo) error {
 			uint32(ace.Header.AceSize) < sidOffset+minimumSIDLength {
 			return ErrInsecurePath
 		}
+		allowed := false
 		switch ace.Header.AceType {
 		case windows.ACCESS_DENIED_ACE_TYPE:
 		case windows.ACCESS_ALLOWED_ACE_TYPE:
+			allowed = true
 		default:
 			return ErrInsecurePath
 		}
@@ -55,7 +57,7 @@ func validatePlatformPath(path string, _ os.FileInfo) error {
 		if sidLength < minimumSIDLength || sidOffset+sidLength > uint32(ace.Header.AceSize) {
 			return ErrInsecurePath
 		}
-		if hasUntrustedWriteRights(ace.Mask) && !trustedWriter(aceSID, processOwner) {
+		if allowed && hasUntrustedWriteRights(ace.Mask) && !trustedWriter(aceSID, processOwner) {
 			return ErrInsecurePath
 		}
 	}
