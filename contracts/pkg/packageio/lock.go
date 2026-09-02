@@ -21,6 +21,9 @@ func CanonicalLockDigest(ctx context.Context, directory string, lock packagecont
 	if err != nil {
 		return "", err
 	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	canonical := lock
 	canonical.Artifacts = append([]packagecontract.LockedArtifact(nil), lock.Artifacts...)
 	for index := range canonical.Artifacts {
