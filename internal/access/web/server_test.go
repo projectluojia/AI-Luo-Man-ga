@@ -297,9 +297,6 @@ func (f *fakeOrchestrator) run(ctx context.Context, echoID string, emit kernelec
 		return err
 	}
 	completed = true
-	if ctx.Err() != nil {
-		return ctx.Err()
-	}
 	for _, event := range storedEvents {
 		if err := emit(event); err != nil {
 			return err
