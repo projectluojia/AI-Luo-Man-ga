@@ -28,14 +28,15 @@ func NewMemoryStore(t *testing.T) *sqlite.Store {
 }
 
 // CloseAndWait 关闭测试存储并等待文件句柄释放，随后删除临时目录：
-// 反复 GC + 重试直到目录可删（上限 5 秒），避免并行测试负载下 Windows
-// 延迟释放句柄导致 TempDir 清理失败。
+// 反复 GC + 重试直到目录可删（上限 10 秒），避免并行测试负载下 Windows
+// 延迟释放句柄导致 TempDir 清理失败。modernc 的 finalizer 在高负载 runner
+// 上可能明显晚于数据库关闭完成，5 秒不足以覆盖这一窗口。
 func CloseAndWait(t *testing.T, store *sqlite.Store, dir string) {
 	t.Helper()
 	if err := store.Close(); err != nil {
 		t.Errorf("close store: %v", err)
 	}
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(10 * time.Second)
 	for {
 		if err := os.RemoveAll(dir); err == nil {
 			return
