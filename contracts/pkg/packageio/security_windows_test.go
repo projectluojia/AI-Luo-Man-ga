@@ -14,17 +14,21 @@ import (
 )
 
 func secureTestDirectory(path string) error {
-	user, err := windows.GetCurrentProcessToken().GetTokenUser()
+	userSID, err := currentTestUserSIDValue()
 	if err != nil {
 		return err
 	}
 	return setTestDACL(path, fmt.Sprintf(
 		"(A;OICI;GA;;;%s)(A;OICI;GA;;;SY)(A;OICI;GA;;;BA)",
-		user.User.Sid.String(),
+		userSID,
 	))
 }
 
 func setTestDACL(path, entries string) error {
+	user, err := windows.GetCurrentProcessToken().GetTokenUser()
+	if err != nil {
+		return err
+	}
 	descriptor, err := windows.SecurityDescriptorFromString("D:P" + entries)
 	if err != nil {
 		return err
@@ -36,18 +40,26 @@ func setTestDACL(path, entries string) error {
 	return windows.SetNamedSecurityInfo(
 		path,
 		windows.SE_FILE_OBJECT,
-		windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION,
-		nil, nil, dacl, nil,
+		windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION,
+		user.User.Sid, nil, dacl, nil,
 	)
 }
 
 func currentTestUserSID(t *testing.T) string {
 	t.Helper()
-	user, err := windows.GetCurrentProcessToken().GetTokenUser()
+	sid, err := currentTestUserSIDValue()
 	if err != nil {
 		t.Fatal(err)
 	}
-	return user.User.Sid.String()
+	return sid
+}
+
+func currentTestUserSIDValue() (string, error) {
+	user, err := windows.GetCurrentProcessToken().GetTokenUser()
+	if err != nil {
+		return "", err
+	}
+	return user.User.Sid.String(), nil
 }
 
 func TestValidateSecureTreeRejectsUntrustedWriteACE(t *testing.T) {
