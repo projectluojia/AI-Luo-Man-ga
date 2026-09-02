@@ -2009,3 +2009,15 @@ func TestOrchestratorUsesPromptServiceRenderer(t *testing.T) {
 		t.Fatalf("渲染结果未进入最终系统提示或渠道段被重复拼接: %q", start.GetSystemPrompt())
 	}
 }
+
+func TestNewOrchestratorRejectsNegativeLeaseDuration(t *testing.T) {
+	defer func() {
+		if recovered := recover(); recovered != "orchestrator lease duration must be positive" {
+			t.Fatalf("panic=%v", recovered)
+		}
+	}()
+	kernelecho.NewOrchestrator(nil, nil, nil, nil, kernelecho.StorePorts{}, kernelecho.Config{
+		LeaseDuration: -time.Second,
+	})
+	t.Fatal("negative lease duration was accepted")
+}
