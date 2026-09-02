@@ -124,10 +124,17 @@ func Install(ctx context.Context, root, sourcePath string) (InstalledRecord, err
 		if err := copyArtifact(artifact.path, stageArtifact); err != nil {
 			return InstalledRecord{}, err
 		}
+		stageDigest, err := packageio.HashArtifact(ctx, stageArtifact, packagecontract.MaxArtifactBytes)
+		if err != nil {
+			return InstalledRecord{}, err
+		}
+		if stageDigest != artifact.digest {
+			return InstalledRecord{}, fmt.Errorf("组件 %s 工件在安装期间发生变化", artifact.componentID)
+		}
 		locked := packagecontract.LockedArtifact{
 			ComponentID: artifact.componentID,
 			Path:        filepath.Join(targetDir, artifactName),
-			SHA256:      artifact.digest,
+			SHA256:      stageDigest,
 		}
 		if component, ok := packagecontract.FindComponent(source.Manifest, artifact.componentID); ok && component.Mode == packagecontract.ModeIsolated {
 			locked.Process, err = defaultProcessSpec(component, filepath.Join(targetDir, artifactName), targetDir, artifact.directory)
