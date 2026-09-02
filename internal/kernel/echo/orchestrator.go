@@ -105,6 +105,9 @@ func NewOrchestrator(
 	if config.LeaseDuration == 0 {
 		config.LeaseDuration = 15 * time.Second
 	}
+	if config.LeaseDuration <= 0 {
+		panic("orchestrator lease duration must be positive")
+	}
 	if config.MaxRunAttempts == 0 {
 		config.MaxRunAttempts = 1
 	}
