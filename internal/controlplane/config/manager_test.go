@@ -58,7 +58,7 @@ func TestManagerStartsInSetupModeAndPersistsQQSecretPrivately(t *testing.T) {
 	}
 }
 
-func TestManagerRejectsLegacyProviderAndProcessFields(t *testing.T) {
+func TestManagerRequiresFreshSaveForLegacyProviderAndProcessFields(t *testing.T) {
 	root := t.TempDir()
 	settings, err := normalize(validInput())
 	if err != nil {
@@ -103,8 +103,25 @@ func TestManagerRejectsLegacyProviderAndProcessFields(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := NewService(root); err == nil {
-		t.Fatal("legacy settings were accepted; final configuration must fail closed")
+	manager, err := NewService(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ready := manager.CurrentResolved(); ready {
+		t.Fatal("legacy settings were exposed as a resolved configuration")
+	}
+	if runtime := manager.Snapshot().Runtime; runtime.State != "setup_required" {
+		t.Fatalf("runtime=%+v, want setup_required", runtime)
+	}
+	if _, err := manager.Save(validInput()); err != nil {
+		t.Fatalf("fresh save after legacy settings: %v", err)
+	}
+	current, err := os.ReadFile(filepath.Join(root, "ailuo-settings.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(current), "model_base_url") || strings.Contains(string(current), "agent_process") {
+		t.Fatal("fresh settings retained legacy fields")
 	}
 }
 
