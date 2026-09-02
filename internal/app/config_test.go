@@ -76,6 +76,7 @@ func TestDefaultInstallRootIsAbsoluteOrEmpty(t *testing.T) {
 
 func TestConfigureInstalledRuntimesAllowsEmptySecureCatalog(t *testing.T) {
 	root := t.TempDir()
+	prepareSecureTestDirectory(t, root)
 	if err := os.Chmod(root, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -204,6 +205,7 @@ func writeProjectLock(t *testing.T, projectRoot, installRoot string) {
 func writeInstalledFixture(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
+	prepareSecureTestDirectory(t, root)
 	writeInstalledPackage(t, root, "main.extension")
 	return root
 }
