@@ -275,6 +275,9 @@ func (f *fakeOrchestrator) run(ctx context.Context, echoID string, emit kernelec
 		<-ctx.Done()
 		return ctx.Err()
 	}
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
 	events := []kernelecho.Event{
 		{AppID: "campus-services", EchoID: echoID, RunID: run.ID, Type: "output.delta", Payload: outputEvent("你好"), CreatedAt: time.Now().UTC()},
 		{AppID: "campus-services", EchoID: echoID, RunID: run.ID, Type: "run.completed", Payload: outputEvent("你好"), CreatedAt: time.Now().UTC()},
@@ -287,13 +290,7 @@ func (f *fakeOrchestrator) run(ctx context.Context, echoID string, emit kernelec
 		}
 		storedEvents = append(storedEvents, stored)
 	}
-	runStatus, echoStatus := kernelecho.RunStatusSucceeded, kernelecho.StatusSucceeded
-	output := kernelecho.Output{ContentType: "text/plain", Data: []byte("你好")}
-	failure := publicerror.Error{}
-	if ctx.Err() != nil {
-		runStatus, echoStatus, output, failure = kernelecho.RunStatusCancelled, kernelecho.StatusCancelled, kernelecho.Output{}, publicerror.Echo("cancelled")
-	}
-	if err := f.store.CompleteRun(persistenceContext, run, runStatus, echoStatus, output, failure, time.Now().UTC()); err != nil {
+	if err := f.store.CompleteRun(persistenceContext, run, kernelecho.RunStatusSucceeded, kernelecho.StatusSucceeded, kernelecho.Output{ContentType: "text/plain", Data: []byte("你好")}, publicerror.Error{}, time.Now().UTC()); err != nil {
 		return err
 	}
 	completed = true
