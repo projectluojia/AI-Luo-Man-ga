@@ -89,6 +89,8 @@ type Scheduler struct {
 	activeWG   sync.WaitGroup
 	workerWG   sync.WaitGroup
 	work       chan struct{}
+	workerStop chan struct{}
+	stopping   bool
 	startOnce  sync.Once
 	shutdownMu sync.Mutex
 	workers    int
@@ -110,18 +112,19 @@ func NewScheduler(
 	}
 	schedulerCtx, stop := context.WithCancel(ctx)
 	scheduler := &Scheduler{
-		ctx:       schedulerCtx,
-		stop:      stop,
-		runner:    runner,
-		reader:    reader,
-		events:    events,
-		appID:     appID,
-		active:    make(map[runKey]context.CancelFunc),
-		pending:   make(map[string]context.Context),
-		work:      make(chan struct{}, 1),
-		workers:   schedulerWorkers,
-		poll:      schedulerPoll,
-		batchSize: schedulerBatchSize,
+		ctx:        schedulerCtx,
+		stop:       stop,
+		runner:     runner,
+		reader:     reader,
+		events:     events,
+		appID:      appID,
+		active:     make(map[runKey]context.CancelFunc),
+		pending:    make(map[string]context.Context),
+		work:       make(chan struct{}, 1),
+		workerStop: make(chan struct{}),
+		workers:    schedulerWorkers,
+		poll:       schedulerPoll,
+		batchSize:  schedulerBatchSize,
 	}
 	for _, option := range options {
 		if option != nil {
@@ -157,11 +160,15 @@ func (s *Scheduler) Recover(ctx context.Context) (int, error) {
 
 // Enqueue 记录入口上下文并唤醒一个 worker；实际工作仍以数据库队列为准。
 func (s *Scheduler) Enqueue(parent context.Context, echoID string) {
-	if echoID == "" || s.ctx.Err() != nil {
+	if echoID == "" {
+		return
+	}
+	s.activeMu.Lock()
+	if s.stopping || s.ctx.Err() != nil {
+		s.activeMu.Unlock()
 		return
 	}
 	runContext := observe.Copy(parent, s.ctx)
-	s.activeMu.Lock()
 	active := false
 	for run := range s.active {
 		if run.echoID == echoID {
@@ -206,6 +213,8 @@ func (s *Scheduler) worker() {
 	defer ticker.Stop()
 	for {
 		select {
+		case <-s.workerStop:
+			return
 		case <-s.ctx.Done():
 			return
 		case <-s.work:
@@ -217,9 +226,12 @@ func (s *Scheduler) worker() {
 }
 
 func (s *Scheduler) runNext() bool {
-	if s.ctx.Err() != nil {
+	s.activeMu.Lock()
+	if s.stopping || s.ctx.Err() != nil {
+		s.activeMu.Unlock()
 		return false
 	}
+	s.activeMu.Unlock()
 	work, err := s.runner.Runnable(s.ctx, s.batchSize)
 	if err != nil {
 		if s.ctx.Err() == nil {
@@ -233,7 +245,7 @@ func (s *Scheduler) runNext() bool {
 	var runContext context.Context
 	var cancel context.CancelFunc
 	s.activeMu.Lock()
-	if s.ctx.Err() == nil {
+	if !s.stopping && s.ctx.Err() == nil {
 		for index := range work {
 			key := runKey{echoID: work[index].Run.EchoID, runID: work[index].Run.ID}
 			if _, running := s.active[key]; running {
@@ -311,8 +323,9 @@ func (s *Scheduler) Shutdown(ctx context.Context) error {
 }
 
 func (s *Scheduler) shutdown(ctx context.Context) error {
-	s.stop()
 	s.activeMu.Lock()
+	firstStop := !s.stopping
+	s.stopping = true
 	activeEchoIDs := make(map[string]struct{}, len(s.active))
 	activeCancellations := make([]context.CancelFunc, 0, len(s.active))
 	for key := range s.active {
@@ -323,6 +336,9 @@ func (s *Scheduler) shutdown(ctx context.Context) error {
 	}
 	clear(s.pending)
 	s.activeMu.Unlock()
+	if firstStop {
+		close(s.workerStop)
+	}
 	for _, cancel := range activeCancellations {
 		cancel()
 	}
@@ -334,9 +350,11 @@ func (s *Scheduler) shutdown(ctx context.Context) error {
 	}()
 	select {
 	case <-ctx.Done():
+		s.stop()
 		return fmt.Errorf("等待活动 Run 停止：%w", ctx.Err())
 	case <-done:
 	}
+	s.stop()
 	var cancellationErrors []error
 	if err := s.runner.CancelQueuedRuns(ctx); err != nil {
 		cancellationErrors = append(cancellationErrors, fmt.Errorf("持久化取消排队 Echo：%w", err))
