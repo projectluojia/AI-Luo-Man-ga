@@ -2,6 +2,7 @@ package packageio_test
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -81,5 +82,13 @@ func TestCanonicalLockDigestRejectsOutsidePath(t *testing.T) {
 	}
 	if _, err := packageio.CanonicalLockDigest(context.Background(), root, lock); err == nil {
 		t.Fatal("CanonicalLockDigest accepted path outside install root")
+	}
+}
+
+func TestCanonicalLockDigestHonorsCancellationWithEmptyLock(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := packageio.CanonicalLockDigest(ctx, t.TempDir(), packagecontract.Lock{}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("CanonicalLockDigest error = %v, want context.Canceled", err)
 	}
 }
