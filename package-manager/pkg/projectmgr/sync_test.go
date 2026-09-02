@@ -65,6 +65,30 @@ path = "packages/app"
 	}
 }
 
+func TestSyncRejectsSameVersionArtifactDrift(t *testing.T) {
+	projectDir := t.TempDir()
+	packageDir := filepath.Join(projectDir, "packages", "demo")
+	writePackage(t, packageDir, "demo.pkg", "1.0.0", "demo.wasm", "")
+	writeProject(t, projectDir, `
+[project]
+id = "ailuo"
+
+[dependencies."demo.pkg"]
+version = "1.0.0"
+path = "packages/demo"
+`)
+	installRoot := filepath.Join(projectDir, "runtime")
+	if _, err := projectmgr.Sync(t.Context(), filepath.Join(projectDir, "ailuo.toml"), installRoot, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(packageDir, "demo.wasm"), []byte("changed"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := projectmgr.Sync(t.Context(), filepath.Join(projectDir, "ailuo.toml"), installRoot, nil); err == nil || !strings.Contains(err.Error(), "内容不一致") {
+		t.Fatalf("Sync after same-version artifact drift = %v, want immutable-content error", err)
+	}
+}
+
 func TestSyncRejectsUnsatisfiedTransitiveConstraint(t *testing.T) {
 	projectDir := t.TempDir()
 	appDir := filepath.Join(projectDir, "packages", "app")
