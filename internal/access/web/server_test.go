@@ -260,16 +260,23 @@ func (f *fakeOrchestrator) run(ctx context.Context, echoID string, emit kernelec
 		{AppID: "campus-services", EchoID: echoID, RunID: run.ID, Type: "output.delta", Payload: outputEvent("你好"), CreatedAt: time.Now().UTC()},
 		{AppID: "campus-services", EchoID: echoID, RunID: run.ID, Type: "run.completed", Payload: outputEvent("你好"), CreatedAt: time.Now().UTC()},
 	}
+	storedEvents := make([]kernelecho.Event, 0, len(events))
 	for _, event := range events {
 		stored, err := f.store.AppendEchoEvent(ctx, event)
 		if err != nil {
 			return err
 		}
-		if err := emit(stored); err != nil {
+		storedEvents = append(storedEvents, stored)
+	}
+	if err := f.store.CompleteRun(ctx, run, kernelecho.RunStatusSucceeded, kernelecho.StatusSucceeded, kernelecho.Output{ContentType: "text/plain", Data: []byte("你好")}, publicerror.Error{}, time.Now().UTC()); err != nil {
+		return err
+	}
+	for _, event := range storedEvents {
+		if err := emit(event); err != nil {
 			return err
 		}
 	}
-	return f.store.CompleteRun(ctx, run, kernelecho.RunStatusSucceeded, kernelecho.StatusSucceeded, kernelecho.Output{ContentType: "text/plain", Data: []byte("你好")}, publicerror.Error{}, time.Now().UTC())
+	return nil
 }
 
 func (f *fakeOrchestrator) RunQueued(ctx context.Context, work kernelecho.RunWork, emit kernelecho.EventEmitter) error {
