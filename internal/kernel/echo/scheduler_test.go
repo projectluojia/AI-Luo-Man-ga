@@ -56,6 +56,37 @@ type shutdownOrderEvents struct{}
 func (shutdownOrderEvents) Publish(Event)         {}
 func (shutdownOrderEvents) Finish(string, string) {}
 
+type pollingShutdownRunner struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (r *pollingShutdownRunner) Recoverable(context.Context) ([]RunWork, error) {
+	return nil, nil
+}
+
+func (r *pollingShutdownRunner) Runnable(ctx context.Context, _ int) ([]RunWork, error) {
+	close(r.started)
+	select {
+	case <-r.release:
+		return nil, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func (r *pollingShutdownRunner) RunQueued(context.Context, RunWork, EventEmitter) error {
+	return nil
+}
+
+func (r *pollingShutdownRunner) Cancel(context.Context, string) (bool, error) {
+	return false, nil
+}
+
+func (r *pollingShutdownRunner) CancelQueuedRuns(context.Context) error {
+	return nil
+}
+
 func TestSchedulerShutdownStopsWorkersBeforeQueuedCancellation(t *testing.T) {
 	runner := &shutdownOrderRunner{started: make(chan struct{}), finished: make(chan struct{})}
 	scheduler := NewScheduler(context.Background(), runner, shutdownOrderReader{}, shutdownOrderEvents{}, "app")
@@ -72,5 +103,39 @@ func TestSchedulerShutdownStopsWorkersBeforeQueuedCancellation(t *testing.T) {
 	defer cancel()
 	if err := scheduler.Shutdown(ctx); err != nil {
 		t.Fatalf("Shutdown: %v", err)
+	}
+}
+
+func TestSchedulerShutdownDoesNotCancelPollingQuery(t *testing.T) {
+	runner := &pollingShutdownRunner{started: make(chan struct{}), release: make(chan struct{})}
+	scheduler := NewScheduler(
+		context.Background(), runner, shutdownOrderReader{}, shutdownOrderEvents{}, "app",
+		WithScheduler(1, time.Millisecond, 1),
+	)
+	if _, err := scheduler.Recover(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-runner.started:
+	case <-time.After(time.Second):
+		t.Fatal("调度器没有开始读取持久队列")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	shutdownDone := make(chan error, 1)
+	go func() { shutdownDone <- scheduler.Shutdown(ctx) }()
+	select {
+	case err := <-shutdownDone:
+		t.Fatalf("轮询未结束就完成 Shutdown: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(runner.release)
+	select {
+	case err := <-shutdownDone:
+		if err != nil {
+			t.Fatalf("Shutdown: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("轮询结束后 Shutdown 未完成")
 	}
 }
