@@ -67,9 +67,16 @@ class ObserveTest(unittest.TestCase):
             ("AILUO_LOG_LEVEL", "verbose"),
             ("AILUO_LOG_FORMAT", "xml"),
         ):
-            with self.subTest(name=name, value=value), patch.dict(os.environ, {name: value}):
-                with self.assertRaises(ValueError):
-                    configure(io.StringIO())
+            with self.subTest(name=name, value=value):
+                env = {
+                    "AILUO_LOG_MAX_VALUE_LENGTH": "4096",
+                    "AILUO_LOG_LEVEL": "INFO",
+                    "AILUO_LOG_FORMAT": "console",
+                }
+                env[name] = value
+                with patch.dict(os.environ, env):
+                    with self.assertRaises(ValueError):
+                        configure(io.StringIO())
 
     def tearDown(self) -> None:
         logging.getLogger().handlers.clear()
