@@ -319,10 +319,29 @@ func (s *Scheduler) shutdown(ctx context.Context) error {
 	s.stop()
 	s.activeMu.Lock()
 	activeEchoIDs := make(map[string]struct{}, len(s.active))
+	activeCancellations := make([]context.CancelFunc, 0, len(s.active))
 	for key := range s.active {
 		activeEchoIDs[key.echoID] = struct{}{}
 	}
+	for _, cancel := range s.active {
+		activeCancellations = append(activeCancellations, cancel)
+	}
+	clear(s.pending)
 	s.activeMu.Unlock()
+	for _, cancel := range activeCancellations {
+		cancel()
+	}
+	done := make(chan struct{})
+	go func() {
+		s.activeWG.Wait()
+		s.workerWG.Wait()
+		close(done)
+	}()
+	select {
+	case <-ctx.Done():
+		return fmt.Errorf("等待活动 Run 停止：%w", ctx.Err())
+	case <-done:
+	}
 	var cancellationErrors []error
 	if err := s.runner.CancelQueuedRuns(ctx); err != nil {
 		cancellationErrors = append(cancellationErrors, fmt.Errorf("持久化取消排队 Echo：%w", err))
@@ -332,19 +351,5 @@ func (s *Scheduler) shutdown(ctx context.Context) error {
 			cancellationErrors = append(cancellationErrors, fmt.Errorf("持久化取消 Echo %s：%w", echoID, err))
 		}
 	}
-	s.activeMu.Lock()
-	clear(s.pending)
-	s.activeMu.Unlock()
-	done := make(chan struct{})
-	go func() {
-		s.activeWG.Wait()
-		s.workerWG.Wait()
-		close(done)
-	}()
-	select {
-	case <-done:
-		return errors.Join(cancellationErrors...)
-	case <-ctx.Done():
-		return errors.Join(append(cancellationErrors, fmt.Errorf("等待活动 Run 停止：%w", ctx.Err()))...)
-	}
+	return errors.Join(cancellationErrors...)
 }
