@@ -8,24 +8,26 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"unsafe"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packageio"
 	"golang.org/x/sys/windows"
 )
 
 func secureTestDirectory(path string) error {
-	userSID, err := currentTestUserSIDValue()
+	ownerSID, userSID, err := currentTestSecuritySIDs()
 	if err != nil {
 		return err
 	}
 	return setTestDACL(path, fmt.Sprintf(
-		"(A;OICI;GA;;;%s)(A;OICI;GA;;;SY)(A;OICI;GA;;;BA)",
+		"(A;OICI;GA;;;%s)(A;OICI;GA;;;%s)(A;OICI;GA;;;SY)(A;OICI;GA;;;BA)",
+		ownerSID,
 		userSID,
 	))
 }
 
 func setTestDACL(path, entries string) error {
-	user, err := windows.GetCurrentProcessToken().GetTokenUser()
+	ownerSID, _, err := currentTestSecuritySIDs()
 	if err != nil {
 		return err
 	}
@@ -41,7 +43,7 @@ func setTestDACL(path, entries string) error {
 		path,
 		windows.SE_FILE_OBJECT,
 		windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION,
-		user.User.Sid, nil, dacl, nil,
+		ownerSID, nil, dacl, nil,
 	)
 }
 
@@ -55,11 +57,51 @@ func currentTestUserSID(t *testing.T) string {
 }
 
 func currentTestUserSIDValue() (string, error) {
-	user, err := windows.GetCurrentProcessToken().GetTokenUser()
+	_, userSID, err := currentTestSecuritySIDs()
 	if err != nil {
 		return "", err
 	}
-	return user.User.Sid.String(), nil
+	return userSID.String(), nil
+}
+
+func currentTestSecuritySIDs() (owner, user *windows.SID, err error) {
+	userInfo, err := windows.GetCurrentProcessToken().GetTokenUser()
+	if err != nil {
+		return nil, nil, err
+	}
+	if userInfo == nil || userInfo.User.Sid == nil || !userInfo.User.Sid.IsValid() {
+		return nil, nil, windows.ERROR_INVALID_SID
+	}
+	userSID, err := userInfo.User.Sid.Copy()
+	if err != nil {
+		return nil, nil, err
+	}
+	var length uint32
+	token := windows.GetCurrentProcessToken()
+	err = windows.GetTokenInformation(token, windows.TokenOwner, nil, 0, &length)
+	if err != windows.ERROR_INSUFFICIENT_BUFFER || length < uint32(unsafe.Sizeof(testTokenOwnerInformation{})) {
+		if err == nil {
+			return nil, nil, windows.ERROR_INVALID_SID
+		}
+		return nil, nil, err
+	}
+	buffer := make([]byte, length)
+	if err := windows.GetTokenInformation(token, windows.TokenOwner, &buffer[0], length, &length); err != nil {
+		return nil, nil, err
+	}
+	ownerInfo := (*testTokenOwnerInformation)(unsafe.Pointer(&buffer[0]))
+	if ownerInfo.Owner == nil || !ownerInfo.Owner.IsValid() {
+		return nil, nil, windows.ERROR_INVALID_SID
+	}
+	ownerSID, err := ownerInfo.Owner.Copy()
+	if err != nil {
+		return nil, nil, err
+	}
+	return ownerSID, userSID, nil
+}
+
+type testTokenOwnerInformation struct {
+	Owner *windows.SID
 }
 
 func TestValidateSecureTreeRejectsUntrustedWriteACE(t *testing.T) {

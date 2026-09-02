@@ -21,7 +21,7 @@ func validatePlatformPath(path string, _ os.FileInfo) error {
 	if err != nil || owner == nil || !owner.IsValid() {
 		return ErrInsecurePath
 	}
-	processOwner, err := currentProcessOwner()
+	processOwner, processUser, err := currentProcessSIDs()
 	if err != nil || !windows.EqualSid(owner, processOwner) {
 		return ErrInsecurePath
 	}
@@ -57,28 +57,60 @@ func validatePlatformPath(path string, _ os.FileInfo) error {
 		if sidLength < minimumSIDLength || sidOffset+sidLength > uint32(ace.Header.AceSize) {
 			return ErrInsecurePath
 		}
-		if allowed && hasUntrustedWriteRights(ace.Mask) && !trustedWriter(aceSID, processOwner) {
+		if allowed && hasUntrustedWriteRights(ace.Mask) && !trustedWriter(aceSID, processOwner, processUser) {
 			return ErrInsecurePath
 		}
 	}
 	return nil
 }
 
-func currentProcessOwner() (*windows.SID, error) {
-	token, err := windows.OpenCurrentProcessToken()
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = token.Close() }()
-	user, err := token.GetTokenUser()
-	if err != nil || user == nil || user.User.Sid == nil {
-		return nil, windows.ERROR_INVALID_SID
-	}
-	return user.User.Sid.Copy()
+type tokenOwnerInformation struct {
+	Owner *windows.SID
 }
 
-func trustedWriter(sid, processOwner *windows.SID) bool {
-	return windows.EqualSid(sid, processOwner) ||
+func currentProcessSIDs() (owner, user *windows.SID, err error) {
+	token, err := windows.OpenCurrentProcessToken()
+	if err != nil {
+		return nil, nil, err
+	}
+	defer func() { _ = token.Close() }()
+	owner, err = tokenOwner(token)
+	if err != nil {
+		return nil, nil, err
+	}
+	userInfo, err := token.GetTokenUser()
+	if err != nil || userInfo == nil || userInfo.User.Sid == nil || !userInfo.User.Sid.IsValid() {
+		return nil, nil, windows.ERROR_INVALID_SID
+	}
+	user, err = userInfo.User.Sid.Copy()
+	if err != nil {
+		return nil, nil, err
+	}
+	return owner, user, nil
+}
+
+func tokenOwner(token windows.Token) (*windows.SID, error) {
+	var length uint32
+	err := windows.GetTokenInformation(token, windows.TokenOwner, nil, 0, &length)
+	if err != windows.ERROR_INSUFFICIENT_BUFFER || length < uint32(unsafe.Sizeof(tokenOwnerInformation{})) {
+		if err == nil {
+			return nil, windows.ERROR_INVALID_SID
+		}
+		return nil, err
+	}
+	buffer := make([]byte, length)
+	if err := windows.GetTokenInformation(token, windows.TokenOwner, &buffer[0], length, &length); err != nil {
+		return nil, err
+	}
+	information := (*tokenOwnerInformation)(unsafe.Pointer(&buffer[0]))
+	if information.Owner == nil || !information.Owner.IsValid() {
+		return nil, windows.ERROR_INVALID_SID
+	}
+	return information.Owner.Copy()
+}
+
+func trustedWriter(sid, processOwner, processUser *windows.SID) bool {
+	return windows.EqualSid(sid, processOwner) || windows.EqualSid(sid, processUser) ||
 		sid.IsWellKnown(windows.WinLocalSystemSid) ||
 		sid.IsWellKnown(windows.WinBuiltinAdministratorsSid)
 }
