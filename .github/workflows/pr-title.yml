@@ -72,9 +72,13 @@ jobs:
               )
 
           def strip_coderabbit_release_notes(message: str) -> str:
-              # CodeRabbit 追加的自动摘要不是作者正文，先移除再校验正文 footer。
-              marker = "<!-- This is an auto-generated comment: release notes by coderabbit.ai -->"
-              return message.split(marker, 1)[0]
+              # CodeRabbit 追加的自动摘要不是作者正文，只移除成对区块。
+              return re.sub(
+                  r"<!-- This is an auto-generated comment: release notes by coderabbit.ai -->.*?<!-- end of auto-generated comment: release notes by coderabbit.ai -->",
+                  "",
+                  message,
+                  flags=re.DOTALL,
+              )
 
           response = subprocess.run(
               [
