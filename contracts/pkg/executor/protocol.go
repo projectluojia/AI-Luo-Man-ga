@@ -118,10 +118,8 @@ func ValidateStartFrame(frame *executorv1.ExecutorFrame) error {
 		start.MaxOutputBytes == 0 || start.MaxOutputBytes > MaxOutputPayloadBytes ||
 		start.MaxCostMicrousd > MaxCostMicrousd ||
 		(start.ParentRunId != "" && (!validToken(start.ParentRunId, MaxIdentifierBytes) || start.ParentRunId == frame.GetRunId())) ||
-		!tracePattern.MatchString(start.TraceId) ||
-		!spanPattern.MatchString(start.ParentSpanId) ||
-		start.TraceId == "00000000000000000000000000000000" ||
-		start.ParentSpanId == "0000000000000000" ||
+		(start.TraceId != "" && (!tracePattern.MatchString(start.TraceId) || start.TraceId == "00000000000000000000000000000000")) ||
+		(start.ParentSpanId != "" && (!spanPattern.MatchString(start.ParentSpanId) || start.ParentSpanId == "0000000000000000")) ||
 		len(start.Capabilities) > MaxCapabilities {
 		return ErrInvalidFrame
 	}
