@@ -231,7 +231,7 @@ func RecoverInstallRoot(ctx context.Context, root string) error {
 
 func recoverInstallBackup(ctx context.Context, root, name string) error {
 	backup := filepath.Join(root, name)
-	source, err := readManifest(backup)
+	source, err := validateInstallBackup(ctx, root, backup)
 	if err != nil {
 		children, readErr := os.ReadDir(backup)
 		if readErr == nil && len(children) == 0 {
