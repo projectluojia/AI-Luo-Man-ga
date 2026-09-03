@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packageio"
+	packageiotest "github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packageio/testutil"
 )
 
 func TestValidateSecureTreeAcceptsOwnedTree(t *testing.T) {
@@ -65,11 +66,7 @@ func TestValidateSecurePathRejectsGroupWritableUnixFile(t *testing.T) {
 
 func newSecureTestDir(t *testing.T) string {
 	t.Helper()
-	root := t.TempDir()
-	if err := secureTestDirectory(root); err != nil {
-		t.Fatal(err)
-	}
-	return root
+	return packageiotest.TempDir(t)
 }
 
 func unsupportedSecurityPlatform() bool {

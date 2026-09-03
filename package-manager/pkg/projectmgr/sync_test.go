@@ -9,12 +9,13 @@ import (
 
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packagecontract"
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packageio"
+	packageiotest "github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packageio/testutil"
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/projectcontract"
 	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/projectmgr"
 )
 
 func TestSyncResolvesAndLocksTransitiveLocalDependencies(t *testing.T) {
-	projectDir := t.TempDir()
+	projectDir := packageiotest.TempDir(t)
 	appDir := filepath.Join(projectDir, "packages", "app")
 	depDir := filepath.Join(appDir, "dep")
 	writePackage(t, depDir, "demo.dep", "1.2.0", "dep.wasm", "")
@@ -66,7 +67,7 @@ path = "packages/app"
 }
 
 func TestSyncRejectsSameVersionArtifactDrift(t *testing.T) {
-	projectDir := t.TempDir()
+	projectDir := packageiotest.TempDir(t)
 	packageDir := filepath.Join(projectDir, "packages", "demo")
 	writePackage(t, packageDir, "demo.pkg", "1.0.0", "demo.wasm", "")
 	writeProject(t, projectDir, `

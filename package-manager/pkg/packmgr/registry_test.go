@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packagecontract"
+	packageiotest "github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packageio/testutil"
 	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/packmgr"
 )
 
@@ -210,7 +211,7 @@ func TestInstallFromReleaseEndToEnd(t *testing.T) {
 		})
 	}, http.NotFound)
 
-	root := t.TempDir()
+	root := packageiotest.TempDir(t)
 	record, err := packmgr.InstallFromRelease(context.Background(), root, client, "owner", "repo", "^1.0.0")
 	if err != nil {
 		t.Fatalf("InstallFromRelease: %v", err)

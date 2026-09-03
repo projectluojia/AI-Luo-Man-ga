@@ -14,18 +14,6 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-func secureTestDirectory(path string) error {
-	ownerSID, userSID, err := currentTestSecuritySIDs()
-	if err != nil {
-		return err
-	}
-	return setTestDACL(path, fmt.Sprintf(
-		"(A;OICI;GA;;;%s)(A;OICI;GA;;;%s)(A;OICI;GA;;;SY)(A;OICI;GA;;;BA)",
-		ownerSID,
-		userSID,
-	))
-}
-
 func setTestDACL(path, entries string) error {
 	ownerSID, _, err := currentTestSecuritySIDs()
 	if err != nil {
