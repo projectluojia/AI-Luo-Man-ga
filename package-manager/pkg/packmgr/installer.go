@@ -151,7 +151,7 @@ func install(ctx context.Context, root, sourcePath, expectedID, expectedVersion 
 			SHA256:      stageDigest,
 		}
 		if component, ok := packagecontract.FindComponent(source.Manifest, artifact.componentID); ok && component.Mode == packagecontract.ModeIsolated {
-			locked.Process, err = defaultProcessSpec(component, filepath.Join(targetDir, artifactName), targetDir, artifact.directory)
+			locked.Process, err = resolveProcessSpec(component, filepath.Join(targetDir, artifactName), targetDir, artifact.directory)
 			if err != nil {
 				return InstalledRecord{}, err
 			}
@@ -245,36 +245,24 @@ func reserveBackupDir(root, targetDir string) (string, error) {
 	return backupDir, nil
 }
 
-// defaultProcessSpec 把 isolated 组件的相对进程模板解析为安装期绝对规格。
-// 没有模板时保持原有约定：工件本身是可执行文件，工作目录是包目录。
-func defaultProcessSpec(component packagecontract.Component, artifactPath, packageDir string, artifactDirectory bool) (*packagecontract.ProcessSpec, error) {
+// resolveProcessSpec 把 isolated 组件的相对进程模板解析为安装期绝对规格。
+func resolveProcessSpec(component packagecontract.Component, artifactPath, packageDir string, artifactDirectory bool) (*packagecontract.ProcessSpec, error) {
+	if component.Process == nil {
+		return nil, packagecontract.ErrInvalidFormat
+	}
 	artifactRoot := packageDir
 	if artifactDirectory {
 		artifactRoot = artifactPath
-	}
-	base := strings.TrimSuffix(filepath.Base(artifactPath), filepath.Ext(artifactPath))
-	process := &packagecontract.ProcessSpec{
-		Path: artifactPath, WorkDir: packageDir,
-		Address: "unix:" + filepath.Join(packageDir, base+"-"+component.ID+".sock"),
-	}
-	if component.Process == nil {
-		if artifactDirectory {
-			return nil, packagecontract.ErrInvalidFormat
-		}
-		return process, nil
 	}
 	executable, err := resolveProcessPath(artifactRoot, component.Process.Path)
 	if err != nil {
 		return nil, err
 	}
-	process.Path = executable
+	process := &packagecontract.ProcessSpec{Path: executable, WorkDir: artifactRoot, Address: component.Process.Address}
 	process.Args = append([]string(nil), component.Process.Args...)
 	process.WorkDir = artifactRoot
 	if component.Process.WorkDir != "" {
 		process.WorkDir = filepath.Join(artifactRoot, filepath.FromSlash(component.Process.WorkDir))
-	}
-	if component.Process.Address != "" {
-		process.Address = component.Process.Address
 	}
 	for index, argument := range process.Args {
 		process.Args[index] = strings.ReplaceAll(argument, "${address}", process.Address)

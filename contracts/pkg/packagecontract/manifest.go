@@ -8,6 +8,7 @@ import (
 	"net"
 	"path"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/capability"
@@ -166,6 +167,9 @@ func ValidateManifest(manifest Manifest) error {
 		if component.Mode != ModeIsolated && component.Process != nil {
 			return ErrInvalidFormat
 		}
+		if component.Mode == ModeIsolated && component.Process == nil {
+			return ErrInvalidFormat
+		}
 		if component.Process != nil {
 			if err := ValidateProcessTemplate(*component.Process); err != nil {
 				return ErrInvalidFormat
@@ -190,8 +194,11 @@ func ValidateManifest(manifest Manifest) error {
 func ValidateProcessTemplate(template ProcessTemplate) error {
 	if !IsPackagePath(template.Path) || template.Path == "." ||
 		(template.WorkDir != "" && !IsPackagePath(template.WorkDir)) ||
-		(template.Address != "" && !IsLocalRuntimeAddress(template.Address)) ||
+		!IsLocalRuntimeAddress(template.Address) ||
 		len(template.Args) > 128 {
+		return ErrInvalidFormat
+	}
+	if runtime.GOOS == "windows" && strings.HasPrefix(template.Address, "unix:") {
 		return ErrInvalidFormat
 	}
 	for _, argument := range template.Args {
