@@ -5,6 +5,8 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -169,5 +171,36 @@ func TestInspectAndInstallRejectArchiveManifestDigestMismatch(t *testing.T) {
 	}
 	if _, err := packmgr.Install(context.Background(), packageiotest.TempDir(t), archive); err == nil {
 		t.Fatal("Install accepted archive with a mismatched manifest digest")
+	}
+}
+
+func writeTestArchive(t *testing.T, path string, manifest, artifact, lock []byte) {
+	t.Helper()
+	file, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gzipWriter := gzip.NewWriter(file)
+	tarWriter := tar.NewWriter(gzipWriter)
+	for name, data := range map[string][]byte{
+		"manifest.json": manifest,
+		"app.wasm":      artifact,
+		"lock.json":     lock,
+	} {
+		if err := tarWriter.WriteHeader(&tar.Header{Name: name, Mode: 0o640, Size: int64(len(data))}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tarWriter.Write(data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tarWriter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gzipWriter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
 	}
 }

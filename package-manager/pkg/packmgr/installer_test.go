@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -306,12 +307,6 @@ func TestInstallRejectsBreakingReverseDependency(t *testing.T) {
 func TestInstallRejectsInvalidSource(t *testing.T) {
 	ctx := context.Background()
 	root := packageiotest.TempDir(t)
-	writeManifest := func(dir string, contents []byte) {
-		t.Helper()
-		if err := os.WriteFile(filepath.Join(dir, "manifest.json"), contents, 0o640); err != nil {
-			t.Fatal(err)
-		}
-	}
 	cases := []struct {
 		name   string
 		mutate func(string)
