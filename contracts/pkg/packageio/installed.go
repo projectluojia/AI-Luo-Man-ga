@@ -233,9 +233,11 @@ func recoverInstallBackup(ctx context.Context, root, name string) error {
 	backup := filepath.Join(root, name)
 	source, err := validateInstallBackup(ctx, root, backup)
 	if err != nil {
-		children, readErr := os.ReadDir(backup)
-		if readErr == nil && len(children) == 0 {
-			return nil
+		if errors.Is(err, packagecontract.ErrInvalidFormat) {
+			children, readErr := os.ReadDir(backup)
+			if readErr == nil && len(children) == 0 {
+				return nil
+			}
 		}
 		return fmt.Errorf("恢复安装备份 %q 失败: %w", name, err)
 	}
