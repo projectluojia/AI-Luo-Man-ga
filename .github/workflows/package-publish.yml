@@ -95,8 +95,10 @@ jobs:
             package_version="${GITHUB_REF#refs/tags/}"
             package_version="${package_version#v}"
           fi
-          ./.ailuo-cli/ailuo pack --version "$package_version" "$PACKAGE_DIR" dist
-          tarball="$(ls dist/*.tgz)"
+          output_dir="$(mktemp -d "$RUNNER_TEMP/ailuo-package.XXXXXX")"
+          ./.ailuo-cli/ailuo pack --version "$package_version" "$PACKAGE_DIR" "$output_dir"
+          tarball="$(find "$output_dir" -maxdepth 1 -type f -name '*.tgz' -print -quit)"
+          test -n "$tarball"
           # pack 的输出目录是第二个位置参数；flag 必须在位置参数之前
           # （Go flag 包遇到首个位置参数即停止解析）。
           # id/version 的权威来源是 tarball 根的 manifest.json：文件名形如
