@@ -78,6 +78,10 @@ func TestValidateManifestRejectsInvalidCore(t *testing.T) {
 		{name: "isolated missing process template", mutate: func(m *packagecontract.Manifest) {
 			m.Components[0].Mode = packagecontract.ModeIsolated
 		}},
+		{name: "isolated missing process address", mutate: func(m *packagecontract.Manifest) {
+			m.Components[0].Mode = packagecontract.ModeIsolated
+			m.Components[0].Process = &packagecontract.ProcessTemplate{Path: "runner"}
+		}},
 		{name: "missing entrypoint", mutate: func(m *packagecontract.Manifest) { m.Components[0].Entrypoint = "" }},
 		{name: "absolute entrypoint", mutate: func(m *packagecontract.Manifest) {
 			m.Components[0].Entrypoint = filepath.Join(string(filepath.Separator), "opt", "evil.wasm")
