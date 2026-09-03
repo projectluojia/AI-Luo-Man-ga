@@ -139,8 +139,8 @@ jobs:
           cache-dependency-glob: ${{ inputs.package-dir }}/**/uv.lock
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         if: ${{ steps.inspect.outputs.uses-node == 'true' }}
-       with:
-         node-version: 'lts/*'
+        with:
+          node-version: 'lts/*'
 
       - name: 运行发布前测试
         env:
