@@ -76,12 +76,13 @@ func fieldJSONName(field *ast.Field) (name string, optional bool, err error) {
 func fieldSchemaWithTypes(expr ast.Expr, types map[string]*ast.StructType, resolving map[string]bool) (any, error) {
 	switch t := expr.(type) {
 	case *ast.Ident:
-		if schema, err := scalarSchema(t.Name); err == nil {
-			return schema, nil
+		scalar, scalarErr := scalarSchema(t.Name)
+		if scalarErr == nil {
+			return scalar, nil
 		}
 		nested, ok := types[t.Name]
 		if !ok {
-			return nil, fmt.Errorf("未知类型 %q", t.Name)
+			return nil, scalarErr
 		}
 		if resolving[t.Name] {
 			return nil, fmt.Errorf("类型 %q 存在递归引用", t.Name)
@@ -105,6 +106,9 @@ func fieldSchemaWithTypes(expr ast.Expr, types map[string]*ast.StructType, resol
 		}
 		return nil, fmt.Errorf("不支持的标识类型 %s.%s", pkgName(t.X), t.Sel.Name)
 	case *ast.ArrayType:
+		if element, ok := t.Elt.(*ast.Ident); ok && (element.Name == "byte" || element.Name == "uint8") {
+			return map[string]any{"type": "string", "contentEncoding": "base64"}, nil
+		}
 		items, err := fieldSchemaWithTypes(t.Elt, types, resolving)
 		if err != nil {
 			return nil, err
@@ -130,8 +134,24 @@ func scalarSchema(name string) (any, error) {
 	switch name {
 	case "string":
 		return map[string]any{"type": "string"}, nil
-	case "int", "int8", "int16", "int32", "int64", "uint", "uint8", "uint16", "uint32", "uint64":
-		return map[string]any{"type": "integer"}, nil
+	case "int8":
+		return boundedIntegerSchema(int64(-1<<7), int64(1<<7-1)), nil
+	case "int16":
+		return boundedIntegerSchema(int64(-1<<15), int64(1<<15-1)), nil
+	case "int32":
+		return boundedIntegerSchema(int64(-1<<31), int64(1<<31-1)), nil
+	case "int64":
+		return boundedIntegerSchema(int64(-1<<63), int64(1<<63-1)), nil
+	case "uint8":
+		return boundedIntegerSchema(uint64(0), uint64(1<<8-1)), nil
+	case "uint16":
+		return boundedIntegerSchema(uint64(0), uint64(1<<16-1)), nil
+	case "uint32":
+		return boundedIntegerSchema(uint64(0), uint64(1<<32-1)), nil
+	case "uint64":
+		return boundedIntegerSchema(uint64(0), ^uint64(0)), nil
+	case "int", "uint":
+		return nil, fmt.Errorf("不支持平台相关整数类型 %q，请使用定宽整数", name)
 	case "float32", "float64":
 		return map[string]any{"type": "number"}, nil
 	case "bool":
@@ -139,6 +159,10 @@ func scalarSchema(name string) (any, error) {
 	default:
 		return nil, fmt.Errorf("未知类型 %q", name)
 	}
+}
+
+func boundedIntegerSchema(minimum, maximum any) map[string]any {
+	return map[string]any{"type": "integer", "minimum": minimum, "maximum": maximum}
 }
 
 // pkgName 取 SelectorExpr 的包名。

@@ -16,7 +16,7 @@ func hidden()                  {}
 
 type HelloArgs struct {
 	Name string ` + "`json:\"name\"`" + `
-	Count int   ` + "`json:\"count,omitempty\"`" + `
+	Count int32 ` + "`json:\"count,omitempty\"`" + `
 }
 
 type PingArgs struct {
@@ -45,7 +45,7 @@ func hello(args HelloArgs) {}
 
 type HelloArgs struct {
 	Name string ` + "`json:\"name\"`" + `
-	Count int   ` + "`json:\"count,omitempty\"`" + `
+	Count int32 ` + "`json:\"count,omitempty\"`" + `
 	At    string ` + "`json:\"at,omitempty\"`" + `  // time.Time 需 import 测试见下
 }
 `)
@@ -74,6 +74,46 @@ type HelloArgs struct {
 	required := schema["required"].([]any)
 	if len(required) != 1 || required[0] != "name" {
 		t.Fatalf("required = %v", required)
+	}
+}
+
+func TestAnalyzeGoRejectsMultipleParameters(t *testing.T) {
+	source := []byte(`package main
+func hello(args Hello, token string) {}
+type Hello struct { Name string ` + "`json:\"name\"`" + ` }
+`)
+	capabilities, err := AnalyzeGo(source, "x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(capabilities) != 0 {
+		t.Fatalf("capabilities = %+v, want no multi-parameter capability", capabilities)
+	}
+}
+
+func TestAnalyzeGoMapsByteSlicesToBase64(t *testing.T) {
+	source := []byte(`package main
+func upload(args UploadArgs) {}
+type UploadArgs struct { Data []byte ` + "`json:\"data\"`" + ` }
+`)
+	capabilities, err := AnalyzeGo(source, "x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema map[string]any
+	if err := json.Unmarshal(capabilities[0].InputSchema, &schema); err != nil {
+		t.Fatal(err)
+	}
+	data := schema["properties"].(map[string]any)["data"].(map[string]any)
+	if data["type"] != "string" || data["contentEncoding"] != "base64" {
+		t.Fatalf("data schema = %+v", data)
+	}
+}
+
+func TestAnalyzeGoRejectsPlatformDependentIntegers(t *testing.T) {
+	source := []byte("package main\nfunc hello(args Hello) {}\ntype Hello struct { Count int `json:\"count\"` }\n")
+	if _, err := AnalyzeGo(source, "x"); err == nil || !strings.Contains(err.Error(), "平台相关整数") {
+		t.Fatalf("error = %v, want platform-dependent integer rejection", err)
 	}
 }
 
