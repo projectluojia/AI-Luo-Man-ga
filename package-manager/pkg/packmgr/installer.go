@@ -37,6 +37,9 @@ func Inspect(ctx context.Context, sourcePath string) (packagecontract.Manifest, 
 	if err != nil {
 		return packagecontract.Manifest{}, nil, err
 	}
+	if err := validatePackagedSource(ctx, sourceDir, source); err != nil {
+		return packagecontract.Manifest{}, nil, err
+	}
 	if _, err := readSourceArtifacts(ctx, sourceDir, source.Manifest); err != nil {
 		return packagecontract.Manifest{}, nil, err
 	}
@@ -64,6 +67,9 @@ func Install(ctx context.Context, root, sourcePath string) (InstalledRecord, err
 	}
 	source, err := readManifest(sourceDir)
 	if err != nil {
+		return InstalledRecord{}, err
+	}
+	if err := validatePackagedSource(ctx, sourceDir, source); err != nil {
 		return InstalledRecord{}, err
 	}
 	artifacts, err := readSourceArtifacts(ctx, sourceDir, source.Manifest)
@@ -461,6 +467,37 @@ func unpackSource(source string) (string, func(), error) {
 		return "", nil, err
 	}
 	return temp, func() { _ = os.RemoveAll(temp) }, nil
+}
+
+func validatePackagedSource(ctx context.Context, sourceDir string, source manifestFile) error {
+	lockPath := filepath.Join(sourceDir, "lock.json")
+	if _, err := os.Stat(lockPath); errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	lockBytes, err := packageio.ReadFileLimited(lockPath, packagecontract.MaxLockBytes)
+	if err != nil {
+		return err
+	}
+	var lock packagecontract.Lock
+	if err := packagecontract.DecodeStrictJSON(lockBytes, &lock); err != nil {
+		return err
+	}
+	manifestDigest := sha256.Sum256(source.manifestBytes)
+	if lock.ManifestSHA256 != hex.EncodeToString(manifestDigest[:]) {
+		return packagecontract.ErrInvalidFormat
+	}
+	for index := range lock.Artifacts {
+		if !packagecontract.IsPackagePath(lock.Artifacts[index].Path) || lock.Artifacts[index].Path == "." {
+			return packagecontract.ErrInvalidFormat
+		}
+		lock.Artifacts[index].Path = filepath.Join(sourceDir, lock.Artifacts[index].Path)
+	}
+	if err := validatePackagedLock(lock, source.Manifest); err != nil {
+		return err
+	}
+	return packageio.VerifyInstalledArtifacts(ctx, sourceDir, lock.Artifacts)
 }
 
 // resolveDependencies 检查每个依赖在安装根内存在已安装包且版本满足约束。

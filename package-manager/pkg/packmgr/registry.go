@@ -3,8 +3,6 @@ package packmgr
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,7 +15,6 @@ import (
 	"time"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packagecontract"
-	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packageio"
 )
 
 // 以 GitHub Releases 作为包分发后端（REST，仅标准库）：发布走 tag+Release+
@@ -108,28 +105,7 @@ func validateTarball(ctx context.Context, tarballPath string) (packagecontract.M
 	if _, err := readSourceArtifacts(ctx, sourceDir, source.Manifest); err != nil {
 		return packagecontract.Manifest{}, err
 	}
-	lockBytes, err := packageio.ReadFileLimited(filepath.Join(sourceDir, "lock.json"), packagecontract.MaxLockBytes)
-	if err != nil {
-		return packagecontract.Manifest{}, err
-	}
-	var lock packagecontract.Lock
-	if err := packagecontract.DecodeStrictJSON(lockBytes, &lock); err != nil {
-		return packagecontract.Manifest{}, err
-	}
-	manifestDigest := sha256.Sum256(source.manifestBytes)
-	if lock.ManifestSHA256 != hex.EncodeToString(manifestDigest[:]) {
-		return packagecontract.Manifest{}, packagecontract.ErrInvalidFormat
-	}
-	for index := range lock.Artifacts {
-		if !packagecontract.IsPackagePath(lock.Artifacts[index].Path) || lock.Artifacts[index].Path == "." {
-			return packagecontract.Manifest{}, packagecontract.ErrInvalidFormat
-		}
-		lock.Artifacts[index].Path = filepath.Join(sourceDir, lock.Artifacts[index].Path)
-	}
-	if err := validatePackagedLock(lock, source.Manifest); err != nil {
-		return packagecontract.Manifest{}, err
-	}
-	if err := packageio.VerifyInstalledArtifacts(ctx, sourceDir, lock.Artifacts); err != nil {
+	if err := validatePackagedSource(ctx, sourceDir, source); err != nil {
 		return packagecontract.Manifest{}, err
 	}
 	return source.Manifest, nil
