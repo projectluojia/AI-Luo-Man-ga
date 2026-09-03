@@ -197,7 +197,7 @@ func TestValidateBackupRejectsCorruptionAndCancelledOperation(t *testing.T) {
 	}
 }
 
-func TestValidateBackupRejectsForgedMigrationHistoryWithoutRequiredSchema(t *testing.T) {
+func TestValidateBackupRejectsPreBaselineDatabase(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "forged.db")
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
@@ -205,11 +205,8 @@ func TestValidateBackupRejectsForgedMigrationHistoryWithoutRequiredSchema(t *tes
 	}
 	if _, err := db.Exec(`
 CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
-WITH RECURSIVE versions(value) AS (
-  SELECT 1 UNION ALL SELECT value + 1 FROM versions WHERE value < 13
-)
 INSERT INTO schema_migrations(version,applied_at)
-SELECT value,'2026-07-26T00:00:00Z' FROM versions;`); err != nil {
+VALUES(27,'2026-09-01T00:00:00Z');`); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Close(); err != nil {

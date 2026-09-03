@@ -30,8 +30,8 @@ func mustCreateUser(t *testing.T, store *sqlite.Store, userID string) {
 	}
 }
 
-// 迁移 15 建立身份 Schema，并通过数据库约束拒绝非法状态。
-func TestIdentityMigration15CreatesIdentitySchema(t *testing.T) {
+// 当前 Schema 通过数据库约束拒绝非法身份状态。
+func TestIdentitySchemaEnforcesConstraints(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "identity-migration.db")
 	store, err := sqlite.Open(path)
 	if err != nil {
@@ -66,8 +66,8 @@ func TestIdentityMigration15CreatesIdentitySchema(t *testing.T) {
 		t.Fatal(err)
 	}
 	var version int
-	if err := db.QueryRow(`SELECT max(version) FROM schema_migrations`).Scan(&version); err != nil || version < 15 {
-		t.Fatalf("schema version=%d err=%v, want >=15", version, err)
+	if err := db.QueryRow(`SELECT max(version) FROM schema_migrations`).Scan(&version); err != nil || version != 28 {
+		t.Fatalf("schema version=%d err=%v, want 28", version, err)
 	}
 	var tables int
 	if err := db.QueryRow(`SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN ('users','external_identities','app_memberships','roles','permission_grants','identity_binding_revisions')`).Scan(&tables); err != nil || tables != 6 {
