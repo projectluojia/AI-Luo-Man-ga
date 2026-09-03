@@ -225,6 +225,19 @@ class RuntimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(failure.sequence, 1)
         self.assertEqual(failure.run_failure.code, "invalid_request")
 
+    async def test_accepts_absent_trace_context(self) -> None:
+        frame = self._start_frame()
+        frame.start_run.trace_id = ""
+        frame.start_run.parent_span_id = ""
+
+        async def request_iterator():
+            yield frame
+
+        output = ExecutorRuntime(RuntimeModel(), model_name="test-model").Run(request_iterator(), None)
+        accepted = await anext(output)
+        self.assertEqual(accepted.run_accepted.protocol_version, PROTOCOL_VERSION)
+        await output.aclose()
+
     async def test_accepts_governed_causal_parent_identity(self) -> None:
         frame = self._start_frame()
         frame.start_run.parent_run_id = "parent-run"
