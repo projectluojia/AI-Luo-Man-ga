@@ -1,6 +1,6 @@
 name: 包发布流水线（可复用）
 
-# npm 式包发布流水线：构建 → pack（tarball）→ 冒烟安装验证 → 版本一致性 →
+# npm 式包发布流水线：构建 → 测试 → pack（tarball）→ 冒烟安装验证 → 版本一致性 →
 # （tag 发布时）附 GitHub Release。包作者仓库通过
 # `uses: <workflow-repository>/.github/workflows/package-publish.yml@ref` 复用；
 # 调用方必须显式传入不可变 package-manager-ref；Package Manager 仓库与模块路径
@@ -140,12 +140,28 @@ jobs:
       - name: 构建 ailuo-pm CLI
         run: go build -o "$RUNNER_TEMP/ailuo" ./cmd/ailuo-pm
         working-directory: .ailuo-cli/package-manager
+
+      - name: 运行发布前测试
+        env:
+          PACKAGE_DIR: ${{ inputs.package-dir }}
+          TEST_COMMAND: ${{ inputs.test-command }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ -n "${TEST_COMMAND//[[:space:]]/}" ]] || {
+            echo "test-command 不能为空" >&2
+            exit 1
+          }
+          cd "$PACKAGE_DIR"
+          bash -euo pipefail -c "$TEST_COMMAND"
+
       - name: 打包并冒烟安装验证
         id: pack
         shell: bash
         # 调用方输入经 env 传入：直接插值进 run: 会把输入当脚本片段拼接。
         env:
           PACKAGE_DIR: ${{ inputs.package-dir }}
+          PACKAGE_OUTPUT_DIR: ${{ runner.temp }}/package-dist
         run: |
           set -euo pipefail
           package_version="0.1.0"
@@ -153,9 +169,8 @@ jobs:
             package_version="${GITHUB_REF#refs/tags/}"
             package_version="${package_version#v}"
           fi
-          output_dir="$(mktemp -d "$RUNNER_TEMP/ailuo-package.XXXXXX")"
-          "$RUNNER_TEMP/ailuo" pack --version "$package_version" "$PACKAGE_DIR" "$output_dir"
-          mapfile -t tarballs < <(find "$output_dir" -maxdepth 1 -type f -name '*.tgz' -print)
+          "$RUNNER_TEMP/ailuo" pack --version "$package_version" "$PACKAGE_DIR" "$PACKAGE_OUTPUT_DIR"
+          mapfile -t tarballs < <(find "$PACKAGE_OUTPUT_DIR" -maxdepth 1 -type f -name '*.tgz' -print)
           test "${#tarballs[@]}" -eq 1
           tarball="${tarballs[0]}"
           # pack 的输出目录是第二个位置参数；flag 必须在位置参数之前
@@ -173,19 +188,6 @@ jobs:
             echo "package-version=$version"
             echo "tarball-path=$tarball"
           } >> "$GITHUB_OUTPUT"
-      - name: 测试已构建包
-        env:
-          PACKAGE_DIR: ${{ inputs.package-dir }}
-          TEST_COMMAND: ${{ inputs.test-command }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          [[ -n "${TEST_COMMAND//[[:space:]]/}" ]] || {
-            echo "test-command 不能为空" >&2
-            exit 1
-          }
-          cd "$PACKAGE_DIR"
-          bash -euo pipefail -c "$TEST_COMMAND"
       - name: 校验包版本与 git tag 一致
         if: ${{ inputs.tag-required }}
         shell: bash
