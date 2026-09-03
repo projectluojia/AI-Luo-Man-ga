@@ -414,10 +414,14 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
             or start.max_output_bytes > MAX_OUTPUT_PAYLOAD_BYTES
             or start.max_cost_microusd > 1_000_000_000_000_000
             or (start.parent_run_id and start.parent_run_id == frame.run_id)
-            or TRACE_PATTERN.fullmatch(start.trace_id) is None
-            or SPAN_PATTERN.fullmatch(start.parent_span_id) is None
-            or start.trace_id == "0" * 32
-            or start.parent_span_id == "0" * 16
+            or (
+                start.trace_id
+                and (TRACE_PATTERN.fullmatch(start.trace_id) is None or start.trace_id == "0" * 32)
+            )
+            or (
+                start.parent_span_id
+                and (SPAN_PATTERN.fullmatch(start.parent_span_id) is None or start.parent_span_id == "0" * 16)
+            )
         ):
             raise ProtocolViolation("start_run 字段无效")
         if start.parent_run_id:
