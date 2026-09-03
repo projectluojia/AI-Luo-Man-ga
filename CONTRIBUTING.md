@@ -47,7 +47,7 @@ GOCACHE=/tmp/github.com/projectluojia/AI-Luo-Man-ga-gocache go test -tags=integr
 
 - 所有手写代码注释使用中文；生成文件、`//go:build` 与 `//go:embed` 指令除外。
 - 用户可见日志使用清晰中文，字段键保持英文；日志与审计不得包含正文、密钥、凭据或原始错误。
-- **生成文件是提交构件，禁止手工修改**：`proto/executor.proto` 或 `proto/runtime_host.proto` 变更后必须重新生成 Go 与 Python 产物并连同测试一起提交（`make generate`，CI 有漂移检查）。wasm 工件由包清单的 `[build]` 声明生成并提交。
+- **生成文件是提交构件，禁止手工修改**：`proto/executor.proto` 或 `proto/runtime_host.proto` 变更后必须重新生成 Go 与 Python 产物并连同测试一起提交（`make generate`，CI 有漂移检查）。WASM 工件是否提交由包清单和 workflow 约定决定；零声明源包由 `ailuo pack` 构建，不要求作者提交生成的 WASM。
 - 修改工程配置（CI、规则集、依赖机器人、模板）时，同步更新 `AGENTS.md` 与相关文档。
 - 密钥、本地数据库、真实校巴数据、虚拟环境与临时输出不得入库。
 
