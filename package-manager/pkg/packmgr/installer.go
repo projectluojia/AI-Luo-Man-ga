@@ -254,6 +254,11 @@ func resolveProcessSpec(component packagecontract.Component, artifactPath, packa
 	if artifactDirectory {
 		artifactRoot = artifactPath
 	}
+	// 文件工件只会复制并锁定 entrypoint；其他进程路径没有对应工件，
+	// 既不能启动也不能通过 ValidateLock 的路径闭合校验。
+	if !artifactDirectory && component.Process.Path != component.Entrypoint {
+		return nil, packagecontract.ErrInvalidFormat
+	}
 	executable, err := resolveProcessPath(artifactRoot, component.Process.Path)
 	if err != nil {
 		return nil, err

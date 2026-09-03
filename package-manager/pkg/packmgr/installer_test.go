@@ -137,6 +137,31 @@ func TestInstallIsolatedWritesProcessSpec(t *testing.T) {
 	}
 }
 
+func TestInstallRejectsFileProcessPathOutsideArtifact(t *testing.T) {
+	source := filepath.Join(t.TempDir(), "isolated")
+	writeSourcePackage(t, source, "demo.isolated", "1.0.0", packagecontract.ModeIsolated, "app", nil)
+	manifestPath := filepath.Join(source, "manifest.json")
+	manifestBytes, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest packagecontract.Manifest
+	if err := packagecontract.DecodeStrictJSON(manifestBytes, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	manifest.Components[0].Process.Path = "runner"
+	manifestBytes, err = json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manifestPath, manifestBytes, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := packmgr.Install(context.Background(), t.TempDir(), source); !errors.Is(err, packagecontract.ErrInvalidFormat) {
+		t.Fatalf("Install with file process path outside artifact = %v, want ErrInvalidFormat", err)
+	}
+}
+
 // 目录工件用于携带解释器、源码和依赖环境；安装必须保留树结构并把进程
 // 模板解析到目录工件内部，而不是把目录当作可执行文件。
 func TestInstallAndPackDirectoryArtifact(t *testing.T) {

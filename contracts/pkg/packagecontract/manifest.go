@@ -55,12 +55,12 @@ type Component struct {
 }
 
 // ProcessTemplate 是包作者声明的 isolated 进程启动模板。Path 与 WorkDir
-// 相对组件工件目录，Address 只允许本机地址；安装器负责转换为绝对路径。
+// 相对组件工件目录，Address 必填且只允许本机地址；安装器负责转换为绝对路径。
 type ProcessTemplate struct {
 	Path    string   `json:"path"`
 	Args    []string `json:"args,omitempty"`
 	WorkDir string   `json:"work_dir,omitempty"`
-	Address string   `json:"address,omitempty"`
+	Address string   `json:"address"`
 }
 
 // 组件运行角色的闭式取值。
