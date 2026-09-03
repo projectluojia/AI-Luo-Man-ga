@@ -377,7 +377,7 @@ func TestWebAccessRejectsUnauthenticatedEchoBeforePersistence(t *testing.T) {
 }
 
 func TestWebAccessRequiresAndReplaysEchoCreationIdempotency(t *testing.T) {
-	handler, store := newTestServer(t, false)
+	handler, store := newTestServer(t, true)
 
 	missing := httptest.NewRecorder()
 	handler.ServeHTTP(missing, httptest.NewRequest(http.MethodPost, "/api/v2/echoes", strings.NewReader(`{"message":"test"}`)))
