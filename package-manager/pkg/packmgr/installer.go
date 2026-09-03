@@ -290,8 +290,8 @@ func resolveProcessPath(artifactRoot, relative string) (string, error) {
 	return path, nil
 }
 
-// Upgrade 要求包已安装且源目录版本号不同，然后安装。
-func Upgrade(ctx context.Context, root, id, sourceDir string) (InstalledRecord, error) {
+// Upgrade 要求包已安装且源包版本号不同，然后安装。
+func Upgrade(ctx context.Context, root, id, sourcePath string) (InstalledRecord, error) {
 	if root == "" || !capability.IsStableID(id) {
 		return InstalledRecord{}, fmt.Errorf("包 %q 标识非法", id)
 	}
@@ -305,6 +305,13 @@ func Upgrade(ctx context.Context, root, id, sourceDir string) (InstalledRecord, 
 	existing, err := packageio.ReadInstalled(ctx, filepath.Join(absoluteRoot, id))
 	if err != nil {
 		return InstalledRecord{}, fmt.Errorf("包 %q 未安装", id)
+	}
+	sourceDir, cleanup, err := unpackSource(sourcePath)
+	if err != nil {
+		return InstalledRecord{}, err
+	}
+	if cleanup != nil {
+		defer cleanup()
 	}
 	source, err := readManifest(sourceDir)
 	if err != nil {
