@@ -27,11 +27,16 @@ func writeSourcePackage(t *testing.T, dir, id, version, mode, artifactName strin
 	if err := os.WriteFile(filepath.Join(dir, artifactName), artifact, 0o640); err != nil {
 		t.Fatal(err)
 	}
+	var process *packagecontract.ProcessTemplate
+	if mode == packagecontract.ModeIsolated {
+		process = &packagecontract.ProcessTemplate{Path: artifactName, Address: "127.0.0.1:50051"}
+	}
 	manifest, err := json.Marshal(packagecontract.Manifest{
 		SchemaVersion: packagecontract.SchemaVersion, ID: id, Version: version,
 		Dependencies: deps,
 		Components: []packagecontract.Component{{
 			ID: "core", Mode: mode, Entrypoint: artifactName,
+			Process: process,
 		}},
 	})
 	if err != nil {

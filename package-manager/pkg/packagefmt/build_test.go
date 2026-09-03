@@ -78,6 +78,7 @@ entrypoint = "brain"
 
 [component.process]
 path = "python"
+address = "127.0.0.1:50051"
 
 [component.build]
 tool = "python-uv"
@@ -110,7 +111,8 @@ func TestBuildRejectsInvalidComponentTargets(t *testing.T) {
 		ID:            "mixed.pkg",
 		Version:       "1.0.0",
 		Components: []packagecontract.Component{
-			{ID: "brain", Mode: packagecontract.ModeIsolated, Role: packagecontract.RoleExecutor, Entrypoint: "brain"},
+			{ID: "brain", Mode: packagecontract.ModeIsolated, Role: packagecontract.RoleExecutor, Entrypoint: "brain",
+				Process: &packagecontract.ProcessTemplate{Path: "brain", Address: "127.0.0.1:50051"}},
 			{ID: "prefs", Mode: packagecontract.ModeHosted, Entrypoint: "prefs.wasm"},
 		},
 	}

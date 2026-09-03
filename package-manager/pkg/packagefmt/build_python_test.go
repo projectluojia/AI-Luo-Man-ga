@@ -37,6 +37,7 @@ func TestBuildPythonUVCreatesVirtualEnvironment(t *testing.T) {
 		SchemaVersion: packagecontract.SchemaVersion, ID: "py.test", Version: "1.0.0",
 		Components: []packagecontract.Component{{
 			ID: "main", Mode: packagecontract.ModeIsolated, Entrypoint: ".venv",
+			Process: &packagecontract.ProcessTemplate{Path: ".venv/python", Address: "127.0.0.1:50051"},
 		}},
 	}
 	if err := packagefmt.Build(context.Background(), sourceDir, manifest,

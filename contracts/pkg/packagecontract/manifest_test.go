@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -74,6 +75,9 @@ func TestValidateManifestRejectsInvalidCore(t *testing.T) {
 		{name: "unsupported mode", mutate: func(m *packagecontract.Manifest) {
 			m.Components[0].Mode = "embedded"
 		}},
+		{name: "isolated missing process template", mutate: func(m *packagecontract.Manifest) {
+			m.Components[0].Mode = packagecontract.ModeIsolated
+		}},
 		{name: "missing entrypoint", mutate: func(m *packagecontract.Manifest) { m.Components[0].Entrypoint = "" }},
 		{name: "absolute entrypoint", mutate: func(m *packagecontract.Manifest) {
 			m.Components[0].Entrypoint = filepath.Join(string(filepath.Separator), "opt", "evil.wasm")
@@ -136,6 +140,7 @@ func TestComponentOrderRespectsDependencyTopology(t *testing.T) {
 		{ID: "bus.core", Mode: packagecontract.ModeHosted, Entrypoint: "core.wasm",
 			Imports: []string{"campus.bus.transport"}},
 		{ID: "bus.adapter", Mode: packagecontract.ModeIsolated, Entrypoint: "adapter",
+			Process: &packagecontract.ProcessTemplate{Path: "adapter", Address: "127.0.0.1:9000"},
 			Exports: []string{"campus.bus.transport"}},
 		{ID: "bus.standalone", Mode: packagecontract.ModeHosted, Entrypoint: "solo.wasm"},
 	}
@@ -175,7 +180,8 @@ func TestValidateLockMatchesComponents(t *testing.T) {
 		SchemaVersion: packagecontract.SchemaVersion, ID: "campus.bus", Version: "1.0.0",
 		Components: []packagecontract.Component{
 			{ID: "bus.core", Mode: packagecontract.ModeHosted, Entrypoint: "bus-core.wasm"},
-			{ID: "bus.adapter", Mode: packagecontract.ModeIsolated, Entrypoint: "bus-adapter"},
+			{ID: "bus.adapter", Mode: packagecontract.ModeIsolated, Entrypoint: "bus-adapter",
+				Process: &packagecontract.ProcessTemplate{Path: "bus-adapter", Address: "127.0.0.1:9000"}},
 		},
 	}
 	lock := packagecontract.Lock{
@@ -231,6 +237,17 @@ func TestValidateProcessSpecRejectsNonLoopback(t *testing.T) {
 	spec := packagecontract.ProcessSpec{Address: "192.0.2.1:9000"}
 	if err := packagecontract.ValidateProcessSpec(spec); err == nil {
 		t.Fatal("ValidateProcessSpec accepted non-loopback address")
+	}
+}
+
+func TestValidateProcessTemplateRejectsUnixAddressOnWindows(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("仅 Windows 使用该进程地址策略")
+	}
+	if err := packagecontract.ValidateProcessTemplate(packagecontract.ProcessTemplate{
+		Path: "runner", Address: "unix:/runtime.sock",
+	}); err == nil {
+		t.Fatal("ValidateProcessTemplate accepted Unix address on Windows")
 	}
 }
 
