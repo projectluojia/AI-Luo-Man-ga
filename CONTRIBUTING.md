@@ -26,14 +26,14 @@ make test-e2e      # Executor e2e（源包，Unix 平台）
 ## PR 流程
 
 1. 从最新 `main` 切出前缀分支，合并前自行 rebase 保持 up-to-date。
-2. 按 `.github/PULL_REQUEST_TEMPLATE.md` 填写变更内容、影响范围、验证证据与安全治理清单。
+2. 必须按 `.github/PULL_REQUEST_TEMPLATE.md` 填写变更内容、堆叠关系、影响范围、验证证据与安全治理清单；人工描述使用中文，命令、路径、API/协议名称和标准关键字可保留原文。
 3. 标题格式：`<type>[optional scope][!]: <描述>`，类型限定 `feat` / `fix` / `docs` / `style` / `refactor` / `perf` / `test` / `build` / `ci` / `chore` / `revert`；破坏性变更还要有 `BREAKING CHANGE: <说明>` footer。
 4. 等待 `ci-required`、CodeQL 和安全扫描等 required checks 全绿；再确认变更涉及的 Agent/Campus 独立包 workflow 通过。Core 门禁覆盖三平台核心测试、Linux 完整质量门禁和 proto 生成物漂移；Agent workflow 额外覆盖安装后 e2e。
 5. 合并需 1 人审批；审批后新的 push 会使旧审批失效，需重新审批。管理员绕过仅限紧急修复，日常合并一律走规则集。
 
 ### 堆叠 PR
 
-存在真实依赖时，用 `gh stack` 按底层到顶层维护分支和 PR：`gh stack init --base main <bottom> <next> ...` 创建新 stack，`gh stack link <stack-number> <pr-or-branch> ...` 接管已有 PR，`gh stack sync` 同步远端，`gh stack view --json` 复核完整链条。每个上层 PR 只能以直接依赖的下一层分支为 base；需要 ready 审查时使用 `--open`，否则保持 draft。不要手工改 base 后继续提交。
+存在真实依赖时，用 `gh stack` 按底层到顶层维护分支和 PR：`gh stack init --base main <bottom> <next> ...` 创建新 stack，`gh stack link <stack-number> <pr-or-branch> ...` 接管已有 PR，`gh stack sync` 同步远端，`gh stack view --json` 复核完整链条。每个上层 PR 只能以直接依赖的下一层分支为 base；PR body 使用同一模板，只描述本层增量，不复制父层内容。需要 ready 审查时使用 `--open`，否则保持 draft。不要手工改 base 后继续提交。
 
 ### 合并前本地验证（与 CI 部分重合）
 
