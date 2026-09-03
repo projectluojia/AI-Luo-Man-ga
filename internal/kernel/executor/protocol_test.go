@@ -20,6 +20,12 @@ func TestStartFrameContract(t *testing.T) {
 	if err := executor.ValidateStartFrame(child); err != nil {
 		t.Fatalf("validate child start frame: %v", err)
 	}
+	emptyTrace := startFrame()
+	emptyTrace.GetStartRun().TraceId = ""
+	emptyTrace.GetStartRun().ParentSpanId = ""
+	if err := executor.ValidateStartFrame(emptyTrace); err != nil {
+		t.Fatalf("validate start frame without optional trace data: %v", err)
+	}
 
 	tests := []struct {
 		name   string
