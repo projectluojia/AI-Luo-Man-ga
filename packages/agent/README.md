@@ -13,7 +13,8 @@ cd runtime
 uv run --project . --locked python -m agent.runtime --listen 127.0.0.1:50051
 ```
 
-启动时由 Deployment 提供模型 Provider 所需的配置：`AILUO_MODEL_API_KEY_FILE`
+启动时由 Deployment 提供模型 Provider 所需的配置：必填的 `AILUO_MODEL_NAME`；
+`AILUO_MODEL_API_KEY_FILE`
 指向受限密钥文件，`AILUO_MODEL_BASE_URL`、`AILUO_MODEL_*` 重试/限流变量按需
 配置；监听地址通过 `--listen` 传入。当前应由 Agent 自己的 Deployment/监督器
 启动该进程，再由 Core 按安装 lock 连接；Core 不负责解释或注入本包的 Provider
