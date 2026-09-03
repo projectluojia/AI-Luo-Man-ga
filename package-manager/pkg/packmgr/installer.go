@@ -51,6 +51,10 @@ func Inspect(ctx context.Context, sourcePath string) (packagecontract.Manifest, 
 // manifest+lock+全部组件工件，并回读验证。目标已有同 ID 且版本不同时替换；
 // 版本相同且内容相同则幂等返回，否则拒绝覆盖已发布内容。
 func Install(ctx context.Context, root, sourcePath string) (InstalledRecord, error) {
+	return install(ctx, root, sourcePath, "", "")
+}
+
+func install(ctx context.Context, root, sourcePath, expectedID, expectedVersion string) (InstalledRecord, error) {
 	if root == "" {
 		return InstalledRecord{}, packagecontract.ErrInvalidFormat
 	}
@@ -71,6 +75,10 @@ func Install(ctx context.Context, root, sourcePath string) (InstalledRecord, err
 	}
 	if err := validatePackagedSource(ctx, sourceDir, source); err != nil {
 		return InstalledRecord{}, err
+	}
+	if (expectedID != "" && source.Manifest.ID != expectedID) ||
+		(expectedVersion != "" && source.Manifest.Version != expectedVersion) {
+		return InstalledRecord{}, fmt.Errorf("源包身份在校验后发生变化")
 	}
 	artifacts, err := readSourceArtifacts(ctx, sourceDir, source.Manifest)
 	if err != nil {
@@ -323,7 +331,7 @@ func Upgrade(ctx context.Context, root, id, sourcePath string) (InstalledRecord,
 	if source.Manifest.Version == existing.Manifest.Version {
 		return InstalledRecord{}, fmt.Errorf("包 %s 已安装版本 %s，升级目标版本相同", id, existing.Manifest.Version)
 	}
-	return Install(ctx, root, sourceDir)
+	return install(ctx, root, sourceDir, source.Manifest.ID, source.Manifest.Version)
 }
 
 // Uninstall 删除已安装包目录。仅当目录包含 manifest.json 时删除（安全防护）。
