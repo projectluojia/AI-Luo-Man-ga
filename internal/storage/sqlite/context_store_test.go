@@ -2,7 +2,6 @@ package sqlite_test
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"path/filepath"
@@ -14,35 +13,6 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/publicerror"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite"
 )
-
-// TestContextMigration19AddsAssemblyColumns 验证迁移 19 为 runs 表增加会话上下文
-// 与上下文版本列，并保持 schema 版本连续。
-func TestContextMigration19AddsAssemblyColumns(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "context-migration.db")
-	store, err := sqlite.Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	db, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	var version int
-	if err := db.QueryRow(`SELECT max(version) FROM schema_migrations`).Scan(&version); err != nil {
-		t.Fatal(err)
-	}
-	var columns int
-	if err := db.QueryRow(`
-SELECT count(*) FROM pragma_table_info('runs')
-WHERE name IN ('session_id','user_id','message_id','context_digest','context_sources')`).Scan(&columns); err != nil {
-		t.Fatal(err)
-	}
-	if columns != 5 {
-		t.Fatalf("runs 表上下文列数量=%d，期望 5", columns)
-	}
-}
 
 func setContextRun(t *testing.T, store *sqlite.Store) kernelecho.RunRecord {
 	t.Helper()

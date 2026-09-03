@@ -14,40 +14,6 @@ import (
 // 编译期保证：SQLite 适配器完整实现后台任务 Store 端口。
 var _ task.Store = (*Store)(nil)
 
-func init() {
-	// 后台任务持久状态机的前向迁移固定为版本 18；版本 15（身份）、16（会话）、
-	// 17（确认）分别由对应模块占用，合并后迁移序列 1–18 连续。
-	// 状态迁移全部以租约令牌与租约到期条件做原子守卫；CHECK 约束在 SQL 边界
-	// 强制状态机与参数的合法取值范围。
-	registerMigration(18, `
-CREATE TABLE tasks (
-  app_id TEXT NOT NULL,
-  task_id TEXT NOT NULL,
-  task_type TEXT NOT NULL CHECK(length(task_type) BETWEEN 1 AND 128),
-  status TEXT NOT NULL CHECK(status IN ('queued','running','succeeded','failed','retry_scheduled','cancelled')),
-  attempt INTEGER NOT NULL CHECK(attempt > 0),
-  max_attempts INTEGER NOT NULL CHECK(max_attempts BETWEEN 1 AND 32),
-  deadline_at TEXT NOT NULL,
-  available_at TEXT NOT NULL,
-  lease_token TEXT,
-  lease_expires_at TEXT,
-  idempotency_key TEXT NOT NULL CHECK(length(idempotency_key) BETWEEN 1 AND 128),
-  params TEXT NOT NULL CHECK(json_valid(params)),
-  error_class TEXT NOT NULL CHECK(error_class IN ('','retryable','non_retryable','deadline_exceeded','lease_lost','cancelled')),
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  PRIMARY KEY (app_id, task_id),
-  CHECK(attempt <= max_attempts),
-  CHECK((status = 'running') = (lease_token IS NOT NULL)),
-  CHECK(lease_token IS NULL OR lease_expires_at IS NOT NULL),
-  CHECK(julianday(deadline_at) > julianday(available_at))
-);
-CREATE INDEX tasks_queue_idx ON tasks(app_id, status, available_at);
-CREATE INDEX tasks_lease_idx ON tasks(status, lease_expires_at);
-CREATE INDEX tasks_app_lease_idx ON tasks(app_id, status, lease_expires_at);
-`)
-}
-
 // taskSelectColumns 是 tasks 表投影列，同时用于 SELECT 与 UPDATE ... RETURNING。
 const taskSelectColumns = `
   app_id, task_id, task_type, status, attempt, max_attempts,

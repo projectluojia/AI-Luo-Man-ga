@@ -13,8 +13,6 @@ import (
 	"time"
 )
 
-const minimumRestorableSchemaVersion = 9
-
 var (
 	ErrBackupDestinationExists  = errors.New("backup destination already exists")
 	ErrRestoreDestinationExists = errors.New("restore destination already exists")
@@ -118,17 +116,21 @@ func ValidateBackup(ctx context.Context, path string) (resultErr error) {
 		observeStorageOperation(ctx, "backup_validate", started, err)
 		return errors.Join(ErrInvalidBackup, fmt.Errorf("backup foreign keys are invalid: %w", err))
 	}
-	var version, migrationCount int
+	var version, migrationCount, baselineCount int
 	if err := db.QueryRowContext(ctx, `SELECT coalesce(max(version), 0), count(*) FROM schema_migrations`).Scan(&version, &migrationCount); err != nil {
 		observeStorageOperation(ctx, "backup_validate", started, err)
 		return errors.Join(ErrInvalidBackup, fmt.Errorf("read backup schema version: %w", err))
 	}
-	if version < minimumRestorableSchemaVersion || version > currentSchemaVersion() || migrationCount != version {
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations WHERE version=?`, schemaBaselineVersion).Scan(&baselineCount); err != nil {
+		observeStorageOperation(ctx, "backup_validate", started, err)
+		return errors.Join(ErrInvalidBackup, fmt.Errorf("read backup schema baseline: %w", err))
+	}
+	if version < schemaBaselineVersion || version > currentSchemaVersion() || migrationCount == 0 || baselineCount != 1 {
 		err := fmt.Errorf("schema migration history is outside the supported restore range")
 		observeStorageOperation(ctx, "backup_validate", started, err)
 		return errors.Join(ErrInvalidBackup, err)
 	}
-	if err := validateRequiredSchema(ctx, db, version); err != nil {
+	if err := validateRequiredSchema(ctx, db); err != nil {
 		observeStorageOperation(ctx, "backup_validate", started, err)
 		return errors.Join(ErrInvalidBackup, err)
 	}
@@ -144,7 +146,7 @@ func sqliteFileURI(absolute string) string {
 	return (&url.URL{Scheme: "file", Path: path}).String()
 }
 
-func validateRequiredSchema(ctx context.Context, db *sql.DB, version int) error {
+func validateRequiredSchema(ctx context.Context, db *sql.DB) error {
 	for _, table := range []string{
 		"schema_migrations",
 		"echoes",
@@ -163,14 +165,7 @@ func validateRequiredSchema(ctx context.Context, db *sql.DB, version int) error 
 			return fmt.Errorf("close required schema probe: %w", err)
 		}
 	}
-	// 存储形态按迁移版本分支：v25 起通用包文档表替换 bus 专属关系表。
-	legacyTables := []string{"bus_source_revisions", "bus_stops", "bus_routes", "bus_journeys", "bus_current_snapshots"}
-	currentTables := []string{"package_documents", "package_snapshots"}
-	required := legacyTables
-	if version >= 25 {
-		required = currentTables
-	}
-	for _, table := range required {
+	for _, table := range []string{"package_documents", "package_snapshots", "app_config_revisions", "app_config_heads"} {
 		rows, err := db.QueryContext(ctx, "SELECT 1 FROM "+table+" LIMIT 0")
 		if err != nil {
 			return fmt.Errorf("required database table is unavailable")
@@ -179,68 +174,7 @@ func validateRequiredSchema(ctx context.Context, db *sql.DB, version int) error 
 			return fmt.Errorf("close required schema probe: %w", err)
 		}
 	}
-	if version >= 13 {
-		for _, table := range []string{"app_config_revisions", "app_config_heads"} {
-			rows, err := db.QueryContext(ctx, "SELECT 1 FROM "+table+" LIMIT 0")
-			if err != nil {
-				return fmt.Errorf("required App configuration table is unavailable")
-			}
-			if err := rows.Close(); err != nil {
-				return fmt.Errorf("close App configuration schema probe: %w", err)
-			}
-		}
-	}
 	runColumns := `
-SELECT app_id,run_id,echo_id,attempt,status,model,model_config_version,protocol_version,
-       max_steps,max_tool_calls,max_input_tokens,max_output_tokens,max_total_tokens,max_output_bytes,
-       max_cost_microusd,provider_timeout_ms,used_input_tokens,used_output_tokens,used_total_tokens,
-       used_cost_microusd,last_agent_sequence
-FROM runs LIMIT 0`
-	if version >= 10 {
-		runColumns = `
-SELECT app_id,run_id,echo_id,attempt,status,model,model_config_version,protocol_version,
-       max_steps,max_tool_calls,max_input_tokens,max_output_tokens,max_total_tokens,max_output_bytes,
-       max_cost_microusd,provider_timeout_ms,used_input_tokens,used_output_tokens,used_total_tokens,
-       used_cost_microusd,used_provider_retries,last_agent_sequence
-FROM runs LIMIT 0`
-	}
-	if version >= 11 {
-		runColumns = `
-SELECT app_id,run_id,echo_id,attempt,status,model,model_config_version,protocol_version,
-       max_steps,max_tool_calls,max_input_tokens,max_output_tokens,max_total_tokens,max_output_bytes,
-       max_cost_microusd,provider_timeout_ms,used_input_tokens,used_output_tokens,used_total_tokens,
-       used_cost_microusd,used_provider_retries,available_at,last_agent_sequence
-FROM runs LIMIT 0`
-	}
-	if version >= 14 {
-		runColumns = `
-SELECT app_id,run_id,run_group_id,echo_id,parent_run_id,origin_call_id,attempt,status,
-       model,model_config_version,protocol_version,max_steps,max_tool_calls,max_input_tokens,
-       max_output_tokens,max_total_tokens,max_output_bytes,max_cost_microusd,provider_timeout_ms,
-       used_input_tokens,used_output_tokens,used_total_tokens,used_cost_microusd,
-       used_provider_retries,available_at,capability_scope,permission_scope,result_message,
-       last_agent_sequence
-FROM runs LIMIT 0`
-		rows, err := db.QueryContext(ctx, `SELECT app_id,run_id,call_id,echo_id FROM capability_audit LIMIT 0`)
-		if err != nil {
-			return fmt.Errorf("required Capability audit schema is unavailable")
-		}
-		if err := rows.Close(); err != nil {
-			return fmt.Errorf("close Capability audit schema probe: %w", err)
-		}
-	}
-	if version >= 24 {
-		runColumns = `
-SELECT app_id,run_id,run_group_id,echo_id,parent_run_id,origin_call_id,attempt,status,
-       model,model_config_version,protocol_version,max_steps,max_tool_calls,max_input_tokens,
-       max_output_tokens,max_total_tokens,max_output_bytes,max_cost_microusd,provider_timeout_ms,
-       used_input_tokens,used_output_tokens,used_total_tokens,used_cost_microusd,
-       used_provider_retries,available_at,capability_scope,permission_scope,result_message,
-       task_message,last_agent_sequence
-		FROM runs LIMIT 0`
-	}
-	if version >= 26 {
-		runColumns = `
 SELECT app_id,run_id,run_group_id,echo_id,parent_run_id,origin_call_id,attempt,status,
        executor_id,config_revision,protocol_version,executor_config,input_payload,input_content_type,
        max_steps,max_capability_calls,max_execution_units,max_output_bytes,max_cost_microusd,
@@ -248,19 +182,6 @@ SELECT app_id,run_id,run_group_id,echo_id,parent_run_id,origin_call_id,attempt,s
        available_at,capability_scope,permission_scope,result_payload,result_content_type,
        last_executor_sequence
 FROM runs LIMIT 0`
-		for _, table := range []string{"app_config_revisions", "app_config_heads"} {
-			rows, err := db.QueryContext(ctx, "SELECT 1 FROM "+table+" LIMIT 0")
-			if err != nil {
-				return fmt.Errorf("required App configuration table is unavailable")
-			}
-			if err := rows.Close(); err != nil {
-				return fmt.Errorf("close App configuration schema probe: %w", err)
-			}
-		}
-	}
-	if version >= 26 {
-		runColumns = strings.ReplaceAll(runColumns, "max_tool_calls", "max_capability_calls")
-	}
 	rows, err := db.QueryContext(ctx, runColumns)
 	if err != nil {
 		return fmt.Errorf("required Run schema is unavailable")

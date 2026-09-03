@@ -3,16 +3,24 @@ package sqlite
 import (
 	"database/sql"
 	"path/filepath"
+	"strings"
 	"testing"
-	"time"
 )
 
-func TestCurrentSchemaUsesExecutorFields(t *testing.T) {
+func TestFreshSchemaUsesExecutorFields(t *testing.T) {
 	store, err := Open(filepath.Join(t.TempDir(), "schema.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer store.Close()
+
+	var version int
+	if err := store.db.QueryRow(`SELECT max(version) FROM schema_migrations`).Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if version != schemaBaselineVersion {
+		t.Fatalf("schema version=%d, want %d", version, schemaBaselineVersion)
+	}
 	for table, forbidden := range map[string][]string{
 		"app_config_revisions": {"model", "system_prompt", "channel_prompts", "provider_timeout_ms"},
 		"runs":                 {"model", "model_config_version", "system_prompt", "provider_timeout_ms", "last_agent_sequence", "max_input_tokens", "max_output_tokens", "max_total_tokens"},
@@ -41,38 +49,35 @@ func TestCurrentSchemaUsesExecutorFields(t *testing.T) {
 			}
 		}
 	}
+	var legacyTables int
+	if err := store.db.QueryRow(`
+SELECT count(*) FROM sqlite_master
+WHERE type='table' AND name IN ('user_prompt_settings','bus_source_revisions','bus_stops','bus_routes','bus_journeys','bus_current_snapshots')`).Scan(&legacyTables); err != nil {
+		t.Fatal(err)
+	}
+	if legacyTables != 0 {
+		t.Fatalf("fresh schema still exposes legacy tables: %d", legacyTables)
+	}
 }
 
-func TestExecutorMigrationNormalizesLegacyErrorValues(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "errors.db")
+func TestOpenRejectsPreBaselineDatabase(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy.db")
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	store := &Store{db: db}
-	if err := store.migrateThrough(t.Context(), 26); err != nil {
-		db.Close()
-		t.Fatal(err)
-	}
-	if _, err := db.ExecContext(t.Context(), `
-INSERT INTO echoes(app_id,echo_id,input_message,status,final_message,error_code,error_message,created_at)
-VALUES('app','echo','input','failed','','agent_run_failed','Agent Run 执行失败',?);`, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+	if _, err := db.Exec(`
+CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
+INSERT INTO schema_migrations(version, applied_at) VALUES(27, '2026-09-01T00:00:00Z');`); err != nil {
 		db.Close()
 		t.Fatal(err)
 	}
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
-	store, err = Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	echo, _, err := store.GetEcho(t.Context(), "app", "echo")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if echo.ErrorCode != "executor_failed" || echo.ErrorMessage != "执行者 Run 执行失败" {
-		t.Fatalf("legacy error was not normalized: %#v", echo)
+
+	_, err = Open(path)
+	if err == nil || !strings.Contains(err.Error(), "删除数据库并重新部署") {
+		t.Fatalf("legacy database error=%v", err)
 	}
 }

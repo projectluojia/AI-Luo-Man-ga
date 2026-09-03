@@ -2,7 +2,6 @@ package sqlite_test
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -43,35 +42,6 @@ func openTaskStore(t *testing.T) (*sqlite.Store, string) {
 	}
 	t.Cleanup(func() { store.Close() })
 	return store, path
-}
-
-func TestTaskMigration18CreatesTasksSchema(t *testing.T) {
-	_, path := openTaskStore(t)
-	// 通过独立连接读取同一数据库文件验证迁移 18 的表与索引。
-	db, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	db.SetMaxOpenConns(1)
-	var version int
-	if err := db.QueryRowContext(t.Context(), `SELECT max(version) FROM schema_migrations`).Scan(&version); err != nil {
-		t.Fatal(err)
-	}
-	if version != 27 {
-		t.Fatalf("schema 版本=%d，期望 27", version)
-	}
-	var tables, indexes int
-	if err := db.QueryRowContext(t.Context(), `
-SELECT
-  (SELECT count(*) FROM sqlite_master WHERE type='table' AND name='tasks'),
-  (SELECT count(*) FROM sqlite_master WHERE type='index' AND name IN
-    ('tasks_queue_idx','tasks_lease_idx','tasks_app_lease_idx'))`).Scan(&tables, &indexes); err != nil {
-		t.Fatal(err)
-	}
-	if tables != 1 || indexes != 3 {
-		t.Fatalf("tasks 表=%d 索引=%d，期望 1 表 3 索引", tables, indexes)
-	}
 }
 
 func TestTaskStoreRoundTripAndAppIsolation(t *testing.T) {
