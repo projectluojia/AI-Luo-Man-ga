@@ -2,7 +2,11 @@ module github.com/projectluojia/AI-Luo-Man-ga
 
 go 1.26
 
+require github.com/projectluojia/AI-Luo-Man-ga/package-manager v0.0.0
+
 require github.com/projectluojia/AI-Luo-Man-ga/contracts v0.0.0
+
+replace github.com/projectluojia/AI-Luo-Man-ga/package-manager => ./package-manager
 
 replace github.com/projectluojia/AI-Luo-Man-ga/contracts => ./contracts
 
@@ -18,6 +22,7 @@ require (
 )
 
 require (
+	github.com/BurntSushi/toml v1.6.0 // indirect
 	github.com/Masterminds/semver/v3 v3.5.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
