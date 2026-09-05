@@ -151,6 +151,22 @@ type Hello struct { Name string }
 	}
 }
 
+func TestAnalyzeGoOmitsUnexportedFields(t *testing.T) {
+	source := []byte("package main\nfunc hello(args Hello) {}\ntype Hello struct { Name string `json:\"name\"`; hidden string `json:\"hidden\"` }\n")
+	capabilities, err := AnalyzeGo(source, "x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema map[string]any
+	if err := json.Unmarshal(capabilities[0].InputSchema, &schema); err != nil {
+		t.Fatal(err)
+	}
+	properties := schema["properties"].(map[string]any)
+	if _, exists := properties["hidden"]; exists {
+		t.Fatal("unexported field was included in schema")
+	}
+}
+
 func TestAnalyzeGoRejectsUnsupportedJSONTagOptions(t *testing.T) {
 	for _, tag := range []string{"json:\"count,string\"", "json:\"count,omitempty,string\"", "json:\"count,omitzero\""} {
 		source := []byte("package main\nfunc hello(args Hello) {}\ntype Hello struct { Count int `" + tag + "` }\n")
@@ -190,6 +206,50 @@ type Hello struct {
 	atProp := props["at"].(map[string]any)
 	if atProp["type"] != "string" || atProp["format"] != "date-time" {
 		t.Fatalf("at = %+v", atProp)
+	}
+}
+
+func TestAnalyzeGoResolvesTimeByImportPath(t *testing.T) {
+	source := []byte(`package main
+import stdtime "time"
+func hello(args Hello) {}
+type Hello struct { At stdtime.Time ` + "`json:\"at\"`" + ` }
+`)
+	capabilities, err := AnalyzeGo(source, "x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema map[string]any
+	if err := json.Unmarshal(capabilities[0].InputSchema, &schema); err != nil {
+		t.Fatal(err)
+	}
+	at := schema["properties"].(map[string]any)["at"].(map[string]any)
+	if at["format"] != "date-time" {
+		t.Fatalf("aliased time schema=%v", at)
+	}
+	other := []byte(`package main
+import stdtime "example.com/time"
+func hello(args Hello) {}
+type Hello struct { At stdtime.Time ` + "`json:\"at\"`" + ` }
+`)
+	if _, err := AnalyzeGo(other, "x"); err == nil {
+		t.Fatal("non-standard time import was accepted")
+	}
+}
+
+func TestAnalyzeGoConstrainsFixedArrays(t *testing.T) {
+	source := []byte("package main\nfunc hello(args Hello) {}\ntype Hello struct { Values [3]int32 `json:\"values\"` }\n")
+	capabilities, err := AnalyzeGo(source, "x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema map[string]any
+	if err := json.Unmarshal(capabilities[0].InputSchema, &schema); err != nil {
+		t.Fatal(err)
+	}
+	values := schema["properties"].(map[string]any)["values"].(map[string]any)
+	if values["minItems"] != float64(3) || values["maxItems"] != float64(3) {
+		t.Fatalf("fixed array schema=%v", values)
 	}
 }
 

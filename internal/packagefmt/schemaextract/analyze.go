@@ -10,6 +10,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"path"
 	"regexp"
 	"strings"
 )
@@ -33,6 +34,7 @@ func AnalyzeGo(source []byte, packageID string) ([]Capability, error) {
 		return nil, err
 	}
 	types := collectStructs(file)
+	imports := collectImports(file)
 	var capabilities []Capability
 	for _, declaration := range file.Decls {
 		function, ok := declaration.(*ast.FuncDecl)
@@ -49,7 +51,7 @@ func AnalyzeGo(source []byte, packageID string) ([]Capability, error) {
 		if !found {
 			continue
 		}
-		schema, err := structSchemaWithTypes(structType, types, make(map[string]bool))
+		schema, err := structSchemaWithTypes(structType, types, imports, make(map[string]bool))
 		if err != nil {
 			return nil, err
 		}
@@ -63,6 +65,22 @@ func AnalyzeGo(source []byte, packageID string) ([]Capability, error) {
 		return nil, nil
 	}
 	return capabilities, nil
+}
+
+func collectImports(file *ast.File) map[string]string {
+	imports := make(map[string]string)
+	for _, spec := range file.Imports {
+		pathValue := strings.Trim(spec.Path.Value, `"`)
+		if spec.Name != nil {
+			if spec.Name.Name == "_" || spec.Name.Name == "." {
+				continue
+			}
+			imports[spec.Name.Name] = pathValue
+			continue
+		}
+		imports[path.Base(pathValue)] = pathValue
+	}
+	return imports
 }
 
 // collectStructs 收集源码中所有具名 struct 类型（字段名 → 类型）。

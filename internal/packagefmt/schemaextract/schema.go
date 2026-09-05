@@ -5,11 +5,12 @@ import (
 	"fmt"
 	"go/ast"
 	"reflect"
+	"strconv"
 	"strings"
 )
 
 // structSchema 把 struct AST 编译为 JSON Schema（object + additionalProperties:false）。
-func structSchemaWithTypes(structType *ast.StructType, types map[string]*ast.StructType, resolving map[string]bool) (json.RawMessage, error) {
+func structSchemaWithTypes(structType *ast.StructType, types map[string]*ast.StructType, imports map[string]string, resolving map[string]bool) (json.RawMessage, error) {
 	if structType.Fields == nil || len(structType.Fields.List) == 0 {
 		return nil, fmt.Errorf("schemaextract: 参数 struct 不能为空")
 	}
@@ -23,6 +24,9 @@ func structSchemaWithTypes(structType *ast.StructType, types map[string]*ast.Str
 	required := schema["required"].([]string)
 	seenNames := make(map[string]struct{}, len(structType.Fields.List))
 	for _, field := range structType.Fields.List {
+		if len(field.Names) == 1 && !ast.IsExported(field.Names[0].Name) {
+			continue
+		}
 		name, optional, err := fieldJSONName(field)
 		if err != nil {
 			return nil, err
@@ -31,7 +35,7 @@ func structSchemaWithTypes(structType *ast.StructType, types map[string]*ast.Str
 			return nil, fmt.Errorf("schemaextract: JSON 字段名 %q 重复", name)
 		}
 		seenNames[name] = struct{}{}
-		fieldSchema, err := fieldSchemaWithTypes(field.Type, types, resolving)
+		fieldSchema, err := fieldSchemaWithTypes(field.Type, types, imports, resolving)
 		if err != nil {
 			return nil, fmt.Errorf("schemaextract: 字段 %q: %w", name, err)
 		}
@@ -73,7 +77,7 @@ func fieldJSONName(field *ast.Field) (name string, optional bool, err error) {
 }
 
 // fieldSchema 把字段类型 AST 编译为 JSON Schema 片段。
-func fieldSchemaWithTypes(expr ast.Expr, types map[string]*ast.StructType, resolving map[string]bool) (any, error) {
+func fieldSchemaWithTypes(expr ast.Expr, types map[string]*ast.StructType, imports map[string]string, resolving map[string]bool) (any, error) {
 	switch t := expr.(type) {
 	case *ast.Ident:
 		scalar, scalarErr := scalarSchema(t.Name)
@@ -88,7 +92,7 @@ func fieldSchemaWithTypes(expr ast.Expr, types map[string]*ast.StructType, resol
 			return nil, fmt.Errorf("类型 %q 存在递归引用", t.Name)
 		}
 		resolving[t.Name] = true
-		schema, err := structSchemaWithTypes(nested, types, resolving)
+		schema, err := structSchemaWithTypes(nested, types, imports, resolving)
 		delete(resolving, t.Name)
 		if err != nil {
 			return nil, err
@@ -99,9 +103,9 @@ func fieldSchemaWithTypes(expr ast.Expr, types map[string]*ast.StructType, resol
 		}
 		return decoded, nil
 	case *ast.StarExpr:
-		return fieldSchemaWithTypes(t.X, types, resolving)
+		return fieldSchemaWithTypes(t.X, types, imports, resolving)
 	case *ast.SelectorExpr:
-		if pkg, ok := t.X.(*ast.Ident); ok && pkg.Name == "time" && t.Sel.Name == "Time" {
+		if pkg, ok := t.X.(*ast.Ident); ok && imports[pkg.Name] == "time" && t.Sel.Name == "Time" {
 			return map[string]any{"type": "string", "format": "date-time"}, nil
 		}
 		return nil, fmt.Errorf("不支持的标识类型 %s.%s", pkgName(t.X), t.Sel.Name)
@@ -112,13 +116,26 @@ func fieldSchemaWithTypes(expr ast.Expr, types map[string]*ast.StructType, resol
 				return map[string]any{"type": "string", "contentEncoding": "base64"}, nil
 			}
 		}
-		items, err := fieldSchemaWithTypes(t.Elt, types, resolving)
+		items, err := fieldSchemaWithTypes(t.Elt, types, imports, resolving)
 		if err != nil {
 			return nil, err
 		}
-		return map[string]any{"type": "array", "items": items}, nil
+		result := map[string]any{"type": "array", "items": items}
+		if t.Len != nil {
+			literal, ok := t.Len.(*ast.BasicLit)
+			if !ok || literal.Kind.String() != "INT" {
+				return nil, fmt.Errorf("schemaextract: 定长数组长度必须是整数常量")
+			}
+			length, err := strconv.Atoi(literal.Value)
+			if err != nil || length < 0 {
+				return nil, fmt.Errorf("schemaextract: 定长数组长度无效")
+			}
+			result["minItems"] = length
+			result["maxItems"] = length
+		}
+		return result, nil
 	case *ast.StructType:
-		schema, err := structSchemaWithTypes(t, types, resolving)
+		schema, err := structSchemaWithTypes(t, types, imports, resolving)
 		if err != nil {
 			return nil, err
 		}
