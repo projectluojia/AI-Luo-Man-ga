@@ -87,7 +87,7 @@ func (m Manifest) Equal(other Manifest) bool {
 
 // SameIdentity 只比较装载工件所需的运行时身份字段。
 func (m Manifest) SameIdentity(other Manifest) bool {
-	return m.ID == other.ID && m.PackageID == other.PackageID && m.Version == other.Version && m.Mode == other.Mode
+	return m.ID == other.ID && m.Version == other.Version && m.Mode == other.Mode
 }
 
 func equalCapabilitySpecs(left, right []capability.CapabilitySpec) bool {

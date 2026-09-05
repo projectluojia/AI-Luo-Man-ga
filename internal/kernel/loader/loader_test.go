@@ -19,6 +19,15 @@ import (
 
 const digest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
+func TestManifestSameIdentityIgnoresPackageID(t *testing.T) {
+	left := loader.Manifest{ID: "pkg.component", PackageID: "pkg-a", Version: "1.0.0", Mode: loader.ModeHosted}
+	right := left
+	right.PackageID = "pkg-b"
+	if !left.SameIdentity(right) {
+		t.Fatal("runtime identity must not depend on package ID absent from the Runtime Host protocol")
+	}
+}
+
 type fakeHost struct {
 	// mode 声明宿主服务的模式；空值按 ModeHosted 处理（多数用例单一模式）。
 	mode      string
