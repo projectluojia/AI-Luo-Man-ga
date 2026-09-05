@@ -71,17 +71,27 @@ func TestManagerRejectsDuplicateQuickReplyTriggers(t *testing.T) {
 }
 
 func TestManagerRejectsIncompleteSettings(t *testing.T) {
-	manager, err := NewService(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
+	tests := []struct {
+		name   string
+		mutate func(*SaveInput)
+	}{
+		{name: "prompt catalog", mutate: func(input *SaveInput) { input.PromptCatalog = promptcatalog.Catalog{} }},
+		{name: "base system prompt", mutate: func(input *SaveInput) { input.BaseSystemPrompt = "" }},
+		{name: "channel prompts", mutate: func(input *SaveInput) { input.ChannelPrompts = nil }},
+		{name: "agent run", mutate: func(input *SaveInput) { input.AgentRun = AgentRunSettings{} }},
 	}
-	input := validInput()
-	input.PromptCatalog = promptcatalog.Catalog{}
-	input.BaseSystemPrompt = ""
-	input.ChannelPrompts = nil
-	input.AgentRun = AgentRunSettings{}
-	if _, err := manager.Save(input); err != ErrInvalid {
-		t.Fatalf("incomplete settings error=%v", err)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			manager, err := NewService(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			input := validInput()
+			test.mutate(&input)
+			if _, err := manager.Save(input); err != ErrInvalid {
+				t.Fatalf("incomplete settings error=%v", err)
+			}
+		})
 	}
 }
 
