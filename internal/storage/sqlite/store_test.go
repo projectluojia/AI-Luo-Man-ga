@@ -97,6 +97,11 @@ func TestEchoCreationIdempotencyIsAtomicAndAppScoped(t *testing.T) {
 	if err != nil || !created || echoID != "echo-a" {
 		t.Fatalf("first creation echo=%q created=%t err=%v", echoID, created, err)
 	}
+	childEcho, childRun := echoRunRecords("app-a", "echo-child", "run-child", "child", now)
+	childRun.ParentRunID = "parent-run"
+	if _, _, err := store.CreateEchoRunIdempotentLimited(ctx, "child-request", idempotency.Fingerprint([]byte("child")), childEcho, childRun, 0); !errors.Is(err, kernelecho.ErrInvalidRunRecord) {
+		t.Fatalf("root creation accepted parent run: %v", err)
+	}
 	replayEcho, replayRun := echoRunRecords("app-a", "must-not-exist", "must-not-exist", "message", now.Add(time.Second))
 	echoID, created, err = store.CreateEchoRunIdempotentLimited(ctx, "client-request", idempotency.Fingerprint([]byte("message")), replayEcho, replayRun, 0)
 	if err != nil || created || echoID != "echo-a" {

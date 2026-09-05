@@ -31,9 +31,14 @@ func TestPublicRunJSONDoesNotExposeChildResultOrPermissionScope(t *testing.T) {
 }
 
 func TestPublicRunRecordOnlyExposesValidTextOutput(t *testing.T) {
-	text := echo.PublicRunRecord(echo.RunRecord{Result: echo.Output{ContentType: "text/plain", Data: []byte("ok")}})
-	if text.Result != "ok" {
-		t.Fatalf("text result=%q", text.Result)
+	for _, output := range []echo.Output{
+		{ContentType: "text/plain", Data: []byte("ok")},
+		{ContentType: "text/plain; charset=utf-8", Data: []byte("ok")},
+	} {
+		text := echo.PublicRunRecord(echo.RunRecord{Result: output})
+		if text.Result != "ok" {
+			t.Fatalf("text result=%q for %#v", text.Result, output)
+		}
 	}
 	for _, output := range []echo.Output{
 		{ContentType: "application/json", Data: []byte(`{"secret":true}`)},

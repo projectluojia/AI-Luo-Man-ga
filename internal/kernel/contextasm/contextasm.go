@@ -17,12 +17,12 @@ import (
 	"time"
 	"unicode/utf8"
 
+	contractsexecutor "github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/executor"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/session"
 )
 
 const (
-	SchemaVersion        = "ailuo.context.v1"
-	MaxInputPayloadBytes = 16 << 10
+	SchemaVersion = "ailuo.context.v1"
 )
 
 var (
@@ -390,9 +390,9 @@ func validateInput(in Input) error {
 		return ErrInvalidInput
 	case strings.TrimSpace(in.ConfigRevision) == "":
 		return ErrInvalidInput
-	case !validContentType(in.InputContentType):
+	case !contractsexecutor.ValidContentType(in.InputContentType):
 		return ErrInvalidInput
-	case len(in.InputPayload) == 0 || len(in.InputPayload) > MaxInputPayloadBytes:
+	case len(in.InputPayload) == 0 || len(in.InputPayload) > contractsexecutor.MaxInputPayloadBytes:
 		return ErrInvalidInput
 	case in.Now.IsZero():
 		return ErrInvalidInput
@@ -403,18 +403,6 @@ func validateInput(in Input) error {
 		}
 	}
 	return nil
-}
-
-func validContentType(value string) bool {
-	if value == "" || len(value) > 128 || !utf8.ValidString(value) {
-		return false
-	}
-	for _, character := range value {
-		if character < 0x20 || character == 0x7f {
-			return false
-		}
-	}
-	return true
 }
 
 func validateBudget(budget Budget) error {

@@ -201,7 +201,7 @@ func (s *Server) translateChatEvent(writer io.Writer, event kernelecho.Event) (t
 		return false
 	case "output.delta":
 		text, ok := decodeTextOutput(event.Payload)
-		if !ok {
+		if !ok || text == "" {
 			return false
 		}
 		_ = writeChatSSE(writer, "text_delta", map[string]string{"text": text})
@@ -244,7 +244,7 @@ func decodeTextOutput(payload []byte) (string, bool) {
 	if !strings.HasPrefix(contentType, "text/plain") && !strings.HasPrefix(contentType, "application/json") {
 		return "", false
 	}
-	return string(value.Data), len(value.Data) > 0
+	return string(value.Data), true
 }
 
 // writeChatSSE 按前端流式协议写出一个事件。

@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/capability"
+	contractsexecutor "github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/executor"
 	kernelecho "github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/executor"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/id"
@@ -41,6 +42,9 @@ func (s *Store) CreateEchoRunIdempotentLimited(
 	}
 	if echo.AppID == "" || echo.ID == "" || echo.InputMessage == "" || echo.Status != kernelecho.StatusRunning || echo.CreatedAt.IsZero() {
 		return "", false, kernelecho.ErrInvalidEchoRecord
+	}
+	if run.ParentRunID != "" {
+		return "", false, kernelecho.ErrInvalidRunRecord
 	}
 	if err := validateNewRun(echo, run); err != nil {
 		return "", false, err
@@ -1087,7 +1091,7 @@ func validateNewRun(echo kernelecho.Record, run kernelecho.RunRecord) error {
 		run.LastExecutorSequence != 0 || run.LeaseToken != "" || run.LeaseExpiresAt != nil || run.StartedAt != nil ||
 		run.CompletedAt != nil || len(run.Result.Data) != 0 || run.Result.ContentType != "" || run.ErrorCode != "" || run.ErrorMessage != "" ||
 		len(run.ExecutorConfig) == 0 || len(run.ExecutorConfig) > executor.MaxExecutorConfigBytes || !json.Valid(run.ExecutorConfig) ||
-		len(run.InputPayload) == 0 || len(run.InputPayload) > executor.MaxInputPayloadBytes || !validContentType(run.InputContentType) ||
+		len(run.InputPayload) == 0 || len(run.InputPayload) > executor.MaxInputPayloadBytes || !contractsexecutor.ValidContentType(run.InputContentType) ||
 		!json.Valid(run.RecoverableState) ||
 		(run.SessionID != "" && !session.ValidStableID(run.SessionID)) ||
 		(run.UserID != "" && !session.ValidStableID(run.UserID)) ||
@@ -1103,18 +1107,6 @@ func validateNewRun(echo kernelecho.Record, run kernelecho.RunRecord) error {
 		return kernelecho.ErrInvalidRunRecord
 	}
 	return nil
-}
-
-func validContentType(value string) bool {
-	if value == "" || len(value) > 128 || !utf8.ValidString(value) {
-		return false
-	}
-	for _, character := range value {
-		if character < 0x20 || character == 0x7f {
-			return false
-		}
-	}
-	return true
 }
 
 func textOutput(output kernelecho.Output) string {

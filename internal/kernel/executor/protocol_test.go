@@ -102,6 +102,13 @@ func TestStartFrameContract(t *testing.T) {
 			},
 			target: executor.ErrInvalidFrame,
 		},
+		{
+			name: "oversized frame",
+			mutate: func(frame *executor.Frame) {
+				frame.GetStartRun().InputPayload.Data = []byte(strings.Repeat("x", executor.MaxFrameBytes+1))
+			},
+			target: executor.ErrFrameTooLarge,
+		},
 	}
 	for _, test := range tests {
 		test := test

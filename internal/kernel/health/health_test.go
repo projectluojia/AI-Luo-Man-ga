@@ -16,9 +16,11 @@ import (
 type healthClient struct {
 	response *executor.HealthResponse
 	err      error
+	request  *executor.HealthRequest
 }
 
-func (h *healthClient) Health(_ context.Context, _ *executor.HealthRequest, _ ...grpc.CallOption) (*executor.HealthResponse, error) {
+func (h *healthClient) Health(_ context.Context, request *executor.HealthRequest, _ ...grpc.CallOption) (*executor.HealthResponse, error) {
+	h.request = request
 	return h.response, h.err
 }
 
@@ -32,6 +34,10 @@ func TestExecutorCheckerReportsReadiness(t *testing.T) {
 	}}}
 	if err := checker.Ping(context.Background()); err != nil {
 		t.Fatalf("ready executor rejected: %v", err)
+	}
+	client := checker.Client.(*healthClient)
+	if client.request == nil || len(client.request.AcceptedProtocolVersions) != 1 || client.request.AcceptedProtocolVersions[0] != executor.Version {
+		t.Fatalf("health request=%#v, want protocol %s", client.request, executor.Version)
 	}
 }
 

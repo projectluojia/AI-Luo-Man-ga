@@ -40,6 +40,10 @@ func TestFreshSchemaUsesExecutorFields(t *testing.T) {
 			}
 			columns[name] = struct{}{}
 		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			t.Fatalf("iterate table %s: %v", table, err)
+		}
 		if err := rows.Close(); err != nil {
 			t.Fatalf("close table %s: %v", table, err)
 		}

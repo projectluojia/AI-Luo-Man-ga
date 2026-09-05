@@ -535,9 +535,9 @@ def _decode_text_payload(payload, field: str) -> str:
 def _render_agent_context(payload, config: dict) -> str:
     parts: list[str] = []
     system_prompt = config.get("system_prompt", "")
+    if not isinstance(system_prompt, str):
+        raise ProtocolViolation("执行者配置中的 system_prompt 必须是字符串")
     if system_prompt:
-        if not isinstance(system_prompt, str):
-            raise ProtocolViolation("执行者配置中的 system_prompt 必须是字符串")
         parts.append(system_prompt)
 
     if payload is None or not payload.data:
@@ -572,9 +572,9 @@ def _render_agent_context(payload, config: dict) -> str:
             raise ProtocolViolation(f"执行上下文包含 Agent 不支持的 block：{block_type}")
 
     channel_prompts = config.get("channel_prompts", {})
+    if not isinstance(channel_prompts, dict) or any(not isinstance(item, str) for item in channel_prompts.values()):
+        raise ProtocolViolation("执行者配置中的 channel_prompts 无效")
     if channel_prompts:
-        if not isinstance(channel_prompts, dict) or any(not isinstance(item, str) for item in channel_prompts.values()):
-            raise ProtocolViolation("执行者配置中的 channel_prompts 无效")
         if channel_prompts.get(channel):
             parts.append(channel_prompts[channel])
     if history:

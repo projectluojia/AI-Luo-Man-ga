@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -212,7 +213,7 @@ VALUES(27,'2026-09-01T00:00:00Z');`); err != nil {
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := sqlite.ValidateBackup(t.Context(), path); !errors.Is(err, sqlite.ErrInvalidBackup) {
+	if err := sqlite.ValidateBackup(t.Context(), path); !errors.Is(err, sqlite.ErrInvalidBackup) || !strings.Contains(err.Error(), "schema migration history is outside the supported restore range") {
 		t.Fatalf("伪造迁移历史错误=%v", err)
 	}
 }

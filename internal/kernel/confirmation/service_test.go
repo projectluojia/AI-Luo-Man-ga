@@ -603,18 +603,24 @@ func TestServiceRequestRejectsInvalidInputs(t *testing.T) {
 		t.Fatalf("empty app got %v, want ErrInvalidRequest", err)
 	}
 	if _, err := service.Request(ctx, "app", "echo", "run", "call-1", confirmation.RequestSpec{
-		CapabilityID: "campus.bus.notify",
+		CapabilityID:   "campus.bus.notify",
+		SideEffect:     "invalid",
+		IdempotencyKey: "operation-2",
 	}, nil, clock.current().Add(time.Hour)); !errors.Is(err, confirmation.ErrInvalidRequest) {
-		t.Fatalf("invalid target type got %v, want ErrInvalidRequest", err)
+		t.Fatalf("invalid side effect got %v, want ErrInvalidRequest", err)
 	}
 	// 只读副作用不需要确认，必须在请求边界拒绝（确认仅治理 write/external）。
 	if _, err := service.Request(ctx, "app", "echo", "run", "call-1", confirmation.RequestSpec{
-		CapabilityID: "campus.bus.notify",
+		CapabilityID:   "campus.bus.notify",
+		SideEffect:     "read",
+		IdempotencyKey: "operation-3",
 	}, nil, clock.current().Add(time.Hour)); !errors.Is(err, confirmation.ErrInvalidRequest) {
 		t.Fatalf("read side effect got %v, want ErrInvalidRequest", err)
 	}
 	if _, err := service.Request(ctx, "app", "echo", "run", "call-1", confirmation.RequestSpec{
-		CapabilityID: "campus.bus.notify",
+		CapabilityID:   "campus.bus.notify",
+		SideEffect:     "write",
+		IdempotencyKey: " ",
 	}, nil, clock.current().Add(time.Hour)); !errors.Is(err, confirmation.ErrInvalidRequest) {
 		t.Fatalf("invalid idempotency key got %v, want ErrInvalidRequest", err)
 	}

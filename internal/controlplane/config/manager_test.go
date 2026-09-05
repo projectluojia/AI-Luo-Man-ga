@@ -125,6 +125,51 @@ func TestManagerRequiresFreshSaveForLegacyProviderAndProcessFields(t *testing.T)
 	}
 }
 
+func TestManagerIgnoresLegacyModelFieldsWithValidRuntimeProcess(t *testing.T) {
+	root := t.TempDir()
+	settings, err := normalize(validInput())
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings.Revision = 1
+	settings.UpdatedAt = time.Now().UTC()
+	encoded, err := json.Marshal(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var legacy map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &legacy); err != nil {
+		t.Fatal(err)
+	}
+	for key, value := range map[string]any{
+		"model_base_url":                "http://127.0.0.1:8081/v1",
+		"model_request_timeout_seconds": 30,
+	} {
+		legacy[key], err = json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	legacyBytes, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "ailuo-settings.json"), legacyBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	manager, err := NewService(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ready := manager.CurrentResolved(); ready {
+		t.Fatal("legacy model fields were exposed as a resolved configuration")
+	}
+	if runtime := manager.Snapshot().Runtime; runtime.State != "setup_required" {
+		t.Fatalf("runtime=%+v, want setup_required", runtime)
+	}
+}
+
 func TestManagerRejectsDuplicateQuickReplyTriggers(t *testing.T) {
 	manager, err := NewService(t.TempDir())
 	if err != nil {

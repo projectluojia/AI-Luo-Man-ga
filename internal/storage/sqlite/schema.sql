@@ -386,10 +386,7 @@ CREATE UNIQUE INDEX package_snapshots_current_idx ON package_snapshots(app_id, n
 
 CREATE TRIGGER runs_budget_insert_guard
 BEFORE INSERT ON runs
-WHEN NEW.max_steps > 64 OR NEW.max_capability_calls > 256 OR
-     NEW.max_execution_units > 1000000000 OR NEW.max_output_bytes > 262144 OR
-     NEW.max_cost_microusd > 1000000000000000 OR
-     NEW.used_execution_units > NEW.max_execution_units OR
+WHEN NEW.used_execution_units > NEW.max_execution_units OR
      (NEW.max_cost_microusd > 0 AND NEW.used_cost_microusd > NEW.max_cost_microusd)
 BEGIN
   SELECT RAISE(ABORT,'invalid run budget');
@@ -398,10 +395,7 @@ END;
 CREATE TRIGGER runs_budget_update_guard
 BEFORE UPDATE OF max_steps,max_capability_calls,max_execution_units,max_output_bytes,
                  max_cost_microusd,used_execution_units,used_cost_microusd ON runs
-WHEN NEW.max_steps > 64 OR NEW.max_capability_calls > 256 OR
-     NEW.max_execution_units > 1000000000 OR NEW.max_output_bytes > 262144 OR
-     NEW.max_cost_microusd > 1000000000000000 OR
-     NEW.used_execution_units > NEW.max_execution_units OR
+WHEN NEW.used_execution_units > NEW.max_execution_units OR
      (NEW.max_cost_microusd > 0 AND NEW.used_cost_microusd > NEW.max_cost_microusd)
 BEGIN
   SELECT RAISE(ABORT,'invalid run budget');

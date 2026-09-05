@@ -1,10 +1,12 @@
 package web_test
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // generateSDKWithCLI 通过独立 package-manager module 的 CLI 生成 SDK，消费方
@@ -12,7 +14,9 @@ import (
 func generateSDKWithCLI(t *testing.T, commandName, outputDir string) {
 	t.Helper()
 	repositoryRoot := findRepositoryRoot(t)
-	command := exec.Command("go", "run", "./cmd/ailuo-pm", commandName,
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+	defer cancel()
+	command := exec.CommandContext(ctx, "go", "run", "./cmd/ailuo-pm", commandName,
 		filepath.Join(repositoryRoot, "packages", "campus-bus"), outputDir)
 	command.Dir = filepath.Join(repositoryRoot, "package-manager")
 	if output, err := command.CombinedOutput(); err != nil {

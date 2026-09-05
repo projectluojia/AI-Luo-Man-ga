@@ -224,7 +224,7 @@ func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 	if err := executorManager.Warmup(ctx, executorManager.Pinned(), 1); err != nil {
 		t.Fatalf("warm executor: %v\n%s", err, logs.String())
 	}
-	executorLease, err := executorManager.Executor(ctx, executorRecord.Runtime.ID)
+	executorLease, err := executorManager.Executor(ctx)
 	if err != nil {
 		t.Fatalf("resolve executor: %v", err)
 	}

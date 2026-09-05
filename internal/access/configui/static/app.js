@@ -49,6 +49,7 @@ function render(snapshot, preserveInputs = false) {
     byId('execution-max-capability-calls').value = settings.execution?.max_capability_calls;
     byId('execution-max-units').value = settings.execution?.max_execution_units;
     byId('execution-max-output-bytes').value = settings.execution?.max_output_bytes;
+    byId('execution-max-cost').value = settings.execution?.max_cost_microusd;
     byId('run-timeout').value = settings.orchestration?.run_timeout_seconds;
     byId('run-max-attempts').value = settings.orchestration?.max_run_attempts;
     byId('run-queue-capacity').value = settings.orchestration?.queue_capacity;
@@ -125,7 +126,8 @@ form.addEventListener('submit', async event => {
       max_steps: Number(byId('execution-max-steps').value),
       max_capability_calls: Number(byId('execution-max-capability-calls').value),
       max_execution_units: Number(byId('execution-max-units').value),
-      max_output_bytes: Number(byId('execution-max-output-bytes').value)
+      max_output_bytes: Number(byId('execution-max-output-bytes').value),
+      max_cost_microusd: Number(byId('execution-max-cost').value)
     },
     orchestration: {
       run_timeout_seconds: Number(byId('run-timeout').value),

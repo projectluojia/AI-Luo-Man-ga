@@ -166,11 +166,11 @@ func outputDelta(text string) *executorv1.OutputDelta {
 	}}
 }
 
-func usageFrame(start *executorv1.ExecutorFrame, sequence, inputTokens, outputTokens uint64) *executorv1.ExecutorFrame {
+func usageFrame(start *executorv1.ExecutorFrame, sequence, executionUnits uint64) *executorv1.ExecutorFrame {
 	return &executorv1.ExecutorFrame{
 		EchoId: start.EchoId, RunId: start.RunId, Sequence: sequence,
 		Body: &executorv1.ExecutorFrame_ResourceUsage{ResourceUsage: &executorv1.ResourceUsage{
-			ExecutionUnits: inputTokens + outputTokens,
+			ExecutionUnits: executionUnits,
 		}},
 	}
 }
@@ -418,7 +418,7 @@ func (a *grantingPolicyExecutor) Run(stream executorv1.ExecutorRuntime_RunServer
 			a.testing.Errorf("Run 接受后的新增授权结果=%#v", result)
 		}
 	}
-	if err := stream.Send(usageFrame(start, 4, 3, 2)); err != nil {
+	if err := stream.Send(usageFrame(start, 4, 5)); err != nil {
 		return err
 	}
 	return stream.Send(&executorv1.ExecutorFrame{
@@ -479,7 +479,7 @@ func (a *duplicateOutputExecutor) Run(stream executorv1.ExecutorRuntime_RunServe
 	}
 	for _, frame := range []*executorv1.ExecutorFrame{
 		acceptedFrame(start, 1),
-		usageFrame(start, 2, 1, 0),
+		usageFrame(start, 2, 1),
 		{
 			EchoId: start.EchoId, RunId: start.RunId, Sequence: 3,
 			Body: &executorv1.ExecutorFrame_OutputDelta{OutputDelta: outputDelta("answer")},

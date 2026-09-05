@@ -29,12 +29,9 @@ func insertInternalEchoRuns(t *testing.T, store *Store, echo kernelecho.Record, 
 	if err != nil {
 		t.Fatal(err)
 	}
-	committed := false
 	defer func() {
-		if !committed {
-			_ = tx.Rollback()
-		}
-		store.txMu.Unlock()
+		var err error
+		store.finishTx(tx, &err, "insert internal echo runs")
 	}()
 	if len(runs) == 0 {
 		t.Fatal("at least one run is required")
@@ -50,7 +47,6 @@ func insertInternalEchoRuns(t *testing.T, store *Store, echo kernelecho.Record, 
 	if err := tx.Commit(); err != nil {
 		t.Fatal(err)
 	}
-	committed = true
 }
 
 func TestFinalizeEchoUsesPrimaryRunGroup(t *testing.T) {

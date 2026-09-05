@@ -66,9 +66,10 @@
         </div>
         <div class="metric-grid">
           <label class="field"><span>最大执行步数</span><input id="execution-max-steps" type="number" min="1" max="64" step="1" required></label>
-          <label class="field"><span>最大 Capability 调用数</span><input id="execution-max-capability-calls" type="number" min="1" max="128" step="1" required></label>
+          <label class="field"><span>最大 Capability 调用数</span><input id="execution-max-capability-calls" type="number" min="1" max="256" step="1" required></label>
           <label class="field"><span>执行单元总上限</span><input id="execution-max-units" type="number" min="1" max="1000000000" step="1" required></label>
           <label class="field"><span>输出字节上限</span><input id="execution-max-output-bytes" type="number" min="1" max="262144" step="1" required></label>
+          <label class="field"><span>成本上限（微美元）</span><input id="execution-max-cost" type="number" min="0" max="1000000000000000" step="1" required></label>
           <label class="field"><span>Run 超时（秒）</span><input id="run-timeout" type="number" min="1" max="600" step="1" required></label>
           <label class="field"><span>最大重试次数</span><input id="run-max-attempts" type="number" min="1" max="10" step="1" required></label>
           <label class="field"><span>队列容量</span><input id="run-queue-capacity" type="number" min="1" max="10000" step="1" required></label>

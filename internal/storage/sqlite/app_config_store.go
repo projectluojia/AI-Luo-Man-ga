@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/appconfig"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/executor"
 )
 
 func (s *Store) Ensure(ctx context.Context, seed appconfig.Config) (result appconfig.Config, created bool, resultErr error) {
@@ -201,7 +202,7 @@ func scanAppConfig(scanner rowScanner) (appconfig.Config, error) {
 	config.Enabled = enabled
 	config.ExecutorConfig = append(json.RawMessage(nil), executorConfig...)
 	config.ExecutionTimeout = time.Duration(executionTimeoutMS) * time.Millisecond
-	if len(config.ExecutorConfig) > 64<<10 || len(capabilitiesJSON) > 65536 || len(permissionsJSON) > 65536 {
+	if len(config.ExecutorConfig) > executor.MaxExecutorConfigBytes || len(capabilitiesJSON) > 65536 || len(permissionsJSON) > 65536 {
 		return appconfig.Config{}, appconfig.ErrInvalid
 	}
 	if err := json.Unmarshal([]byte(capabilitiesJSON), &config.EnabledCapabilities); err != nil {

@@ -33,6 +33,7 @@ const (
 	MaxOutputPayloadBytes     = 256 << 10
 	MaxFailureMessageBytes    = 1024
 	MaxIdentifierBytes        = 128
+	MaxContentTypeBytes       = 128
 	MaxDescriptionBytes       = 4096
 	MaxNameBytes              = 256
 	MaxProtocolSteps          = 64
@@ -67,6 +68,19 @@ func Supports(versions []string) bool {
 		}
 	}
 	return false
+}
+
+// ValidContentType 校验 Payload 使用的内容类型文本。
+func ValidContentType(value string) bool {
+	if !validText(value, 1, MaxContentTypeBytes) {
+		return false
+	}
+	for _, character := range value {
+		if character < 0x20 || character == 0x7f {
+			return false
+		}
+	}
+	return true
 }
 
 func ValidateHealthRequest(request *executorv1.HealthRequest) error {
@@ -148,6 +162,7 @@ func ValidateResourceUsage(
 	previousRetries uint32,
 	maxUnits, maxCost uint64,
 ) error {
+	// maxCost 为 0 表示不限成本；maxUnits 为 0 仍会拒绝任何正执行单元用量。
 	if usage == nil || usage.ExecutionUnits == 0 || usage.ExecutionUnits > MaxExecutionUnits ||
 		usage.CostMicrousd > MaxCostMicrousd || usage.ExecutionUnits < previousUnits ||
 		usage.CostMicrousd < previousCost || usage.Retries < previousRetries ||
@@ -254,13 +269,8 @@ func validPayload(payload *executorv1.Payload, required bool, maximum int) bool 
 	if len(payload.Data) == 0 {
 		return !required && payload.ContentType == ""
 	}
-	if !validText(payload.ContentType, 1, 128) {
+	if !ValidContentType(payload.ContentType) {
 		return false
-	}
-	for _, character := range payload.ContentType {
-		if character < 0x20 || character == 0x7f {
-			return false
-		}
 	}
 	return len(payload.Data) <= maximum
 }

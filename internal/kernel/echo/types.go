@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"mime"
 	"time"
 	"unicode/utf8"
 
@@ -138,7 +139,8 @@ type PublicRun struct {
 
 func PublicRunRecord(run RunRecord) PublicRun {
 	result := ""
-	if run.Result.ContentType == "text/plain" && utf8.Valid(run.Result.Data) {
+	contentType, _, err := mime.ParseMediaType(run.Result.ContentType)
+	if err == nil && contentType == "text/plain" && utf8.Valid(run.Result.Data) {
 		result = string(run.Result.Data)
 	}
 	return PublicRun{RunRecord: run, Result: result}

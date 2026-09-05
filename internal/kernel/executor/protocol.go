@@ -60,6 +60,7 @@ func ValidateStartFrame(frame *Frame) error {
 }
 
 func ValidateResourceUsage(usage *ResourceUsage, previousUnits, previousCost uint64, previousRetries uint32, maxUnits, maxCost uint64) error {
+	// maxCost 为 0 表示不限成本；maxUnits 为 0 仍会拒绝任何正执行单元用量。
 	return contractsexecutor.ValidateResourceUsage(usage, previousUnits, previousCost, previousRetries, maxUnits, maxCost)
 }
 
