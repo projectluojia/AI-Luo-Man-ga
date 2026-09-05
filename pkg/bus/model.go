@@ -5,8 +5,6 @@ import (
 	"errors"
 	"strings"
 	"time"
-
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 )
 
 var (
@@ -15,6 +13,13 @@ var (
 	ErrSameStop            = errors.New("origin and destination stops must differ")
 	ErrInvalidLimit        = errors.New("limit must be between 1 and 50")
 	ErrQueryRequired       = errors.New("query is required")
+
+	// 数据治理错误码（与内核 contracts 定义一致的中立副本）：pkg/bus 是
+	// 可发布中立包，guest 与内核共同依赖，不反向依赖内核 internal/ 包。
+	ErrDataUnavailable = errors.New("authoritative data is unavailable")
+	ErrDataIncomplete  = errors.New("data freshness metadata is incomplete")
+	ErrDataUntrusted   = errors.New("data source is not authoritative")
+	ErrDataExpired     = errors.New("authoritative data has expired")
 )
 
 const DataStateAuthoritativeFresh = "authoritative_fresh"
@@ -37,13 +42,13 @@ type DataStatus struct {
 func (m SnapshotMetadata) Govern(now time.Time) (DataStatus, error) {
 	if m.Revision == "" || m.Source == "" || !m.Complete || m.ImportedAt.IsZero() || m.ValidUntil.IsZero() ||
 		!m.ValidUntil.After(m.ImportedAt) || now.Before(m.ImportedAt) {
-		return DataStatus{}, contracts.ErrDataIncomplete
+		return DataStatus{}, ErrDataIncomplete
 	}
 	if !m.Authoritative {
-		return DataStatus{}, contracts.ErrDataUntrusted
+		return DataStatus{}, ErrDataUntrusted
 	}
 	if !now.Before(m.ValidUntil) {
-		return DataStatus{}, contracts.ErrDataExpired
+		return DataStatus{}, ErrDataExpired
 	}
 	return DataStatus{State: DataStateAuthoritativeFresh, SnapshotMetadata: m}, nil
 }

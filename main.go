@@ -40,6 +40,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/session"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/task"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/packagefmt"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/packmgr"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/promptcatalog"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/agent"
@@ -201,16 +202,33 @@ func runMaintenanceCommand(arguments []string, output io.Writer) (bool, error) {
 	}
 }
 
+// defaultRuntimeRoot 返回用户级默认安装根目录（用户配置目录下 ailuo/runtime）。
+// 与 npm 的 node_modules、cargo 的 registry 同理：ailuo install 与内核启动共享
+// 同一默认位置，无需显式 --root；UserConfigDir 不可用（无 HOME 等）时返回空。
+func defaultRuntimeRoot() string {
+	base, err := os.UserConfigDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(base, "ailuo", "runtime")
+}
+
 // runPackageCommand 执行包管理 CLI：install 支持本地目录/tarball/GitHub
 // Release 源（owner/repo[@约束]），upgrade/uninstall/list/pack/publish 见各分支。
 func runPackageCommand(parent context.Context, arguments []string, output io.Writer) (bool, error) {
 	command := arguments[0]
 	flags := flag.NewFlagSet(command, flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
-	root := flags.String("root", os.Getenv("AILUO_RUNTIME_INSTALL_ROOT"), "安装根目录（默认 AILUO_RUNTIME_INSTALL_ROOT）")
+	root := flags.String("root", "", "安装根目录（默认 AILUO_RUNTIME_INSTALL_ROOT，再默认用户配置目录 ailuo/runtime）")
 	repo := flags.String("repo", "", "GitHub 仓库（owner/repo），publish 使用")
 	if err := flags.Parse(arguments[1:]); err != nil {
 		return true, fmt.Errorf("configuration error: %s", err)
+	}
+	if *root == "" {
+		*root = os.Getenv("AILUO_RUNTIME_INSTALL_ROOT")
+	}
+	if *root == "" {
+		*root = defaultRuntimeRoot()
 	}
 	if *root == "" && command != "pack" && command != "publish" {
 		return true, fmt.Errorf("configuration error: %s requires --root 或 AILUO_RUNTIME_INSTALL_ROOT", command)
@@ -234,7 +252,7 @@ func runPackageCommand(parent context.Context, arguments []string, output io.Wri
 		if err != nil {
 			return true, err
 		}
-		if _, err := fmt.Fprintf(output, "已安装 %s@%s（%s）\n", record.Manifest.ID, record.Manifest.Version, record.Manifest.Mode); err != nil {
+		if _, err := fmt.Fprintf(output, "已安装 %s@%s（%s）\n", record.Manifest.ID, record.Manifest.Version, record.Manifest.Components[0].Mode); err != nil {
 			return true, err
 		}
 		return true, nil
@@ -246,7 +264,7 @@ func runPackageCommand(parent context.Context, arguments []string, output io.Wri
 		if err != nil {
 			return true, err
 		}
-		_, err = fmt.Fprintf(output, "已升级 %s@%s（%s）\n", record.Manifest.ID, record.Manifest.Version, record.Manifest.Mode)
+		_, err = fmt.Fprintf(output, "已升级 %s@%s（%s）\n", record.Manifest.ID, record.Manifest.Version, record.Manifest.Components[0].Mode)
 		return true, err
 	case "uninstall":
 		if flags.NArg() != 1 {
@@ -267,7 +285,11 @@ func runPackageCommand(parent context.Context, arguments []string, output io.Wri
 		if flags.NArg() == 2 {
 			outputDir = flags.Arg(1)
 		}
-		tarballPath, err := packmgr.Pack(ctx, flags.Arg(0), outputDir)
+		manifest, manifestBytes, err := resolveSource(ctx, flags.Arg(0))
+		if err != nil {
+			return true, err
+		}
+		tarballPath, err := packmgr.PackFromSource(ctx, flags.Arg(0), outputDir, manifest, manifestBytes)
 		if err != nil {
 			return true, err
 		}
@@ -283,7 +305,12 @@ func runPackageCommand(parent context.Context, arguments []string, output io.Wri
 		if !ok || owner == "" || name == "" {
 			return true, fmt.Errorf("configuration error: publish requires --repo owner/repo")
 		}
-		htmlURL, err := packmgr.NewGitHubClient().Publish(ctx, owner, name, flags.Arg(0))
+		client := packmgr.NewGitHubClient()
+		manifest, manifestBytes, err := resolveSource(ctx, flags.Arg(0))
+		if err != nil {
+			return true, err
+		}
+		htmlURL, err := client.PublishFromSource(ctx, owner, name, flags.Arg(0), manifest, manifestBytes)
 		if err != nil {
 			return true, err
 		}
@@ -310,7 +337,7 @@ func runPackageCommand(parent context.Context, arguments []string, output io.Wri
 			if record.Manifest.Pin {
 				pin = " [pin]"
 			}
-			if _, err := fmt.Fprintf(output, "%s@%s\t%s%s\n", record.Manifest.ID, record.Manifest.Version, record.Manifest.Mode, pin); err != nil {
+			if _, err := fmt.Fprintf(output, "%s@%s\t%s%s\n", record.Manifest.ID, record.Manifest.Version, record.Manifest.Components[0].Mode, pin); err != nil {
 				return true, err
 			}
 		}
@@ -335,6 +362,24 @@ func splitRegistryRef(source string) (owner, repo, constraint string, ok bool) {
 func localPathExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
+}
+
+// resolveSource 解析作者侧 ailuo.toml；若清单声明 [build]，先执行构建再返回。
+func resolveSource(ctx context.Context, sourceDir string) (manifest packmgr.Manifest, manifestBytes []byte, err error) {
+	path := packagefmt.SourcePath(sourceDir)
+	if _, statErr := os.Stat(path); statErr != nil {
+		return packmgr.Manifest{}, nil, fmt.Errorf("读取源清单失败: %w", statErr)
+	}
+	manifest, manifestBytes, build, err := packagefmt.Parse(path)
+	if err != nil {
+		return packmgr.Manifest{}, nil, err
+	}
+	if build != nil {
+		if err := packagefmt.Build(ctx, sourceDir, manifest, *build); err != nil {
+			return packmgr.Manifest{}, nil, err
+		}
+	}
+	return manifest, manifestBytes, nil
 }
 
 // identityProvision 是 identity-bind 命令的输入。
@@ -684,12 +729,8 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 		ConfirmationVerifier: confirmations,
 	})
 	// 统一 Loader：所有运行模式共享一个 Manager，清单在注册时按 Verify 精确绑定
-	// 到唯一宿主。内置 campus（hosted 沙箱）、内置 agent（isolated 进程）与
-	// installed 包（hosted/isolated）同池管理，不再按包分叉多个 Loader。
-	campusHost, err := campus.Host(store)
-	if err != nil {
-		return fmt.Errorf("create campus hosted boundary: %w", err)
-	}
+	// 到唯一宿主。内置 agent（isolated 进程）与 installed 包（hosted/isolated）
+	// 同池管理；campus.bus 是安装目录包（声明宿主函数 → 进程内 WasmHost 装载）。
 	workDir, err := filepath.Abs(".")
 	if err != nil {
 		return fmt.Errorf("resolve agent working directory: %w", err)
@@ -715,12 +756,14 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 	if err != nil {
 		return fmt.Errorf("create built-in agent runtime: %w", err)
 	}
-	installedHosts, installedRecords, err := configureInstalledRuntimes(ctx, config)
+	// 宿主函数集：当前只有 campus 的存储投影（内核特权，供安装目录 hosted 包声明）。
+	hostFunctions := campus.HostedFunctions(store)
+	installedHosts, installedRecords, _, err := configureInstalledRuntimes(ctx, config, hostFunctions)
 	if err != nil {
 		return err
 	}
-	hosts := make([]loader.Host, 0, 2+len(installedHosts))
-	hosts = append(hosts, campusHost, agentHost)
+	hosts := make([]loader.Host, 0, 1+len(installedHosts))
+	hosts = append(hosts, agentHost)
 	hosts = append(hosts, installedHosts...)
 	runtimeLoader, err := loader.New(hosts...)
 	if err != nil {
@@ -731,10 +774,10 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 		defer cancel()
 		resultErr = errors.Join(resultErr, runtimeLoader.Shutdown(shutdownContext))
 	}()
-	// 内置包与 installed 包统一注册：campus 与内置 agent 各以安装清单形式经同一
-	// RegisterInstalled 路径注册（agent 记录只携带运行时清单，其 Service agent.run
-	// 依赖 Orchestrator，在内核装配完成后单独注册），随后注册 installed 目录。
-	if err := loader.RegisterInstalled(ctx, runtimeLoader, reg, []loader.InstalledRecord{campus.Record(), agent.Record(agentHost)}); err != nil {
+	// 内置 agent 以安装清单形式经统一 RegisterInstalled 路径注册（agent 记录只
+	// 携带运行时清单，其 Service agent.run 依赖 Orchestrator，在内核装配完成后
+	// 单独注册）；campus.bus 与其余 installed 包随后注册。
+	if err := loader.RegisterInstalled(ctx, runtimeLoader, reg, []loader.InstalledRecord{agent.Record(agentHost)}); err != nil {
 		return fmt.Errorf("register built-in packages: %w", err)
 	}
 	if len(installedRecords) > 0 {
@@ -742,7 +785,19 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 			return fmt.Errorf("register installed runtimes: %w", err)
 		}
 	}
-	// 预热全部声明 pin 的运行时（内置 campus/agent 与 installed pin）：编译/启动
+	// campus.bus 是核心业务包（App 配置启用的 Capability 均由其导出）：安装目录
+	// 缺失 campus 组件即拒绝就绪（fail-closed），给出可行动错误。
+	campusInstalled := false
+	for _, record := range installedRecords {
+		if record.PackageID == campus.ServiceID {
+			campusInstalled = true
+			break
+		}
+	}
+	if !campusInstalled {
+		return fmt.Errorf("campus.bus 未安装：请先安装其 .tgz 发布物或 owner/repo[@version] 发布包")
+	}
+	// 预热全部声明 pin 的运行时（内置 agent 与 installed pin）：编译/启动
 	// 失败则内核拒绝就绪（fail-closed）。预热清单由各清单声明推导，不再硬编码。
 	pinnedRuntimes := runtimeLoader.Pinned()
 	if err := runtimeLoader.Warmup(ctx, pinnedRuntimes, min(len(pinnedRuntimes), 4)); err != nil {
@@ -1035,6 +1090,18 @@ func loadConfig() (config, error) {
 	if err != nil {
 		return config{}, err
 	}
+	// 安装根目录：显式 AILUO_RUNTIME_INSTALL_ROOT 优先；未设置时回退用户级
+	// 默认目录（ailuo install 与内核共享同一默认位置）。默认目录尚未创建
+	// （未安装任何包）时视为未配置：内核跳过安装目录装载，由 campus 核心
+	// 包缺失的 fail-closed 检查给出可行动安装指引。
+	runtimeInstallRoot := os.Getenv("AILUO_RUNTIME_INSTALL_ROOT")
+	if runtimeInstallRoot == "" {
+		if def := defaultRuntimeRoot(); def != "" {
+			if _, err := os.Stat(def); err == nil {
+				runtimeInstallRoot = def
+			}
+		}
+	}
 	result := config{
 		httpAddress:         envOr("AILUO_HTTP_ADDRESS", "127.0.0.1:8080"),
 		configUIAddress:     envOr("AILUO_CONFIG_UI_ADDRESS", configui.DefaultAddress),
@@ -1060,7 +1127,7 @@ func loadConfig() (config, error) {
 		logFormat:           envOr("AILUO_LOG_FORMAT", "console"),
 		logSource:           logSource,
 		logMaxValueLength:   logMaxValueLength,
-		runtimeInstallRoot:  os.Getenv("AILUO_RUNTIME_INSTALL_ROOT"),
+		runtimeInstallRoot:  runtimeInstallRoot,
 		runtimeHostAddress:  os.Getenv("AILUO_RUNTIME_HOST_ADDRESS"),
 		qqWSURL:             os.Getenv("AILUO_QQ_WS_URL"),
 		qqEnabled:           os.Getenv("AILUO_QQ_WS_URL") != "",
@@ -1203,80 +1270,100 @@ func agentEnvironment(config config) []string {
 }
 
 // configureInstalledRuntimes 发现安装目录中的 installed 包，返回加入统一 Loader
-// 的宿主与待注册记录。安装目录未配置时返回空切片（统一 Loader 只装配内置包）；
-// 配置了安装目录但没有 hosted 宿主地址时 fail-closed。pin 运行时由各清单声明，
-// 预热清单由 runtimeLoader.Pinned() 统一推导，本函数不再返回。
-func configureInstalledRuntimes(ctx context.Context, cfg config) ([]loader.Host, []loader.InstalledRecord, error) {
+// 的宿主、待注册记录与安装目录 catalog。安装目录未配置时返回空切片（统一
+// Loader 只装配内置 agent）；配置了安装目录但没有 hosted 宿主地址时 fail-closed。
+// hosted 包按是否声明 host_functions 分流：有声明 → 进程内 WasmHost（宿主函数
+// 是内核特权，跨进程无法投影），无声明 → 外部 GRPCHost。pin 运行时由各清单
+// 声明，预热清单由 runtimeLoader.Pinned() 统一推导。
+func configureInstalledRuntimes(ctx context.Context, cfg config, hostFunctions []loader.HostedFunction) (hosts []loader.Host, records []loader.InstalledRecord, catalog *loader.Catalog, err error) {
 	if cfg.runtimeInstallRoot == "" {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
-	catalog, err := loader.NewCatalog(cfg.runtimeInstallRoot)
+	catalog, err = loader.NewCatalog(cfg.runtimeInstallRoot)
 	if err != nil {
-		return nil, nil, fmt.Errorf("create installed runtime catalog: %w", err)
+		return nil, nil, nil, fmt.Errorf("create installed runtime catalog: %w", err)
 	}
-	records, err := catalog.Discover(ctx)
+	records, err = catalog.Discover(ctx)
 	if err != nil {
-		return nil, nil, fmt.Errorf("discover installed runtimes: %w", err)
+		return nil, nil, nil, fmt.Errorf("discover installed runtimes: %w", err)
 	}
 	if len(records) == 0 {
 		observe.Info(ctx, "运行时安装目录校验完成",
 			observe.IntAttr("runtime_count", 0),
 		)
-		return nil, nil, nil
+		return nil, nil, catalog, nil
 	}
-	hosts := make([]loader.Host, 0, 2)
-	hostedCount := 0
+	hostedWithFunctions := 0
+	hostedWithoutFunctions := 0
 	isolatedCount := 0
 	pinnedCount := 0
 	for _, record := range records {
 		switch record.Runtime.Mode {
 		case loader.ModeHosted:
-			hostedCount++
+			if len(record.Runtime.HostFunctions) > 0 {
+				hostedWithFunctions++
+			} else {
+				hostedWithoutFunctions++
+			}
 		case loader.ModeIsolated:
 			isolatedCount++
 		default:
-			return nil, nil, loader.ErrUnsupportedMode
+			return nil, nil, nil, loader.ErrUnsupportedMode
 		}
 		if record.Runtime.Pin {
 			pinnedCount++
 		}
 	}
-	if hostedCount > 0 {
-		if cfg.runtimeHostAddress == "" {
-			return nil, nil, fmt.Errorf("configuration error: AILUO_RUNTIME_HOST_ADDRESS is required for installed hosted runtimes")
+	hosts = make([]loader.Host, 0, 3)
+	if hostedWithFunctions > 0 {
+		// 声明宿主函数的 hosted 包只能在内核进程内执行（宿主函数是内核特权）。
+		host, hostErr := loader.NewWasmHost(loader.WasmHostConfig{
+			ReadArtifact:         catalog.ReadArtifact,
+			HostFunctions:        hostFunctions,
+			RequireHostFunctions: true,
+		})
+		if hostErr != nil {
+			return nil, nil, nil, fmt.Errorf("configure in-kernel hosted runtime boundary: %w", hostErr)
 		}
-		host, err := loader.NewGRPCHost(loader.GRPCHostConfig{
+		hosts = append(hosts, host)
+	}
+	if hostedWithoutFunctions > 0 {
+		if cfg.runtimeHostAddress == "" {
+			return nil, nil, nil, fmt.Errorf("configuration error: AILUO_RUNTIME_HOST_ADDRESS is required for installed hosted runtimes without host functions")
+		}
+		host, hostErr := loader.NewGRPCHost(loader.GRPCHostConfig{
 			Mode: loader.ModeHosted, Address: cfg.runtimeHostAddress,
 			VerifyInstalled: catalog.VerifyRuntime,
 			DialTimeout:     10 * time.Second,
-			MaxRuntimes:     hostedCount,
+			MaxRuntimes:     hostedWithoutFunctions,
 			MaxConcurrent:   64,
 		})
-		if err != nil {
-			return nil, nil, fmt.Errorf("configure hosted runtime boundary: %w", err)
+		if hostErr != nil {
+			return nil, nil, nil, fmt.Errorf("configure hosted runtime boundary: %w", hostErr)
 		}
 		hosts = append(hosts, host)
 	}
 	if isolatedCount > 0 {
-		host, err := loader.NewIsolatedProcessHost(loader.IsolatedProcessHostConfig{
+		host, hostErr := loader.NewIsolatedProcessHost(loader.IsolatedProcessHostConfig{
 			ResolveInstalled: catalog.ResolveProcess,
 			VerifyInstalled:  catalog.VerifyProcess,
 			DialTimeout:      10 * time.Second,
 			StopGrace:        5 * time.Second,
 			TerminateGrace:   2 * time.Second,
 		})
-		if err != nil {
-			return nil, nil, fmt.Errorf("configure isolated runtime boundary: %w", err)
+		if hostErr != nil {
+			return nil, nil, nil, fmt.Errorf("configure isolated runtime boundary: %w", hostErr)
 		}
 		hosts = append(hosts, host)
 	}
 	observe.Info(ctx, "已安装运行时发现完成",
 		observe.IntAttr("runtime_count", len(records)),
-		observe.IntAttr("hosted_count", hostedCount),
+		observe.IntAttr("hosted_with_host_functions", hostedWithFunctions),
+		observe.IntAttr("hosted_without_host_functions", hostedWithoutFunctions),
 		observe.IntAttr("isolated_count", isolatedCount),
 		observe.IntAttr("pinned_count", pinnedCount),
 	)
-	return hosts, records, nil
+	return hosts, records, catalog, nil
 }
 
 func envOr(name, fallback string) string {

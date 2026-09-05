@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -10,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access/configui"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/identity"
@@ -166,6 +168,16 @@ func TestLoadConfigRejectsRelativeRuntimeInstallRoot(t *testing.T) {
 	}
 }
 
+func TestDefaultRuntimeRootIsAbsoluteOrEmpty(t *testing.T) {
+	root := defaultRuntimeRoot()
+	if root == "" {
+		return // 无 HOME / 不支持 UserConfigDir 的平台
+	}
+	if !filepath.IsAbs(root) || !strings.HasSuffix(root, "ailuo"+string(filepath.Separator)+"runtime") {
+		t.Fatalf("defaultRuntimeRoot()=%q 应为绝对路径并结尾为 ailuo/runtime", root)
+	}
+}
+
 func TestConfigureInstalledRuntimesAllowsEmptySecureCatalog(t *testing.T) {
 	if !unixSecurityAvailable {
 		t.Skip("非 Unix 平台显式关闭安装目录属主校验")
@@ -174,7 +186,7 @@ func TestConfigureInstalledRuntimesAllowsEmptySecureCatalog(t *testing.T) {
 	if err := os.Chmod(root, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	hosts, records, err := configureInstalledRuntimes(t.Context(), config{runtimeInstallRoot: root})
+	hosts, records, _, err := configureInstalledRuntimes(t.Context(), config{runtimeInstallRoot: root}, nil)
 	if err != nil {
 		t.Fatalf("configure empty catalog: %v", err)
 	}
@@ -188,16 +200,16 @@ func TestConfigureInstalledRuntimesRegistersHostedCatalogAndRequiresAddress(t *t
 		t.Skip("非 Unix 平台显式关闭安装目录属主校验")
 	}
 	root := writeMainInstalledFixture(t)
-	if _, _, err := configureInstalledRuntimes(t.Context(), config{
+	if _, _, _, err := configureInstalledRuntimes(t.Context(), config{
 		runtimeInstallRoot: root,
-	}); err == nil || !strings.Contains(err.Error(), "AILUO_RUNTIME_HOST_ADDRESS") {
+	}, nil); err == nil || !strings.Contains(err.Error(), "AILUO_RUNTIME_HOST_ADDRESS") {
 		t.Fatalf("missing hosted address error=%v", err)
 	}
 
-	hosts, records, err := configureInstalledRuntimes(t.Context(), config{
+	hosts, records, _, err := configureInstalledRuntimes(t.Context(), config{
 		runtimeInstallRoot: root,
 		runtimeHostAddress: "unix:" + filepath.Join(root, "host.sock"),
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("configure hosted catalog: %v", err)
 	}
@@ -210,7 +222,9 @@ func TestConfigureInstalledRuntimesRegistersHostedCatalogAndRequiresAddress(t *t
 		t.Fatalf("create runtime loader: %v", err)
 	}
 	t.Cleanup(func() {
-		if err := manager.Shutdown(t.Context()); err != nil {
+		shutdownContext, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := manager.Shutdown(shutdownContext); err != nil {
 			t.Errorf("shutdown runtime manager: %v", err)
 		}
 	})
@@ -258,7 +272,11 @@ func writeMainInstalledFixture(t *testing.T) string {
 	}
 	installed := packmgr.Manifest{
 		SchemaVersion: packmgr.SchemaVersion, ID: "main.extension", Version: "1.0.0",
-		Mode: loader.ModeHosted, Entrypoint: "runtime-artifact", Pin: true, Extensions: extensions,
+		Pin: true, Extensions: extensions,
+		Components: []packmgr.Component{{
+			ID: "main.extension", Mode: loader.ModeHosted, Entrypoint: "runtime-artifact",
+			Exports: []string{"main.extension.query"},
+		}},
 	}
 	manifest, err := json.Marshal(installed)
 	if err != nil {
@@ -271,10 +289,11 @@ func writeMainInstalledFixture(t *testing.T) string {
 	artifactDigest := sha256.Sum256(artifactBody)
 	lockBytes, err := json.Marshal(packmgr.Lock{
 		SchemaVersion: packmgr.SchemaVersion,
-		PackageID:     "main.extension", PackageVersion: "1.0.0", Mode: loader.ModeHosted,
+		PackageID:     "main.extension", PackageVersion: "1.0.0",
 		ManifestSHA256: hex.EncodeToString(manifestDigest[:]),
-		ArtifactSHA256: hex.EncodeToString(artifactDigest[:]),
-		ArtifactPath:   artifact,
+		Artifacts: []packmgr.LockedArtifact{{
+			ComponentID: "main.extension", Path: artifact, SHA256: hex.EncodeToString(artifactDigest[:]),
+		}},
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -30,7 +30,7 @@ func TestInstalledCatalogDiscoversVerifiesAndRegistersHostedRuntime(t *testing.T
 		t.Fatalf("records=%#v err=%v", records, err)
 	}
 	record := records[0]
-	if record.Runtime.ID != "extension.test" || record.Runtime.Mode != loader.ModeHosted ||
+	if record.Runtime.ID != "extension.test.extension.test" || record.Runtime.Mode != loader.ModeHosted ||
 		record.Process != nil || record.Service.ID != "extension" ||
 		len(record.Tools) != 1 || len(record.Capabilities) != 1 {
 		t.Fatalf("record=%#v", record)
@@ -137,7 +137,7 @@ func TestInstalledCatalogRejectsDuplicateJSONAndWritableDirectory(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	duplicate := append(manifest[:len(manifest)-1], []byte(`,"schema_version":"ailuo.package.v1"}`)...)
+	duplicate := append(manifest[:len(manifest)-1], []byte(`,"schema_version":"ailuo.package.v2"}`)...)
 	if err := os.WriteFile(manifestPath, duplicate, 0o640); err != nil {
 		t.Fatal(err)
 	}
@@ -158,9 +158,9 @@ func TestInstalledCatalogRejectsDuplicateJSONAndWritableDirectory(t *testing.T) 
 	}
 }
 
-func writeInstalledFixture(t *testing.T, root, runtimeID, mode string, unknown bool) string {
+func writeInstalledFixture(t *testing.T, root, pkgID, mode string, unknown bool) string {
 	t.Helper()
-	directory := filepath.Join(root, runtimeID)
+	directory := filepath.Join(root, pkgID)
 	if err := os.Mkdir(directory, 0o750); err != nil {
 		t.Fatal(err)
 	}
@@ -195,8 +195,12 @@ func writeInstalledFixture(t *testing.T, root, runtimeID, mode string, unknown b
 		t.Fatal(err)
 	}
 	installed := packmgr.Manifest{
-		SchemaVersion: packmgr.SchemaVersion, ID: runtimeID, Version: "1.0.0",
-		Mode: mode, Entrypoint: "runtime-artifact", IdleTTLMS: 1000, Extensions: extensions,
+		SchemaVersion: packmgr.SchemaVersion, ID: pkgID, Version: "1.0.0",
+		IdleTTLMS: 1000, Extensions: extensions,
+		Components: []packmgr.Component{{
+			ID: pkgID, Mode: mode, Entrypoint: "runtime-artifact",
+			Exports: []string{"extension.query"},
+		}},
 	}
 	manifest, err := json.Marshal(installed)
 	if err != nil {
@@ -210,16 +214,19 @@ func writeInstalledFixture(t *testing.T, root, runtimeID, mode string, unknown b
 	}
 	manifestDigest := sha256.Sum256(manifest)
 	artifactDigest := sha256.Sum256(artifactBody)
-	lock := packmgr.Lock{
-		SchemaVersion: packmgr.SchemaVersion, PackageID: runtimeID,
-		PackageVersion: "1.0.0", Mode: mode,
-		ManifestSHA256: hex.EncodeToString(manifestDigest[:]),
-		ArtifactSHA256: hex.EncodeToString(artifactDigest[:]), ArtifactPath: artifact,
+	lockedArtifact := packmgr.LockedArtifact{
+		ComponentID: pkgID, Path: artifact, SHA256: hex.EncodeToString(artifactDigest[:]),
 	}
 	if mode == loader.ModeIsolated {
-		lock.Process = &packmgr.ProcessSpec{
+		lockedArtifact.Process = &packmgr.ProcessSpec{
 			Path: artifact, WorkDir: directory, Address: "unix:" + filepath.Join(directory, "runtime.sock"),
 		}
+	}
+	lock := packmgr.Lock{
+		SchemaVersion: packmgr.SchemaVersion, PackageID: pkgID,
+		PackageVersion: "1.0.0",
+		ManifestSHA256: hex.EncodeToString(manifestDigest[:]),
+		Artifacts:      []packmgr.LockedArtifact{lockedArtifact},
 	}
 	lockBytes, err := json.Marshal(lock)
 	if err != nil {
@@ -290,8 +297,11 @@ func writeDeclaredFixture(t *testing.T, root, runtimeID string, decls []packmgr.
 	}
 	installed := packmgr.Manifest{
 		SchemaVersion: packmgr.SchemaVersion, ID: runtimeID, Version: "1.0.0",
-		Mode: loader.ModeHosted, Entrypoint: "runtime-artifact", IdleTTLMS: 1000,
-		HostFunctions: decls, Storage: storage, Extensions: extensions,
+		IdleTTLMS: 1000, Storage: storage, Extensions: extensions,
+		Components: []packmgr.Component{{
+			ID: runtimeID, Mode: loader.ModeHosted, Entrypoint: "runtime-artifact",
+			Exports: []string{"extension.query"}, HostFunctions: decls,
+		}},
 	}
 	manifest, err := json.Marshal(installed)
 	if err != nil {
@@ -304,9 +314,11 @@ func writeDeclaredFixture(t *testing.T, root, runtimeID string, decls []packmgr.
 	artifactDigest := sha256.Sum256([]byte("hosted artifact"))
 	lock := packmgr.Lock{
 		SchemaVersion: packmgr.SchemaVersion, PackageID: runtimeID,
-		PackageVersion: "1.0.0", Mode: loader.ModeHosted,
+		PackageVersion: "1.0.0",
 		ManifestSHA256: hex.EncodeToString(manifestDigest[:]),
-		ArtifactSHA256: hex.EncodeToString(artifactDigest[:]), ArtifactPath: artifact,
+		Artifacts: []packmgr.LockedArtifact{{
+			ComponentID: runtimeID, Path: artifact, SHA256: hex.EncodeToString(artifactDigest[:]),
+		}},
 	}
 	lockBytes, err := json.Marshal(lock)
 	if err != nil {
@@ -323,7 +335,7 @@ func writeDeclaredFixture(t *testing.T, root, runtimeID string, decls []packmgr.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(records) != 1 || records[0].Runtime.ID != runtimeID {
+	if len(records) != 1 || records[0].Runtime.ID != runtimeID+"."+runtimeID || records[0].PackageID != runtimeID {
 		t.Fatalf("Discover records = %+v, want single %q record", records, runtimeID)
 	}
 	return records[0]
@@ -420,7 +432,11 @@ func TestInstalledCatalogRejectsInvalidDeclarations(t *testing.T) {
 				}
 				installed := packmgr.Manifest{
 					SchemaVersion: packmgr.SchemaVersion, ID: "extension.bad", Version: "1.0.0",
-					Mode: loader.ModeHosted, HostFunctions: tc.decls, Storage: tc.storage, Extensions: extensions,
+					Storage: tc.storage, Extensions: extensions,
+					Components: []packmgr.Component{{
+						ID: "extension.bad", Mode: loader.ModeHosted, Entrypoint: "runtime-artifact",
+						Exports: []string{"extension.query"}, HostFunctions: tc.decls,
+					}},
 				}
 				manifest, err := json.Marshal(installed)
 				if err != nil {
@@ -433,9 +449,11 @@ func TestInstalledCatalogRejectsInvalidDeclarations(t *testing.T) {
 				artifactDigest := sha256.Sum256([]byte("hosted artifact"))
 				lock := packmgr.Lock{
 					SchemaVersion: packmgr.SchemaVersion, PackageID: "extension.bad",
-					PackageVersion: "1.0.0", Mode: loader.ModeHosted,
+					PackageVersion: "1.0.0",
 					ManifestSHA256: hex.EncodeToString(manifestDigest[:]),
-					ArtifactSHA256: hex.EncodeToString(artifactDigest[:]), ArtifactPath: artifact,
+					Artifacts: []packmgr.LockedArtifact{{
+						ComponentID: "extension.bad", Path: artifact, SHA256: hex.EncodeToString(artifactDigest[:]),
+					}},
 				}
 				lockBytes, err := json.Marshal(lock)
 				if err != nil {

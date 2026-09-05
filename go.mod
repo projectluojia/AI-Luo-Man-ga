@@ -3,6 +3,7 @@ module github.com/projectluojia/AI-Luo-Man-ga
 go 1.26
 
 require (
+	github.com/BurntSushi/toml v1.6.0
 	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3

@@ -36,7 +36,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/blob"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/memory"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/tools/bus"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/bus"
 )
 
 type integrationWebAuthenticator struct{}

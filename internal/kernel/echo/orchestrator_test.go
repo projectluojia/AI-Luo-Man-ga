@@ -29,7 +29,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/memory"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite/sqlitetest"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/tools/bus"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/bus"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"

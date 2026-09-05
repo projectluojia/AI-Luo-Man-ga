@@ -1,7 +1,8 @@
 // Package campustest 提供校园服务 hosted 装配的共享测试辅助，
-// 供 campus、echo、e2e 等包以真实 hosted 链路验证能力。装配入口（宿主构造与
-// 安装清单）由 campus 包单一提供（campus.Host/campus.Record），本包只负责
-// 测试专属的 Loader 生命周期与预热。
+// 供 campus、echo、e2e 等包以真实 hosted 链路验证能力。
+//
+// 装配形态按平台拆分（Unix 走真实安装目录发现，非 Unix 内存构造清单，均经
+// 进程内 WasmHost + 宿主函数投影）：本文件只含跨平台共用的注册与预热逻辑。
 package campustest
 
 import (
@@ -11,19 +12,11 @@ import (
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/tools/bus"
 )
 
-// RegisterHosted 以 hosted 包形态装配校园服务：内置 wasm 工件经进程内沙箱执行，
-// 权威存储经宿主函数投影；装配完成即预热 pin 包（编译在测试装配时完成，
-// 避免占用 Run 的 deadline）。
-func RegisterHosted(t testing.TB, target *registry.Registry, store bus.Store) {
+// registerHosted 注册并预热已发现记录（Unix 与非 Unix 共用）。
+func registerHosted(t testing.TB, target *registry.Registry, host loader.Host, records []loader.InstalledRecord) {
 	t.Helper()
-	host, err := campus.Host(store)
-	if err != nil {
-		t.Fatalf("campus.Host: %v", err)
-	}
 	manager, err := loader.New(host)
 	if err != nil {
 		t.Fatalf("loader.New: %v", err)
@@ -35,12 +28,13 @@ func RegisterHosted(t testing.TB, target *registry.Registry, store bus.Store) {
 			t.Errorf("loader shutdown: %v", err)
 		}
 	})
-	if err := loader.RegisterInstalled(context.Background(), manager, target, []loader.InstalledRecord{campus.Record()}); err != nil {
+	if err := loader.RegisterInstalled(context.Background(), manager, target, records); err != nil {
 		t.Fatalf("RegisterInstalled: %v", err)
 	}
 	warmupContext, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	if err := manager.Warmup(warmupContext, []string{campus.ServiceID}, 1); err != nil {
+	// 预热按实际注册的 runtime ID（组件 ID），非包 ID（campus.ServiceID）。
+	if err := manager.Warmup(warmupContext, []string{records[0].Runtime.ID}, 1); err != nil {
 		t.Fatalf("warm campus hosted package: %v", err)
 	}
 }

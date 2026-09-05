@@ -1,7 +1,0 @@
-{
-  "schema_version": "ailuo.package.v1",
-  "id": "strings.tool",
-  "version": "1.0.0",
-  "mode": "hosted",
-  "entrypoint": "strings.tool.wasm"
-}

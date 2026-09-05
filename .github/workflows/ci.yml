@@ -114,7 +114,7 @@ jobs:
           uv run --project agent --locked python -m grpc_tools.protoc -I proto --python_out=agent/generated --grpc_python_out=agent/generated proto/executor.proto
           git diff --exit-code
 
-  # 包发布流水线冒烟：构建 strings.tool 工件 → pack → tarball 安装 → 列表校验。
+  # 包发布流水线冒烟：pack（经 [build] 自动构建）→ tarball 安装 → 列表校验。
   # （完整发布流水线由 package-publish.yml 可复用 workflow 承载，供包作者仓库
   # 经 `uses: projectluojia/AI-Luo-Man-ga/.github/workflows/package-publish.yml@ref`
   # 调用；本仓库 PR 只跑本地冒烟，避免同仓相对路径调用可复用 workflow 的限制。）
@@ -132,10 +132,7 @@ jobs:
           cache: true
       - name: 构建 ailuo CLI
         run: go build -o ailuo .
-      - name: 构建 strings.tool 工件
-        run: bash ./build.sh
-        working-directory: extensions/strings.tool
-      - name: 打包并冒烟安装验证
+      - name: 打包 strings.tool（经 [build] 自动构建）并冒烟安装验证
         shell: bash
         run: |
           set -euo pipefail
@@ -143,6 +140,14 @@ jobs:
           tarball="$(ls dist/*.tgz)"
           ./ailuo install --root "$RUNNER_TEMP/pkgroot" "$tarball"
           ./ailuo list --root "$RUNNER_TEMP/pkgroot" | grep -q '^strings.tool@1.0.0'
+      - name: 打包 campus.bus（经 [build] 自动构建）并冒烟安装验证
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./ailuo pack extensions/campus.bus dist
+          tarball="$(ls dist/campus-*.tgz)"
+          ./ailuo install --root "$RUNNER_TEMP/pkgroot" "$tarball"
+          ./ailuo list --root "$RUNNER_TEMP/pkgroot" | grep -q '^campus@1.0.0'
 
   # Docker Compose 编排语法校验（QQ OneBot 容器）。
   compose-config:

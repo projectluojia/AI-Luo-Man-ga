@@ -46,28 +46,34 @@ func NewGitHubClient() *GitHubClient {
 
 // Publish 打包并发布到 GitHub Release：API 自动从默认分支创建 tag
 // v{version}（无 git CLI 依赖），创建 Release 并上传 tarball。同版本
-// 重复发布返回错误（版本不可变）。
+// 重复发布返回错误（版本不可变）。清单来自源目录 manifest.json。
 func (c *GitHubClient) Publish(ctx context.Context, owner, repo, sourceDir string) (string, error) {
+	source, err := readSourceManifest(sourceDir)
+	if err != nil {
+		return "", err
+	}
+	return c.PublishFromSource(ctx, owner, repo, sourceDir, source.Manifest, source.manifestBytes)
+}
+
+// PublishFromSource 用调用方提供的清单发布（与 PackFromSource 对称）：供作者侧
+// 源清单（ailuo.toml）路径使用，不读取 manifest.json。
+func (c *GitHubClient) PublishFromSource(ctx context.Context, owner, repo, sourceDir string, manifest Manifest, manifestBytes []byte) (string, error) {
 	if owner == "" || repo == "" {
 		return "", fmt.Errorf("发布需要 --repo owner/repo")
 	}
 	if c.Token == "" {
 		return "", fmt.Errorf("发布需要 GITHUB_TOKEN（或 GH_TOKEN）")
 	}
-	source, err := readSourceManifest(sourceDir)
-	if err != nil {
-		return "", err
-	}
 	tempDir, err := os.MkdirTemp("", "ailuo-publish-")
 	if err != nil {
 		return "", err
 	}
 	defer os.RemoveAll(tempDir)
-	tarballPath, err := Pack(ctx, sourceDir, tempDir)
+	tarballPath, err := PackFromSource(ctx, sourceDir, tempDir, manifest, manifestBytes)
 	if err != nil {
 		return "", err
 	}
-	tag := "v" + source.Manifest.Version
+	tag := "v" + manifest.Version
 	release, err := c.createRelease(ctx, owner, repo, tag)
 	if err != nil {
 		return "", err
@@ -80,7 +86,7 @@ func (c *GitHubClient) Publish(ctx context.Context, owner, repo, sourceDir strin
 		}
 		return primary
 	}
-	assetName := source.Manifest.ID + "-" + source.Manifest.Version + ".tgz"
+	assetName := manifest.ID + "-" + manifest.Version + ".tgz"
 	assetURL := fmt.Sprintf("%s/repos/%s/%s/releases/%d/assets?name=%s",
 		c.UploadBase, owner, repo, release.ID, url.QueryEscape(assetName))
 	file, err := os.Open(tarballPath)

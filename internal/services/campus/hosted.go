@@ -8,7 +8,7 @@ import (
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/tools/bus"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/bus"
 )
 
 // busHostQuery 是 guest 存储查询投影的载荷信封：操作标识 + 参数。
@@ -82,13 +82,13 @@ func busQueryHandler(store bus.Store) func(context.Context, contracts.RequestCon
 // （如跨 App 无数据），其余存储故障归为内部错误。
 func busHostErrorCode(err error) string {
 	switch {
-	case errors.Is(err, contracts.ErrDataUnavailable):
+	case errors.Is(err, bus.ErrDataUnavailable):
 		return "data_unavailable"
-	case errors.Is(err, contracts.ErrDataIncomplete):
+	case errors.Is(err, bus.ErrDataIncomplete):
 		return "data_incomplete"
-	case errors.Is(err, contracts.ErrDataUntrusted):
+	case errors.Is(err, bus.ErrDataUntrusted):
 		return "data_untrusted"
-	case errors.Is(err, contracts.ErrDataExpired):
+	case errors.Is(err, bus.ErrDataExpired):
 		return "data_expired"
 	default:
 		return "internal"

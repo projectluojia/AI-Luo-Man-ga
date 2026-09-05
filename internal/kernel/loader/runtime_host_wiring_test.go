@@ -54,7 +54,11 @@ func TestRuntimeHostProductionWiring(t *testing.T) {
 	}
 	installed := packmgr.Manifest{
 		SchemaVersion: packmgr.SchemaVersion, ID: "strings.tool", Version: "1.0.0",
-		Mode: loader.ModeHosted, Entrypoint: "strings.tool.wasm", Pin: true, Extensions: extensions,
+		Pin: true, Extensions: extensions,
+		Components: []packmgr.Component{{
+			ID: "core", Mode: loader.ModeHosted, Entrypoint: "strings.tool.wasm",
+			Exports: []string{"strings.len.cap"},
+		}},
 	}
 	manifest, err := json.Marshal(installed)
 	if err != nil {
@@ -67,9 +71,11 @@ func TestRuntimeHostProductionWiring(t *testing.T) {
 	artifactDigest := sha256.Sum256(artifactBytes)
 	lock := packmgr.Lock{
 		SchemaVersion: packmgr.SchemaVersion, PackageID: "strings.tool",
-		PackageVersion: "1.0.0", Mode: loader.ModeHosted,
+		PackageVersion: "1.0.0",
 		ManifestSHA256: hex.EncodeToString(manifestDigest[:]),
-		ArtifactSHA256: hex.EncodeToString(artifactDigest[:]), ArtifactPath: artifactPath,
+		Artifacts: []packmgr.LockedArtifact{{
+			ComponentID: "core", Path: artifactPath, SHA256: hex.EncodeToString(artifactDigest[:]),
+		}},
 	}
 	lockBytes, err := json.Marshal(lock)
 	if err != nil {
@@ -84,7 +90,7 @@ func TestRuntimeHostProductionWiring(t *testing.T) {
 		t.Fatal(err)
 	}
 	records, err := catalog.Discover(t.Context())
-	if err != nil || len(records) != 1 || records[0].Runtime.ID != "strings.tool" {
+	if err != nil || len(records) != 1 || records[0].Runtime.ID != "strings.tool.core" {
 		t.Fatalf("discover records=%#v err=%v", records, err)
 	}
 	backend, err := loader.NewHostedRuntimeBackend(loader.WasmHostConfig{ReadArtifact: catalog.ReadArtifact})
@@ -113,10 +119,10 @@ func TestRuntimeHostProductionWiring(t *testing.T) {
 		t.Fatal(err)
 	}
 	// 预热触发完整装载（验证 → 协议 Describe/Start/Health），编译失败内核拒绝就绪。
-	if err := manager.Warmup(context.Background(), []string{"strings.tool"}, 1); err != nil {
+	if err := manager.Warmup(context.Background(), []string{"strings.tool.core"}, 1); err != nil {
 		t.Fatal(err)
 	}
-	result, err := manager.Handler("strings.tool")(
+	result, err := manager.Handler("strings.tool.core")(
 		context.Background(), toolRuntimeRequest(), json.RawMessage(`{"value":"hello"}`),
 	)
 	if err != nil {

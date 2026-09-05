@@ -2,7 +2,7 @@ package campus
 
 import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/tools/bus"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/bus"
 )
 
 const (
@@ -13,6 +13,33 @@ const (
 	BusRouteListCapabilityID     = "campus.bus.routes.list"
 	BusJourneySearchCapabilityID = "campus.bus.journeys.search"
 )
+
+// ToolSpecs 返回校巴工具规格（内核侧注册用；来源是 pkg/bus 的中立常量）。
+func ToolSpecs() []registry.ToolSpec {
+	return []registry.ToolSpec{
+		{
+			ID:              bus.StopSearchToolID,
+			Version:         "1.0.0",
+			Description:     "Search authoritative campus bus stops by name or alias.",
+			InputSchemaJSON: bus.StopSearchInputSchemaJSON,
+			SideEffect:      registry.SideEffectRead,
+		},
+		{
+			ID:              bus.RouteListToolID,
+			Version:         "1.0.0",
+			Description:     "List authoritative campus bus routes.",
+			InputSchemaJSON: bus.RouteListInputSchemaJSON,
+			SideEffect:      registry.SideEffectRead,
+		},
+		{
+			ID:              bus.JourneySearchToolID,
+			Version:         "1.0.0",
+			Description:     "Search authoritative campus bus journeys by stops and departure time.",
+			InputSchemaJSON: bus.JourneySearchInputSchemaJSON,
+			SideEffect:      registry.SideEffectRead,
+		},
+	}
+}
 
 // ServiceSpec 返回 campus 服务规格。
 func ServiceSpec() registry.ServiceSpec {

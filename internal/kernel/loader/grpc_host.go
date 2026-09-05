@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"slices"
 	"strings"
@@ -96,6 +97,11 @@ func (h *GRPCHost) Mode() string { return h.config.Mode }
 func (h *GRPCHost) Verify(ctx context.Context, manifest Manifest) error {
 	if manifest.Mode != h.config.Mode {
 		return ErrUnsupportedMode
+	}
+	// 宿主函数是内核特权：跨进程无法投影权威存储，声明了 host_functions 的
+	// 工件必须由内核进程内 WasmHost 装载（fail-closed，避免外部进程丢失投影）。
+	if len(manifest.HostFunctions) > 0 {
+		return fmt.Errorf("%w: host functions cannot be projected across the process boundary (must load in-kernel)", ErrUnsupportedMode)
 	}
 	return h.config.VerifyInstalled(ctx, manifest)
 }

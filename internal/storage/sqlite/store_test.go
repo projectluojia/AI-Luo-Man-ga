@@ -10,12 +10,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	kernelecho "github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/idempotency"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/publicerror"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/tools/bus"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/bus"
 )
 
 func TestStorePersistsBusSnapshotAndEchoAudit(t *testing.T) {
@@ -57,7 +56,7 @@ func TestStorePersistsBusSnapshotAndEchoAudit(t *testing.T) {
 	other, err := store.SearchJourneys(ctx, "another-app", bus.SearchRequest{
 		OriginStopID: "a", DestinationStopID: "b", DepartAfter: departure.Add(-time.Minute), Limit: 5,
 	})
-	if !errors.Is(err, contracts.ErrDataUnavailable) || len(other.Journeys) != 0 {
+	if !errors.Is(err, bus.ErrDataUnavailable) || len(other.Journeys) != 0 {
 		t.Fatalf("cross-app data status=%#v err=%v", other, err)
 	}
 
@@ -874,7 +873,7 @@ func TestBusSnapshotQueriesRequireAnActiveRevision(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	if _, err := store.ListRoutes(context.Background(), "app", bus.RouteListRequest{Limit: 10}); !errors.Is(err, contracts.ErrDataUnavailable) {
+	if _, err := store.ListRoutes(context.Background(), "app", bus.RouteListRequest{Limit: 10}); !errors.Is(err, bus.ErrDataUnavailable) {
 		t.Fatalf("missing snapshot error=%v, want ErrDataUnavailable", err)
 	}
 }
