@@ -260,18 +260,26 @@ func TestInstallRejectsInvalidSource(t *testing.T) {
 	}{
 		{name: "missing manifest", mutate: func(_ string) {}},
 		{name: "invalid manifest json", mutate: func(dir string) {
-			os.WriteFile(filepath.Join(dir, "manifest.json"), []byte("{"), 0o640)
+			if err := os.WriteFile(filepath.Join(dir, "manifest.json"), []byte("{"), 0o640); err != nil {
+				t.Fatal(err)
+			}
 		}},
 		{name: "missing artifact", mutate: func(dir string) {
 			writeSourcePackage(t, dir, "demo.pkg", "1.0.0", packagecontract.ModeHosted, "app.wasm", nil)
 			os.Remove(filepath.Join(dir, "app.wasm"))
 		}},
 		{name: "entrypoint escapes source dir", mutate: func(dir string) {
+			writeSourcePackage(t, dir, "demo.pkg", "1.0.0", packagecontract.ModeHosted, "app.wasm", nil)
 			manifest := []byte(`{"schema_version":"ailuo.package.v3","id":"demo.pkg","version":"1.0.0","components":[{"id":"core","mode":"hosted","role":"provider","entrypoint":"../outside"}]}`)
-			os.WriteFile(filepath.Join(dir, "manifest.json"), manifest, 0o640)
+			if err := os.WriteFile(filepath.Join(dir, "manifest.json"), manifest, 0o640); err != nil {
+				t.Fatal(err)
+			}
 		}},
 		{name: "entrypoint uses foreign separator", mutate: func(dir string) {
-			os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(`{"schema_version":"ailuo.package.v3","id":"demo.pkg","version":"1.0.0","components":[{"id":"core","mode":"hosted","role":"provider","entrypoint":"..\\outside"}]}`), 0o640)
+			writeSourcePackage(t, dir, "demo.pkg", "1.0.0", packagecontract.ModeHosted, "app.wasm", nil)
+			if err := os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(`{"schema_version":"ailuo.package.v3","id":"demo.pkg","version":"1.0.0","components":[{"id":"core","mode":"hosted","role":"provider","entrypoint":"..\\outside"}]}`), 0o640); err != nil {
+				t.Fatal(err)
+			}
 		}},
 	}
 	for _, tc := range cases {
