@@ -12,7 +12,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/jsonutil"
 	kernelecho "github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
 )
@@ -104,16 +103,8 @@ func (s *Server) decodeChatRequest(writer http.ResponseWriter, request *http.Req
 		return nil, false
 	}
 	defer s.admissionWG.Done()
-	request.Body = http.MaxBytesReader(writer, request.Body, 64<<10)
-	decoder := json.NewDecoder(request.Body)
-	decoder.DisallowUnknownFields()
 	var input chatRequest
-	if err := decoder.Decode(&input); err != nil {
-		access.WriteJSON(writer, http.StatusBadRequest, map[string]string{"code": "invalid_request", "message": "请求体不是有效的 JSON 对象"})
-		return nil, false
-	}
-	if err := jsonutil.EnsureEOF(decoder); err != nil {
-		access.WriteJSON(writer, http.StatusBadRequest, map[string]string{"code": "invalid_request", "message": "请求体只能包含一个 JSON 对象"})
+	if !decodeJSONBody(writer, request, &input) {
 		return nil, false
 	}
 	input.Text = strings.TrimSpace(input.Text)

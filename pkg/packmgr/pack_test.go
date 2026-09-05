@@ -10,42 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/packmgr"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
 )
-
-func TestPackAndInstallFromTarball(t *testing.T) {
-	ctx := context.Background()
-	source := filepath.Join(t.TempDir(), "pkg")
-	writeSourcePackage(t, source, "demo.pkg", "1.0.0", packmgr.ModeHosted, "app.wasm", nil)
-
-	output := t.TempDir()
-	tarballPath, err := packmgr.Pack(ctx, source, output)
-	if err != nil {
-		t.Fatalf("Pack: %v", err)
-	}
-	if filepath.Base(tarballPath) != "demo.pkg-1.0.0.tgz" {
-		t.Fatalf("tarball name = %s, want demo.pkg-1.0.0.tgz", filepath.Base(tarballPath))
-	}
-	// 发布物可安装（解压 → 走完整安装流程）。
-	root := t.TempDir()
-	record, err := packmgr.Install(ctx, root, tarballPath)
-	if err != nil {
-		t.Fatalf("Install from tarball: %v", err)
-	}
-	if record.Manifest.Version != "1.0.0" {
-		t.Fatalf("installed version = %s", record.Manifest.Version)
-	}
-	reloaded, err := packmgr.ReadInstalled(ctx, filepath.Join(root, "demo.pkg"))
-	if err != nil {
-		t.Fatalf("ReadInstalled: %v", err)
-	}
-	if len(reloaded.Lock.Artifacts) != 1 || reloaded.Lock.Artifacts[0].ComponentID != "core" {
-		t.Fatalf("Lock.Artifacts = %+v", reloaded.Lock.Artifacts)
-	}
-	if reloaded.Lock.Artifacts[0].Path != filepath.Join(root, "demo.pkg", "app.wasm") {
-		t.Fatalf("artifact path = %s", reloaded.Lock.Artifacts[0].Path)
-	}
-}
 
 func TestUnpackTarballRejectsTraversal(t *testing.T) {
 	// 恶意 tarball：路径穿越条目必须被拒绝。

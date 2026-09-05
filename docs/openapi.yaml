@@ -176,6 +176,108 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+  /api/v1/capabilities/{capability_id}/invoke:
+    post:
+      summary: Invoke an enabled Capability with a governed payload
+      description: >-
+        Synchronous consumer entry point used by generated SDKs. The request body
+        is a single-input envelope; the App policy, permission narrowing, input
+        schema validation and idempotency/confirmation governance are enforced by
+        the kernel Dispatcher. Unknown request fields and trailing content are
+        rejected.
+      parameters:
+        - name: capability_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+        - name: X-Confirmation-ID
+          in: header
+          required: false
+          schema:
+            type: string
+            maxLength: 256
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [input]
+              properties:
+                input:
+                  description: Capability input payload validated against its registered JSON Schema.
+      responses:
+        "200":
+          description: Capability result envelope.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [capability_id, result]
+                properties:
+                  capability_id:
+                    type: string
+                  result:
+                    description: Capability output payload.
+                    type: object
+        "400":
+          description: Malformed request body, schema violation, or missing idempotency key for a side-effecting Capability.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Web authentication is required.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: The App is not granted the required permission.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: The idempotency key conflicts or the Capability requires confirmation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Capability invocation failed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: The Capability does not exist or is not enabled for the App.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: App policy, idempotency store, or the invoke endpoint itself is unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "504":
+          description: The synchronous Capability deadline expired.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /api/v1/config:
     servers:
       - url: http://127.0.0.1:9178

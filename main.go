@@ -41,7 +41,6 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/task"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/packagefmt"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/packmgr"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/promptcatalog"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/agent"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus"
@@ -49,6 +48,8 @@ import (
 	promptservice "github.com/projectluojia/AI-Luo-Man-ga/internal/services/prompt"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/blob"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/sdkgen"
 
 	"github.com/joho/godotenv"
 	"google.golang.org/grpc"
@@ -195,7 +196,7 @@ func runMaintenanceCommand(arguments []string, output io.Writer) (bool, error) {
 		}
 		_, err = fmt.Fprintf(output, "身份解绑完成：app=%s 平台=%s space=%s platform_user=%s\n", *appID, *platform, *space, *platformUser)
 		return true, err
-	case "install", "upgrade", "uninstall", "list", "pack", "publish":
+	case "install", "upgrade", "uninstall", "list", "pack", "publish", "sdk-go", "sdk-py", "sdk-ts":
 		return runPackageCommand(ctx, arguments, output)
 	default:
 		return true, fmt.Errorf("configuration error: unknown command")
@@ -230,7 +231,7 @@ func runPackageCommand(parent context.Context, arguments []string, output io.Wri
 	if *root == "" {
 		*root = defaultRuntimeRoot()
 	}
-	if *root == "" && command != "pack" && command != "publish" {
+	if *root == "" && command != "pack" && command != "publish" && command != "sdk-go" && command != "sdk-py" && command != "sdk-ts" {
 		return true, fmt.Errorf("configuration error: %s requires --root 或 AILUO_RUNTIME_INSTALL_ROOT", command)
 	}
 	ctx, cancel := context.WithTimeout(parent, 2*time.Minute)
@@ -252,7 +253,7 @@ func runPackageCommand(parent context.Context, arguments []string, output io.Wri
 		if err != nil {
 			return true, err
 		}
-		if _, err := fmt.Fprintf(output, "已安装 %s@%s（%s）\n", record.Manifest.ID, record.Manifest.Version, record.Manifest.Components[0].Mode); err != nil {
+		if _, err := fmt.Fprintf(output, "已安装 %s@%s（%s）\n", record.Manifest.ID, record.Manifest.Version, componentModes(record.Manifest)); err != nil {
 			return true, err
 		}
 		return true, nil
@@ -264,7 +265,7 @@ func runPackageCommand(parent context.Context, arguments []string, output io.Wri
 		if err != nil {
 			return true, err
 		}
-		_, err = fmt.Fprintf(output, "已升级 %s@%s（%s）\n", record.Manifest.ID, record.Manifest.Version, record.Manifest.Components[0].Mode)
+		_, err = fmt.Fprintf(output, "已升级 %s@%s（%s）\n", record.Manifest.ID, record.Manifest.Version, componentModes(record.Manifest))
 		return true, err
 	case "uninstall":
 		if flags.NArg() != 1 {
@@ -281,6 +282,8 @@ func runPackageCommand(parent context.Context, arguments []string, output io.Wri
 		if flags.NArg() < 1 || flags.NArg() > 2 {
 			return true, fmt.Errorf("configuration error: pack requires source package directory [and optional output directory]")
 		}
+		// 输出目录只由位置参数决定：--root 是安装根，拿它当打包输出目录会把
+		// tarball 丢进已安装包的目录树里。
 		outputDir := "."
 		if flags.NArg() == 2 {
 			outputDir = flags.Arg(1)
@@ -318,6 +321,42 @@ func runPackageCommand(parent context.Context, arguments []string, output io.Wri
 			return true, err
 		}
 		return true, nil
+	case "sdk-go", "sdk-py", "sdk-ts":
+		if flags.NArg() < 1 || flags.NArg() > 2 {
+			return true, fmt.Errorf("configuration error: %s requires source package directory [and optional output directory]", command)
+		}
+		language := sdkgen.LanguageGo
+		if command == "sdk-py" {
+			language = sdkgen.LanguagePython
+		}
+		if command == "sdk-ts" {
+			language = sdkgen.LanguageTypeScript
+		}
+		manifest, _, _, err := packagefmt.Parse(packagefmt.SourcePath(flags.Arg(0)))
+		if err != nil {
+			return true, err
+		}
+		files, err := sdkgen.Generate(manifest.Extensions, sdkgen.Options{Language: language, PackageID: manifest.ID})
+		if err != nil {
+			return true, err
+		}
+		outputDir := "."
+		if flags.NArg() == 2 {
+			outputDir = flags.Arg(1)
+		}
+		for _, f := range files {
+			path := filepath.Join(outputDir, f.Path)
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				return true, err
+			}
+			if err := os.WriteFile(path, f.Code, 0o644); err != nil {
+				return true, err
+			}
+		}
+		if _, err := fmt.Fprintf(output, "已生成 SDK：%d 个文件到 %s\n", len(files), outputDir); err != nil {
+			return true, err
+		}
+		return true, nil
 	default: // list
 		if flags.NArg() != 0 {
 			return true, fmt.Errorf("configuration error: list takes no positional arguments")
@@ -337,12 +376,32 @@ func runPackageCommand(parent context.Context, arguments []string, output io.Wri
 			if record.Manifest.Pin {
 				pin = " [pin]"
 			}
-			if _, err := fmt.Fprintf(output, "%s@%s\t%s%s\n", record.Manifest.ID, record.Manifest.Version, record.Manifest.Components[0].Mode, pin); err != nil {
+			if _, err := fmt.Fprintf(output, "%s@%s\t%s%s\n", record.Manifest.ID, record.Manifest.Version, componentModes(record.Manifest), pin); err != nil {
 				return true, err
 			}
 		}
 		return true, nil
 	}
+}
+
+// componentModes 汇总包内组件的运行形态：单组件直接给出 mode，多组件按形态计数。
+// 包不是"一种模式"（每个组件各有 mode），打印 Components[0].Mode 会把混合包说成
+// 单一形态。
+func componentModes(manifest packmgr.Manifest) string {
+	if len(manifest.Components) == 1 {
+		return manifest.Components[0].Mode
+	}
+	counts := make(map[string]int, 2)
+	for _, component := range manifest.Components {
+		counts[component.Mode]++
+	}
+	parts := make([]string, 0, len(counts))
+	for _, mode := range []string{packmgr.ModeHosted, packmgr.ModeIsolated} {
+		if counts[mode] > 0 {
+			parts = append(parts, fmt.Sprintf("%s×%d", mode, counts[mode]))
+		}
+	}
+	return strings.Join(parts, "+")
 }
 
 // registryRefPattern 匹配 GitHub Release 源：owner/repo[@约束]。
@@ -786,10 +845,11 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 		}
 	}
 	// campus.bus 是核心业务包（App 配置启用的 Capability 均由其导出）：安装目录
-	// 缺失 campus 组件即拒绝就绪（fail-closed），给出可行动错误。
+	// 缺失 bus 组件即拒绝就绪（fail-closed），给出可行动错误。只比包 ID 不够——
+	// 包内可能只装上了别的组件，那时 Capability 一个也没注册，却会判定为就绪。
 	campusInstalled := false
 	for _, record := range installedRecords {
-		if record.PackageID == campus.ServiceID {
+		if record.PackageID == campus.ServiceID && record.ComponentID == campus.BusComponentID {
 			campusInstalled = true
 			break
 		}
@@ -913,6 +973,7 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 	}
 	webAccess := web.NewServer(ctx, orchestrator, store, readiness, reg, policy, campus.AppID, platformHub,
 		web.WithEventHub(qqEvents),
+		web.WithDispatcher(dispatcher),
 		web.WithScheduler(config.scheduler.Workers, time.Duration(config.scheduler.PollMs)*time.Millisecond, config.scheduler.BatchSize))
 	// 平台事件入口独立挂载：/api/v1/ingress/{platform} 由平台适配器规范化事件驱动，
 	// 其余路径全部交给 Web Access（健康检查、Echo/SSE、演示页面）。

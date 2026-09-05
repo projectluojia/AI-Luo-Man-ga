@@ -22,17 +22,15 @@ import (
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/packmgr"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus/builtin"
 	"github.com/projectluojia/AI-Luo-Man-ga/pkg/bus"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
 )
 
 // RegisterHosted 以真实安装目录路径装配校园服务：构造 campus.bus 安装包 →
 // 进程内 WasmHost（宿主函数投影权威存储）→ 注册并预热。campus 是单组件包，
-// 组件 ID 为 "bus"，全部 Capability 由其导出。
-const campusComponentID = "bus"
-
+// 组件 ID 为 campus.BusComponentID，全部 Capability 由其导出。
 func RegisterHosted(t testing.TB, target *registry.Registry, store bus.Store) {
 	t.Helper()
 	root := t.TempDir()
@@ -45,7 +43,7 @@ func RegisterHosted(t testing.TB, target *registry.Registry, store bus.Store) {
 	if err != nil {
 		t.Fatalf("Discover: %v", err)
 	}
-	if len(records) != 1 || records[0].ComponentID != campusComponentID {
+	if len(records) != 1 || records[0].ComponentID != campus.BusComponentID {
 		t.Fatalf("Discover records = %+v, want single campus component", records)
 	}
 	host, err := loader.NewWasmHost(loader.WasmHostConfig{
@@ -68,11 +66,7 @@ func writeCampusBusPackage(t testing.TB, root string) {
 	if err := os.MkdirAll(directory, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	extensions, err := json.Marshal(struct {
-		Tools        []registry.ToolSpec       `json:"tools"`
-		Service      registry.ServiceSpec      `json:"service"`
-		Capabilities []registry.CapabilitySpec `json:"capabilities"`
-	}{Tools: campus.ToolSpecs(), Service: campus.ServiceSpec(), Capabilities: campus.CapabilitySpecs()})
+	extensions, err := campus.Extensions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +80,7 @@ func writeCampusBusPackage(t testing.TB, root string) {
 		},
 		Extensions: extensions,
 		Components: []packmgr.Component{{
-			ID: campusComponentID, Mode: loader.ModeHosted, Entrypoint: "campus.wasm",
+			ID: campus.BusComponentID, Mode: loader.ModeHosted, Entrypoint: "campus.wasm",
 			Exports: []string{
 				campus.BusStopSearchCapabilityID,
 				campus.BusRouteListCapabilityID,
@@ -115,7 +109,7 @@ func writeCampusBusPackage(t testing.TB, root string) {
 		SchemaVersion: packmgr.SchemaVersion, PackageID: campus.ServiceID,
 		PackageVersion: "1.0.0", ManifestSHA256: hex.EncodeToString(manifestDigest[:]),
 		Artifacts: []packmgr.LockedArtifact{{
-			ComponentID: campusComponentID, Path: artifactPath, SHA256: hex.EncodeToString(artifactDigest[:]),
+			ComponentID: campus.BusComponentID, Path: artifactPath, SHA256: hex.EncodeToString(artifactDigest[:]),
 		}},
 	})
 	if err != nil {

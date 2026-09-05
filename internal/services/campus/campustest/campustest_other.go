@@ -15,10 +15,10 @@ import (
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/packmgr"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus/builtin"
 	"github.com/projectluojia/AI-Luo-Man-ga/pkg/bus"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
 )
 
 // RegisterHosted 以 hosted 包形态装配校园服务：内置 wasm 工件经进程内沙箱执行，
@@ -51,7 +51,7 @@ func RegisterHosted(t testing.TB, target *registry.Registry, store bus.Store) {
 				Purpose: "查询 Go 托管权威校巴存储（App 隔离在宿主侧强制）",
 			}},
 		},
-		PackageID: campus.ServiceID, ComponentID: "bus",
+		PackageID: campus.ServiceID, ComponentID: campus.BusComponentID,
 		Tools:        campus.ToolSpecs(),
 		Service:      campus.ServiceSpec(),
 		Capabilities: campus.CapabilitySpecs(),

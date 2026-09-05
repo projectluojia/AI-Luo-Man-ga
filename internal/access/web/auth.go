@@ -11,6 +11,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access/qq"
 	qqsettings "github.com/projectluojia/AI-Luo-Man-ga/internal/access/qq/settings"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/identity"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
 )
 
@@ -44,6 +45,13 @@ func WithWebAuthenticator(authenticator WebAuthenticator) ServerOption {
 	}
 }
 
+// WithIdentityResolver 注入非消息入口使用的外部身份解析器。
+func WithIdentityResolver(resolver access.IdentityResolver) ServerOption {
+	return func(server *Server) {
+		server.identityResolver = resolver
+	}
+}
+
 // WithQQAccessAdmin 注入 QQ Access 本地管理面。NapCat 登录与 OneBot 配置不在此 API 内。
 func WithQQAccessAdmin(admin QQAccessAdmin) ServerOption {
 	return func(server *Server) { server.qqAccessAdmin = admin }
@@ -55,6 +63,13 @@ func WithEventHub(hub *access.EventHub) ServerOption {
 		if hub != nil {
 			server.hub = hub
 		}
+	}
+}
+
+// WithDispatcher 注入 Capability 调用分发器（invokeCapability 端点必需）。
+func WithDispatcher(dispatcher *runtime.Dispatcher) ServerOption {
+	return func(server *Server) {
+		server.dispatcher = dispatcher
 	}
 }
 
@@ -113,4 +128,18 @@ func (s *Server) authenticateWeb(writer http.ResponseWriter, request *http.Reque
 		return AuthenticatedWebIdentity{}, false
 	}
 	return resolved, true
+}
+
+func (s *Server) resolveWebIdentity(ctx context.Context, value AuthenticatedWebIdentity) (identity.IdentityContext, error) {
+	if s.identityResolver == nil {
+		return identity.IdentityContext{}, access.ErrHubConfiguration
+	}
+	resolved, err := s.identityResolver.ResolveIdentity(ctx, s.appID, "web", value.PlatformSpaceID, value.PlatformUserID)
+	if err != nil {
+		return identity.IdentityContext{}, err
+	}
+	if err := access.ValidateIdentityContext(s.appID, resolved); err != nil {
+		return identity.IdentityContext{}, err
+	}
+	return resolved, nil
 }

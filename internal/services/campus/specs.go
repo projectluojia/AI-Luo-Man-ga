@@ -1,6 +1,8 @@
 package campus
 
 import (
+	"encoding/json"
+
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/pkg/bus"
 )
@@ -8,6 +10,9 @@ import (
 const (
 	AppID     = "campus-services"
 	ServiceID = "campus"
+	// BusComponentID 是 campus 包内导出全部校巴 Capability 的组件 ID。就绪校验
+	// 与测试装配共用该常量：包内可以有其他组件，只有 bus 组件在位才算就绪。
+	BusComponentID = "bus"
 
 	BusStopSearchCapabilityID    = "campus.bus.stops.search"
 	BusRouteListCapabilityID     = "campus.bus.routes.list"
@@ -85,4 +90,18 @@ func CapabilitySpecs() []registry.CapabilitySpec {
 			ToolID:          bus.JourneySearchToolID,
 		},
 	}
+}
+
+// Extensions 返回 campus 的 extensions 段（tools/service/capabilities JSON），
+// 供安装包构造（campustest）与 SDK 生成（e2e）等消费方共用同一权威契约。
+func Extensions() (json.RawMessage, error) {
+	extensions, err := json.Marshal(struct {
+		Tools        []registry.ToolSpec       `json:"tools"`
+		Service      registry.ServiceSpec      `json:"service"`
+		Capabilities []registry.CapabilitySpec `json:"capabilities"`
+	}{Tools: ToolSpecs(), Service: ServiceSpec(), Capabilities: CapabilitySpecs()})
+	if err != nil {
+		return nil, err
+	}
+	return extensions, nil
 }
