@@ -9,7 +9,7 @@
 ```bash
 make test-agent    # 按 packages/agent/runtime/uv.lock 运行 Executor 包测试
 make test-campus   # 校巴 guest 的 WASI vet 与交叉编译
-make test          # Core Go 单元测试
+make test          # Core 与 contracts module 测试
 make test-contracts # 公共 contracts module 测试
 make test-package-manager # Package Manager module 测试
 make test-race     # Go race 检测
