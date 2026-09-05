@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"time"
+	"unicode/utf8"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/idempotency"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/publicerror"
@@ -136,7 +137,11 @@ type PublicRun struct {
 }
 
 func PublicRunRecord(run RunRecord) PublicRun {
-	return PublicRun{RunRecord: run, Result: string(run.Result.Data)}
+	result := ""
+	if run.Result.ContentType == "text/plain" && utf8.Valid(run.Result.Data) {
+		result = string(run.Result.Data)
+	}
+	return PublicRun{RunRecord: run, Result: result}
 }
 
 type CapabilityAuditRecord struct {

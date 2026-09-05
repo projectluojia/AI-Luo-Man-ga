@@ -29,3 +29,18 @@ func TestPublicRunJSONDoesNotExposeChildResultOrPermissionScope(t *testing.T) {
 		t.Fatalf("public Run tree metadata missing: %s", text)
 	}
 }
+
+func TestPublicRunRecordOnlyExposesValidTextOutput(t *testing.T) {
+	text := echo.PublicRunRecord(echo.RunRecord{Result: echo.Output{ContentType: "text/plain", Data: []byte("ok")}})
+	if text.Result != "ok" {
+		t.Fatalf("text result=%q", text.Result)
+	}
+	for _, output := range []echo.Output{
+		{ContentType: "application/json", Data: []byte(`{"secret":true}`)},
+		{ContentType: "text/plain", Data: []byte{0xff}},
+	} {
+		if got := echo.PublicRunRecord(echo.RunRecord{Result: output}).Result; got != "" {
+			t.Fatalf("non-public output exposed as %q", got)
+		}
+	}
+}
