@@ -167,6 +167,21 @@ func TestAnalyzeGoOmitsUnexportedFields(t *testing.T) {
 	}
 }
 
+func TestAnalyzeGoDecodesInterpretedStructTags(t *testing.T) {
+	source := []byte("package main\nfunc hello(args Hello) {}\ntype Hello struct { Name string \"json:\\\"name\\\"\" }\n")
+	capabilities, err := AnalyzeGo(source, "x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema map[string]any
+	if err := json.Unmarshal(capabilities[0].InputSchema, &schema); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := schema["properties"].(map[string]any)["name"]; !ok {
+		t.Fatalf("schema=%v", schema)
+	}
+}
+
 func TestAnalyzeGoRejectsUnsupportedJSONTagOptions(t *testing.T) {
 	for _, tag := range []string{"json:\"count,string\"", "json:\"count,omitempty,string\"", "json:\"count,omitzero\""} {
 		source := []byte("package main\nfunc hello(args Hello) {}\ntype Hello struct { Count int `" + tag + "` }\n")

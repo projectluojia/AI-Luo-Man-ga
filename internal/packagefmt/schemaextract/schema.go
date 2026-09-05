@@ -54,7 +54,10 @@ func fieldJSONName(field *ast.Field) (name string, optional bool, err error) {
 	if field.Tag == nil || len(field.Names) != 1 {
 		return "", false, fmt.Errorf("schemaextract: 字段缺少 json tag")
 	}
-	tag := strings.Trim(field.Tag.Value, "`")
+	tag, err := strconv.Unquote(field.Tag.Value)
+	if err != nil {
+		return "", false, fmt.Errorf("schemaextract: 字段 %q 的 json tag 无效", field.Names[0].Name)
+	}
 	value, ok := reflect.StructTag(tag).Lookup("json")
 	if !ok {
 		return "", false, fmt.Errorf("schemaextract: 字段 %q 缺少 json tag", field.Names[0].Name)
