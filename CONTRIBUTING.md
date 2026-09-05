@@ -20,6 +20,7 @@ make test-integration  # Runtime Host 与 e2e 跨进程集成测试（Unix 平�
 - 提交信息遵循 Conventional Commits。开发分支上的逐条提交不强制格式；**PR 标题与 squash 合并消息必须规范**（`pr-title.yml` 强制校验）。
 - 一个 commit 是一个自洽的逻辑单元：可独立构建、独立回滚（例如迁移 + 存取代码 + 测试同处一个 commit）。
 - `main` 只接受 squash 合并，合并前必须通过全部 required status checks。
+- CodeRabbit 默认审打到 `main` 的 PR；base 为 `feat/*` 的堆叠 PR 同样自动审查（`.coderabbit.yaml`）。
 
 ## PR 流程
 
