@@ -72,6 +72,9 @@ func CanonicalLockDigest(ctx context.Context, directory string, lock packagecont
 	if err != nil {
 		return "", err
 	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	digest := sha256.Sum256(encoded)
 	return hex.EncodeToString(digest[:]), nil
 }
