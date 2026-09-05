@@ -91,7 +91,7 @@ func (c *GitHubClient) PublishTarball(ctx context.Context, owner, repo, tarballP
 // validateTarball 校验发布物自身的清单、锁和工件，不把部署依赖当作发布前提。
 // 依赖是否已安装属于目标 Deployment 的 Install 阶段，不应阻塞作者发布。
 func validateTarball(ctx context.Context, tarballPath string) (packagecontract.Manifest, error) {
-	sourceDir, cleanup, err := unpackSource(tarballPath)
+	sourceDir, cleanup, _, err := unpackSource(tarballPath)
 	if err != nil {
 		return packagecontract.Manifest{}, err
 	}
@@ -105,7 +105,7 @@ func validateTarball(ctx context.Context, tarballPath string) (packagecontract.M
 	if _, err := readSourceArtifacts(ctx, sourceDir, source.Manifest); err != nil {
 		return packagecontract.Manifest{}, err
 	}
-	if err := validatePackagedSource(ctx, sourceDir, source); err != nil {
+	if err := validatePackagedSource(ctx, sourceDir, source, true); err != nil {
 		return packagecontract.Manifest{}, err
 	}
 	return source.Manifest, nil
@@ -350,7 +350,7 @@ func InstallFromRelease(ctx context.Context, root string, client *GitHubClient, 
 	if err := client.DownloadRelease(ctx, assetURL, tarball); err != nil {
 		return InstalledRecord{}, err
 	}
-	sourceDir, cleanup, err := unpackSource(tarball)
+	sourceDir, cleanup, _, err := unpackSource(tarball)
 	if err != nil {
 		return InstalledRecord{}, err
 	}
