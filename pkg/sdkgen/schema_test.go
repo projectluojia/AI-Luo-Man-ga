@@ -96,6 +96,7 @@ func TestSchemaTypeRejects(t *testing.T) {
 		`{"type":"boolean","enum":[true]}`,                        // boolean 不支持 enum
 		`{"type":"array","items":{"type":"string"},"enum":["x"]}`, // array 不支持 enum（不静默忽略）
 		`{"type":"string","format":"date-time","enum":["x"]}`,     // enum 与 format 冲突
+		`{"type":"string","const":"x"}`,                           // 未知关键字
 	}
 	for _, schema := range tests {
 		if _, err := schemaType(json.RawMessage(schema), "Input"); err == nil {

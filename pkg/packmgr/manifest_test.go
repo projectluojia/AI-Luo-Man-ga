@@ -216,12 +216,12 @@ func TestValidateProcessSpecRejectsNonLoopback(t *testing.T) {
 }
 
 func TestLocalRuntimeAddressPolicy(t *testing.T) {
-	for _, address := range []string{"127.0.0.1:9000", "[::1]:9000", "localhost:9000", "unix:/runtime.sock"} {
+	for _, address := range []string{"127.0.0.1:9000", "[::1]:9000", "unix:/runtime.sock"} {
 		if !packmgr.IsLocalRuntimeAddress(address) {
 			t.Errorf("IsLocalRuntimeAddress(%q) = false", address)
 		}
 	}
-	for _, address := range []string{"0.0.0.0:9000", "192.0.2.1:9000", "unix:relative.sock", "unix:/runtime/../socket.sock"} {
+	for _, address := range []string{"0.0.0.0:9000", "192.0.2.1:9000", "localhost:9000", "unix:relative.sock", "unix:/runtime/../socket.sock"} {
 		if packmgr.IsLocalRuntimeAddress(address) {
 			t.Errorf("IsLocalRuntimeAddress(%q) = true", address)
 		}

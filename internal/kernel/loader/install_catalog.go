@@ -193,20 +193,24 @@ func (c *Catalog) readRecordByID(ctx context.Context, id string) (InstalledRecor
 	if err != nil {
 		return InstalledRecord{}, errors.Join(ErrInstallCatalogInvalid, err)
 	}
-	for _, entry := range entries {
-		if packmgr.IsTransientInstallDirectory(entry.Name()) {
-			continue
-		}
-		if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
-			continue
-		}
-		records, err := c.readPackage(ctx, filepath.Join(c.root, entry.Name()))
-		if err != nil {
-			return InstalledRecord{}, err
-		}
-		for _, record := range records {
-			if record.Runtime.ID == id {
-				return record, nil
+	for pass := 0; pass < 2; pass++ {
+		for _, entry := range entries {
+			name := entry.Name()
+			if packmgr.IsTransientInstallDirectory(name) || !entry.IsDir() || strings.HasPrefix(name, ".") {
+				continue
+			}
+			candidate := id == name || strings.HasPrefix(id, name+".")
+			if (pass == 0) != candidate {
+				continue
+			}
+			records, err := c.readPackage(ctx, filepath.Join(c.root, name))
+			if err != nil {
+				return InstalledRecord{}, err
+			}
+			for _, record := range records {
+				if record.Runtime.ID == id {
+					return record, nil
+				}
 			}
 		}
 	}

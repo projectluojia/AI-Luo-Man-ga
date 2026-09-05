@@ -49,6 +49,16 @@ type schemaSpec struct {
 	Properties           map[string]json.RawMessage `json:"properties"`
 	Required             []string                   `json:"required"`
 	AdditionalProperties *bool                      `json:"additionalProperties"`
+	// 约束由内核 Schema 校验执行，SDK 生成器只保留其声明以拒绝未知关键字。
+	Minimum         json.RawMessage `json:"minimum"`
+	Maximum         json.RawMessage `json:"maximum"`
+	MinLength       json.RawMessage `json:"minLength"`
+	MaxLength       json.RawMessage `json:"maxLength"`
+	MinItems        json.RawMessage `json:"minItems"`
+	MaxItems        json.RawMessage `json:"maxItems"`
+	UniqueItems     json.RawMessage `json:"uniqueItems"`
+	Pattern         json.RawMessage `json:"pattern"`
+	ContentEncoding json.RawMessage `json:"contentEncoding"`
 	// 组合/引用结构（改变类型语义，生成器无法正确表达 → 显式拒绝）：
 	OneOf []json.RawMessage `json:"oneOf"`
 	AllOf []json.RawMessage `json:"allOf"`
@@ -66,6 +76,7 @@ func schemaType(schema json.RawMessage, name string) (*TypeModel, error) {
 	// 容忍合法但不参与类型派生的约束关键字（minimum 等），拒绝尾随内容：
 	// decoder.More() 不覆盖尾随 `}`/`]`，故用二次 Decode 断言 io.EOF。
 	decoder := json.NewDecoder(bytes.NewReader(schema))
+	decoder.DisallowUnknownFields()
 	var spec schemaSpec
 	if err := decoder.Decode(&spec); err != nil {
 		return nil, fmt.Errorf("sdkgen: 解码 JSON Schema 失败: %w", err)
