@@ -460,7 +460,11 @@ func unpackSource(source string) (string, func(), error) {
 		return "", nil, err
 	}
 	if info.IsDir() {
-		return source, nil, nil
+		absolute, err := filepath.Abs(source)
+		if err != nil {
+			return "", nil, err
+		}
+		return absolute, nil, nil
 	}
 	if !strings.HasSuffix(strings.ToLower(source), ".tgz") {
 		return "", nil, fmt.Errorf("安装源必须是包目录或 .tgz 发布物")
