@@ -28,8 +28,8 @@ type Generated struct {
 	Code []byte
 }
 
-// Generate 从 extensions 段生成指定语言的 SDK 源码。
-// source 是 packagecontract.Manifest.Extensions 的原始字节；生成是唯一 SDK 路径，
+// Generate 从 Capability 规格数组生成指定语言的 SDK 源码。
+// source 是 packagecontract.Manifest.Capabilities 的 JSON；生成是唯一 SDK 路径，
 // 任何无法严格解码的输入都返回错误，不产生部分产物。
 func Generate(source json.RawMessage, options Options) ([]Generated, error) {
 	if options.PackageID == "" {

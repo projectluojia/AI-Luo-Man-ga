@@ -1,7 +1,6 @@
 package packagefmt
 
 import (
-	"encoding/json"
 	"testing"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/packagefmt/schemaextract"
@@ -35,24 +34,10 @@ type HelloArgs struct {
 	if len(manifest.Components[0].Exports) != 1 || manifest.Components[0].Exports[0] != "autogen.test.hello" {
 		t.Fatalf("exports = %v", manifest.Components[0].Exports)
 	}
-	// Extensions 必须包含 tool + capability，schema 与提取一致。
-	var extensions struct {
-		Tools []struct {
-			ID              string `json:"id"`
-			InputSchemaJSON string `json:"input_schema_json"`
-		} `json:"tools"`
-		Capabilities []struct {
-			ID              string `json:"id"`
-			InputSchemaJSON string `json:"input_schema_json"`
-		} `json:"capabilities"`
+	if len(manifest.Capabilities) != 1 || manifest.Capabilities[0].ID != "autogen.test.hello" {
+		t.Fatalf("capabilities = %+v", manifest.Capabilities)
 	}
-	if err := json.Unmarshal(manifest.Extensions, &extensions); err != nil {
-		t.Fatalf("extensions 解码失败: %v", err)
-	}
-	if len(extensions.Tools) != 1 || extensions.Tools[0].ID != "autogen.test.hello" {
-		t.Fatalf("tools = %+v", extensions.Tools)
-	}
-	if extensions.Tools[0].InputSchemaJSON != string(capabilities[0].InputSchema) {
+	if manifest.Capabilities[0].InputSchemaJSON != string(capabilities[0].InputSchema) {
 		t.Fatalf("schema 不一致")
 	}
 	if len(manifestBytes) == 0 {

@@ -6,14 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"os"
 	"path/filepath"
 	"slices"
 	"sync"
 	"time"
-
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/jsonutil"
 )
 
 const maxSettingsFileBytes = 256 << 10
@@ -125,44 +124,18 @@ func (m *Service) WaitReady(ctx context.Context) (Resolved, error) {
 	}
 }
 
-type persistedSettingsAlias Settings
-
-// legacySettingsEnvelope 接受已知旧配置字段，迁移后仍由当前 Settings 严格校验。
-// 旧 Provider 参数已归 Executor Deployment 管理，只兼容读取并丢弃；旧的
-// agent_process 仍映射到语义相同的 runtime_process。
-type legacySettingsEnvelope struct {
-	*persistedSettingsAlias
-	RuntimeProcess               json.RawMessage `json:"runtime_process"`
-	ModelBaseURL                 json.RawMessage `json:"model_base_url"`
-	ModelRequestTimeoutSeconds   json.RawMessage `json:"model_request_timeout_seconds"`
-	ModelReadinessTimeoutSeconds json.RawMessage `json:"model_readiness_timeout_seconds"`
-	ModelMaxRetries              json.RawMessage `json:"model_max_retries"`
-	ModelRetryBaseSeconds        json.RawMessage `json:"model_retry_base_seconds"`
-	ModelRetryMaxSeconds         json.RawMessage `json:"model_retry_max_seconds"`
-	ModelRequestsPerMinute       json.RawMessage `json:"model_requests_per_minute"`
-	ModelMaxConcurrency          json.RawMessage `json:"model_max_concurrency"`
-	AgentProcess                 json.RawMessage `json:"agent_process"`
-}
-
 func decodeStoredSettings(data []byte) (Settings, error) {
 	var settings Settings
-	envelope := legacySettingsEnvelope{persistedSettingsAlias: (*persistedSettingsAlias)(&settings)}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&envelope); err != nil {
+	if err := decoder.Decode(&settings); err != nil {
 		return Settings{}, err
 	}
-	if err := jsonutil.EnsureEOF(decoder); err != nil {
+	var extra any
+	if err := decoder.Decode(&extra); err == nil {
+		return Settings{}, errors.New("settings file contains multiple JSON values")
+	} else if !errors.Is(err, io.EOF) {
 		return Settings{}, err
-	}
-	if len(envelope.RuntimeProcess) > 0 {
-		if err := json.Unmarshal(envelope.RuntimeProcess, &settings.RuntimeProcess); err != nil {
-			return Settings{}, err
-		}
-	} else if len(envelope.AgentProcess) > 0 {
-		if err := json.Unmarshal(envelope.AgentProcess, &settings.RuntimeProcess); err != nil {
-			return Settings{}, err
-		}
 	}
 	return settings, nil
 }

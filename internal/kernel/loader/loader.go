@@ -7,9 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/capability"
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packagecontract"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/executor"
@@ -22,9 +24,9 @@ const (
 	ModeHosted   = "hosted"
 	ModeIsolated = "isolated"
 
-	// RoleCapability 是能力提供者角色：经 Dispatcher 被内核调用（Invoke），
+	// RoleProvider 是能力提供者角色：经 Dispatcher 被内核调用（Invoke），
 	// 实现 Invoker 接口；具体包不属于 Loader 的固定知识。
-	RoleCapability = "capability"
+	RoleProvider = "provider"
 	// RoleExecutor 是 AI 执行者角色：驱动受治理 Run 会话、反向消费内核投影的
 	// 能力，实现 internal/kernel/executor 契约，不注册任何被调能力。
 	RoleExecutor = "executor"
@@ -51,11 +53,13 @@ var (
 
 var stableIDPattern = id.AppID
 
-// Manifest 是运行时的注册与装载清单。ID/Version/Mode 是身份字段；Role、
-// Pin、IdleTTL、LockedDigest 与 HostFunctions 是声明字段——装载与绑定校验
-// 以完整清单为准，工件读取只依赖身份字段。
+// Manifest 是运行时的注册与装载清单。ID/PackageID/Version/Mode 是身份字段；
+// Role、Pin、IdleTTL、LockedDigest、HostFunctions 和 Capabilities 是声明字段——
+// 装载与绑定校验以完整清单为准，工件读取只依赖运行时身份字段。
 type Manifest struct {
-	ID           string
+	ID string
+	// PackageID 是拥有该组件的 Package 标识，用于绑定包级资源作用域。
+	PackageID    string
 	Version      string
 	Mode         string
 	Role         string
@@ -68,19 +72,43 @@ type Manifest struct {
 	// Storage 是包声明的持久化契约（namespace 等）。声明了存储宿主函数的包
 	// 必须同时声明该段；存储函数的 namespace 绑定取自此处，guest 不可选择。
 	Storage *packagecontract.Storage
+	// Capabilities 是该组件导出的 Capability 契约，用于在宿主函数边界再次
+	// 校验副作用。它来自已校验的安装包清单，不能由运行时进程修改。
+	Capabilities []capability.CapabilitySpec
 }
 
 // Equal 比较运行时清单的完整身份与装载声明。
 func (m Manifest) Equal(other Manifest) bool {
-	return m.ID == other.ID && m.Version == other.Version && m.Mode == other.Mode &&
+	return m.ID == other.ID && m.PackageID == other.PackageID && m.Version == other.Version && m.Mode == other.Mode &&
 		m.Role == other.Role && m.LockedDigest == other.LockedDigest && m.Pin == other.Pin &&
 		m.IdleTTL == other.IdleTTL && packagecontract.EqualHostedFunctions(m.HostFunctions, other.HostFunctions) &&
-		packagecontract.EqualStorage(m.Storage, other.Storage)
+		packagecontract.EqualStorage(m.Storage, other.Storage) && equalCapabilitySpecs(m.Capabilities, other.Capabilities)
 }
 
 // SameIdentity 只比较装载工件所需的运行时身份字段。
 func (m Manifest) SameIdentity(other Manifest) bool {
-	return m.ID == other.ID && m.Version == other.Version && m.Mode == other.Mode
+	return m.ID == other.ID && m.PackageID == other.PackageID && m.Version == other.Version && m.Mode == other.Mode
+}
+
+func equalCapabilitySpecs(left, right []capability.CapabilitySpec) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index].ID != right[index].ID || left[index].Version != right[index].Version ||
+			left[index].Name != right[index].Name || left[index].Description != right[index].Description ||
+			left[index].InputSchemaJSON != right[index].InputSchemaJSON || left[index].SideEffect != right[index].SideEffect ||
+			left[index].RequiresConfirmation != right[index].RequiresConfirmation ||
+			len(left[index].RequiredPermissions) != len(right[index].RequiredPermissions) {
+			return false
+		}
+		for permissionIndex := range left[index].RequiredPermissions {
+			if left[index].RequiredPermissions[permissionIndex] != right[index].RequiredPermissions[permissionIndex] {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 type Description struct {
@@ -129,6 +157,7 @@ type entry struct {
 	mu              sync.Mutex
 	state           string
 	runtime         Runtime
+	generation      uint64
 	inFlight        int
 	currentInFlight int
 	transition      chan struct{}
@@ -140,11 +169,12 @@ type entry struct {
 // 归零后经 stopOnce 恰好停止一次；stopped 通道供 Shutdown 有界等待。
 // group 不为 nil 时表示该成员属于退役组，停止由组统一触发。
 type retiredRuntime struct {
-	runtime  Runtime
-	inFlight int
-	stopOnce sync.Once
-	stopped  chan struct{}
-	group    *retiredGroup
+	runtime    Runtime
+	generation uint64
+	inFlight   int
+	stopOnce   sync.Once
+	stopped    chan struct{}
+	group      *retiredGroup
 }
 
 type Manager struct {
@@ -158,7 +188,7 @@ type Manager struct {
 	now            func() time.Time
 }
 
-// packageGroup 是一个包的组件组：order 按依赖拓扑排列（Provider 在前）。
+// packageGroup 是一个包的组件组：order 按清单声明顺序排列。
 type packageGroup struct {
 	order     []*entry
 	upgradeMu sync.Mutex
@@ -338,6 +368,41 @@ func (m *Manager) rollbackRegistered(manifests []Manifest) error {
 	return nil
 }
 
+// rollbackPackageRegistration 撤销一批刚提交的包组和运行时条目。仅用于启动期
+// Registry 发布失败的补偿路径，所有条目必须仍未加载且没有在途调用。
+func (m *Manager) rollbackPackageRegistration(manifests []Manifest, packageIDs []string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	ids := make(map[string]struct{}, len(manifests))
+	for _, manifest := range manifests {
+		ids[manifest.ID] = struct{}{}
+	}
+	for _, packageID := range packageIDs {
+		group := m.packages[packageID]
+		if group == nil || len(group.order) == 0 {
+			return ErrUnavailable
+		}
+		for _, item := range group.order {
+			if _, ok := ids[item.manifest.ID]; !ok {
+				return ErrUnavailable
+			}
+			item.mu.Lock()
+			safe := item.state == StateRegistered && item.runtime == nil && item.inFlight == 0
+			item.mu.Unlock()
+			if !safe {
+				return ErrUnavailable
+			}
+		}
+	}
+	for _, packageID := range packageIDs {
+		delete(m.packages, packageID)
+	}
+	for _, manifest := range manifests {
+		delete(m.entries, manifest.ID)
+	}
+	return nil
+}
+
 func (m *Manager) EnsureLoaded(ctx context.Context, id string) error {
 	item, err := m.resolve(id)
 	if err != nil {
@@ -376,9 +441,13 @@ func (m *Manager) ensureLoaded(ctx context.Context, item *entry) error {
 			if loadErr.err != nil {
 				item.state = StateFailed
 				item.runtime = loadErr.runtime
+				if item.runtime != nil {
+					item.generation++
+				}
 			} else {
 				item.state = StateReady
 				item.runtime = loadErr.runtime
+				item.generation++
 			}
 			close(wait)
 			item.transition = nil
@@ -429,7 +498,7 @@ func loadRuntime(ctx context.Context, host Host, manifest Manifest) loadResult {
 	}
 	// 角色与执行面一致性在加载期强制：能力提供者必须实现 Invoker；执行者
 	// 必须实现 internal/kernel/executor 契约（ClientProvider）。
-	if manifest.Role == RoleCapability {
+	if manifest.Role == RoleProvider {
 		if _, ok := runtime.(Invoker); !ok {
 			return stopAfterLoadFailure(ctx, runtime, ErrInvalidManifest)
 		}
@@ -458,10 +527,11 @@ func stopAfterLoadFailure(ctx context.Context, runtime Runtime, primary error) l
 }
 
 type Lease struct {
-	entry   *entry
-	runtime Runtime
-	invoker Invoker
-	once    sync.Once
+	entry      *entry
+	runtime    Runtime
+	generation uint64
+	invoker    Invoker
+	once       sync.Once
 }
 
 func (m *Manager) Acquire(ctx context.Context, id string) (*Lease, error) {
@@ -492,7 +562,7 @@ func (m *Manager) Acquire(ctx context.Context, id string) (*Lease, error) {
 		return nil, ErrUnavailable
 	}
 	var invoker Invoker
-	if item.manifest.Role == RoleCapability {
+	if item.manifest.Role == RoleProvider {
 		// 能力提供者的 Invoker 由加载期校验保证；取不到视为内部违例。
 		var ok bool
 		invoker, ok = item.runtime.(Invoker)
@@ -508,7 +578,7 @@ func (m *Manager) Acquire(ctx context.Context, id string) (*Lease, error) {
 	item.mu.Unlock()
 	m.mu.RUnlock()
 	observe.DefaultMetrics().RuntimeCallStarted()
-	return &Lease{entry: item, runtime: loadedRuntime, invoker: invoker}, nil
+	return &Lease{entry: item, runtime: loadedRuntime, generation: item.generation, invoker: invoker}, nil
 }
 
 func (l *Lease) Invoke(ctx context.Context, request contracts.RequestContext, payload json.RawMessage) (json.RawMessage, error) {
@@ -518,7 +588,7 @@ func (l *Lease) Invoke(ctx context.Context, request contracts.RequestContext, pa
 	result, err := l.invoker.Invoke(ctx, request, payload)
 	if errors.Is(err, ErrUnavailable) || errors.Is(err, ErrRuntimeProtocol) {
 		l.entry.mu.Lock()
-		if l.entry.state == StateReady && l.entry.runtime == l.runtime {
+		if l.entry.state == StateReady && l.entry.generation == l.generation {
 			l.entry.state = StateFailed
 		}
 		l.entry.mu.Unlock()
@@ -543,11 +613,11 @@ func (l *Lease) Release() {
 		item.mu.Lock()
 		item.inFlight--
 		var retired *retiredRuntime
-		if l.runtime == item.runtime {
+		if l.generation == item.generation {
 			item.currentInFlight--
 		} else {
 			for _, candidate := range item.retired {
-				if candidate.runtime == l.runtime {
+				if candidate.generation == l.generation {
 					retired = candidate
 					break
 				}
@@ -863,8 +933,9 @@ func (m *Manager) resolve(id string) (*entry, error) {
 
 func ValidateManifest(manifest Manifest) error {
 	if !stableIDPattern.MatchString(manifest.ID) ||
+		(manifest.PackageID != "" && !stableIDPattern.MatchString(manifest.PackageID)) ||
 		(manifest.Mode != ModeHosted && manifest.Mode != ModeIsolated) ||
-		(manifest.Role != RoleCapability && manifest.Role != RoleExecutor) ||
+		(manifest.Role != RoleProvider && manifest.Role != RoleExecutor) ||
 		manifest.IdleTTL < 0 || len(manifest.LockedDigest) != 64 {
 		return ErrInvalidManifest
 	}
@@ -876,6 +947,9 @@ func ValidateManifest(manifest Manifest) error {
 	}
 	if manifest.Storage != nil {
 		if err := packagecontract.ValidateStorage(*manifest.Storage); err != nil {
+			return ErrInvalidManifest
+		}
+		if manifest.PackageID == "" || !strings.HasPrefix(manifest.Storage.Namespace, manifest.PackageID+"/") {
 			return ErrInvalidManifest
 		}
 	}

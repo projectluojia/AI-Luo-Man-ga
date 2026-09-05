@@ -16,5 +16,11 @@ dist/
 .codegraph/
 .ruff_cache/
 .uv-cache/
+.ailuo-sync-transaction.json
+.ailuo-sync-transaction.json.backup
+.ailuo-sync-transaction-*
+.ailuo-sync-write-*
+.ailuo-stage-*
+.ailuo-root-backup-*
 
 server.log

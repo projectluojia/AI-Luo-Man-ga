@@ -15,7 +15,6 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packagecontract"
 	runtimev1 "github.com/projectluojia/AI-Luo-Man-ga/gen/runtimev1"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/backoff"
@@ -25,7 +24,7 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-const RuntimeHostProtocolVersion = "2.0"
+const RuntimeHostProtocolVersion = "3.0"
 
 const (
 	maxRuntimeMessageBytes = 512 << 10
@@ -314,10 +313,7 @@ func (r *grpcRuntime) Invoke(ctx context.Context, request contracts.RequestConte
 			PermissionScope: append([]string(nil), request.PermissionScope...),
 			CallChain:       append([]string(nil), request.CallChain...),
 			CallId:          request.CallID,
-			TargetType:      request.TargetType,
 			CapabilityId:    request.CapabilityID,
-			ServiceId:       request.ServiceID,
-			ToolId:          request.ToolID,
 		},
 		PayloadJson: append([]byte(nil), payload...),
 	})
@@ -402,7 +398,7 @@ func validateRuntimeInvoke(request contracts.RequestContext, payload json.RawMes
 	values := []string{
 		request.AppID, request.EchoID, request.RequestID, request.TraceID, request.UserID, request.SessionID,
 		request.RunID, request.ParentRunID, request.CallID, request.IdempotencyKey, request.ConfirmationID, request.ProtocolVersion,
-		request.TargetType, request.CapabilityID, request.ServiceID, request.ToolID,
+		request.CapabilityID,
 	}
 	values = append(values, request.PermissionScope...)
 	values = append(values, request.CallChain...)
@@ -411,16 +407,7 @@ func validateRuntimeInvoke(request contracts.RequestContext, payload json.RawMes
 			return ErrRuntimeProtocol
 		}
 	}
-	switch request.TargetType {
-	case registry.TargetTypeCapability:
-		if !stableIDPattern.MatchString(request.CapabilityID) || !stableIDPattern.MatchString(request.ServiceID) || request.ToolID != "" {
-			return ErrRuntimeProtocol
-		}
-	case registry.TargetTypeTool:
-		if request.CapabilityID != "" || !stableIDPattern.MatchString(request.ServiceID) || !stableIDPattern.MatchString(request.ToolID) {
-			return ErrRuntimeProtocol
-		}
-	default:
+	if !stableIDPattern.MatchString(request.CapabilityID) {
 		return ErrRuntimeProtocol
 	}
 	return nil

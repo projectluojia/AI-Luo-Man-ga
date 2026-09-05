@@ -239,6 +239,9 @@ SELECT app_id,run_id,run_group_id,echo_id,parent_run_id,origin_call_id,attempt,s
        task_message,last_agent_sequence
 FROM runs LIMIT 0`
 	}
+	if version >= 26 {
+		runColumns = strings.ReplaceAll(runColumns, "max_tool_calls", "max_capability_calls")
+	}
 	rows, err := db.QueryContext(ctx, runColumns)
 	if err != nil {
 		return fmt.Errorf("required Run schema is unavailable")

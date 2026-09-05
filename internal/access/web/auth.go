@@ -15,8 +15,8 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
 )
 
-// AuthenticatedWebIdentity 是可信 Web 认证层提供的平台身份。请求正文中的
-// user_id、user_name 与 session_id 不得用于填充本结构。
+// AuthenticatedWebIdentity 是可信 Web 认证层提供的平台身份；聊天请求正文
+// 不携带身份字段，不能覆盖本结构。
 type AuthenticatedWebIdentity struct {
 	PlatformSpaceID   string
 	PlatformUserID    string

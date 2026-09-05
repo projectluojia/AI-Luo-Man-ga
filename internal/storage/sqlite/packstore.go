@@ -13,7 +13,7 @@ import (
 )
 
 // packageDocuments 实现 packstore.Store：包装统一 Store 复用其连接与事务
-// 互斥。作用域以 (app_id, namespace) 复合键强制 App 隔离，全部查询参数化；
+// 互斥。作用域以 (app_id, package-qualified namespace) 复合键强制 App 与包隔离，全部查询参数化；
 // 读取在单事务内同时取回文档与快照元数据（快照原子替换下 reader 永不观察
 // 到跨修订混合），快照替换在单写事务内原子生效、失败保留上一完整版本。
 type packageDocuments struct {

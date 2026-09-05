@@ -28,7 +28,7 @@ func TestBackupAndRestorePreserveCompleteSnapshot(t *testing.T) {
 	}
 	now := time.Now().UTC()
 	docs := store.PackageDocuments()
-	scope := packstore.Scope{AppID: "campus-services", Namespace: "campus/bus"}
+	scope := packstore.Scope{AppID: "campus-services", PackageID: "campus", Namespace: "campus/bus"}
 	snapshot := map[string][]packstore.Document{
 		"routes": {{ID: "route", Payload: []byte(`{"id":"route","name":"A-B","direction":"outbound","source_revision":"backup-revision"}`)}},
 	}

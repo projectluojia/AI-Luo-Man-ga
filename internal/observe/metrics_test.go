@@ -16,7 +16,6 @@ func TestMetricsExposeOnlyClosedLabelsAndExpectedValues(t *testing.T) {
 	metrics.RunStarted()
 	metrics.SetQueuedRuns(3)
 	metrics.ObserveCapability(false, 10*time.Millisecond)
-	metrics.ObserveTool(true, 5*time.Millisecond)
 	metrics.ObserveStorage(true, time.Millisecond)
 	metrics.ObserveRuntimeLoad(true, 2*time.Millisecond)
 	metrics.ObserveRuntimeStop(false, 3*time.Millisecond)
@@ -31,7 +30,6 @@ func TestMetricsExposeOnlyClosedLabelsAndExpectedValues(t *testing.T) {
 		"ailuo_runs_active 1",
 		"ailuo_runs_queued 3",
 		`ailuo_capability_calls_total{result="failure"} 1`,
-		`ailuo_tool_calls_total{result="success"} 1`,
 		`ailuo_runtime_loads_total{result="success"} 1`,
 		`ailuo_runtime_stops_total{result="failure"} 1`,
 		"ailuo_runtime_calls_active 1",

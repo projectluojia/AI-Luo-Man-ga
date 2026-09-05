@@ -13,8 +13,6 @@ import (
 )
 
 const (
-	childServiceID = "run"
-
 	childRunInputSchema = `{
   "$schema":"https://json-schema.org/draft/2020-12/schema",
   "type":"object",
@@ -101,38 +99,22 @@ func RegisterChildCapabilities(reg *registry.Registry, runner ChildRunner) error
 		}
 		return encoded, nil
 	}
-	return reg.RegisterService(registry.ServiceRegistration{
-		Spec: capability.ServiceSpec{
-			ID: childServiceID, Version: "1.0.0", Description: "Governed child Run control.",
+	return reg.RegisterBatch([]registry.CapabilityRegistration{
+		{
+			Spec: capability.CapabilitySpec{
+				ID: CreateChildRunCapabilityID, Version: "1.0.0", Name: "创建受治理的子运行",
+				Description:     "Create one durable queued child Run with narrower capabilities and an independent budget.",
+				InputSchemaJSON: childRunInputSchema, SideEffect: capability.SideEffectExternal,
+			},
+			Handler: createChild,
 		},
-		Capabilities: map[string]struct {
-			Spec    capability.CapabilitySpec
-			Handler registry.Handler
-		}{
-			CreateChildRunCapabilityID: {
-				Spec: capability.CapabilitySpec{
-					ID:              CreateChildRunCapabilityID,
-					Version:         "1.0.0",
-					Name:            "创建受治理的子运行",
-					Description:     "Create one durable queued child Run with narrower Capabilities and an independent budget.",
-					ServiceID:       childServiceID,
-					InputSchemaJSON: childRunInputSchema,
-					SideEffect:      capability.SideEffectExternal,
-				},
-				Handler: createChild,
+		{
+			Spec: capability.CapabilitySpec{
+				ID: GetChildStatusCapabilityID, Version: "1.0.0", Name: "查询子运行状态",
+				Description:     "Read the durable status and completed result of a direct child Run.",
+				InputSchemaJSON: childStatusInputSchema, SideEffect: capability.SideEffectNone,
 			},
-			GetChildStatusCapabilityID: {
-				Spec: capability.CapabilitySpec{
-					ID:              GetChildStatusCapabilityID,
-					Version:         "1.0.0",
-					Name:            "查询子运行状态",
-					Description:     "Read the durable status and completed result of a direct child Run.",
-					ServiceID:       childServiceID,
-					InputSchemaJSON: childStatusInputSchema,
-					SideEffect:      capability.SideEffectNone,
-				},
-				Handler: getChildStatus,
-			},
+			Handler: getChildStatus,
 		},
 	})
 }

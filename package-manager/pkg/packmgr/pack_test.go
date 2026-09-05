@@ -94,7 +94,7 @@ func TestPackFromSourceRejectsMismatchedManifestBytes(t *testing.T) {
 	source := t.TempDir()
 	manifest := packagecontract.Manifest{
 		SchemaVersion: packagecontract.SchemaVersion, ID: "demo.pkg", Version: "1.0.0",
-		Components: []packagecontract.Component{{ID: "core", Mode: packagecontract.ModeHosted, Entrypoint: "app.wasm"}},
+		Components: []packagecontract.Component{{ID: "core", Mode: packagecontract.ModeHosted, Role: packagecontract.RoleProvider, Entrypoint: "app.wasm"}},
 	}
 	manifestBytes, err := json.Marshal(manifest)
 	if err != nil {

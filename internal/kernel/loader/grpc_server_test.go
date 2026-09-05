@@ -97,7 +97,7 @@ func invokeRequest(id string) *runtimev1.InvokeRequest {
 		Context: &runtimev1.GovernedRequestContext{
 			AppId: "app.test", EchoId: "echo-1", RequestId: "request-1", TraceId: "trace-1",
 			RunId: "run-1", CallId: "call-1", ProtocolVersion: "1.0",
-			TargetType: "capability", CapabilityId: "test.capability", ServiceId: "test.service",
+			CapabilityId:    "test.capability",
 			PermissionScope: []string{"test.read"},
 		},
 		PayloadJson: []byte(`{}`),
@@ -147,8 +147,7 @@ func TestRuntimeHostProtocolServerRoundTrip(t *testing.T) {
 	contexts := append([]contracts.RequestContext(nil), backend.contexts...)
 	backend.mu.Unlock()
 	if len(contexts) != 1 || contexts[0].AppID != "app.test" || contexts[0].CallID != "call-1" ||
-		contexts[0].TargetType != "capability" || contexts[0].CapabilityID != "test.capability" ||
-		contexts[0].ServiceID != "test.service" || contexts[0].ToolID != "" {
+		contexts[0].CapabilityID != "test.capability" {
 		t.Fatalf("contexts=%#v", contexts)
 	}
 	if err := manager.Shutdown(context.Background()); err != nil {
@@ -168,7 +167,7 @@ func TestRuntimeHostProtocolServerRejectsInvalidOrderingIdentityAndCapacity(t *t
 		t.Fatalf("invoke before start error=%v", err)
 	}
 	invalid := lifecycleRequest("hosted.one")
-	invalid.Identity.ProtocolVersion = "3.0"
+	invalid.Identity.ProtocolVersion = "2.0"
 	if _, err := server.Start(context.Background(), invalid); status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("protocol mismatch error=%v", err)
 	}
@@ -214,15 +213,14 @@ func TestRuntimeHostProtocolServerRejectsInvalidContextAndMalformedBackendResult
 		t.Fatalf("unknown context error=%v", err)
 	}
 	missingTarget := invokeRequest("hosted.invalid")
-	missingTarget.Context.TargetType = ""
+	missingTarget.Context.CapabilityId = ""
 	if _, err := server.Invoke(context.Background(), missingTarget); status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("missing target identity error=%v", err)
 	}
-	mismatchedTarget := invokeRequest("hosted.invalid")
-	mismatchedTarget.Context.TargetType = "tool"
-	mismatchedTarget.Context.ToolId = "test.capability"
-	if _, err := server.Invoke(context.Background(), mismatchedTarget); status.Code(err) != codes.InvalidArgument {
-		t.Fatalf("mismatched target identity error=%v", err)
+	missingCapability := invokeRequest("hosted.invalid")
+	missingCapability.Context.CapabilityId = ""
+	if _, err := server.Invoke(context.Background(), missingCapability); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("missing capability identity error=%v", err)
 	}
 	if _, err := server.Invoke(context.Background(), invokeRequest("hosted.invalid")); status.Code(err) != codes.Internal {
 		t.Fatalf("malformed result error=%v", err)
@@ -270,13 +268,13 @@ func TestRuntimeHostProtocolServerDrainsAndReturnsOnlyStableErrors(t *testing.T)
 	}
 }
 
-// toolRuntimeRequest 构造 tool 目标类型的受治理请求（hosted guest 按 ToolID 分发）。
-func toolRuntimeRequest() contracts.RequestContext {
+// capabilityRuntimeRequest 构造 hosted 能力调用的受治理请求。
+func capabilityRuntimeRequest() contracts.RequestContext {
 	return contracts.RequestContext{
 		AppID: "app.test", EchoID: "echo-1", RequestID: "request-1", TraceID: "trace-1",
 		RunID: "run-1", CallID: "call-1", CallDepth: 1,
 		IdempotencyKey: "operation-1", ProtocolVersion: "1.0",
-		TargetType: "tool", ServiceID: testPackageID, ToolID: testToolID,
+		CapabilityID:    testCapabilityID,
 		PermissionScope: []string{testInvokeScope},
 	}
 }
@@ -318,7 +316,7 @@ func TestRuntimeHostServesHostedArtifactOverProtocol(t *testing.T) {
 		t.Fatal(err)
 	}
 	result, err := manager.Handler(testPackageID)(
-		context.Background(), toolRuntimeRequest(), json.RawMessage(`{"value":"hello"}`),
+		context.Background(), capabilityRuntimeRequest(), json.RawMessage(`{"value":"hello"}`),
 	)
 	if err != nil {
 		t.Fatalf("invoke: %v", err)
@@ -374,7 +372,7 @@ func TestRuntimeHostEnforcesExecutionBudgetOverProtocol(t *testing.T) {
 		t.Fatal(err)
 	}
 	started := time.Now()
-	_, err = manager.Handler("busy.host")(context.Background(), toolRuntimeRequest(), json.RawMessage(`{}`))
+	_, err = manager.Handler("busy.host")(context.Background(), capabilityRuntimeRequest(), json.RawMessage(`{}`))
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("invoke error = %v, want context.DeadlineExceeded", err)
 	}

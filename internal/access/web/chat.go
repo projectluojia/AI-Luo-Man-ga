@@ -16,16 +16,10 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
 )
 
-// chatRequest 是产品前端（LuoYing-Frontend）的聊天契约：文本消息经受治理
-// Intake 进入平台标准链路。session_id 只用于平台会话绑定记录，客户端提供的
-// user_id/user_name/session_id 不作为身份依据，身份只来自可信 Web 登录态。
+// chatRequest 是产品前端的聊天契约：文本消息经受治理 Intake 进入平台标准链路，
+// 身份和会话只来自可信 Web 登录态。
 type chatRequest struct {
-	SessionID string   `json:"session_id"`
-	UserID    string   `json:"user_id"`
-	UserName  string   `json:"user_name"`
-	Text      string   `json:"text"`
-	ImageIDs  []string `json:"image_ids"`
-	FileIDs   []string `json:"file_ids"`
+	Text string `json:"text"`
 }
 
 // chatStream 提供前端流式聊天契约：POST /chat/stream。请求经标准 Intake →
@@ -138,10 +132,6 @@ func (s *Server) decodeChatRequest(writer http.ResponseWriter, request *http.Req
 	input.Text = strings.TrimSpace(input.Text)
 	if input.Text == "" || utf8.RuneCountInString(input.Text) > 4000 {
 		access.WriteJSON(writer, http.StatusBadRequest, map[string]string{"code": "invalid_message", "message": "消息长度必须为 1 至 4000 个字符"})
-		return nil, false
-	}
-	if len(input.ImageIDs) > 0 || len(input.FileIDs) > 0 {
-		access.WriteJSON(writer, http.StatusBadRequest, map[string]string{"code": "attachments_unsupported", "message": "附件消息暂不支持"})
 		return nil, false
 	}
 	return &input, true

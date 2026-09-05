@@ -10,22 +10,29 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 )
 
-func TestRegisterInstalledRejectsCapabilityPackageWithoutUniquePrimaryService(t *testing.T) {
+func TestRegisterInstalledRejectsInvalidPackageGroups(t *testing.T) {
 	cases := []struct {
 		name    string
 		records []loader.InstalledRecord
 	}{
 		{
-			name: "missing primary",
+			name: "missing package id",
 			records: []loader.InstalledRecord{capabilityRecord(
-				"broken.missing", "broken-package", "component", 1, "broken.missing.cap", capability.ServiceSpec{},
+				"broken.missing", "", "component", 0, "broken.missing.cap",
 			)},
 		},
 		{
-			name: "duplicate primary",
+			name: "duplicate component",
 			records: []loader.InstalledRecord{
-				capabilityRecord("broken.one", "broken-package", "one", 0, "broken.one.cap", capability.ServiceSpec{ID: "broken", Version: "1.2.3"}),
-				capabilityRecord("broken.two", "broken-package", "two", 0, "broken.two.cap", capability.ServiceSpec{ID: "broken", Version: "1.2.3"}),
+				capabilityRecord("broken.one", "broken-package", "component", 0, "broken.one.cap"),
+				capabilityRecord("broken.two", "broken-package", "component", 1, "broken.two.cap"),
+			},
+		},
+		{
+			name: "duplicate order",
+			records: []loader.InstalledRecord{
+				capabilityRecord("broken.one", "broken-package", "one", 0, "broken.one.cap"),
+				capabilityRecord("broken.two", "broken-package", "two", 0, "broken.two.cap"),
 			},
 		},
 	}
@@ -45,18 +52,16 @@ func TestRegisterInstalledRejectsCapabilityPackageWithoutUniquePrimaryService(t 
 	}
 }
 
-func capabilityRecord(runtimeID, packageID, componentID string, order int, capabilityID string, service capability.ServiceSpec) loader.InstalledRecord {
+func capabilityRecord(runtimeID, packageID, componentID string, order int, capabilityID string) loader.InstalledRecord {
 	return loader.InstalledRecord{
 		Runtime: loader.Manifest{
 			ID: runtimeID, Version: "1.2.3", Mode: loader.ModeHosted,
-			Role: loader.RoleCapability, LockedDigest: digest,
+			Role: loader.RoleProvider, LockedDigest: digest, Capabilities: []capability.CapabilitySpec{{
+				ID: capabilityID, Version: "1.2.3", Name: capabilityID,
+				InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
+				SideEffect:      capability.SideEffectRead,
+			}},
 		},
 		PackageID: packageID, ComponentID: componentID, ComponentOrder: order,
-		Service: service,
-		Capabilities: []capability.CapabilitySpec{{
-			ID: capabilityID, Version: "1.2.3", ServiceID: service.ID,
-			InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
-			SideEffect:      capability.SideEffectRead,
-		}},
 	}
 }

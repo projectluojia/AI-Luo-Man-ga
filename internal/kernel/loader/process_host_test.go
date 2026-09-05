@@ -154,7 +154,7 @@ func TestProcessHostRunsOutsideKernelAndShutsDownGracefully(t *testing.T) {
 		context.Background(),
 		contracts.RequestContext{
 			AppID: "app.test", EchoID: "echo-1", RequestID: "request-1", CallID: "call-1",
-			TargetType: "capability", CapabilityID: "test.capability", ServiceID: "test.service",
+			CapabilityID: "test.capability",
 		},
 		json.RawMessage(`{"value":1}`),
 	)
@@ -218,7 +218,7 @@ func TestProcessHostEnforcesFileSizeLimit(t *testing.T) {
 		context.Background(),
 		contracts.RequestContext{
 			AppID: "app.test", EchoID: "echo-1", RequestID: "request-1", CallID: "call-1",
-			TargetType: "capability", CapabilityID: "test.capability", ServiceID: "test.service",
+			CapabilityID: "test.capability",
 		},
 		json.RawMessage(`{"value":1}`),
 	)

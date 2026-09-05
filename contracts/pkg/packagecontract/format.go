@@ -14,17 +14,20 @@ import (
 )
 
 // 包格式版本：清单与 lock 共用的 schema 版本。
-const SchemaVersion = "ailuo.package.v2"
+const SchemaVersion = "ailuo.package.v3"
+
+// Package 清单的集合上限：安装器、Catalog 和运行时注册共享这些边界，
+// 防止一个合法 JSON 通过超大依赖图耗尽装载资源。
+const (
+	MaxComponents   = 64
+	MaxCapabilities = 256
+	MaxDependencies = 256
+)
 
 // 执行形态与托管策略的闭式取值。
 const (
 	ModeHosted   = "hosted"
 	ModeIsolated = "isolated"
-
-	SensitivityPublic  = "public"
-	SensitivityPrivate = "private"
-	RetentionPermanent = "permanent"
-	RetentionTemporary = "temporary"
 )
 
 var (
@@ -44,13 +47,9 @@ type HostedFunctionDecl struct {
 	Purpose string `json:"purpose,omitempty"`
 }
 
-// Storage 是包声明的持久化契约：无状态包实例经该命名空间读写宿主统一存储；
-// schema 只做前向迁移（AGENTS.md 存储规则）。
+// Storage 是包声明的持久化契约：无状态包实例经该命名空间读写宿主统一存储。
 type Storage struct {
-	Namespace     string `json:"namespace"`
-	SchemaVersion uint32 `json:"schema_version"`
-	Sensitivity   string `json:"sensitivity"`
-	Retention     string `json:"retention"`
+	Namespace string `json:"namespace"`
 }
 
 // Dependency 是包声明的版本化依赖（包 ID + semver 约束 + 显式来源）。
@@ -85,10 +84,7 @@ func ValidateHostedFunctions(decls []HostedFunctionDecl) error {
 
 // ValidateStorage 校验持久化契约声明的闭式取值。
 func ValidateStorage(storage Storage) error {
-	if !storageNamespacePattern.MatchString(storage.Namespace) || len(storage.Namespace) > 128 ||
-		storage.SchemaVersion == 0 ||
-		(storage.Sensitivity != SensitivityPublic && storage.Sensitivity != SensitivityPrivate) ||
-		(storage.Retention != RetentionPermanent && storage.Retention != RetentionTemporary) {
+	if !storageNamespacePattern.MatchString(storage.Namespace) || len(storage.Namespace) > 128 {
 		return ErrInvalidFormat
 	}
 	return nil

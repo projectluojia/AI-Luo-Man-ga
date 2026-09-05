@@ -46,8 +46,8 @@ func (m *memorySettingsStore) DeletePromptSettings(_ context.Context, appID, use
 }
 
 func TestRenderUsesV2DefaultsForUserWithoutSettings(t *testing.T) {
-	service := NewService(promptcatalog.Default(), newMemorySettingsStore())
-	prompt, err := service.RenderSystemPrompt(t.Context(), RenderRequest{
+	provider := NewProvider(promptcatalog.Default(), newMemorySettingsStore())
+	prompt, err := provider.RenderSystemPrompt(t.Context(), RenderRequest{
 		AppID:            "campus-services",
 		UserID:           "user-1",
 		BaseSystemPrompt: "【基本人格】测试",
@@ -72,7 +72,7 @@ func TestRenderUsesV2DefaultsForUserWithoutSettings(t *testing.T) {
 
 func TestRenderAppliesStoredUserPreferences(t *testing.T) {
 	store := newMemorySettingsStore()
-	service := NewService(promptcatalog.Default(), store)
+	provider := NewProvider(promptcatalog.Default(), store)
 	if err := store.SavePromptSettings(t.Context(), "campus-services", Settings{
 		UserID:     "user-1",
 		BasicStyle: "professional",
@@ -83,7 +83,7 @@ func TestRenderAppliesStoredUserPreferences(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	prompt, err := service.RenderSystemPrompt(t.Context(), RenderRequest{
+	prompt, err := provider.RenderSystemPrompt(t.Context(), RenderRequest{
 		AppID:            "campus-services",
 		UserID:           "user-1",
 		BaseSystemPrompt: "【基本人格】测试",
@@ -105,13 +105,13 @@ func TestRenderAppliesStoredUserPreferences(t *testing.T) {
 }
 
 func TestRenderRequiresBasePromptAndSkipsUnknownChannel(t *testing.T) {
-	service := NewService(promptcatalog.Default(), newMemorySettingsStore())
-	if _, err := service.RenderSystemPrompt(t.Context(), RenderRequest{
+	provider := NewProvider(promptcatalog.Default(), newMemorySettingsStore())
+	if _, err := provider.RenderSystemPrompt(t.Context(), RenderRequest{
 		AppID: "campus-services", BaseSystemPrompt: "   ",
 	}); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("blank base prompt error=%v", err)
 	}
-	prompt, err := service.RenderSystemPrompt(t.Context(), RenderRequest{
+	prompt, err := provider.RenderSystemPrompt(t.Context(), RenderRequest{
 		AppID:            "campus-services",
 		BaseSystemPrompt: "【基本人格】测试",
 		Channel:          "qq_group",
@@ -126,22 +126,22 @@ func TestRenderRequiresBasePromptAndSkipsUnknownChannel(t *testing.T) {
 }
 
 func TestSetSettingsRejectsUnknownStyleOrTrait(t *testing.T) {
-	service := NewService(promptcatalog.Default(), newMemorySettingsStore())
-	if _, err := service.SetSettings(t.Context(), "campus-services", "user-1", "不存在", nil); !errors.Is(err, ErrInvalid) {
+	provider := NewProvider(promptcatalog.Default(), newMemorySettingsStore())
+	if _, err := provider.SetSettings(t.Context(), "campus-services", "user-1", "不存在", nil); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("unknown style error=%v", err)
 	}
-	if _, err := service.SetSettings(t.Context(), "campus-services", "user-1", "默认", map[string]string{"不存在": "增强"}); !errors.Is(err, ErrInvalid) {
+	if _, err := provider.SetSettings(t.Context(), "campus-services", "user-1", "默认", map[string]string{"不存在": "增强"}); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("unknown trait error=%v", err)
 	}
-	if _, err := service.SetSettings(t.Context(), "campus-services", "user-1", "默认", map[string]string{"emoji": "超强"}); !errors.Is(err, ErrInvalid) {
+	if _, err := provider.SetSettings(t.Context(), "campus-services", "user-1", "默认", map[string]string{"emoji": "超强"}); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("unknown level error=%v", err)
 	}
 }
 
 func TestRegisterExposesPreferenceCapabilitiesOnly(t *testing.T) {
-	service := NewService(promptcatalog.Default(), newMemorySettingsStore())
+	provider := NewProvider(promptcatalog.Default(), newMemorySettingsStore())
 	reg := registry.New()
-	if err := Register(reg, service); err != nil {
+	if err := Register(reg, provider); err != nil {
 		t.Fatal(err)
 	}
 	for _, capabilityID := range []string{PreferenceGetID, PreferenceSetID, PreferenceResetID} {
@@ -149,11 +149,11 @@ func TestRegisterExposesPreferenceCapabilitiesOnly(t *testing.T) {
 		if err != nil {
 			t.Fatalf("capability %s: %v", capabilityID, err)
 		}
-		if spec.ServiceID != ServiceID {
-			t.Fatalf("capability %s service=%s", capabilityID, spec.ServiceID)
+		if spec.ID != capabilityID {
+			t.Fatalf("capability %s resolved as %s", capabilityID, spec.ID)
 		}
 	}
-	if services := reg.Services(); len(services) != 1 || services[0].ID != ServiceID {
-		t.Fatalf("services=%#v", services)
+	if capabilities := reg.Capabilities(); len(capabilities) != 3 {
+		t.Fatalf("capabilities=%#v", capabilities)
 	}
 }

@@ -315,10 +315,7 @@ type GovernedRequestContext struct {
 	PermissionScope []string               `protobuf:"bytes,14,rep,name=permission_scope,json=permissionScope,proto3" json:"permission_scope,omitempty"`
 	CallChain       []string               `protobuf:"bytes,15,rep,name=call_chain,json=callChain,proto3" json:"call_chain,omitempty"`
 	CallId          string                 `protobuf:"bytes,16,opt,name=call_id,json=callId,proto3" json:"call_id,omitempty"`
-	TargetType      string                 `protobuf:"bytes,17,opt,name=target_type,json=targetType,proto3" json:"target_type,omitempty"`
 	CapabilityId    string                 `protobuf:"bytes,18,opt,name=capability_id,json=capabilityId,proto3" json:"capability_id,omitempty"`
-	ServiceId       string                 `protobuf:"bytes,19,opt,name=service_id,json=serviceId,proto3" json:"service_id,omitempty"`
-	ToolId          string                 `protobuf:"bytes,20,opt,name=tool_id,json=toolId,proto3" json:"tool_id,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -465,30 +462,9 @@ func (x *GovernedRequestContext) GetCallId() string {
 	return ""
 }
 
-func (x *GovernedRequestContext) GetTargetType() string {
-	if x != nil {
-		return x.TargetType
-	}
-	return ""
-}
-
 func (x *GovernedRequestContext) GetCapabilityId() string {
 	if x != nil {
 		return x.CapabilityId
-	}
-	return ""
-}
-
-func (x *GovernedRequestContext) GetServiceId() string {
-	if x != nil {
-		return x.ServiceId
-	}
-	return ""
-}
-
-func (x *GovernedRequestContext) GetToolId() string {
-	if x != nil {
-		return x.ToolId
 	}
 	return ""
 }
@@ -653,7 +629,7 @@ const file_runtime_host_proto_rawDesc = "" +
 	"\bidentity\x18\x01 \x01(\v2!.ailuo.runtime.v1.RuntimeIdentityR\bidentity\x12\x14\n" +
 	"\x05ready\x18\x02 \x01(\bR\x05ready\x12\x1f\n" +
 	"\vstatus_code\x18\x03 \x01(\tR\n" +
-	"statusCode\"\x9c\x05\n" +
+	"statusCode\"\xf7\x04\n" +
 	"\x16GovernedRequestContext\x12\x15\n" +
 	"\x06app_id\x18\x01 \x01(\tR\x05appId\x12\x17\n" +
 	"\aecho_id\x18\x02 \x01(\tR\x06echoId\x12\x1d\n" +
@@ -675,13 +651,9 @@ const file_runtime_host_proto_rawDesc = "" +
 	"\x10permission_scope\x18\x0e \x03(\tR\x0fpermissionScope\x12\x1d\n" +
 	"\n" +
 	"call_chain\x18\x0f \x03(\tR\tcallChain\x12\x17\n" +
-	"\acall_id\x18\x10 \x01(\tR\x06callId\x12\x1f\n" +
-	"\vtarget_type\x18\x11 \x01(\tR\n" +
-	"targetType\x12#\n" +
-	"\rcapability_id\x18\x12 \x01(\tR\fcapabilityId\x12\x1d\n" +
-	"\n" +
-	"service_id\x18\x13 \x01(\tR\tserviceId\x12\x17\n" +
-	"\atool_id\x18\x14 \x01(\tR\x06toolId\"\xb5\x01\n" +
+	"\acall_id\x18\x10 \x01(\tR\x06callId\x12#\n" +
+	"\rcapability_id\x18\x12 \x01(\tR\fcapabilityIdJ\x04\b\x11\x10\x12J\x04\b\x13\x10\x14J\x04\b\x14\x10\x15R\vtarget_typeR\n" +
+	"service_idR\atool_id\"\xb5\x01\n" +
 	"\rInvokeRequest\x12=\n" +
 	"\bidentity\x18\x01 \x01(\v2!.ailuo.runtime.v1.RuntimeIdentityR\bidentity\x12B\n" +
 	"\acontext\x18\x02 \x01(\v2(.ailuo.runtime.v1.GovernedRequestContextR\acontext\x12!\n" +

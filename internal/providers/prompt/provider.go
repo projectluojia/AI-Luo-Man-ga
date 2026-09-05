@@ -1,7 +1,7 @@
-// Package prompt 是 L3 提示词 Service。
+// Package prompt 是 Core 使用的提示词 Provider 实现。
 //
 // 它拥有 V2 迁移来的提示词个性化能力：基本风格、额外特征目录与用户偏好渲染。
-// 基础人格、系统指令和渠道规则仍由 App 配置治理；本 Service 只负责把用户可选
+// 基础人格、系统指令和渠道规则仍由 App 配置治理；本 Provider 只负责把用户可选
 // 的个性化片段按目录渲染出来，内核再把渲染结果交给 contextasm 做最终装配。
 package prompt
 
@@ -23,8 +23,8 @@ type SettingsStore interface {
 	DeletePromptSettings(context.Context, string, string) error
 }
 
-// RenderRequest 是内核向提示词 Service 发出的受治理渲染请求。
-// 所有输入已经由内核从持久配置或 Run 记录中投影，Service 不直接读库。
+// RenderRequest 是内核向提示词 Provider 发出的受治理渲染请求。
+// 所有输入已经由内核从持久配置或 Run 记录中投影，Provider 不直接读库。
 type RenderRequest struct {
 	AppID            string
 	UserID           string
@@ -33,26 +33,26 @@ type RenderRequest struct {
 	ChannelPrompts   map[string]string
 }
 
-type Service struct {
+type Provider struct {
 	catalog  promptcatalog.Catalog
 	settings SettingsStore
 }
 
-func NewService(catalog promptcatalog.Catalog, settings SettingsStore) *Service {
+func NewProvider(catalog promptcatalog.Catalog, settings SettingsStore) *Provider {
 	if settings == nil {
-		panic("prompt service requires a settings store")
+		panic("prompt provider requires a settings store")
 	}
 	normalizedCatalog, err := promptcatalog.Normalize(catalog)
 	if err != nil {
-		panic("prompt service requires a valid catalog")
+		panic("prompt provider requires a valid catalog")
 	}
-	return &Service{catalog: normalizedCatalog, settings: settings}
+	return &Provider{catalog: normalizedCatalog, settings: settings}
 }
 
 // RenderSystemPrompt 按用户偏好渲染基础提示 + 个性化片段 + 渠道提示。
 // 用户未设置偏好或请求中没有用户时使用默认偏好；动态上下文（时间、历史、
 // Capability 投影）不属于本方法，仍由内核 contextasm 继续装配。
-func (s *Service) RenderSystemPrompt(ctx context.Context, request RenderRequest) (string, error) {
+func (s *Provider) RenderSystemPrompt(ctx context.Context, request RenderRequest) (string, error) {
 	base := strings.TrimSpace(request.BaseSystemPrompt)
 	if base == "" {
 		return "", ErrInvalid
@@ -87,7 +87,7 @@ func (s *Service) RenderSystemPrompt(ctx context.Context, request RenderRequest)
 	return strings.Join(parts, "\n\n"), nil
 }
 
-func (s *Service) renderBasicStyle(settings Settings) string {
+func (s *Provider) renderBasicStyle(settings Settings) string {
 	style, ok := s.basicStyle(settings.BasicStyle)
 	if !ok {
 		return ""
@@ -95,7 +95,7 @@ func (s *Service) renderBasicStyle(settings Settings) string {
 	return "【基本风格与语调】\n" + style.Name + "：" + style.Text
 }
 
-func (s *Service) renderExtraTraits(settings Settings) string {
+func (s *Provider) renderExtraTraits(settings Settings) string {
 	lines := make([]string, 0, len(s.catalog.ExtraTraits)+1)
 	for _, trait := range s.catalog.ExtraTraits {
 		level, ok := settings.ExtraTraitLevels[trait.Key]
@@ -114,7 +114,7 @@ func (s *Service) renderExtraTraits(settings Settings) string {
 	return "【额外特征】\n" + strings.Join(lines, "\n")
 }
 
-func (s *Service) basicStyle(key string) (promptcatalog.BasicStyle, bool) {
+func (s *Provider) basicStyle(key string) (promptcatalog.BasicStyle, bool) {
 	for _, style := range s.catalog.BasicStyles {
 		if style.Key == key {
 			return style, true
@@ -137,7 +137,7 @@ func traitText(trait promptcatalog.ExtraTrait, level string) (string, bool) {
 }
 
 // Settings 返回用户当前偏好；未设置过返回默认偏好。
-func (s *Service) Settings(ctx context.Context, appID, userID string) (Settings, error) {
+func (s *Provider) Settings(ctx context.Context, appID, userID string) (Settings, error) {
 	if userID == "" {
 		return Settings{}, fmt.Errorf("%w: user is required", ErrInvalid)
 	}
@@ -152,7 +152,7 @@ func (s *Service) Settings(ctx context.Context, appID, userID string) (Settings,
 }
 
 // SetSettings 保存用户偏好。输入先校验并归一化为稳定键。
-func (s *Service) SetSettings(ctx context.Context, appID, userID string, basicStyle string, extraTraitLevels map[string]string) (Settings, error) {
+func (s *Provider) SetSettings(ctx context.Context, appID, userID string, basicStyle string, extraTraitLevels map[string]string) (Settings, error) {
 	if userID == "" {
 		return Settings{}, fmt.Errorf("%w: user is required", ErrInvalid)
 	}
@@ -174,7 +174,7 @@ func (s *Service) SetSettings(ctx context.Context, appID, userID string, basicSt
 }
 
 // ResetSettings 清除用户偏好，之后恢复默认。
-func (s *Service) ResetSettings(ctx context.Context, appID, userID string) error {
+func (s *Provider) ResetSettings(ctx context.Context, appID, userID string) error {
 	if userID == "" {
 		return fmt.Errorf("%w: user is required", ErrInvalid)
 	}

@@ -217,7 +217,7 @@ func startFrame() *executor.Frame {
 		Body: &executor.Frame_StartRun{StartRun: &executor.StartRun{
 			AppId: "app", InputMessage: "message", Timezone: "Asia/Shanghai",
 			Model: "model", SystemPrompt: "prompt", MaxSteps: 4, ProtocolVersion: executor.Version,
-			MaxToolCalls: 4, MaxInputTokens: 1000, MaxOutputTokens: 1000,
+			MaxCapabilityCalls: 4, MaxInputTokens: 1000, MaxOutputTokens: 1000,
 			MaxTotalTokens: 2000, MaxOutputBytes: 4096, ProviderTimeoutMs: 5000,
 			TraceId: "11111111111111111111111111111111", ParentSpanId: "2222222222222222",
 			Capabilities: []*executor.Capability{{

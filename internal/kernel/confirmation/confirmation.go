@@ -2,7 +2,7 @@
 //
 // 确认（Confirmation）是 Go 内核持有的、针对高风险副作用动作（发送消息、
 // 写入记忆、修改数据、调用外部系统）的持久化授权凭证。确认记录绑定 App、
-// Echo、Run、Call、Capability/Tool、幂等键与参数摘要；只有 approved 状态
+// Echo、Run、Call、Capability、幂等键与参数摘要；只有 approved 状态
 // 且全部绑定维度匹配的记录才能放行副作用执行，其余状态一律 fail-closed。
 //
 // 本包不拥有任何具体数据库实现：领域与调度代码只依赖 Store 端口，
@@ -23,7 +23,6 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/jsonutil"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/id"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/idempotency"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime"
 )
 
@@ -37,12 +36,9 @@ const (
 	StatusRevoked  = "revoked"
 )
 
-// 确认目标类型与副作用类型复用 Registry 的闭式取值，避免双份常量漂移。
 const (
-	TargetTypeCapability = registry.TargetTypeCapability
-	TargetTypeTool       = registry.TargetTypeTool
-	SideEffectWrite      = capability.SideEffectWrite
-	SideEffectExternal   = capability.SideEffectExternal
+	SideEffectWrite    = capability.SideEffectWrite
+	SideEffectExternal = capability.SideEffectExternal
 )
 
 // DefaultLifetime 是未显式指定有效期时待确认记录的默认有效时长。
@@ -81,9 +77,7 @@ type Confirmation struct {
 	EchoID         string     // 发起确认的 Echo
 	RunID          string     // 发起确认的 Run
 	CallID         string     // 发起确认的调用
-	CapabilityID   string     // 目标 Capability（tool 目标可为空）
-	TargetType     string     // 目标类型：capability / tool
-	TargetID       string     // 目标标识（Capability 或 Tool ID）
+	CapabilityID   string     // 目标 Capability
 	SideEffect     string     // 副作用类型：write / external
 	IdempotencyKey string     // 与执行期一致的幂等键
 	ArgumentDigest string     // 确认时参数摘要（规范化 JSON 的 sha256 十六进制）
@@ -96,9 +90,7 @@ type Confirmation struct {
 
 // RequestSpec 描述一条待确认请求的目标与副作用绑定。
 type RequestSpec struct {
-	CapabilityID   string // 目标 Capability；target_type=capability 时缺省取 target_id
-	TargetType     string // capability 或 tool
-	TargetID       string // Capability 或 Tool 标识
+	CapabilityID   string // 目标 Capability 标识
 	SideEffect     string // write 或 external
 	IdempotencyKey string // 与执行期相同的幂等键
 }
@@ -158,16 +150,6 @@ func ValidateStatus(value string) error {
 	}
 }
 
-// ValidateTargetType 校验确认目标类型。
-func ValidateTargetType(value string) error {
-	switch value {
-	case TargetTypeCapability, TargetTypeTool:
-		return nil
-	default:
-		return fmt.Errorf("%w: invalid target type %q", ErrInvalidRequest, value)
-	}
-}
-
 // ValidateSideEffect 校验确认适用的副作用类型。
 func ValidateSideEffect(value string) error {
 	switch value {
@@ -193,7 +175,7 @@ func ValidateRequest(request runtime.ConfirmationRequest) error {
 		return ErrInvalidRequest
 	case len(request.ConfirmationID) > maxIDBytes:
 		return ErrInvalidRequest
-	case ValidateTargetType(request.TargetType) != nil || request.TargetID == "" || len(request.TargetID) > maxIDBytes:
+	case !validID(request.CapabilityID):
 		return ErrInvalidRequest
 	case ValidateSideEffect(request.SideEffect) != nil:
 		return ErrInvalidRequest
@@ -210,10 +192,7 @@ func ValidateConfirmation(record Confirmation) error {
 		!validID(record.RunID) || !validID(record.CallID) {
 		return ErrInvalidRequest
 	}
-	if record.CapabilityID != "" && !validID(record.CapabilityID) {
-		return ErrInvalidRequest
-	}
-	if ValidateTargetType(record.TargetType) != nil || !validID(record.TargetID) {
+	if !validID(record.CapabilityID) {
 		return ErrInvalidRequest
 	}
 	if ValidateSideEffect(record.SideEffect) != nil || idempotency.ValidateKey(record.IdempotencyKey) != nil {

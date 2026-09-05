@@ -65,7 +65,7 @@ func TestDigestRejectsInvalidInput(t *testing.T) {
 	}
 }
 
-func TestValidateStatusAndTargets(t *testing.T) {
+func TestValidateStatusAndEffects(t *testing.T) {
 	t.Parallel()
 	for _, status := range []string{StatusWaiting, StatusApproved, StatusRejected, StatusExpired, StatusRevoked} {
 		if err := ValidateStatus(status); err != nil {
@@ -75,14 +75,6 @@ func TestValidateStatusAndTargets(t *testing.T) {
 	if err := ValidateStatus("executed"); !errors.Is(err, ErrInvalidRequest) {
 		// 执行结果不属于确认状态机：状态机不允许把执行结果伪报为状态。
 		t.Fatalf("unknown status got %v, want ErrInvalidRequest", err)
-	}
-	for _, target := range []string{TargetTypeCapability, TargetTypeTool} {
-		if err := ValidateTargetType(target); err != nil {
-			t.Fatalf("target type %q should be valid: %v", target, err)
-		}
-	}
-	if err := ValidateTargetType("database"); !errors.Is(err, ErrInvalidRequest) {
-		t.Fatalf("invalid target type got %v, want ErrInvalidRequest", err)
 	}
 	for _, sideEffect := range []string{SideEffectWrite, SideEffectExternal} {
 		if err := ValidateSideEffect(sideEffect); err != nil {
@@ -98,22 +90,21 @@ func TestValidateRequestRejectsPartialBindings(t *testing.T) {
 	t.Parallel()
 	valid := runtime.ConfirmationRequest{
 		AppID: "app", EchoID: "echo", RunID: "run", ConfirmationID: "confirmation-1",
-		TargetType: TargetTypeCapability, TargetID: "campus.bus.notify",
-		SideEffect: SideEffectExternal, IdempotencyKey: "operation-1",
+		CapabilityID: "campus.bus.notify",
+		SideEffect:   SideEffectExternal, IdempotencyKey: "operation-1",
 	}
 	if err := ValidateRequest(valid); err != nil {
 		t.Fatalf("valid request rejected: %v", err)
 	}
 	for name, mutate := range map[string]func(*runtime.ConfirmationRequest){
-		"缺 App":   func(r *runtime.ConfirmationRequest) { r.AppID = "" },
-		"缺 Echo":  func(r *runtime.ConfirmationRequest) { r.EchoID = "" },
-		"缺 Run":   func(r *runtime.ConfirmationRequest) { r.RunID = "" },
-		"缺确认标识":   func(r *runtime.ConfirmationRequest) { r.ConfirmationID = "" },
-		"非法目标类型":  func(r *runtime.ConfirmationRequest) { r.TargetType = "database" },
-		"缺目标":     func(r *runtime.ConfirmationRequest) { r.TargetID = "" },
-		"非法副作用类型": func(r *runtime.ConfirmationRequest) { r.SideEffect = "read" },
-		"非法幂等键":   func(r *runtime.ConfirmationRequest) { r.IdempotencyKey = "bad key!" },
-		"超长确认标识":  func(r *runtime.ConfirmationRequest) { r.ConfirmationID = strings.Repeat("x", 257) },
+		"缺 App":        func(r *runtime.ConfirmationRequest) { r.AppID = "" },
+		"缺 Echo":       func(r *runtime.ConfirmationRequest) { r.EchoID = "" },
+		"缺 Run":        func(r *runtime.ConfirmationRequest) { r.RunID = "" },
+		"缺确认标识":        func(r *runtime.ConfirmationRequest) { r.ConfirmationID = "" },
+		"缺 Capability": func(r *runtime.ConfirmationRequest) { r.CapabilityID = "" },
+		"非法副作用类型":      func(r *runtime.ConfirmationRequest) { r.SideEffect = "read" },
+		"非法幂等键":        func(r *runtime.ConfirmationRequest) { r.IdempotencyKey = "bad key!" },
+		"超长确认标识":       func(r *runtime.ConfirmationRequest) { r.ConfirmationID = strings.Repeat("x", 257) },
 	} {
 		request := valid
 		mutate(&request)
@@ -129,8 +120,7 @@ func TestValidateConfirmationRequiresCompleteBinding(t *testing.T) {
 	valid := Confirmation{
 		AppID: "app", ConfirmationID: "confirmation-1",
 		EchoID: "echo", RunID: "run", CallID: "call-1",
-		CapabilityID: "campus.bus.notify", TargetType: TargetTypeCapability,
-		TargetID: "campus.bus.notify", SideEffect: SideEffectExternal,
+		CapabilityID: "campus.bus.notify", SideEffect: SideEffectExternal,
 		IdempotencyKey: "operation-1",
 		ArgumentDigest: strings.Repeat("ab", 32),
 		Status:         StatusWaiting,
@@ -162,9 +152,9 @@ func TestValidateConfirmationRequiresCompleteBinding(t *testing.T) {
 			c.Status = StatusApproved
 			c.DecidedAt = &decided
 		},
-		"非法目标类型":  func(c *Confirmation) { c.TargetType = "database" },
-		"非法副作用类型": func(c *Confirmation) { c.SideEffect = "read" },
-		"非法幂等键":   func(c *Confirmation) { c.IdempotencyKey = "bad key!" },
+		"非法 Capability": func(c *Confirmation) { c.CapabilityID = "invalid capability" },
+		"非法副作用类型":       func(c *Confirmation) { c.SideEffect = "read" },
+		"非法幂等键":         func(c *Confirmation) { c.IdempotencyKey = "bad key!" },
 	} {
 		record := valid
 		mutate(&record)

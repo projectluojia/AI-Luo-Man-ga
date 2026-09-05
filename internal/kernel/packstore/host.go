@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/capability"
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packagecontract"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
@@ -65,13 +66,18 @@ type deleteResponse struct {
 	Deleted bool `json:"deleted"`
 }
 
-// HostFunctions 返回绑定到固定 namespace 的通用存储宿主函数。AppID 取自
-// 每次调用的治理上下文（宿主侧注入，guest 不可伪造），namespace 由装配方
-// 固定为包清单声明值——guest 无法选择作用域。
-func HostFunctions(store Store, namespace string) []loader.HostedFunction {
+// HostFunctions 返回绑定到固定 Package namespace 的通用存储宿主函数。
+// AppID 取自每次调用的治理上下文（宿主侧注入，guest 不可伪造），PackageID
+// 与 namespace 由装配方固定；写操作还必须对应声明为 write/external 的
+// Capability，并携带幂等键。
+func HostFunctions(store Store, packageID, namespace string, capabilities []capability.CapabilitySpec) []loader.HostedFunction {
+	capabilityByID := make(map[string]capability.CapabilitySpec, len(capabilities))
+	for _, spec := range capabilities {
+		capabilityByID[spec.ID] = spec
+	}
 	binding := func(call func(context.Context, Scope, []byte) (any, error)) func(context.Context, contracts.RequestContext, []byte) ([]byte, error) {
 		return func(ctx context.Context, request contracts.RequestContext, body []byte) ([]byte, error) {
-			scope := Scope{AppID: request.AppID, Namespace: namespace}
+			scope := Scope{AppID: request.AppID, PackageID: packageID, Namespace: namespace}
 			if err := ValidateScope(scope); err != nil {
 				return nil, err
 			}
@@ -80,6 +86,14 @@ func HostFunctions(store Store, namespace string) []loader.HostedFunction {
 				return nil, err
 			}
 			return json.Marshal(response)
+		}
+	}
+	storeBinding := func(operation string, call func(context.Context, Scope, []byte) (any, error)) func(context.Context, contracts.RequestContext, []byte) ([]byte, error) {
+		return func(ctx context.Context, request contracts.RequestContext, body []byte) ([]byte, error) {
+			if err := authorizeStoreOperation(request, operation, capabilityByID); err != nil {
+				return nil, err
+			}
+			return binding(call)(ctx, request, body)
 		}
 	}
 	decode := func(body []byte, target any) error {
@@ -91,7 +105,7 @@ func HostFunctions(store Store, namespace string) []loader.HostedFunction {
 	return []loader.HostedFunction{
 		{
 			Module: StoreModule, Name: OpGet,
-			Call: binding(func(ctx context.Context, scope Scope, body []byte) (any, error) {
+			Call: storeBinding(OpGet, func(ctx context.Context, scope Scope, body []byte) (any, error) {
 				var request getRequest
 				if err := decode(body, &request); err != nil {
 					return nil, err
@@ -111,7 +125,7 @@ func HostFunctions(store Store, namespace string) []loader.HostedFunction {
 		},
 		{
 			Module: StoreModule, Name: OpList,
-			Call: binding(func(ctx context.Context, scope Scope, body []byte) (any, error) {
+			Call: storeBinding(OpList, func(ctx context.Context, scope Scope, body []byte) (any, error) {
 				var request listRequest
 				if err := decode(body, &request); err != nil {
 					return nil, err
@@ -139,7 +153,7 @@ func HostFunctions(store Store, namespace string) []loader.HostedFunction {
 		},
 		{
 			Module: StoreModule, Name: OpPut,
-			Call: binding(func(ctx context.Context, scope Scope, body []byte) (any, error) {
+			Call: storeBinding(OpPut, func(ctx context.Context, scope Scope, body []byte) (any, error) {
 				var request putRequest
 				if err := decode(body, &request); err != nil {
 					return nil, err
@@ -158,7 +172,7 @@ func HostFunctions(store Store, namespace string) []loader.HostedFunction {
 		},
 		{
 			Module: StoreModule, Name: OpDelete,
-			Call: binding(func(ctx context.Context, scope Scope, body []byte) (any, error) {
+			Call: storeBinding(OpDelete, func(ctx context.Context, scope Scope, body []byte) (any, error) {
 				var request deleteRequest
 				if err := decode(body, &request); err != nil {
 					return nil, err
@@ -181,6 +195,26 @@ func HostFunctions(store Store, namespace string) []loader.HostedFunction {
 	}
 }
 
+func authorizeStoreOperation(request contracts.RequestContext, operation string, capabilities map[string]capability.CapabilitySpec) error {
+	spec, ok := capabilities[request.CapabilityID]
+	if !ok {
+		return ErrAccessDenied
+	}
+	switch spec.SideEffect {
+	case capability.SideEffectNone, capability.SideEffectRead, capability.SideEffectWrite, capability.SideEffectExternal:
+	default:
+		return ErrAccessDenied
+	}
+	if operation != OpPut && operation != OpDelete {
+		return nil
+	}
+	if (spec.SideEffect != capability.SideEffectWrite && spec.SideEffect != capability.SideEffectExternal) ||
+		request.IdempotencyKey == "" || (spec.RequiresConfirmation && request.ConfirmationID == "") {
+		return ErrAccessDenied
+	}
+	return nil
+}
+
 // ManifestFunctions 是装配期宿主函数提供者：按包清单返回绑定到该包
 // namespace 的存储宿主函数。声明了 ailuo.store.* 却未声明 [storage] 的清单
 // 直接拒绝（fail-closed）；未声明存储函数的包返回空集。
@@ -195,7 +229,7 @@ func ManifestFunctions(store Store, manifest loader.Manifest) ([]loader.HostedFu
 	if !declaredStore {
 		return nil, nil
 	}
-	if manifest.Storage == nil {
+	if manifest.Storage == nil || manifest.PackageID == "" {
 		return nil, fmt.Errorf("%w: package %q imports %s without declaring storage namespace",
 			loader.ErrInvalidManifest, manifest.ID, StoreModule)
 	}
@@ -203,5 +237,5 @@ func ManifestFunctions(store Store, manifest loader.Manifest) ([]loader.HostedFu
 		return nil, fmt.Errorf("%w: package %q storage declaration is invalid",
 			loader.ErrInvalidManifest, manifest.ID)
 	}
-	return HostFunctions(store, manifest.Storage.Namespace), nil
+	return HostFunctions(store, manifest.PackageID, manifest.Storage.Namespace, manifest.Capabilities), nil
 }
