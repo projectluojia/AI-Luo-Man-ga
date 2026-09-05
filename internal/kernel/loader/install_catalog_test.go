@@ -170,7 +170,7 @@ func TestInstalledRegistrationRollsBackLoaderOnRegistryConflict(t *testing.T) {
 		t.Fatal(err)
 	}
 	reg := registry.New()
-	existing := records[0].Capabilities[0]
+	existing := records[0].Runtime.Capabilities[0]
 	if err := reg.Register(registry.CapabilityRegistration{Spec: existing, Handler: noopCatalogHandler}); err != nil {
 		t.Fatal(err)
 	}
@@ -480,13 +480,13 @@ func TestInstalledCatalogRejectsInvalidDeclarations(t *testing.T) {
 					ID: "extension.local", Version: "1.0.0", Mode: loader.ModeHosted,
 					Role: loader.RoleProvider, LockedDigest: digest,
 					HostFunctions: tc.decls,
+					Capabilities: []capability.CapabilitySpec{{
+						ID: "extension.query", Version: "1.0.0", Name: "扩展查询",
+						Description:     "查询扩展",
+						InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
+						SideEffect:      capability.SideEffectRead,
+					}},
 				},
-				Capabilities: []capability.CapabilitySpec{{
-					ID: "extension.query", Version: "1.0.0", Name: "扩展查询",
-					Description:     "查询扩展",
-					InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
-					SideEffect:      capability.SideEffectRead,
-				}},
 			}
 			if err := loader.RegisterInstalled(t.Context(), manager, reg, []loader.InstalledRecord{record}); !errors.Is(err, loader.ErrInvalidInstalledRecord) {
 				t.Fatalf("RegisterInstalled with invalid declarations error = %v, want ErrInvalidInstalledRecord", err)
