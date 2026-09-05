@@ -66,3 +66,57 @@ func TestRecoverSyncTransactionRestoresPublishedState(t *testing.T) {
 		t.Fatalf("journal still exists: %v", err)
 	}
 }
+
+func TestSyncTransactionRollbackRestoresPublishedState(t *testing.T) {
+	projectDir := t.TempDir()
+	installRoot := filepath.Join(projectDir, "runtime")
+	stageRoot := filepath.Join(projectDir, ".stage")
+	transactionPath := filepath.Join(projectDir, ".ailuo-sync-transaction.json")
+	lockPath := filepath.Join(projectDir, "ailuo.lock")
+	if err := os.MkdirAll(installRoot, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(stageRoot, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(installRoot, "state"), []byte("old"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stageRoot, "state"), []byte("new"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(lockPath, []byte("old-lock"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	transaction, err := newSyncTransaction(transactionPath, lockPath, installRoot, stageRoot, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.RemoveAll(stageRoot); _ = transaction.cleanup() }()
+	published, err := reserveInstallRootPublication(installRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(installRoot, published.backup); err != nil {
+		t.Fatal(err)
+	}
+	published.backedUp = true
+	if err := os.Rename(stageRoot, installRoot); err != nil {
+		t.Fatal(err)
+	}
+	published.published = true
+	if err := writeSyncedFile(lockPath, []byte("new-lock"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := transaction.rollback(published); err != nil {
+		t.Fatal(err)
+	}
+	state, err := os.ReadFile(filepath.Join(installRoot, "state"))
+	if err != nil || string(state) != "old" {
+		t.Fatalf("state=%q err=%v, want old state", state, err)
+	}
+	lock, err := os.ReadFile(lockPath)
+	if err != nil || string(lock) != "old-lock" {
+		t.Fatalf("lock=%q err=%v, want old lock", lock, err)
+	}
+}

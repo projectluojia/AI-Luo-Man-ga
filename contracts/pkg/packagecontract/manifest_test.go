@@ -216,6 +216,13 @@ func TestValidateLockMatchesComponents(t *testing.T) {
 	cloneLock := func() packagecontract.Lock {
 		copied := lock
 		copied.Artifacts = append([]packagecontract.LockedArtifact(nil), lock.Artifacts...)
+		for index, artifact := range copied.Artifacts {
+			if artifact.Process != nil {
+				process := *artifact.Process
+				process.Args = append([]string(nil), artifact.Process.Args...)
+				copied.Artifacts[index].Process = &process
+			}
+		}
 		return copied
 	}
 	bad := cloneLock()
@@ -229,6 +236,16 @@ func TestValidateLockMatchesComponents(t *testing.T) {
 	bad.Artifacts[0].Path = filepath.Join(installDir, "other.wasm")
 	if err := packagecontract.ValidateLock(bad, manifest); err == nil {
 		t.Fatal("ValidateLock accepted artifact path not matching entrypoint")
+	}
+	bad = cloneLock()
+	bad.Artifacts[1].Process.Address = "127.0.0.1:9001"
+	if err := packagecontract.ValidateLock(bad, manifest); err == nil {
+		t.Fatal("ValidateLock accepted process address mismatch")
+	}
+	bad = cloneLock()
+	bad.Artifacts[1].Process.Args = []string{"--unexpected"}
+	if err := packagecontract.ValidateLock(bad, manifest); err == nil {
+		t.Fatal("ValidateLock accepted process arguments mismatch")
 	}
 	// 摘要必须是合法十六进制：只校验长度会让 64 个 "g" 混过完整性校验前置检查。
 	bad = cloneLock()

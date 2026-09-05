@@ -9,6 +9,7 @@ import (
 	"path"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/capability"
@@ -321,7 +322,8 @@ func ValidateLock(lock Lock, manifest Manifest) error {
 		case ModeIsolated:
 			if artifact.Process == nil ||
 				!processPathBelongsToArtifact(artifact.Path, artifact.Process.Path) ||
-				!pathWithin(filepath.Dir(artifact.Path), artifact.Process.WorkDir) {
+				!pathWithin(filepath.Dir(artifact.Path), artifact.Process.WorkDir) ||
+				!processSpecMatchesTemplate(component, artifact.Path, *artifact.Process) {
 				return ErrInvalidFormat
 			}
 			if err := ValidateProcessSpec(*artifact.Process); err != nil {
@@ -332,6 +334,37 @@ func ValidateLock(lock Lock, manifest Manifest) error {
 		}
 	}
 	return nil
+}
+
+func processSpecMatchesTemplate(component Component, artifactPath string, spec ProcessSpec) bool {
+	template := component.Process
+	if template == nil {
+		return false
+	}
+	root := filepath.Dir(artifactPath)
+	if template.Path != component.Entrypoint {
+		root = artifactPath
+	}
+	executable := template.Path
+	if executable == ".venv/python" {
+		if runtime.GOOS == "windows" {
+			executable = filepath.Join(".venv", "Scripts", "python.exe")
+		} else {
+			executable = filepath.Join(".venv", "bin", "python")
+		}
+	}
+	expectedPath := filepath.Join(root, filepath.FromSlash(executable))
+	expectedWorkDir := root
+	if template.WorkDir != "" {
+		expectedWorkDir = filepath.Join(root, filepath.FromSlash(template.WorkDir))
+	}
+	expectedArgs := make([]string, len(template.Args))
+	for index, argument := range template.Args {
+		expectedArgs[index] = strings.ReplaceAll(argument, "${address}", template.Address)
+	}
+	return filepath.Clean(spec.Path) == filepath.Clean(expectedPath) &&
+		filepath.Clean(spec.WorkDir) == filepath.Clean(expectedWorkDir) &&
+		spec.Address == template.Address && slices.Equal(spec.Args, expectedArgs)
 }
 
 // processPathBelongsToArtifact 限制 isolated 进程可执行文件在组件工件内；

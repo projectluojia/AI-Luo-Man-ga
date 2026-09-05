@@ -575,10 +575,11 @@ func (m *Manager) Acquire(ctx context.Context, id string) (*Lease, error) {
 	item.inFlight++
 	item.currentInFlight++
 	loadedRuntime := item.runtime
+	generation := item.generation
 	item.mu.Unlock()
 	m.mu.RUnlock()
 	observe.DefaultMetrics().RuntimeCallStarted()
-	return &Lease{entry: item, runtime: loadedRuntime, generation: item.generation, invoker: invoker}, nil
+	return &Lease{entry: item, runtime: loadedRuntime, generation: generation, invoker: invoker}, nil
 }
 
 func (l *Lease) Invoke(ctx context.Context, request contracts.RequestContext, payload json.RawMessage) (json.RawMessage, error) {

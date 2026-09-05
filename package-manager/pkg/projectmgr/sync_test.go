@@ -89,39 +89,6 @@ path = "packages/demo"
 	}
 }
 
-func TestSyncRollsBackInstallRootWhenProjectLockPublishFails(t *testing.T) {
-	projectDir := t.TempDir()
-	packageDir := filepath.Join(projectDir, "packages", "demo")
-	writePackage(t, packageDir, "demo.pkg", "1.0.0", "demo.wasm", "")
-	projectFile := filepath.Join(projectDir, "ailuo.toml")
-	writeProject(t, projectDir, `
-[project]
-id = "ailuo"
-
-[dependencies."demo.pkg"]
-version = ">=1.0.0"
-path = "packages/demo"
-`)
-	installRoot := filepath.Join(projectDir, "runtime")
-	if _, err := projectmgr.Sync(t.Context(), projectFile, installRoot, nil); err != nil {
-		t.Fatal(err)
-	}
-	writePackage(t, packageDir, "demo.pkg", "2.0.0", "demo.wasm", "")
-	if err := os.WriteFile(filepath.Join(projectDir, "ailuo.lock.backup"), []byte("stale"), 0o640); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := projectmgr.Sync(t.Context(), projectFile, installRoot, nil); err == nil {
-		t.Fatal("Sync unexpectedly succeeded with a stale lock backup")
-	}
-	record, err := packageio.ReadInstalled(context.Background(), filepath.Join(installRoot, "demo.pkg"))
-	if err != nil {
-		t.Fatalf("ReadInstalled after rollback: %v", err)
-	}
-	if record.Manifest.Version != "1.0.0" {
-		t.Fatalf("installed version after rollback=%s, want 1.0.0", record.Manifest.Version)
-	}
-}
-
 func TestSyncRejectsMalformedExistingProjectLock(t *testing.T) {
 	projectDir := t.TempDir()
 	packageDir := filepath.Join(projectDir, "packages", "demo")

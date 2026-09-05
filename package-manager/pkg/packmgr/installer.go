@@ -281,7 +281,7 @@ func resolveProcessSpec(component packagecontract.Component, artifactPath, packa
 	if err != nil {
 		return nil, err
 	}
-	process := &packagecontract.ProcessSpec{Path: executable, WorkDir: artifactRoot, Address: component.Process.Address}
+	process := &packagecontract.ProcessSpec{Path: executable, Address: component.Process.Address}
 	process.Args = append([]string(nil), component.Process.Args...)
 	process.WorkDir = artifactRoot
 	if component.Process.WorkDir != "" {

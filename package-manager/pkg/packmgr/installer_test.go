@@ -266,7 +266,9 @@ func TestInstallRejectsInvalidSource(t *testing.T) {
 		}},
 		{name: "missing artifact", mutate: func(dir string) {
 			writeSourcePackage(t, dir, "demo.pkg", "1.0.0", packagecontract.ModeHosted, "app.wasm", nil)
-			os.Remove(filepath.Join(dir, "app.wasm"))
+			if err := os.Remove(filepath.Join(dir, "app.wasm")); err != nil {
+				t.Fatal(err)
+			}
 		}},
 		{name: "entrypoint escapes source dir", mutate: func(dir string) {
 			writeSourcePackage(t, dir, "demo.pkg", "1.0.0", packagecontract.ModeHosted, "app.wasm", nil)

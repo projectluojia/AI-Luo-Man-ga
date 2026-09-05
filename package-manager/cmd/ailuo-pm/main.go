@@ -54,7 +54,6 @@ func runPackageCommand(parent context.Context, arguments []string, output io.Wri
 	update := flags.Bool("update", false, "sync 时显式重新求解并更新项目锁")
 	force := flags.Bool("force", false, "unlock 时显式清理确认过的遗留锁")
 	repo := flags.String("repo", "", "GitHub 仓库（owner/repo），publish 使用")
-	version := flags.String("version", "", "零声明包自动生成的 semver 版本")
 	if err := flags.Parse(arguments[1:]); err != nil {
 		return fmt.Errorf("configuration error: %s", err)
 	}
@@ -111,7 +110,7 @@ func runPackageCommand(parent context.Context, arguments []string, output io.Wri
 			if !info.IsDir() {
 				record, err = packmgr.Install(ctx, *root, source)
 			} else {
-				manifest, manifestBytes, resolveErr := resolveSource(ctx, source, *version)
+				manifest, manifestBytes, resolveErr := resolveSource(ctx, source)
 				if resolveErr != nil {
 					return resolveErr
 				}
@@ -178,7 +177,7 @@ func runPackageCommand(parent context.Context, arguments []string, output io.Wri
 		if flags.NArg() == 2 {
 			outputDir = flags.Arg(1)
 		}
-		manifest, manifestBytes, err := resolveSource(ctx, flags.Arg(0), *version)
+		manifest, manifestBytes, err := resolveSource(ctx, flags.Arg(0))
 		if err != nil {
 			return err
 		}
@@ -202,7 +201,7 @@ func runPackageCommand(parent context.Context, arguments []string, output io.Wri
 		if strings.HasSuffix(strings.ToLower(flags.Arg(0)), ".tgz") {
 			htmlURL, err = client.PublishTarball(ctx, owner, name, flags.Arg(0))
 		} else {
-			manifest, manifestBytes, resolveErr := resolveSource(ctx, flags.Arg(0), *version)
+			manifest, manifestBytes, resolveErr := resolveSource(ctx, flags.Arg(0))
 			if resolveErr != nil {
 				return resolveErr
 			}
@@ -323,16 +322,13 @@ func splitRegistryRef(source string) (owner, repo, constraint string, ok bool) {
 	return match[1], match[2], match[3], true
 }
 
-// resolveSource 解析源包目录：优先 ailuo.toml（显式声明，含宿主函数/存储），
-// 无则从源码自动提取清单并构建（作者零声明，纯计算包）。组件声明 [component.build] 时
-// 先执行构建再返回（pack/publish 共用，构建失败即报错，不打包残缺工件）。
-func resolveSource(ctx context.Context, sourceDir, version string) (manifest packagecontract.Manifest, manifestBytes []byte, err error) {
-	return packagefmt.Resolve(ctx, sourceDir, version)
+// resolveSource 解析显式源清单并执行声明的构建步骤。
+func resolveSource(ctx context.Context, sourceDir string) (manifest packagecontract.Manifest, manifestBytes []byte, err error) {
+	return packagefmt.Resolve(ctx, sourceDir)
 }
 
-// resolveSDKSource 读取显式源清单，或只提取零声明源码的 Capability；SDK 生成不构建
-// guest 工件，也不需要虚构一个包版本。
-func resolveSDKSource(ctx context.Context, sourceDir string) (string, json.RawMessage, error) {
+// resolveSDKSource 读取显式源清单；SDK 契约必须与可安装包保持一致。
+func resolveSDKSource(_ context.Context, sourceDir string) (string, json.RawMessage, error) {
 	path := packagefmt.SourcePath(sourceDir)
 	_, statErr := os.Stat(path)
 	if statErr == nil {
@@ -349,17 +345,5 @@ func resolveSDKSource(ctx context.Context, sourceDir string) (string, json.RawMe
 	if !errors.Is(statErr, fs.ErrNotExist) {
 		return "", nil, fmt.Errorf("读取源清单失败: %w", statErr)
 	}
-	absolute, err := filepath.Abs(sourceDir)
-	if err != nil {
-		return "", nil, err
-	}
-	capabilities, _, err := packagefmt.AutoExtract(ctx, sourceDir)
-	if err != nil {
-		return "", nil, err
-	}
-	capabilitiesJSON, err := packagefmt.CapabilitiesJSON(filepath.Base(absolute), capabilities)
-	if err != nil {
-		return "", nil, err
-	}
-	return filepath.Base(absolute), capabilitiesJSON, nil
+	return "", nil, fmt.Errorf("读取源清单失败: 缺少 ailuo.toml，SDK 需要显式 Capability 声明")
 }
