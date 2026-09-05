@@ -333,7 +333,7 @@ func TestIngressShutdownWaitsForAdmittedCreation(t *testing.T) {
 	h.echoes.releaseCreate = make(chan struct{})
 	h.openIdentity(t, "user-qq-1", "qq", "qq-group-1", "qq-user-1")
 
-	request := httptest.NewRequest(http.MethodPost, "/api/v1/ingress/qq", strings.NewReader(sampleEvent(nil)))
+	request := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/ingress/qq", strings.NewReader(sampleEvent(nil)))
 	responseDone := make(chan *httptest.ResponseRecorder, 1)
 	go func() {
 		response := httptest.NewRecorder()

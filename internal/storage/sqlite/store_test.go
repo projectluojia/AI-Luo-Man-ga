@@ -533,6 +533,14 @@ func TestCancelQueuedRunsCancelsDelayedRuns(t *testing.T) {
 	); err != nil || !created || stored != echo.ID {
 		t.Fatalf("create delayed Echo/Run: %v", err)
 	}
+	otherEcho, otherRun := echoRunRecords("app-b", "delayed", "delayed-run-b", "delayed", now)
+	otherRun.AvailableAt = now.Add(time.Hour)
+	otherRun.Deadline = otherRun.AvailableAt.Add(time.Minute)
+	if stored, created, err := store.CreateEchoRunIdempotentLimited(
+		ctx, "cancel-delayed-other", idempotency.Fingerprint([]byte("delayed-other")), otherEcho, otherRun, 0,
+	); err != nil || !created || stored != otherEcho.ID {
+		t.Fatalf("create other-app delayed Echo/Run: %v", err)
+	}
 	if err := store.CancelQueuedRuns(ctx, "app-a", now.Add(time.Second)); err != nil {
 		t.Fatal(err)
 	}
@@ -547,14 +555,6 @@ func TestCancelQueuedRunsCancelsDelayedRuns(t *testing.T) {
 	runs, err := store.ListRuns(ctx, "app-a", "delayed")
 	if err != nil || len(runs) != 1 || runs[0].Status != kernelecho.RunStatusCancelled {
 		t.Fatalf("runs=%#v err=%v, want cancelled Run", runs, err)
-	}
-	otherEcho, otherRun := echoRunRecords("app-b", "delayed", "delayed-run-b", "delayed", now)
-	otherRun.AvailableAt = now.Add(time.Hour)
-	otherRun.Deadline = otherRun.AvailableAt.Add(time.Minute)
-	if stored, created, err := store.CreateEchoRunIdempotentLimited(
-		ctx, "cancel-delayed-other", idempotency.Fingerprint([]byte("delayed-other")), otherEcho, otherRun, 0,
-	); err != nil || !created || stored != otherEcho.ID {
-		t.Fatalf("create other-app delayed Echo/Run: %v", err)
 	}
 	if queued, err := store.ListQueuedRuns(ctx, "app-b", 10); err != nil || len(queued) != 1 {
 		t.Fatalf("cross-app queued=%#v err=%v, want untouched queued Run", queued, err)
