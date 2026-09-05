@@ -5,15 +5,13 @@ import (
 )
 
 // Loader hosted 测试契约：宿主侧集中持有的稳定测试标识。
-// 测试固件（testdata/{success,hostfn,busy}）不知道包名与工具名；如果测试需要
+// 测试固件（testdata/{success,hostfn,busy}）不知道包名与能力名；如果测试需要
 // 新增标识，在此集中声明，避免字面量在测试间漂移。
 const (
 	// testPackageID 是 hosted 测试包的 Package/Runtime 标识。
 	testPackageID = "runtime.test"
-	// testRuntimeID 是测试包内运行组件的稳定标识。
-	testRuntimeID = testPackageID + ".runtime"
-	// testToolID 是 hosted 测试包声明的原子工具标识。
-	testToolID = "runtime.test.echo"
+	// testInvokeCapabilityID 是 hosted 测试包直接调用的能力标识。
+	testInvokeCapabilityID = "runtime.test.echo"
 	// testCapabilityID 是测试包对外暴露的能力标识。
 	testCapabilityID = "runtime.test.echo.cap"
 	// testInvokeScope 是 hosted 测试包调用的权限范围。

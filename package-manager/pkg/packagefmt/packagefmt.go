@@ -2,12 +2,9 @@
 // 风格源清单）转换为中性包清单 packagecontract.Manifest。包管理器的文件发布
 // 与安装实现位于 packmgr，本包只负责作者侧源格式。
 //
-// ailuo.toml 采用继承式精简：tool 以 `[tool.<id>]` 表声明（id 即键，不重复）；
-// dependency 以 `[dependencies.<id>]` 表声明版本约束与显式来源；capability 只
-// 声明 id 与引用的 tool，其余字段（schema、side_effect、name、description）全部
-// 继承自 tool；service 段省略时自动生成（id/version/description 继承 package，
-// tool_dependencies 默认为全部 tool id）。每个 component 通过 `[component.build]`
-// 声明自己的构建器和源码目录。
+// ailuo.toml 采用显式 Capability 声明：依赖以 `[dependencies.<id>]` 表声明版本
+// 约束与来源；Capability 直接声明自己的 Schema、权限和副作用。每个 component
+// 通过 `[component.build]` 声明自己的构建器和源码目录。
 package packagefmt
 
 import (
@@ -36,8 +33,6 @@ type sourceManifest struct {
 	Components   []sourceComponent           `toml:"component"`
 	Storage      *sourceStorage              `toml:"storage,omitempty"`
 	Dependencies map[string]sourceDependency `toml:"dependencies,omitempty"`
-	Tools        map[string]sourceTool       `toml:"tool,omitempty"`
-	Service      *sourceService              `toml:"service,omitempty"`
 	Capabilities []sourceCapability          `toml:"capability,omitempty"`
 }
 
@@ -56,7 +51,6 @@ type sourceComponent struct {
 	Entrypoint    string                 `toml:"entrypoint"`
 	Process       *sourceProcess         `toml:"process,omitempty"`
 	Exports       []string               `toml:"exports,omitempty"`
-	Imports       []string               `toml:"imports,omitempty"`
 	HostFunctions []sourceHostedFunction `toml:"host_function,omitempty"`
 	Build         *sourceBuild           `toml:"build,omitempty"`
 }
@@ -80,10 +74,7 @@ type sourceHostedFunction struct {
 }
 
 type sourceStorage struct {
-	Namespace     string `toml:"namespace"`
-	SchemaVersion uint32 `toml:"schema_version"`
-	Sensitivity   string `toml:"sensitivity"`
-	Retention     string `toml:"retention"`
+	Namespace string `toml:"namespace"`
 }
 
 type sourceDependency struct {
@@ -91,28 +82,15 @@ type sourceDependency struct {
 	Source  string `toml:"source"`
 }
 
-// sourceTool 是 `[tool.<id>]` 表的字段；id 由键提供，version 继承 package。
-type sourceTool struct {
+// sourceCapability 是一个直接对外声明的 Capability；版本继承 package。
+type sourceCapability struct {
+	ID                   string   `toml:"id"`
+	Name                 string   `toml:"name"`
 	Description          string   `toml:"description"`
 	Schema               string   `toml:"schema"`
 	SideEffect           string   `toml:"side_effect"`
 	RequiresConfirmation bool     `toml:"requires_confirmation,omitempty"`
 	RequiredPermissions  []string `toml:"required_permissions,omitempty"`
-}
-
-// sourceService 继承 package 的 id/version/description；tool_dependencies 省略
-// 时默认为全部 tool id（按字母序）。
-type sourceService struct {
-	ToolDependencies     []string `toml:"tool_dependencies,omitempty"`
-	RequestedPermissions []string `toml:"requested_permissions,omitempty"`
-}
-
-// sourceCapability 引用 tool 并继承其 schema/side_effect/name/description。
-type sourceCapability struct {
-	ID          string `toml:"id"`
-	Tool        string `toml:"tool"`
-	Name        string `toml:"name,omitempty"`
-	Description string `toml:"description,omitempty"`
 }
 
 // Parse 读取并解析 ailuo.toml：严格 TOML 解码（未知字段/重复键拒绝），转换为
@@ -171,10 +149,7 @@ func (s sourceManifest) convert() (packagecontract.Manifest, error) {
 	}
 	if s.Storage != nil {
 		manifest.Storage = &packagecontract.Storage{
-			Namespace:     s.Storage.Namespace,
-			SchemaVersion: s.Storage.SchemaVersion,
-			Sensitivity:   s.Storage.Sensitivity,
-			Retention:     s.Storage.Retention,
+			Namespace: s.Storage.Namespace,
 		}
 	}
 	dependencyIDs := make([]string, 0, len(s.Dependencies))
@@ -208,84 +183,30 @@ func (s sourceManifest) convert() (packagecontract.Manifest, error) {
 		manifest.Components = append(manifest.Components, packagecontract.Component{
 			ID: component.ID, Mode: component.Mode, Role: component.Role,
 			Entrypoint: component.Entrypoint, Process: process,
-			Exports: append([]string(nil), component.Exports...),
-			Imports: append([]string(nil), component.Imports...), HostFunctions: decls,
+			Exports: append([]string(nil), component.Exports...), HostFunctions: decls,
 		})
 	}
-	extensions, err := s.buildExtensions()
+	capabilities, err := s.buildCapabilities()
 	if err != nil {
 		return packagecontract.Manifest{}, err
 	}
-	manifest.Extensions = extensions
+	manifest.Capabilities = capabilities
 	if err := packagecontract.ValidateManifest(manifest); err != nil {
 		return packagecontract.Manifest{}, fmt.Errorf("%w: %v", ErrSourceInvalid, err)
 	}
 	return manifest, nil
 }
 
-// buildExtensions 组装宿主扩展段（tools/service/capabilities），应用继承规则：
-// 版本继承 package；capability 从 tool 继承 schema/side_effect/name/description；
-// service 缺省时自动生成。输出与内核 registry 规格字段一致的 JSON。
-func (s sourceManifest) buildExtensions() (json.RawMessage, error) {
-	if len(s.Tools) == 0 && len(s.Capabilities) == 0 && s.Service == nil {
-		return nil, nil
-	}
-	toolIDs := make([]string, 0, len(s.Tools))
-	for id := range s.Tools {
-		toolIDs = append(toolIDs, id)
-	}
-	sort.Strings(toolIDs)
-	tools := make([]capability.ToolSpec, 0, len(toolIDs))
-	for _, id := range toolIDs {
-		tool := s.Tools[id]
-		tools = append(tools, capability.ToolSpec{
-			ID: id, Version: s.Package.Version, Description: tool.Description,
-			InputSchemaJSON: tool.Schema, SideEffect: tool.SideEffect,
-			RequiresConfirmation: tool.RequiresConfirmation,
-			RequiredPermissions:  tool.RequiredPermissions,
-		})
-	}
-	service := capability.ServiceSpec{
-		ID: s.Package.ID, Version: s.Package.Version, Description: s.Package.Description,
-	}
-	if s.Service != nil {
-		service.ToolDependencies = s.Service.ToolDependencies
-		service.RequestedPermissions = s.Service.RequestedPermissions
-	}
-	if len(service.ToolDependencies) == 0 {
-		service.ToolDependencies = append([]string(nil), toolIDs...)
-	}
+// buildCapabilities 将作者清单中的 Capability 转换为中性契约。
+func (s sourceManifest) buildCapabilities() ([]capability.CapabilitySpec, error) {
 	capabilities := make([]capability.CapabilitySpec, 0, len(s.Capabilities))
 	for _, declaration := range s.Capabilities {
-		tool, ok := s.Tools[declaration.Tool]
-		if !ok {
-			return nil, fmt.Errorf("%w: capability %s 引用不存在的 tool %s", ErrSourceInvalid, declaration.ID, declaration.Tool)
-		}
-		name := declaration.Name
-		if name == "" {
-			name = tool.Description
-		}
-		description := declaration.Description
-		if description == "" {
-			description = tool.Description
-		}
 		capabilities = append(capabilities, capability.CapabilitySpec{
-			ID: declaration.ID, Version: s.Package.Version, Name: name,
-			Description: description, ServiceID: s.Package.ID,
-			InputSchemaJSON: tool.Schema, SideEffect: tool.SideEffect,
-			RequiresConfirmation: tool.RequiresConfirmation,
-			RequiredPermissions:  tool.RequiredPermissions,
-			ToolID:               declaration.Tool,
+			ID: declaration.ID, Version: s.Package.Version, Name: declaration.Name,
+			Description: declaration.Description, InputSchemaJSON: declaration.Schema,
+			SideEffect: declaration.SideEffect, RequiresConfirmation: declaration.RequiresConfirmation,
+			RequiredPermissions: append([]string(nil), declaration.RequiredPermissions...),
 		})
 	}
-	extensions := struct {
-		Tools        []capability.ToolSpec       `json:"tools,omitempty"`
-		Service      capability.ServiceSpec      `json:"service,omitempty"`
-		Capabilities []capability.CapabilitySpec `json:"capabilities,omitempty"`
-	}{Tools: tools, Service: service, Capabilities: capabilities}
-	data, err := json.Marshal(extensions)
-	if err != nil {
-		return nil, fmt.Errorf("%w: 扩展段序列化失败: %v", ErrSourceInvalid, err)
-	}
-	return data, nil
+	return capabilities, nil
 }

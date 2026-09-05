@@ -12,6 +12,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/capability"
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packagecontract"
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packageio"
 	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/packmgr"
@@ -34,8 +35,14 @@ func writeSourcePackage(t *testing.T, dir, id, version, mode, artifactName strin
 	manifest, err := json.Marshal(packagecontract.Manifest{
 		SchemaVersion: packagecontract.SchemaVersion, ID: id, Version: version,
 		Dependencies: deps,
+		Capabilities: []capability.CapabilitySpec{{
+			ID: id + ".capability", Version: version, Name: "测试能力", Description: "测试能力",
+			InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
+			SideEffect:      capability.SideEffectRead,
+		}},
 		Components: []packagecontract.Component{{
-			ID: "core", Mode: mode, Entrypoint: artifactName,
+			ID: "core", Mode: mode, Role: packagecontract.RoleProvider, Entrypoint: artifactName,
+			Exports: []string{id + ".capability"},
 			Process: process,
 		}},
 	})
@@ -260,11 +267,11 @@ func TestInstallRejectsInvalidSource(t *testing.T) {
 			os.Remove(filepath.Join(dir, "app.wasm"))
 		}},
 		{name: "entrypoint escapes source dir", mutate: func(dir string) {
-			manifest := []byte(`{"schema_version":"ailuo.package.v2","id":"demo.pkg","version":"1.0.0","components":[{"id":"core","mode":"hosted","entrypoint":"../outside"}]}`)
+			manifest := []byte(`{"schema_version":"ailuo.package.v3","id":"demo.pkg","version":"1.0.0","components":[{"id":"core","mode":"hosted","role":"provider","entrypoint":"../outside"}]}`)
 			os.WriteFile(filepath.Join(dir, "manifest.json"), manifest, 0o640)
 		}},
 		{name: "entrypoint uses foreign separator", mutate: func(dir string) {
-			os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(`{"schema_version":"ailuo.package.v2","id":"demo.pkg","version":"1.0.0","components":[{"id":"core","mode":"hosted","entrypoint":"..\\outside"}]}`), 0o640)
+			os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(`{"schema_version":"ailuo.package.v3","id":"demo.pkg","version":"1.0.0","components":[{"id":"core","mode":"hosted","role":"provider","entrypoint":"..\\outside"}]}`), 0o640)
 		}},
 	}
 	for _, tc := range cases {
@@ -393,8 +400,8 @@ func TestInstallRejectsEntrypointBasenameCollision(t *testing.T) {
 	manifest, err := json.Marshal(packagecontract.Manifest{
 		SchemaVersion: packagecontract.SchemaVersion, ID: "demo.pkg", Version: "1.0.0",
 		Components: []packagecontract.Component{
-			{ID: "one", Mode: packagecontract.ModeHosted, Entrypoint: "mod.wasm"},
-			{ID: "two", Mode: packagecontract.ModeHosted, Entrypoint: "mod.wasm"},
+			{ID: "one", Mode: packagecontract.ModeHosted, Role: packagecontract.RoleProvider, Entrypoint: "mod.wasm"},
+			{ID: "two", Mode: packagecontract.ModeHosted, Role: packagecontract.RoleProvider, Entrypoint: "mod.wasm"},
 		},
 	})
 	if err != nil {
@@ -470,6 +477,22 @@ func TestInstallSerializesSamePackagePublication(t *testing.T) {
 	}
 	if record.Manifest.Version != "1.0.0" && record.Manifest.Version != "2.0.0" {
 		t.Fatalf("version=%s, want one complete installation", record.Manifest.Version)
+	}
+}
+
+func TestInstallRejectsExistingCrossProcessInstallLock(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(t.TempDir(), "pkg")
+	writeSourcePackage(t, source, "demo.locked", "1.0.0", packagecontract.ModeHosted, "app.wasm", nil)
+	lockPath := packageio.InstallRootLockPath(root)
+	if err := os.WriteFile(lockPath, []byte("unknown-owner\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := packmgr.Install(context.Background(), root, source); !errors.Is(err, packageio.ErrFileLocked) {
+		t.Fatalf("Install with existing cross-process lock=%v, want ErrFileLocked", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "demo.locked")); !os.IsNotExist(err) {
+		t.Fatalf("locked Install mutated target: %v", err)
 	}
 }
 

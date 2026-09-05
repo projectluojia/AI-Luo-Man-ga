@@ -13,7 +13,6 @@ import (
 )
 
 const (
-	ServiceID         = "prompt"
 	PreferenceGetID   = "prompt.preference.get"
 	PreferenceSetID   = "prompt.preference.set"
 	PreferenceResetID = "prompt.preference.reset"
@@ -54,64 +53,42 @@ type setInput struct {
 	ExtraTraitLevels map[string]string `json:"extra_trait_levels"`
 }
 
-// Register 把 prompt Service 注册进 Registry。偏好读取是 read 副作用，设置与
+// Register 把 prompt Capability 注册进 Registry。偏好读取是 read 副作用，设置与
 // 重置是 write 副作用（走 Dispatcher 的幂等与审计治理）。渲染入口 RenderSystemPrompt
 // 是内核系统端口，不注册为模型可见 Capability。
-func Register(reg *registry.Registry, service *Service) error {
-	if reg == nil || service == nil {
+func Register(reg *registry.Registry, provider *Provider) error {
+	if reg == nil || provider == nil {
 		return registry.ErrInvalidSpec
 	}
-	return reg.RegisterService(registry.ServiceRegistration{
-		Spec: capability.ServiceSpec{
-			ID:          ServiceID,
-			Version:     "1.0.0",
-			Description: "User prompt style preferences migrated from LuoYingRebuild V2.",
+	return reg.RegisterBatch([]registry.CapabilityRegistration{
+		{
+			Spec: capability.CapabilitySpec{
+				ID: PreferenceGetID, Version: "1.0.0", Name: "查看我的提示词偏好",
+				Description:     "Get the current user's prompt style preference, including basic style and extra trait levels.",
+				InputSchemaJSON: emptyInputSchema, SideEffect: capability.SideEffectRead,
+			},
+			Handler: provider.getPreference,
 		},
-		Capabilities: map[string]struct {
-			Spec    capability.CapabilitySpec
-			Handler registry.Handler
-		}{
-			PreferenceGetID: {
-				Spec: capability.CapabilitySpec{
-					ID:              PreferenceGetID,
-					Version:         "1.0.0",
-					Name:            "查看我的提示词偏好",
-					Description:     "Get the current user's prompt style preference, including basic style and extra trait levels.",
-					ServiceID:       ServiceID,
-					InputSchemaJSON: emptyInputSchema,
-					SideEffect:      capability.SideEffectRead,
-				},
-				Handler: service.getPreference,
+		{
+			Spec: capability.CapabilitySpec{
+				ID: PreferenceSetID, Version: "1.0.0", Name: "设置我的提示词偏好",
+				Description:     "Set the current user's prompt style preference using stable keys and enhanced/default/reduced levels.",
+				InputSchemaJSON: setInputSchema, SideEffect: capability.SideEffectWrite,
 			},
-			PreferenceSetID: {
-				Spec: capability.CapabilitySpec{
-					ID:              PreferenceSetID,
-					Version:         "1.0.0",
-					Name:            "设置我的提示词偏好",
-					Description:     "Set the current user's prompt style preference using stable keys and enhanced/default/reduced levels.",
-					ServiceID:       ServiceID,
-					InputSchemaJSON: setInputSchema,
-					SideEffect:      capability.SideEffectWrite,
-				},
-				Handler: service.setPreference,
+			Handler: provider.setPreference,
+		},
+		{
+			Spec: capability.CapabilitySpec{
+				ID: PreferenceResetID, Version: "1.0.0", Name: "重置我的提示词偏好",
+				Description:     "Reset the current user's prompt style preference to defaults.",
+				InputSchemaJSON: emptyInputSchema, SideEffect: capability.SideEffectWrite,
 			},
-			PreferenceResetID: {
-				Spec: capability.CapabilitySpec{
-					ID:              PreferenceResetID,
-					Version:         "1.0.0",
-					Name:            "重置我的提示词偏好",
-					Description:     "Reset the current user's prompt style preference to defaults.",
-					ServiceID:       ServiceID,
-					InputSchemaJSON: emptyInputSchema,
-					SideEffect:      capability.SideEffectWrite,
-				},
-				Handler: service.resetPreference,
-			},
+			Handler: provider.resetPreference,
 		},
 	})
 }
 
-func (s *Service) getPreference(ctx context.Context, request contracts.RequestContext, _ json.RawMessage) (json.RawMessage, error) {
+func (s *Provider) getPreference(ctx context.Context, request contracts.RequestContext, _ json.RawMessage) (json.RawMessage, error) {
 	settings, err := s.Settings(ctx, request.AppID, request.UserID)
 	if err != nil {
 		return nil, err
@@ -131,7 +108,7 @@ func (s *Service) getPreference(ctx context.Context, request contracts.RequestCo
 	return encoded, nil
 }
 
-func (s *Service) setPreference(ctx context.Context, request contracts.RequestContext, payload json.RawMessage) (json.RawMessage, error) {
+func (s *Provider) setPreference(ctx context.Context, request contracts.RequestContext, payload json.RawMessage) (json.RawMessage, error) {
 	var input setInput
 	if err := jsonutil.DecodeStrict(payload, &input); err != nil {
 		return nil, errors.Join(registry.ErrSchemaValidation, err)
@@ -154,7 +131,7 @@ func (s *Service) setPreference(ctx context.Context, request contracts.RequestCo
 	return encoded, nil
 }
 
-func (s *Service) resetPreference(ctx context.Context, request contracts.RequestContext, _ json.RawMessage) (json.RawMessage, error) {
+func (s *Provider) resetPreference(ctx context.Context, request contracts.RequestContext, _ json.RawMessage) (json.RawMessage, error) {
 	if err := s.ResetSettings(ctx, request.AppID, request.UserID); err != nil {
 		return nil, err
 	}

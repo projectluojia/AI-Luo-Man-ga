@@ -103,7 +103,7 @@ function render(snapshot, preserveInputs = false) {
     byId('prompt-channel-qq-private').value = settings.channel_prompts?.qq_private || '';
     byId('agent-timezone').value = settings.agent_run?.timezone || 'Asia/Shanghai';
     byId('agent-max-steps').value = settings.agent_run?.max_steps;
-    byId('agent-max-tool-calls').value = settings.agent_run?.max_tool_calls;
+    byId('agent-max-capability-calls').value = settings.agent_run?.max_capability_calls;
     byId('agent-max-input-tokens').value = settings.agent_run?.max_input_tokens;
     byId('agent-max-output-tokens').value = settings.agent_run?.max_output_tokens;
     byId('agent-max-total-tokens').value = settings.agent_run?.max_total_tokens;
@@ -189,7 +189,7 @@ form.addEventListener('submit', async event => {
     agent_run: {
       timezone: byId('agent-timezone').value.trim(),
       max_steps: Number(byId('agent-max-steps').value),
-      max_tool_calls: Number(byId('agent-max-tool-calls').value),
+      max_capability_calls: Number(byId('agent-max-capability-calls').value),
       max_input_tokens: Number(byId('agent-max-input-tokens').value),
       max_output_tokens: Number(byId('agent-max-output-tokens').value),
       max_total_tokens: Number(byId('agent-max-total-tokens').value),

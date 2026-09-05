@@ -44,25 +44,17 @@ const (
 // calls 非空时统计调用次数（幂等/去重断言用）。
 func registerRouteCapability(t *testing.T, reg *registry.Registry, calls *atomic.Int32) {
 	t.Helper()
-	if err := reg.RegisterService(registry.ServiceRegistration{
-		Spec: capability.ServiceSpec{ID: "demo", Version: "1.0.0", Description: "编排测试服务"},
-		Capabilities: map[string]struct {
-			Spec    capability.CapabilitySpec
-			Handler registry.Handler
-		}{
-			routeCapabilityID: {
-				Spec: capability.CapabilitySpec{
-					ID: routeCapabilityID, Version: "1.0.0", Name: "线路查询", Description: "编排测试能力",
-					ServiceID: "demo", SideEffect: capability.SideEffectRead, ToolID: routeCapabilityID,
-					InputSchemaJSON: `{"type":"object","properties":{"limit":{"type":"integer","minimum":1,"maximum":50}},"additionalProperties":false}`,
-				},
-				Handler: func(ctx context.Context, request contracts.RequestContext, payload json.RawMessage) (json.RawMessage, error) {
-					if calls != nil {
-						calls.Add(1)
-					}
-					return json.RawMessage(`{"data_status":{"state":"authoritative_fresh"},"routes":[{"id":"r","name":"测试线路","direction":"去程"}]}`), nil
-				},
-			},
+	if err := reg.Register(registry.CapabilityRegistration{
+		Spec: capability.CapabilitySpec{
+			ID: routeCapabilityID, Version: "1.0.0", Name: "线路查询", Description: "编排测试能力",
+			SideEffect:      capability.SideEffectRead,
+			InputSchemaJSON: `{"type":"object","properties":{"limit":{"type":"integer","minimum":1,"maximum":50}},"additionalProperties":false}`,
+		},
+		Handler: func(ctx context.Context, request contracts.RequestContext, payload json.RawMessage) (json.RawMessage, error) {
+			if calls != nil {
+				calls.Add(1)
+			}
+			return json.RawMessage(`{"data_status":{"state":"authoritative_fresh"},"routes":[{"id":"r","name":"测试线路","direction":"去程"}]}`), nil
 		},
 	}); err != nil {
 		t.Fatal(err)
@@ -208,8 +200,8 @@ func (a *nestedRunAgent) Run(stream executorv1.ExecutorRuntime_RunServer) error 
 	if start.GetInputMessage() != "只查询线路并总结" {
 		a.testing.Errorf("child input=%q", start.GetInputMessage())
 	}
-	if start.GetMaxSteps() >= 4 || start.GetMaxToolCalls() >= 8 {
-		a.testing.Errorf("child budgets steps=%d tools=%d", start.GetMaxSteps(), start.GetMaxToolCalls())
+	if start.GetMaxSteps() >= 4 || start.GetMaxCapabilityCalls() >= 8 {
+		a.testing.Errorf("child budgets steps=%d capability_calls=%d", start.GetMaxSteps(), start.GetMaxCapabilityCalls())
 	}
 	if len(start.GetCapabilities()) != 1 || start.GetCapabilities()[0].GetId() != routeCapabilityID {
 		a.testing.Errorf("child capabilities=%#v", start.GetCapabilities())
@@ -828,7 +820,7 @@ func TestOrchestratorRunsAgentCapabilityLoop(t *testing.T) {
 		t.Fatalf("events=%#v", events)
 	}
 	if routeCalls.Load() != 1 {
-		t.Fatalf("Agent frame invoked Tool %d times", routeCalls.Load())
+		t.Fatalf("Agent frame invoked Capability %d times", routeCalls.Load())
 	}
 	audits, err := store.ListCapabilityCalls(ctx, testAppID, echoID)
 	if err != nil || len(audits) != 1 {
@@ -965,7 +957,7 @@ func TestOrchestratorRunsOneGovernedChildWithNarrowedProjection(t *testing.T) {
 	registerRouteCapability(t, reg, routeCalls)
 	seedOrchestratorConfig(t, store, appconfig.Config{
 		AppID: testAppID, Enabled: true, Model: "test-model", SystemPrompt: "test",
-		Timezone: "Asia/Shanghai", MaxSteps: 4, MaxToolCalls: 8, MaxInputTokens: 1000,
+		Timezone: "Asia/Shanghai", MaxSteps: 4, MaxCapabilityCalls: 8, MaxInputTokens: 1000,
 		MaxOutputTokens: 500, MaxTotalTokens: 1500, MaxOutputBytes: 4096,
 		ProviderTimeout: time.Second,
 	})
@@ -1021,7 +1013,7 @@ func TestOrchestratorRunsOneGovernedChildWithNarrowedProjection(t *testing.T) {
 	if root.ID == "" || child.ParentRunID != root.ID || child.OriginCallID != "delegate-call" ||
 		child.ResultMessage != "子任务完成" || child.Status != kernelecho.RunStatusSucceeded ||
 		len(child.CapabilityScope) != 1 || child.CapabilityScope[0] != routeCapabilityID ||
-		child.MaxSteps >= root.MaxSteps || child.MaxToolCalls >= root.MaxToolCalls {
+		child.MaxSteps >= root.MaxSteps || child.MaxCapabilityCalls >= root.MaxCapabilityCalls {
 		t.Fatalf("root=%#v child=%#v", root, child)
 	}
 	// 子 Run 是干净工作区：不携带会话上下文，但仍固化自身的上下文摘要。
@@ -1082,7 +1074,7 @@ func TestParentCancellationPropagatesAndPersistsChildThenRootTerminalState(t *te
 	registerRouteCapability(t, reg, nil)
 	seedOrchestratorConfig(t, store, appconfig.Config{
 		AppID: testAppID, Enabled: true, Model: "test-model", SystemPrompt: "test",
-		Timezone: "Asia/Shanghai", MaxSteps: 4, MaxToolCalls: 8, MaxInputTokens: 1000,
+		Timezone: "Asia/Shanghai", MaxSteps: 4, MaxCapabilityCalls: 8, MaxInputTokens: 1000,
 		MaxOutputTokens: 500, MaxTotalTokens: 1500, MaxOutputBytes: 4096,
 		ProviderTimeout: time.Second,
 	})
@@ -1214,7 +1206,7 @@ func TestOrchestratorRecoversHistoricalAppConfigRevision(t *testing.T) {
 	replacement.SystemPrompt = "当前配置 B"
 	replacement.Timezone = "UTC"
 	replacement.MaxSteps = 7
-	replacement.MaxToolCalls = 6
+	replacement.MaxCapabilityCalls = 6
 	current, err := store.CompareAndSwap(t.Context(), historical.Generation, replacement)
 	if err != nil {
 		t.Fatal(err)
@@ -1230,7 +1222,7 @@ func TestOrchestratorRecoversHistoricalAppConfigRevision(t *testing.T) {
 	if start.GetModel() != historical.Model ||
 		start.GetTimezone() != historical.Timezone ||
 		start.GetMaxSteps() != historical.MaxSteps ||
-		start.GetMaxToolCalls() != historical.MaxToolCalls ||
+		start.GetMaxCapabilityCalls() != historical.MaxCapabilityCalls ||
 		!strings.Contains(start.GetSystemPrompt(), historical.SystemPrompt) ||
 		strings.Contains(start.GetSystemPrompt(), replacement.SystemPrompt) {
 		t.Fatalf("StartRun 未使用历史配置：%#v", start)
@@ -1262,24 +1254,16 @@ func TestOrchestratorRevalidatesCapabilityPolicyAfterProjection(t *testing.T) {
 	}
 	reg := registry.New()
 	var called atomic.Int32
-	if err := reg.RegisterService(registry.ServiceRegistration{
-		Spec: capability.ServiceSpec{ID: "test", Version: "1.0.0"},
-		Capabilities: map[string]struct {
-			Spec    capability.CapabilitySpec
-			Handler registry.Handler
-		}{
-			capabilityID: {
-				Spec: capability.CapabilitySpec{
-					ID: capabilityID, Version: "1.0.0", Name: "测试读取",
-					Description: "验证运行中动态撤权", ServiceID: "test",
-					InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
-					SideEffect:      capability.SideEffectRead,
-				},
-				Handler: func(context.Context, contracts.RequestContext, json.RawMessage) (json.RawMessage, error) {
-					called.Add(1)
-					return json.RawMessage(`{}`), nil
-				},
-			},
+	if err := reg.Register(registry.CapabilityRegistration{
+		Spec: capability.CapabilitySpec{
+			ID: capabilityID, Version: "1.0.0", Name: "测试读取",
+			Description:     "验证运行中动态撤权",
+			InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
+			SideEffect:      capability.SideEffectRead,
+		},
+		Handler: func(context.Context, contracts.RequestContext, json.RawMessage) (json.RawMessage, error) {
+			called.Add(1)
+			return json.RawMessage(`{}`), nil
 		},
 	}); err != nil {
 		t.Fatal(err)
@@ -1344,11 +1328,9 @@ func TestOrchestratorAcceptedRunScopeCannotExpandAfterGrant(t *testing.T) {
 	}
 	reg := registry.New()
 	var newlyGrantedCalled atomic.Int32
-	capabilities := make(map[string]struct {
-		Spec    capability.CapabilitySpec
-		Handler registry.Handler
-	})
+	registrations := make([]registry.CapabilityRegistration, 0, 3)
 	for _, capabilityID := range []string{acceptedCapability, newCapability, permissionCapability} {
+		capabilityID := capabilityID
 		handler := registry.Handler(func(context.Context, contracts.RequestContext, json.RawMessage) (json.RawMessage, error) {
 			if capabilityID != acceptedCapability {
 				newlyGrantedCalled.Add(1)
@@ -1359,26 +1341,18 @@ func TestOrchestratorAcceptedRunScopeCannotExpandAfterGrant(t *testing.T) {
 		if capabilityID == permissionCapability {
 			requiredPermissions = []string{permission}
 		}
-		capabilities[capabilityID] = struct {
-			Spec    capability.CapabilitySpec
-			Handler registry.Handler
-		}{
+		registrations = append(registrations, registry.CapabilityRegistration{
 			Spec: capability.CapabilitySpec{
 				ID: capabilityID, Version: "1.0.0", Name: "测试读取",
-				Description: "验证已接受 Run 的授权范围不可扩张", ServiceID: "test",
+				Description:         "验证已接受 Run 的授权范围不可扩张",
 				InputSchemaJSON:     `{"type":"object","additionalProperties":false}`,
 				SideEffect:          capability.SideEffectRead,
 				RequiredPermissions: requiredPermissions,
 			},
 			Handler: handler,
-		}
+		})
 	}
-	if err := reg.RegisterService(registry.ServiceRegistration{
-		Spec: capability.ServiceSpec{
-			ID: "test", Version: "1.0.0", RequestedPermissions: []string{permission},
-		},
-		Capabilities: capabilities,
-	}); err != nil {
+	if err := reg.RegisterBatch(registrations); err != nil {
 		t.Fatal(err)
 	}
 	listener := bufconn.Listen(1 << 20)
@@ -1431,7 +1405,7 @@ func TestOrchestratorAcceptedRunScopeCannotExpandAfterGrant(t *testing.T) {
 func orchestratorAppConfig() appconfig.Config {
 	return appconfig.Config{
 		AppID: testAppID, Enabled: true, Model: "model-a", SystemPrompt: "历史配置 A",
-		Timezone: "Asia/Shanghai", MaxSteps: 4, MaxToolCalls: 4,
+		Timezone: "Asia/Shanghai", MaxSteps: 4, MaxCapabilityCalls: 4,
 		MaxInputTokens: 1024, MaxOutputTokens: 512, MaxTotalTokens: 1536,
 		MaxOutputBytes: 4096, ProviderTimeout: 5 * time.Second,
 	}
@@ -1441,7 +1415,7 @@ func orchestratorAppConfig() appconfig.Config {
 func orchestratorSeed(model string) appconfig.Config {
 	return appconfig.Config{
 		AppID: testAppID, Enabled: true, Model: model, SystemPrompt: "test",
-		Timezone: "Asia/Shanghai", MaxSteps: 4, MaxToolCalls: 8,
+		Timezone: "Asia/Shanghai", MaxSteps: 4, MaxCapabilityCalls: 8,
 		MaxInputTokens: 32768, MaxOutputTokens: 8192, MaxTotalTokens: 40960,
 		MaxOutputBytes: 65536, MaxCostMicrousd: 0, ProviderTimeout: 30 * time.Second,
 	}
@@ -1720,23 +1694,15 @@ func TestOrchestratorDoesNotAutomaticallyRetryAfterSideEffect(t *testing.T) {
 	policy := runtimetest.NewStaticAppPolicy()
 	policy.Enable(testAppID, "test.external")
 	var calls atomic.Int32
-	if err := reg.RegisterService(registry.ServiceRegistration{
-		Spec: capability.ServiceSpec{ID: "test", Version: "1.0.0"},
-		Capabilities: map[string]struct {
-			Spec    capability.CapabilitySpec
-			Handler registry.Handler
-		}{
-			"test.external": {
-				Spec: capability.CapabilitySpec{
-					ID: "test.external", Version: "1.0.0", Name: "外部测试", Description: "验证副作用重试边界", ServiceID: "test",
-					InputSchemaJSON: `{"type":"object","properties":{},"additionalProperties":false}`,
-					SideEffect:      capability.SideEffectExternal,
-				},
-				Handler: func(context.Context, contracts.RequestContext, json.RawMessage) (json.RawMessage, error) {
-					calls.Add(1)
-					return json.RawMessage(`{"ok":true}`), nil
-				},
-			},
+	if err := reg.Register(registry.CapabilityRegistration{
+		Spec: capability.CapabilitySpec{
+			ID: "test.external", Version: "1.0.0", Name: "外部测试", Description: "验证副作用重试边界",
+			InputSchemaJSON: `{"type":"object","properties":{},"additionalProperties":false}`,
+			SideEffect:      capability.SideEffectExternal,
+		},
+		Handler: func(context.Context, contracts.RequestContext, json.RawMessage) (json.RawMessage, error) {
+			calls.Add(1)
+			return json.RawMessage(`{"ok":true}`), nil
 		},
 	}); err != nil {
 		t.Fatal(err)
@@ -1799,7 +1765,7 @@ func TestOrchestratorRejectsDuplicateAgentCallBeforeSecondEffect(t *testing.T) {
 		t.Fatalf("run error=%v, want ErrDuplicateCall", err)
 	}
 	if routeCalls.Load() != 1 {
-		t.Fatalf("duplicate call executed Tool %d times", routeCalls.Load())
+		t.Fatalf("duplicate call executed Capability %d times", routeCalls.Load())
 	}
 	record, _, getErr := store.GetEcho(ctx, testAppID, echoID)
 	if getErr != nil || record.Status != kernelecho.StatusFailed || record.ErrorCode != "protocol_violation" {
@@ -1975,7 +1941,7 @@ func (r promptCaptureRenderer) RenderSystemPrompt(_ context.Context, request ker
 	return request.BaseSystemPrompt + "\n\n【基本风格与语调】\n测试：渲染成功", nil
 }
 
-func TestOrchestratorUsesPromptServiceRenderer(t *testing.T) {
+func TestOrchestratorUsesPromptProviderRenderer(t *testing.T) {
 	listener := bufconn.Listen(1 << 20)
 	grpcServer := grpc.NewServer()
 	agentServer := &configCaptureAgent{starts: make(chan *executorv1.StartRun, 1)}
@@ -2015,7 +1981,7 @@ func TestOrchestratorUsesPromptServiceRenderer(t *testing.T) {
 		},
 	)
 	if _, err := runOrchestrator(orchestrator, t.Context(), kernelecho.RunRequest{
-		Message: "提示词服务测试", IdempotencyKey: "prompt-service-render", Channel: "qq_group",
+		Message: "提示词 Provider 测试", IdempotencyKey: "prompt-provider-render", Channel: "qq_group",
 	}, nil); err != nil {
 		t.Fatal(err)
 	}

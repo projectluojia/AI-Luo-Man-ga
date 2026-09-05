@@ -89,6 +89,94 @@ path = "packages/demo"
 	}
 }
 
+func TestSyncRollsBackInstallRootWhenProjectLockPublishFails(t *testing.T) {
+	projectDir := t.TempDir()
+	packageDir := filepath.Join(projectDir, "packages", "demo")
+	writePackage(t, packageDir, "demo.pkg", "1.0.0", "demo.wasm", "")
+	projectFile := filepath.Join(projectDir, "ailuo.toml")
+	writeProject(t, projectDir, `
+[project]
+id = "ailuo"
+
+[dependencies."demo.pkg"]
+version = ">=1.0.0"
+path = "packages/demo"
+`)
+	installRoot := filepath.Join(projectDir, "runtime")
+	if _, err := projectmgr.Sync(t.Context(), projectFile, installRoot, nil); err != nil {
+		t.Fatal(err)
+	}
+	writePackage(t, packageDir, "demo.pkg", "2.0.0", "demo.wasm", "")
+	if err := os.WriteFile(filepath.Join(projectDir, "ailuo.lock.backup"), []byte("stale"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := projectmgr.Sync(t.Context(), projectFile, installRoot, nil); err == nil {
+		t.Fatal("Sync unexpectedly succeeded with a stale lock backup")
+	}
+	record, err := packageio.ReadInstalled(context.Background(), filepath.Join(installRoot, "demo.pkg"))
+	if err != nil {
+		t.Fatalf("ReadInstalled after rollback: %v", err)
+	}
+	if record.Manifest.Version != "1.0.0" {
+		t.Fatalf("installed version after rollback=%s, want 1.0.0", record.Manifest.Version)
+	}
+}
+
+func TestSyncRejectsMalformedExistingProjectLock(t *testing.T) {
+	projectDir := t.TempDir()
+	packageDir := filepath.Join(projectDir, "packages", "demo")
+	writePackage(t, packageDir, "demo.pkg", "1.0.0", "demo.wasm", "")
+	writeProject(t, projectDir, `
+[project]
+id = "ailuo"
+
+[dependencies."demo.pkg"]
+version = "1.0.0"
+path = "packages/demo"
+`)
+	if err := os.WriteFile(filepath.Join(projectDir, "ailuo.lock"), []byte("{}"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := projectmgr.Sync(t.Context(), filepath.Join(projectDir, "ailuo.toml"), filepath.Join(projectDir, "runtime"), nil); err == nil {
+		t.Fatal("Sync unexpectedly ignored malformed existing project lock")
+	}
+}
+
+func TestSyncPreservesValidatedPackagesOutsideProjectClosure(t *testing.T) {
+	projectDir := t.TempDir()
+	packageDir := filepath.Join(projectDir, "packages", "demo")
+	extraDir := filepath.Join(projectDir, "packages", "extra")
+	writePackage(t, packageDir, "demo.pkg", "1.0.0", "demo.wasm", "")
+	writePackage(t, extraDir, "extra.pkg", "1.0.0", "extra.wasm", "")
+	projectFile := filepath.Join(projectDir, "ailuo.toml")
+	writeProject(t, projectDir, `
+[project]
+id = "ailuo"
+
+[dependencies."extra.pkg"]
+version = "1.0.0"
+path = "packages/extra"
+`)
+	installRoot := filepath.Join(projectDir, "runtime")
+	if _, err := projectmgr.Sync(t.Context(), projectFile, installRoot, nil); err != nil {
+		t.Fatal(err)
+	}
+	writeProject(t, projectDir, `
+[project]
+id = "ailuo"
+
+[dependencies."demo.pkg"]
+version = "1.0.0"
+path = "packages/demo"
+`)
+	if _, err := projectmgr.Sync(t.Context(), projectFile, installRoot, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := packageio.ReadInstalled(context.Background(), filepath.Join(installRoot, "extra.pkg")); err != nil {
+		t.Fatalf("extra validated package was removed: %v", err)
+	}
+}
+
 func TestSyncRejectsUnsatisfiedTransitiveConstraint(t *testing.T) {
 	projectDir := t.TempDir()
 	appDir := filepath.Join(projectDir, "packages", "app")
@@ -126,7 +214,7 @@ func writePackage(t *testing.T, dir, id, version, artifact, dependency string) {
 	if err := os.WriteFile(filepath.Join(dir, artifact), []byte(id+"-"+version), 0o640); err != nil {
 		t.Fatal(err)
 	}
-	body := "[package]\nid = \"" + id + "\"\nversion = \"" + version + "\"\n\n[[component]]\nid = \"main\"\nmode = \"hosted\"\nentrypoint = \"" + artifact + "\"\n" + dependency
+	body := "[package]\nid = \"" + id + "\"\nversion = \"" + version + "\"\n\n[[component]]\nid = \"main\"\nmode = \"hosted\"\nrole = \"provider\"\nentrypoint = \"" + artifact + "\"\nexports = [\"" + id + ".capability\"]\n\n[[capability]]\nid = \"" + id + ".capability\"\nname = \"测试能力\"\ndescription = \"测试能力\"\nschema = \"\"\"" + `{"type":"object","additionalProperties":false}` + "\"\"\"\nside_effect = \"read\"\n" + dependency
 	if err := os.WriteFile(filepath.Join(dir, "ailuo.toml"), []byte(body), 0o640); err != nil {
 		t.Fatal(err)
 	}

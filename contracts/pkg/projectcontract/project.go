@@ -17,6 +17,11 @@ const SchemaVersion = "ailuo.project.v1"
 // MaxLockBytes 限制项目锁文件大小，避免启动时读取不受限输入。
 const MaxLockBytes = int64(64 << 10)
 
+const (
+	MaxDirectDependencies = 256
+	MaxLockedPackages     = 256
+)
+
 var ErrInvalid = errors.New("invalid project package contract")
 
 // Manifest 是项目级依赖清单，对应项目根目录的 ailuo.toml。
@@ -54,7 +59,8 @@ type LockedPackage struct {
 
 // ValidateManifest 校验项目依赖清单的结构与唯一性。
 func ValidateManifest(manifest Manifest) error {
-	if manifest.SchemaVersion != SchemaVersion || !capability.IsStableID(manifest.ID) {
+	if manifest.SchemaVersion != SchemaVersion || !capability.IsStableID(manifest.ID) ||
+		len(manifest.Dependencies) > MaxDirectDependencies {
 		return ErrInvalid
 	}
 	seen := make(map[string]struct{}, len(manifest.Dependencies))
@@ -74,6 +80,7 @@ func ValidateManifest(manifest Manifest) error {
 // 是否完整以及约束是否满足由解析器结合项目清单验证。
 func ValidateLockShape(lock Lock) error {
 	if lock.SchemaVersion != SchemaVersion || !capability.IsStableID(lock.ProjectID) ||
+		len(lock.Packages) > MaxLockedPackages ||
 		!packagecontract.IsSHA256Hex(lock.ProjectManifestSHA256) {
 		return ErrInvalid
 	}

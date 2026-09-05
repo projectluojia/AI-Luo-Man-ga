@@ -68,7 +68,7 @@ func (h *versionedHost) Load(_ context.Context, manifest loader.Manifest) (loade
 func upgradeManifest(id, version string) loader.Manifest {
 	return loader.Manifest{
 		ID: id, Version: version, Mode: loader.ModeHosted,
-		Role: loader.RoleCapability, LockedDigest: digest,
+		Role: loader.RoleProvider, LockedDigest: digest,
 	}
 }
 
@@ -78,7 +78,7 @@ func registerSingleComponent(t *testing.T, manager *loader.Manager, id, version 
 	if err := manager.Register(context.Background(), upgradeManifest(id, version)); err != nil {
 		t.Fatal(err)
 	}
-	if err := manager.RegisterPackage(id, []string{id}); err != nil {
+	if err := manager.RegisterPackages(map[string][]string{id: {id}}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -199,7 +199,7 @@ func TestManagerTracksRetiredLeasesByRuntimeVersion(t *testing.T) {
 	if err := manager.Register(ctx, upgradeManifest("extension.test", "1.0.0")); err != nil {
 		t.Fatal(err)
 	}
-	if err := manager.RegisterPackage("extension.test", []string{"extension.test"}); err != nil {
+	if err := manager.RegisterPackages(map[string][]string{"extension.test": {"extension.test"}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := manager.EnsureLoaded(ctx, "extension.test"); err != nil {
@@ -286,7 +286,7 @@ func TestManagerUpgradeRejectsInvalidTargets(t *testing.T) {
 	if err := manager.Register(ctx, upgradeManifest("extension.test", "1.0.0")); err != nil {
 		t.Fatal(err)
 	}
-	if err := manager.RegisterPackage("extension.test", []string{"extension.test"}); err != nil {
+	if err := manager.RegisterPackages(map[string][]string{"extension.test": {"extension.test"}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := manager.EnsureLoaded(ctx, "extension.test"); err != nil {
@@ -304,7 +304,7 @@ func TestManagerUpgradeRejectsInvalidTargets(t *testing.T) {
 	if err := manager.Register(ctx, upgradeManifest("pending.test", "1.0.0")); err != nil {
 		t.Fatal(err)
 	}
-	if err := manager.RegisterPackage("pending.test", []string{"pending.test"}); err != nil {
+	if err := manager.RegisterPackages(map[string][]string{"pending.test": {"pending.test"}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := manager.UpgradePackage(ctx, upgradeSingleComponent("pending.test", "2.0.0")); !errors.Is(err, loader.ErrUnavailable) {

@@ -48,20 +48,12 @@ func capabilitiesSource(packageID, version string, capabilities []schemaextract.
 	if len(capabilities) == 0 {
 		return sourceManifest{}, nil, fmt.Errorf("packagefmt: 源码未提取到任何 capability")
 	}
-	source := sourceManifest{
-		Package: sourcePackage{ID: packageID, Version: version},
-		Tools:   make(map[string]sourceTool, len(capabilities)),
-	}
+	source := sourceManifest{Package: sourcePackage{ID: packageID, Version: version}}
 	exportIDs := make([]string, 0, len(capabilities))
 	for _, spec := range capabilities {
-		source.Tools[spec.ID] = sourceTool{
-			Description: spec.Description,
-			Schema:      string(spec.InputSchema),
-			SideEffect:  capability.SideEffectRead,
-		}
 		source.Capabilities = append(source.Capabilities, sourceCapability{
-			ID: spec.ID, Tool: spec.ID,
-			Description: spec.Description,
+			ID: spec.ID, Name: spec.Description, Description: spec.Description,
+			Schema: string(spec.InputSchema), SideEffect: capability.SideEffectRead,
 		})
 		exportIDs = append(exportIDs, spec.ID)
 	}
@@ -69,14 +61,18 @@ func capabilitiesSource(packageID, version string, capabilities []schemaextract.
 	return source, exportIDs, nil
 }
 
-// ExtensionsFromCapabilities 只构造 SDK 所需的宿主扩展段，不生成安装清单。
+// CapabilitiesJSON 只构造 SDK 所需的 Capability JSON，不生成安装清单。
 // SDK 源码可以由零声明包直接生成，无需虚构或持久化包版本。
-func ExtensionsFromCapabilities(packageID string, capabilities []schemaextract.Capability) (json.RawMessage, error) {
-	source, _, err := capabilitiesSource(packageID, "", capabilities)
+func CapabilitiesJSON(packageID string, capabilities []schemaextract.Capability) (json.RawMessage, error) {
+	source, _, err := capabilitiesSource(packageID, "1.0.0", capabilities)
 	if err != nil {
 		return nil, err
 	}
-	return source.buildExtensions()
+	converted, err := source.buildCapabilities()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(converted)
 }
 
 // ManifestFromCapabilities 从源码提取的 capabilities 自动生成纯计算包清单
@@ -92,7 +88,7 @@ func ManifestFromCapabilities(packageID, version string, capabilities []schemaex
 	if err != nil {
 		return packagecontract.Manifest{}, nil, err
 	}
-	extensions, err := source.buildExtensions()
+	convertedCapabilities, err := source.buildCapabilities()
 	if err != nil {
 		return packagecontract.Manifest{}, nil, err
 	}
@@ -101,9 +97,10 @@ func ManifestFromCapabilities(packageID, version string, capabilities []schemaex
 		ID:            packageID,
 		Version:       version,
 		Components: []packagecontract.Component{{
-			ID: "main", Mode: "hosted", Entrypoint: "main.wasm", Exports: exportIDs,
+			ID: "main", Mode: "hosted", Role: packagecontract.RoleProvider,
+			Entrypoint: "main.wasm", Exports: exportIDs,
 		}},
-		Extensions: extensions,
+		Capabilities: convertedCapabilities,
 	}
 	if err := packagecontract.ValidateManifest(manifest); err != nil {
 		return packagecontract.Manifest{}, nil, fmt.Errorf("packagefmt: 自动生成清单校验失败: %w", err)

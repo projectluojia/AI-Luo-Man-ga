@@ -15,7 +15,7 @@ func TestChatStreamTranslatesEchoEvents(t *testing.T) {
 	handler, _ := newTestServer(t, false)
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/chat/stream", bytes.NewReader([]byte(
-		`{"session_id":"web-session","user_id":"web-user","user_name":"网页用户","text":"有哪些线路"}`,
+		`{"text":"有哪些线路"}`,
 	)))
 	request.Header.Set("Content-Type", "application/json")
 	handler.ServeHTTP(response, request)
@@ -50,7 +50,7 @@ func TestChatStreamRejectsInvalidRequests(t *testing.T) {
 		{name: "unknown field", body: `{"text":"hi","mystery":1}`, code: "invalid_request"},
 		{name: "malformed json", body: `{"text":`, code: "invalid_request"},
 		{name: "trailing json", body: `{"text":"hi"}{}`, code: "invalid_request"},
-		{name: "attachments unsupported", body: `{"text":"hi","image_ids":["upload/a.png"]}`, code: "attachments_unsupported"},
+		{name: "legacy client field", body: `{"text":"hi","user_id":"web-user"}`, code: "invalid_request"},
 	}
 	for _, test := range tests {
 		test := test

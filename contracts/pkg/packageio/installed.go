@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -24,6 +25,10 @@ type InstalledRecord struct {
 }
 
 var installLocks sync.Map
+var installRootLocks sync.Map
+var projectLocks sync.Map
+
+var ErrFileLocked = errors.New("package operation is already locked")
 
 const (
 	// StagePrefix 是安装原子发布阶段目录的前缀。
@@ -37,6 +42,91 @@ const (
 func InstallLock(root, id string) *sync.Mutex {
 	lock, _ := installLocks.LoadOrStore(root+"\x00"+id, &sync.Mutex{})
 	return lock.(*sync.Mutex)
+}
+
+// InstallRootLock 返回同一安装根共用的进程内事务锁。项目同步、安装、升级和
+// 卸载必须在根级串行，避免不同操作分别通过包级锁拼出半套安装闭包。
+func InstallRootLock(root string) *sync.Mutex {
+	lock, _ := installRootLocks.LoadOrStore(root, &sync.Mutex{})
+	return lock.(*sync.Mutex)
+}
+
+// ProjectLock 返回同一项目锁文件共用的进程内事务锁，避免不同安装根的同步
+// 操作同时改写同一份 ailuo.lock。
+func ProjectLock(path string) *sync.Mutex {
+	lock, _ := projectLocks.LoadOrStore(path, &sync.Mutex{})
+	return lock.(*sync.Mutex)
+}
+
+// InstallRootLockPath 返回安装根的跨进程锁文件路径。锁文件放在安装根外，
+// 不会被 ListInstalled 当成未知安装条目。
+func InstallRootLockPath(root string) string {
+	return root + ".ailuo-install.lock"
+}
+
+// FileLock 是一个基于 O_EXCL 的跨进程独占锁。锁文件在进程崩溃后会保留，
+// 后续操作必须显式确认并清理，不能把未知持有者静默当成已退出。
+type FileLock struct {
+	path string
+	file *os.File
+}
+
+// AcquireFileLock 创建独占锁文件；已有锁直接失败，不等待也不删除。
+func AcquireFileLock(ctx context.Context, path string) (*FileLock, error) {
+	if path == "" {
+		return nil, packagecontract.ErrInvalidFormat
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if errors.Is(err, os.ErrExist) {
+		return nil, fmt.Errorf("%w: %s", ErrFileLocked, path)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if _, err := file.WriteString(strconv.Itoa(os.Getpid()) + "\n"); err != nil {
+		_ = file.Close()
+		_ = os.Remove(path)
+		return nil, err
+	}
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		_ = os.Remove(path)
+		return nil, err
+	}
+	return &FileLock{path: path, file: file}, nil
+}
+
+// RemoveFileLock 显式删除遗留锁。调用方必须先确认没有其他包管理进程仍在运行；
+// 正常流程不调用此函数，也不会依据锁内 PID 自动删除未知锁。
+func RemoveFileLock(path string) error {
+	if path == "" {
+		return packagecontract.ErrInvalidFormat
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
+}
+
+// Close 释放锁文件；释放失败会返回错误，调用方不能把它当作成功清理。
+func (l *FileLock) Close() error {
+	if l == nil {
+		return nil
+	}
+	var result []error
+	if l.file != nil {
+		if err := l.file.Close(); err != nil {
+			result = append(result, err)
+		}
+		l.file = nil
+	}
+	if err := RemoveFileLock(l.path); err != nil {
+		result = append(result, err)
+	}
+	return errors.Join(result...)
 }
 
 // IsTransientInstallDirectory 判断安装根内的阶段/备份工作目录。

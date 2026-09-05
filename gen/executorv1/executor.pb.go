@@ -360,27 +360,27 @@ func (*ExecutorFrame_RunAccepted) isExecutorFrame_Body() {}
 func (*ExecutorFrame_RunUsage) isExecutorFrame_Body() {}
 
 type StartRun struct {
-	state             protoimpl.MessageState `protogen:"open.v1"`
-	AppId             string                 `protobuf:"bytes,1,opt,name=app_id,json=appId,proto3" json:"app_id,omitempty"`
-	InputMessage      string                 `protobuf:"bytes,2,opt,name=input_message,json=inputMessage,proto3" json:"input_message,omitempty"`
-	Timezone          string                 `protobuf:"bytes,3,opt,name=timezone,proto3" json:"timezone,omitempty"`
-	Capabilities      []*Capability          `protobuf:"bytes,4,rep,name=capabilities,proto3" json:"capabilities,omitempty"`
-	Model             string                 `protobuf:"bytes,5,opt,name=model,proto3" json:"model,omitempty"`
-	SystemPrompt      string                 `protobuf:"bytes,6,opt,name=system_prompt,json=systemPrompt,proto3" json:"system_prompt,omitempty"`
-	MaxSteps          uint32                 `protobuf:"varint,7,opt,name=max_steps,json=maxSteps,proto3" json:"max_steps,omitempty"`
-	ProtocolVersion   string                 `protobuf:"bytes,8,opt,name=protocol_version,json=protocolVersion,proto3" json:"protocol_version,omitempty"`
-	MaxToolCalls      uint32                 `protobuf:"varint,9,opt,name=max_tool_calls,json=maxToolCalls,proto3" json:"max_tool_calls,omitempty"`
-	MaxInputTokens    uint64                 `protobuf:"varint,10,opt,name=max_input_tokens,json=maxInputTokens,proto3" json:"max_input_tokens,omitempty"`
-	MaxOutputTokens   uint64                 `protobuf:"varint,11,opt,name=max_output_tokens,json=maxOutputTokens,proto3" json:"max_output_tokens,omitempty"`
-	MaxTotalTokens    uint64                 `protobuf:"varint,12,opt,name=max_total_tokens,json=maxTotalTokens,proto3" json:"max_total_tokens,omitempty"`
-	MaxOutputBytes    uint64                 `protobuf:"varint,13,opt,name=max_output_bytes,json=maxOutputBytes,proto3" json:"max_output_bytes,omitempty"`
-	MaxCostMicrousd   uint64                 `protobuf:"varint,14,opt,name=max_cost_microusd,json=maxCostMicrousd,proto3" json:"max_cost_microusd,omitempty"`
-	ProviderTimeoutMs uint32                 `protobuf:"varint,15,opt,name=provider_timeout_ms,json=providerTimeoutMs,proto3" json:"provider_timeout_ms,omitempty"`
-	TraceId           string                 `protobuf:"bytes,16,opt,name=trace_id,json=traceId,proto3" json:"trace_id,omitempty"`
-	ParentSpanId      string                 `protobuf:"bytes,17,opt,name=parent_span_id,json=parentSpanId,proto3" json:"parent_span_id,omitempty"`
-	ParentRunId       string                 `protobuf:"bytes,18,opt,name=parent_run_id,json=parentRunId,proto3" json:"parent_run_id,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	state              protoimpl.MessageState `protogen:"open.v1"`
+	AppId              string                 `protobuf:"bytes,1,opt,name=app_id,json=appId,proto3" json:"app_id,omitempty"`
+	InputMessage       string                 `protobuf:"bytes,2,opt,name=input_message,json=inputMessage,proto3" json:"input_message,omitempty"`
+	Timezone           string                 `protobuf:"bytes,3,opt,name=timezone,proto3" json:"timezone,omitempty"`
+	Capabilities       []*Capability          `protobuf:"bytes,4,rep,name=capabilities,proto3" json:"capabilities,omitempty"`
+	Model              string                 `protobuf:"bytes,5,opt,name=model,proto3" json:"model,omitempty"`
+	SystemPrompt       string                 `protobuf:"bytes,6,opt,name=system_prompt,json=systemPrompt,proto3" json:"system_prompt,omitempty"`
+	MaxSteps           uint32                 `protobuf:"varint,7,opt,name=max_steps,json=maxSteps,proto3" json:"max_steps,omitempty"`
+	ProtocolVersion    string                 `protobuf:"bytes,8,opt,name=protocol_version,json=protocolVersion,proto3" json:"protocol_version,omitempty"`
+	MaxCapabilityCalls uint32                 `protobuf:"varint,9,opt,name=max_capability_calls,json=maxCapabilityCalls,proto3" json:"max_capability_calls,omitempty"`
+	MaxInputTokens     uint64                 `protobuf:"varint,10,opt,name=max_input_tokens,json=maxInputTokens,proto3" json:"max_input_tokens,omitempty"`
+	MaxOutputTokens    uint64                 `protobuf:"varint,11,opt,name=max_output_tokens,json=maxOutputTokens,proto3" json:"max_output_tokens,omitempty"`
+	MaxTotalTokens     uint64                 `protobuf:"varint,12,opt,name=max_total_tokens,json=maxTotalTokens,proto3" json:"max_total_tokens,omitempty"`
+	MaxOutputBytes     uint64                 `protobuf:"varint,13,opt,name=max_output_bytes,json=maxOutputBytes,proto3" json:"max_output_bytes,omitempty"`
+	MaxCostMicrousd    uint64                 `protobuf:"varint,14,opt,name=max_cost_microusd,json=maxCostMicrousd,proto3" json:"max_cost_microusd,omitempty"`
+	ProviderTimeoutMs  uint32                 `protobuf:"varint,15,opt,name=provider_timeout_ms,json=providerTimeoutMs,proto3" json:"provider_timeout_ms,omitempty"`
+	TraceId            string                 `protobuf:"bytes,16,opt,name=trace_id,json=traceId,proto3" json:"trace_id,omitempty"`
+	ParentSpanId       string                 `protobuf:"bytes,17,opt,name=parent_span_id,json=parentSpanId,proto3" json:"parent_span_id,omitempty"`
+	ParentRunId        string                 `protobuf:"bytes,18,opt,name=parent_run_id,json=parentRunId,proto3" json:"parent_run_id,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *StartRun) Reset() {
@@ -469,9 +469,9 @@ func (x *StartRun) GetProtocolVersion() string {
 	return ""
 }
 
-func (x *StartRun) GetMaxToolCalls() uint32 {
+func (x *StartRun) GetMaxCapabilityCalls() uint32 {
 	if x != nil {
-		return x.MaxToolCalls
+		return x.MaxCapabilityCalls
 	}
 	return 0
 }
@@ -1102,7 +1102,7 @@ const file_executor_proto_rawDesc = "" +
 	"cancel_run\x18\x10 \x01(\v2\x1c.ailuo.executor.v1.CancelRunH\x00R\tcancelRun\x12C\n" +
 	"\frun_accepted\x18\x11 \x01(\v2\x1e.ailuo.executor.v1.RunAcceptedH\x00R\vrunAccepted\x12:\n" +
 	"\trun_usage\x18\x12 \x01(\v2\x1b.ailuo.executor.v1.RunUsageH\x00R\brunUsageB\x06\n" +
-	"\x04body\"\xb9\x05\n" +
+	"\x04body\"\xc5\x05\n" +
 	"\bStartRun\x12\x15\n" +
 	"\x06app_id\x18\x01 \x01(\tR\x05appId\x12#\n" +
 	"\rinput_message\x18\x02 \x01(\tR\finputMessage\x12\x1a\n" +
@@ -1111,8 +1111,8 @@ const file_executor_proto_rawDesc = "" +
 	"\x05model\x18\x05 \x01(\tR\x05model\x12#\n" +
 	"\rsystem_prompt\x18\x06 \x01(\tR\fsystemPrompt\x12\x1b\n" +
 	"\tmax_steps\x18\a \x01(\rR\bmaxSteps\x12)\n" +
-	"\x10protocol_version\x18\b \x01(\tR\x0fprotocolVersion\x12$\n" +
-	"\x0emax_tool_calls\x18\t \x01(\rR\fmaxToolCalls\x12(\n" +
+	"\x10protocol_version\x18\b \x01(\tR\x0fprotocolVersion\x120\n" +
+	"\x14max_capability_calls\x18\t \x01(\rR\x12maxCapabilityCalls\x12(\n" +
 	"\x10max_input_tokens\x18\n" +
 	" \x01(\x04R\x0emaxInputTokens\x12*\n" +
 	"\x11max_output_tokens\x18\v \x01(\x04R\x0fmaxOutputTokens\x12(\n" +

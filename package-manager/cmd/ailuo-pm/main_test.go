@@ -1,10 +1,14 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packageio"
 )
 
 const zeroDeclarationSource = "package main\nfunc hello(args HelloArgs) {}\ntype HelloArgs struct { Name string `json:\"name\"` }\n"
@@ -30,11 +34,29 @@ func TestResolveSourceRequiresVersionForZeroDeclarationPackage(t *testing.T) {
 
 func TestResolveSDKSourceExtractsZeroDeclarationContract(t *testing.T) {
 	sourceDir := writeZeroDeclarationSource(t)
-	packageID, extensions, err := resolveSDKSource(t.Context(), sourceDir)
+	packageID, capabilitiesJSON, err := resolveSDKSource(t.Context(), sourceDir)
 	if err != nil {
 		t.Fatalf("resolveSDKSource: %v", err)
 	}
-	if packageID != "autogen.test" || len(extensions) == 0 {
-		t.Fatalf("package ID/extensions = %q/%s, want extracted extensions", packageID, extensions)
+	if packageID != "autogen.test" || len(capabilitiesJSON) == 0 {
+		t.Fatalf("package ID/capabilities = %q/%s, want extracted capabilities", packageID, capabilitiesJSON)
+	}
+}
+
+func TestUnlockRequiresForceAndRemovesInstallLock(t *testing.T) {
+	root := t.TempDir()
+	lockPath := packageio.InstallRootLockPath(root)
+	if err := os.WriteFile(lockPath, []byte("stale\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := runPackageCommand(context.Background(), []string{"unlock", "--root", root}, new(bytes.Buffer)); err == nil {
+		t.Fatal("unlock without --force = nil, want configuration error")
+	}
+	var output bytes.Buffer
+	if err := runPackageCommand(context.Background(), []string{"unlock", "--force", "--root", root}, &output); err != nil {
+		t.Fatalf("unlock --force: %v", err)
+	}
+	if _, err := os.Stat(lockPath); !os.IsNotExist(err) {
+		t.Fatalf("lock after unlock err=%v, want not exist", err)
 	}
 }

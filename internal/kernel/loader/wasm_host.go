@@ -316,18 +316,18 @@ func (r *wasmRuntime) hostFunction(fn HostedFunction) func(context.Context, api.
 	}
 }
 
-// hostedRequest 是宿主写入 guest stdin 的调用信封：工具标识 + 业务载荷。
-// guest 据此分发到具体工具实现，并可用宿主函数读取治理上下文。
+// hostedRequest 是宿主写入 guest stdin 的调用信封：Capability 标识 + 业务载荷。
+// guest 据此分发到具体实现，并可用宿主函数读取治理上下文。
 type hostedRequest struct {
-	ToolID  string          `json:"tool_id"`
-	Payload json.RawMessage `json:"payload"`
+	CapabilityID string          `json:"capability_id"`
+	Payload      json.RawMessage `json:"payload"`
 }
 
 // Invoke 以独立实例执行一次调用：stdin 写入调用信封，stdout 读取结果信封。
 // 先实例化（不自动执行入口）再登记治理上下文，随后手动调用 _start，避免
 // 入口执行期间宿主函数查不到调用上下文。
 func (r *wasmRuntime) Invoke(ctx context.Context, request contracts.RequestContext, payload json.RawMessage) (json.RawMessage, error) {
-	requestEnvelope, err := json.Marshal(hostedRequest{ToolID: request.ToolID, Payload: payload})
+	requestEnvelope, err := json.Marshal(hostedRequest{CapabilityID: request.CapabilityID, Payload: payload})
 	if err != nil {
 		return nil, errors.Join(ErrRuntimeProtocol, err)
 	}

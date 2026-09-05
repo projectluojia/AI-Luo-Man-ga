@@ -38,8 +38,7 @@ type ConfirmationRequest struct {
 	EchoID         string
 	RunID          string
 	ConfirmationID string
-	TargetType     string
-	TargetID       string
+	CapabilityID   string
 	SideEffect     string
 	IdempotencyKey string
 }
@@ -50,7 +49,7 @@ type ConfirmationVerifier interface {
 
 // DispatcherConfig 装配 Dispatcher 的可选依赖；零值字段使用生产默认或保持禁用。
 type DispatcherConfig struct {
-	// MaxCallDepth 是 Capability/Tool 调用链的最大深度；0 使用默认值 16。
+	// MaxCallDepth 是 Capability 调用链的最大深度；0 使用默认值 16。
 	MaxCallDepth uint16
 	// ConfirmationVerifier 是持久确认验证器；为 nil 时要求确认的能力 fail-closed。
 	ConfirmationVerifier ConfirmationVerifier
@@ -80,158 +79,77 @@ func NewDispatcher(reg *registry.Registry, policy AppPolicy, config DispatcherCo
 	return d
 }
 
+// InvokeCapability 经过同一条校验、授权、幂等、确认和审计前置链路调用 Capability。
 func (d *Dispatcher) InvokeCapability(ctx context.Context, request contracts.RequestContext, capabilityID string, payload json.RawMessage) (json.RawMessage, error) {
-	return d.route(ctx, request, "capability", capabilityID, payload,
-		[]slog.Attr{
-			observe.StringAttr("target_type", "capability"),
-			observe.StringAttr("capability_id", capabilityID),
-		},
-		func() (routedTarget, error) {
-			spec, handler, err := d.registry.ResolveCapability(capabilityID)
-			if err != nil {
-				return routedTarget{}, err
-			}
-			return routedTarget{
-				targetID: capabilityID, version: spec.Version, sideEffect: spec.SideEffect,
-				requiresConfirmation: spec.RequiresConfirmation,
-				requiredPermissions:  spec.RequiredPermissions, handler: handler,
-				validateInput: func(payload json.RawMessage) error {
-					return d.registry.ValidateCapabilityInput(capabilityID, payload)
-				},
-				fillChild: func(child contracts.RequestContext) contracts.RequestContext {
-					child.CapabilityID = capabilityID
-					child.ServiceID = spec.ServiceID
-					child.ToolID = spec.ToolID
-					return child
-				},
-				metric: observe.DefaultMetrics().ObserveCapability,
-			}, nil
-		},
-	)
+	return d.route(ctx, request, capabilityID, payload)
 }
 
-func (d *Dispatcher) UseTool(ctx context.Context, request contracts.RequestContext, serviceID, toolID string, payload json.RawMessage) (json.RawMessage, error) {
-	return d.route(ctx, request, "tool", toolID, payload,
-		[]slog.Attr{
-			observe.StringAttr("target_type", "tool"),
-			observe.StringAttr("service_id", serviceID),
-			observe.StringAttr("tool_id", toolID),
-		},
-		func() (routedTarget, error) {
-			spec, handler, err := d.registry.ResolveTool(serviceID, toolID)
-			if err != nil {
-				return routedTarget{}, err
-			}
-			return routedTarget{
-				targetID: toolID, version: spec.Version, sideEffect: spec.SideEffect,
-				requiresConfirmation: spec.RequiresConfirmation,
-				requiredPermissions:  spec.RequiredPermissions, handler: handler,
-				validateInput: func(payload json.RawMessage) error {
-					return d.registry.ValidateToolInput(serviceID, toolID, payload)
-				},
-				fillChild: func(child contracts.RequestContext) contracts.RequestContext {
-					child.CapabilityID = ""
-					child.ServiceID = serviceID
-					child.ToolID = toolID
-					return child
-				},
-				metric: observe.DefaultMetrics().ObserveTool,
-			}, nil
-		},
-	)
-}
-
-// routedTarget 是 Capability/Tool 共用的治理目标视图：解析结果、输入校验、
-// 子请求标识填充与执行指标封装在一起，使两条调用路径共享同一条治理序列。
-type routedTarget struct {
-	targetID             string
-	version              string
-	sideEffect           string
-	requiresConfirmation bool
-	requiredPermissions  []string
-	handler              registry.Handler
-	validateInput        func(json.RawMessage) error
-	fillChild            func(contracts.RequestContext) contracts.RequestContext
-	metric               func(bool, time.Duration)
-}
-
-// route 是 Capability 与 Tool 调用的统一治理序列：校验 → 策略快照（Capability
-// 另做启用检查）→ 解析 → 授权与收窄 → 严格 Schema 重验 → 子请求（深度+1、
-// 调用链、循环检测）→ 幂等/确认治理执行 → 指标。
+// route 是 Capability 的统一治理序列：上下文 → App 策略 → Registry → 权限与副作用
+// → Schema → 调用链 → 幂等/确认 → 实现。
 func (d *Dispatcher) route(
 	ctx context.Context,
 	request contracts.RequestContext,
-	targetType string,
-	targetID string,
+	capabilityID string,
 	payload json.RawMessage,
-	logAttrs []slog.Attr,
-	resolve func() (routedTarget, error),
 ) (json.RawMessage, error) {
 	started := time.Now()
 	succeeded := false
+	defer func() { observe.DefaultMetrics().ObserveCapability(succeeded, time.Since(started)) }()
 	ctx, cancel := requestDeadlineContext(ctx, request.Deadline)
 	defer cancel()
-	ctx = requestLogContext(ctx, request, logAttrs...)
-	observe.Debug(ctx, "开始路由调用",
+	ctx = requestLogContext(ctx, request, observe.StringAttr("capability_id", capabilityID))
+	observe.Debug(ctx, "开始路由 Capability",
 		observe.IntAttr("payload_bytes", len(payload)),
 		observe.IntAttr("call_depth", int(request.CallDepth)),
 	)
 	if err := d.validate(ctx, request); err != nil {
-		observe.Warn(ctx, "调用上下文校验失败",
-			observe.StringAttr("error", err.Error()),
-		)
+		observe.Warn(ctx, "调用上下文校验失败", observe.StringAttr("error", err.Error()))
 		return nil, err
 	}
 	policy, err := d.policySnapshot(ctx, request)
 	if err != nil {
 		return nil, err
 	}
-	if targetType == registry.TargetTypeCapability && !policy.CapabilityEnabled(targetID) {
-		err := fmt.Errorf("%w: app=%q capability=%q", ErrCapabilityDisabled, request.AppID, targetID)
+	if !policy.CapabilityEnabled(capabilityID) {
+		err := fmt.Errorf("%w: app=%q capability=%q", ErrCapabilityDisabled, request.AppID, capabilityID)
 		observe.Warn(ctx, "App 未启用请求的 Capability")
 		return nil, err
 	}
-	target, err := resolve()
+	spec, handler, err := d.registry.ResolveCapability(capabilityID)
 	if err != nil {
-		observe.Warn(ctx, "Registry 中未找到调用路由",
-			observe.StringAttr("error", err.Error()),
-		)
+		observe.Warn(ctx, "Registry 中未找到 Capability 路由", observe.StringAttr("error", err.Error()))
 		return nil, err
 	}
-	defer func() { target.metric(succeeded, time.Since(started)) }()
-	narrowedPermissions, err := d.authorize(ctx, request, targetType, target.targetID, target.sideEffect, target.requiresConfirmation, target.requiredPermissions)
+	narrowedPermissions, err := d.authorize(ctx, request, spec.ID, spec.SideEffect,
+		spec.RequiresConfirmation, spec.RequiredPermissions)
 	if err != nil {
 		observe.Warn(ctx, "权限或副作用治理拒绝本次调用",
 			observe.StringAttr("error_class", "governance"),
 		)
 		return nil, err
 	}
-	if err := target.validateInput(payload); err != nil {
-		observe.Warn(ctx, "输入未通过注册 Schema 校验",
+	if err := d.registry.ValidateCapabilityInput(spec.ID, payload); err != nil {
+		observe.Warn(ctx, "输入未通过 Capability Schema 校验",
 			observe.StringAttr("error_class", "validation"),
 		)
 		return nil, err
 	}
-	child, fingerprint, err := d.childRequest(request, targetType, target.targetID, target.version, narrowedPermissions, payload)
+	child, fingerprint, err := d.childRequest(request, spec.ID, spec.Version, narrowedPermissions, payload)
 	if err != nil {
-		observe.Warn(ctx, "调用图治理拒绝本次调用",
-			observe.StringAttr("error", err.Error()),
-		)
+		observe.Warn(ctx, "调用图治理拒绝本次调用", observe.StringAttr("error", err.Error()))
 		return nil, err
 	}
-	child = target.fillChild(child)
-	child.TargetType = targetType
-	result, replayed, err := d.invokeHandler(ctx, request, targetType, target.targetID, target.version, target.sideEffect, fingerprint, func(executionContext context.Context) (json.RawMessage, error) {
-		return target.handler(executionContext, child, payload)
-	})
+	child.CapabilityID = spec.ID
+	result, replayed, err := d.invokeHandler(ctx, request, spec.ID, spec.Version,
+		spec.SideEffect, fingerprint, func(executionContext context.Context) (json.RawMessage, error) {
+			return handler(executionContext, child, payload)
+		})
 	if err != nil {
-		observe.Warn(ctx, "调用处理失败",
-			observe.StringAttr("error", err.Error()),
-			observe.Duration(started),
-		)
+		observe.Warn(ctx, "Capability 处理失败",
+			observe.StringAttr("error", err.Error()), observe.Duration(started))
 		return nil, err
 	}
-	observe.Debug(ctx, "调用处理完成",
+	observe.Debug(ctx, "Capability 处理完成",
 		observe.IntAttr("result_bytes", len(result)),
 		observe.BoolAttr("idempotency_replayed", replayed),
 		observe.Duration(started),
@@ -281,7 +199,6 @@ func requestDeadlineContext(ctx context.Context, deadline time.Time) (context.Co
 func (d *Dispatcher) authorize(
 	ctx context.Context,
 	request contracts.RequestContext,
-	targetType string,
 	targetID string,
 	sideEffect string,
 	requiresConfirmation bool,
@@ -301,14 +218,9 @@ func (d *Dispatcher) authorize(
 			return nil, fmt.Errorf("%w: target=%q", ErrConfirmationRequired, targetID)
 		}
 		confirmation := ConfirmationRequest{
-			AppID:          request.AppID,
-			EchoID:         request.EchoID,
-			RunID:          request.RunID,
-			ConfirmationID: request.ConfirmationID,
-			TargetType:     targetType,
-			TargetID:       targetID,
-			SideEffect:     sideEffect,
-			IdempotencyKey: request.IdempotencyKey,
+			AppID: request.AppID, EchoID: request.EchoID, RunID: request.RunID,
+			ConfirmationID: request.ConfirmationID, CapabilityID: targetID,
+			SideEffect: sideEffect, IdempotencyKey: request.IdempotencyKey,
 		}
 		if err := d.confirmations.VerifyConfirmation(ctx, confirmation); err != nil {
 			return nil, fmt.Errorf("%w: target=%q", ErrConfirmationRequired, targetID)
@@ -320,7 +232,6 @@ func (d *Dispatcher) authorize(
 func (d *Dispatcher) invokeHandler(
 	ctx context.Context,
 	request contracts.RequestContext,
-	targetType string,
 	targetID string,
 	version string,
 	sideEffect string,
@@ -335,11 +246,8 @@ func (d *Dispatcher) invokeHandler(
 		return nil, false, ErrIdempotencyUnavailable
 	}
 	result, replayed, err := d.idempotency.Execute(ctx, idempotency.Operation{
-		AppID:       request.AppID,
-		Scope:       "runtime." + targetType + "/" + targetID + "/" + version,
-		Key:         request.IdempotencyKey,
-		Fingerprint: fingerprint,
-		OwnerID:     request.RequestID,
+		AppID: request.AppID, Scope: "runtime.capability/" + targetID + "/" + version,
+		Key: request.IdempotencyKey, Fingerprint: fingerprint, OwnerID: request.RequestID,
 	}, func(executionContext context.Context) ([]byte, error) {
 		return handler(executionContext)
 	})
@@ -348,13 +256,12 @@ func (d *Dispatcher) invokeHandler(
 
 func (d *Dispatcher) childRequest(
 	request contracts.RequestContext,
-	targetType string,
 	targetID string,
 	version string,
 	narrowedPermissions []string,
 	payload json.RawMessage,
 ) (contracts.RequestContext, string, error) {
-	fingerprint, err := callFingerprint(request, targetType, targetID, version, payload)
+	fingerprint, err := callFingerprint(request, targetID, version, payload)
 	if err != nil {
 		return contracts.RequestContext{}, "", err
 	}
@@ -369,19 +276,19 @@ func (d *Dispatcher) childRequest(
 	return child, fingerprint, nil
 }
 
-func callFingerprint(request contracts.RequestContext, targetType, targetID, version string, payload json.RawMessage) (string, error) {
+func callFingerprint(request contracts.RequestContext, targetID, version string, payload json.RawMessage) (string, error) {
 	digest := sha256.New()
 	permissions := append([]string(nil), request.PermissionScope...)
 	sort.Strings(permissions)
-	fmt.Fprintf(digest, "%s\x00%s\x00%s\x00%s\x00%s\x00", targetType, targetID, version, request.AppID, request.UserID)
+	fmt.Fprintf(digest, "%s\x00%s\x00%s\x00%s\x00", targetID, version, request.AppID, request.UserID)
 	canonicalPayload, err := jsonutil.CanonicalJSON(payload)
 	if err != nil {
 		return "", fmt.Errorf("canonicalize call payload: %w", err)
 	}
-	digest.Write(canonicalPayload)
+	_, _ = digest.Write(canonicalPayload)
 	for _, permission := range permissions {
-		digest.Write([]byte{0})
-		digest.Write([]byte(permission))
+		_, _ = digest.Write([]byte{0})
+		_, _ = digest.Write([]byte(permission))
 	}
 	return fmt.Sprintf("%x", digest.Sum(nil)), nil
 }

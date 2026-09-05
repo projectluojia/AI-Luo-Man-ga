@@ -30,7 +30,7 @@ var (
 var environmentNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,127}$`)
 
 // ProcessHostConfig 是统一进程宿主的配置：服务 mode=isolated 的全部组件，
-// role 决定装载后的协议面——capability 走 runtime_host 协议（Invoker），
+// role 决定装载后的协议面——provider 走 runtime_host 协议（Invoker），
 // executor 走 executor.v1 协议（ClientProvider + ProcessLifecycle）。内核不
 // 感知任何具体运行时的名字：进程规格由组合根聚合的包源按清单解析。
 type ProcessHostConfig struct {
@@ -122,7 +122,7 @@ func (h *ProcessHost) Load(ctx context.Context, manifest Manifest) (Runtime, err
 	switch manifest.Role {
 	case RoleExecutor:
 		return h.loadExecutor(ctx, manifest, spec)
-	case RoleCapability:
+	case RoleProvider:
 		return h.loadCapability(ctx, manifest, spec)
 	default:
 		return nil, ErrInvalidManifest

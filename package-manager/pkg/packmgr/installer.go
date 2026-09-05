@@ -50,7 +50,25 @@ func Inspect(ctx context.Context, sourcePath string) (packagecontract.Manifest, 
 // 校验源（manifest + 每组件 entrypoint 工件）、解析依赖、原子发布
 // manifest+lock+全部组件工件，并回读验证。目标已有同 ID 且版本不同时替换；
 // 版本相同且内容相同则幂等返回，否则拒绝覆盖已发布内容。
-func Install(ctx context.Context, root, sourcePath string) (InstalledRecord, error) {
+func Install(ctx context.Context, root, sourcePath string) (record InstalledRecord, err error) {
+	if root == "" {
+		return InstalledRecord{}, packagecontract.ErrInvalidFormat
+	}
+	absoluteRoot, err := filepath.Abs(root)
+	if err != nil {
+		return InstalledRecord{}, err
+	}
+	if err := os.MkdirAll(filepath.Dir(absoluteRoot), 0o750); err != nil {
+		return InstalledRecord{}, err
+	}
+	rootLock := packageio.InstallRootLock(absoluteRoot)
+	rootLock.Lock()
+	defer rootLock.Unlock()
+	fileLock, err := packageio.AcquireFileLock(ctx, packageio.InstallRootLockPath(absoluteRoot))
+	if err != nil {
+		return InstalledRecord{}, err
+	}
+	defer func() { err = errors.Join(err, fileLock.Close()) }()
 	return install(ctx, root, sourcePath, "", "")
 }
 
@@ -292,7 +310,7 @@ func resolveProcessPath(artifactRoot, relative string) (string, error) {
 }
 
 // Upgrade 要求包已安装且源包版本号不同，然后安装。
-func Upgrade(ctx context.Context, root, id, sourcePath string) (InstalledRecord, error) {
+func Upgrade(ctx context.Context, root, id, sourcePath string) (record InstalledRecord, err error) {
 	if root == "" || !capability.IsStableID(id) {
 		return InstalledRecord{}, fmt.Errorf("包 %q 标识非法", id)
 	}
@@ -300,6 +318,17 @@ func Upgrade(ctx context.Context, root, id, sourcePath string) (InstalledRecord,
 	if err != nil {
 		return InstalledRecord{}, err
 	}
+	if err := os.MkdirAll(filepath.Dir(absoluteRoot), 0o750); err != nil {
+		return InstalledRecord{}, err
+	}
+	rootLock := packageio.InstallRootLock(absoluteRoot)
+	rootLock.Lock()
+	defer rootLock.Unlock()
+	fileLock, err := packageio.AcquireFileLock(ctx, packageio.InstallRootLockPath(absoluteRoot))
+	if err != nil {
+		return InstalledRecord{}, err
+	}
+	defer func() { err = errors.Join(err, fileLock.Close()) }()
 	if err := packageio.RecoverInstallRoot(ctx, absoluteRoot); err != nil {
 		return InstalledRecord{}, err
 	}
@@ -328,7 +357,7 @@ func Upgrade(ctx context.Context, root, id, sourcePath string) (InstalledRecord,
 }
 
 // Uninstall 删除已安装包目录。仅当目录包含 manifest.json 时删除（安全防护）。
-func Uninstall(ctx context.Context, root, id string) error {
+func Uninstall(ctx context.Context, root, id string) (err error) {
 	if root == "" || !capability.IsStableID(id) {
 		return fmt.Errorf("包 %q 标识非法", id)
 	}
@@ -336,6 +365,17 @@ func Uninstall(ctx context.Context, root, id string) error {
 	if err != nil {
 		return err
 	}
+	if err := os.MkdirAll(filepath.Dir(absoluteRoot), 0o750); err != nil {
+		return err
+	}
+	rootLock := packageio.InstallRootLock(absoluteRoot)
+	rootLock.Lock()
+	defer rootLock.Unlock()
+	fileLock, err := packageio.AcquireFileLock(ctx, packageio.InstallRootLockPath(absoluteRoot))
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, fileLock.Close()) }()
 	if err := os.MkdirAll(absoluteRoot, 0o750); err != nil {
 		return err
 	}

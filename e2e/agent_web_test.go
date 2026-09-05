@@ -251,7 +251,7 @@ func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 	defer executorLease.Release()
 
 	docs := memory.NewDocuments()
-	scope := packstore.Scope{AppID: campus.AppID, Namespace: campus.StorageNamespace}
+	scope := packstore.Scope{AppID: campus.AppID, PackageID: campus.PackageID, Namespace: campus.StorageNamespace}
 	routes := []packstore.Document{{ID: "r", Payload: []byte(`{"id":"r","name":"测试线路","direction":"去程","source_revision":"e2e-revision"}`)}}
 	if err := docs.ReplaceSnapshot(context.Background(), scope, packstore.SnapshotMeta{
 		Revision: "e2e-revision", Source: "zhihui-luojia", Authoritative: true, Complete: true,
@@ -276,7 +276,7 @@ func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 	}
 	if _, _, err := store.Ensure(ctx, appconfig.Config{
 		AppID: campus.AppID, Enabled: true, Model: "test-model", SystemPrompt: "test",
-		Timezone: "Asia/Shanghai", MaxSteps: 4, MaxToolCalls: 8, MaxInputTokens: 1000,
+		Timezone: "Asia/Shanghai", MaxSteps: 4, MaxCapabilityCalls: 8, MaxInputTokens: 1000,
 		MaxOutputTokens: 500, MaxTotalTokens: 1500, MaxOutputBytes: 4096,
 		ProviderTimeout: 5 * time.Second,
 	}); err != nil {

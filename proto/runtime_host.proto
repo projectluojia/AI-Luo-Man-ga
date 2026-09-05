@@ -56,10 +56,9 @@ message GovernedRequestContext {
   repeated string permission_scope = 14;
   repeated string call_chain = 15;
   string call_id = 16;
-  string target_type = 17;
   string capability_id = 18;
-  string service_id = 19;
-  string tool_id = 20;
+  reserved 17, 19, 20;
+  reserved "target_type", "service_id", "tool_id";
 }
 
 message InvokeRequest {

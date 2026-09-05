@@ -1,29 +1,32 @@
 package packagecontract_test
 
 import (
-	"encoding/json"
 	"errors"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 
+	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/capability"
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packagecontract"
 )
 
 func TestValidateManifestAcceptsNeutralCore(t *testing.T) {
-	extensions := json.RawMessage(`{"tools":[],"service":{},"capabilities":[]}`)
 	manifest := packagecontract.Manifest{
 		SchemaVersion: packagecontract.SchemaVersion, ID: "campus.bus", Version: "1.2.3",
-		Pin: true, IdleTTLMS: 1000, Extensions: extensions,
+		Pin: true, IdleTTLMS: 1000,
+		Capabilities: []capability.CapabilitySpec{{
+			ID: "campus.bus.query", Version: "1.2.3", Name: "查询校巴",
+			InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
+			SideEffect:      capability.SideEffectRead,
+		}},
 		Components: []packagecontract.Component{{
-			ID: "bus.core", Mode: packagecontract.ModeHosted, Entrypoint: "bus-core.wasm",
-			Exports: []string{"campus.bus.query"}, Imports: []string{"campus.bus.transport"},
+			ID: "bus.core", Mode: packagecontract.ModeHosted, Role: packagecontract.RoleProvider, Entrypoint: "bus-core.wasm",
+			Exports:       []string{"campus.bus.query"},
 			HostFunctions: []packagecontract.HostedFunctionDecl{{Module: "ailuo.bus", Name: "query", Purpose: "权威存储查询"}},
 		}},
 		Storage: &packagecontract.Storage{
-			Namespace: "campus/bus", SchemaVersion: 1,
-			Sensitivity: packagecontract.SensitivityPublic, Retention: packagecontract.RetentionPermanent,
+			Namespace: "campus.bus/bus",
 		},
 		Dependencies: []packagecontract.Dependency{{ID: "bus.transport", Constraint: "^1.0.0", Source: "github:owner/repo"}},
 	}
@@ -57,9 +60,14 @@ func TestValidateManifestRejectsInvalidCore(t *testing.T) {
 	validManifest := func() packagecontract.Manifest {
 		return packagecontract.Manifest{
 			SchemaVersion: packagecontract.SchemaVersion, ID: "campus.bus", Version: "1.0.0",
-			Extensions: json.RawMessage(`{"tools":[]}`),
+			Capabilities: []capability.CapabilitySpec{{
+				ID: "campus.bus.query", Version: "1.0.0", Name: "查询校巴",
+				InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
+				SideEffect:      capability.SideEffectRead,
+			}},
 			Components: []packagecontract.Component{{
-				ID: "bus.core", Mode: packagecontract.ModeHosted, Entrypoint: "bus-core.wasm",
+				ID: "bus.core", Mode: packagecontract.ModeHosted, Role: packagecontract.RoleProvider, Entrypoint: "bus-core.wasm",
+				Exports: []string{"campus.bus.query"},
 			}},
 		}
 	}
@@ -104,8 +112,10 @@ func TestValidateManifestRejectsInvalidCore(t *testing.T) {
 			m.Components[0].HostFunctions = []packagecontract.HostedFunctionDecl{{Module: "wasi_snapshot_preview1", Name: "fd_write"}}
 		}},
 		{name: "invalid storage", mutate: func(m *packagecontract.Manifest) {
-			m.Storage = &packagecontract.Storage{Namespace: "campus/bus", SchemaVersion: 0,
-				Sensitivity: packagecontract.SensitivityPublic, Retention: packagecontract.RetentionPermanent}
+			m.Storage = &packagecontract.Storage{Namespace: "campus/bus"}
+		}},
+		{name: "storage namespace outside package", mutate: func(m *packagecontract.Manifest) {
+			m.Storage = &packagecontract.Storage{Namespace: "other/data"}
 		}},
 		{name: "invalid dependency id", mutate: func(m *packagecontract.Manifest) {
 			m.Dependencies = []packagecontract.Dependency{{ID: "Bus.query", Constraint: "^1.0.0"}}
@@ -113,19 +123,26 @@ func TestValidateManifestRejectsInvalidCore(t *testing.T) {
 		{name: "invalid dependency constraint", mutate: func(m *packagecontract.Manifest) {
 			m.Dependencies = []packagecontract.Dependency{{ID: "bus.query", Constraint: "^"}}
 		}},
-		{name: "invalid extensions json", mutate: func(m *packagecontract.Manifest) { m.Extensions = json.RawMessage(`{`) }},
+		{name: "invalid capability id", mutate: func(m *packagecontract.Manifest) { m.Capabilities[0].ID = "Campus.bus.query" }},
+		{name: "unexported capability", mutate: func(m *packagecontract.Manifest) {
+			m.Capabilities = append(m.Capabilities, capability.CapabilitySpec{
+				ID: "campus.bus.hidden", Version: "1.0.0", Name: "隐藏能力",
+				InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
+				SideEffect:      capability.SideEffectRead,
+			})
+		}},
+		{name: "executor exports capability", mutate: func(m *packagecontract.Manifest) {
+			m.Components[0].Role = packagecontract.RoleExecutor
+			m.Components[0].Mode = packagecontract.ModeIsolated
+			m.Components[0].Process = &packagecontract.ProcessTemplate{Path: "runner", Address: "127.0.0.1:50051"}
+		}},
+		{name: "invalid capability schema", mutate: func(m *packagecontract.Manifest) { m.Capabilities[0].InputSchemaJSON = "{" }},
 		{name: "capability exported twice", mutate: func(m *packagecontract.Manifest) {
 			m.Components = append(m.Components, packagecontract.Component{
 				ID: "bus.other", Mode: packagecontract.ModeHosted, Entrypoint: "x",
 				Exports: []string{"campus.bus.query"},
 			})
 			m.Components[0].Exports = []string{"campus.bus.query"}
-		}},
-		{name: "cyclic imports", mutate: func(m *packagecontract.Manifest) {
-			m.Components = []packagecontract.Component{
-				{ID: "a", Mode: packagecontract.ModeHosted, Entrypoint: "a", Exports: []string{"x"}, Imports: []string{"y"}},
-				{ID: "b", Mode: packagecontract.ModeHosted, Entrypoint: "b", Exports: []string{"y"}, Imports: []string{"x"}},
-			}
 		}},
 	}
 	for _, tc := range cases {
@@ -139,13 +156,12 @@ func TestValidateManifestRejectsInvalidCore(t *testing.T) {
 	}
 }
 
-func TestComponentOrderRespectsDependencyTopology(t *testing.T) {
+func TestComponentOrderPreservesManifestOrder(t *testing.T) {
 	components := []packagecontract.Component{
-		{ID: "bus.core", Mode: packagecontract.ModeHosted, Entrypoint: "core.wasm",
-			Imports: []string{"campus.bus.transport"}},
 		{ID: "bus.adapter", Mode: packagecontract.ModeIsolated, Entrypoint: "adapter",
 			Process: &packagecontract.ProcessTemplate{Path: "adapter", Address: "127.0.0.1:9000"},
-			Exports: []string{"campus.bus.transport"}},
+		},
+		{ID: "bus.core", Mode: packagecontract.ModeHosted, Entrypoint: "core.wasm"},
 		{ID: "bus.standalone", Mode: packagecontract.ModeHosted, Entrypoint: "solo.wasm"},
 	}
 	order, err := packagecontract.ComponentOrder(components)
@@ -161,18 +177,8 @@ func TestComponentOrderRespectsDependencyTopology(t *testing.T) {
 		t.Fatalf("component %q missing from order %v", id, order)
 		return -1
 	}
-	if indexOf("bus.adapter") >= indexOf("bus.core") {
-		t.Fatalf("provider bus.adapter must start before consumer bus.core: order=%v", order)
-	}
-}
-
-func TestComponentOrderRejectsCycle(t *testing.T) {
-	components := []packagecontract.Component{
-		{ID: "a", Mode: packagecontract.ModeHosted, Entrypoint: "a", Exports: []string{"x"}, Imports: []string{"y"}},
-		{ID: "b", Mode: packagecontract.ModeHosted, Entrypoint: "b", Exports: []string{"y"}, Imports: []string{"x"}},
-	}
-	if _, err := packagecontract.ComponentOrder(components); !errors.Is(err, packagecontract.ErrInvalidFormat) {
-		t.Fatalf("ComponentOrder cycle error = %v, want ErrInvalidFormat", err)
+	if indexOf("bus.adapter") != 0 || indexOf("bus.core") != 1 || indexOf("bus.standalone") != 2 {
+		t.Fatalf("component order=%v, want manifest order", order)
 	}
 }
 
@@ -183,8 +189,8 @@ func TestValidateLockMatchesComponents(t *testing.T) {
 	manifest := packagecontract.Manifest{
 		SchemaVersion: packagecontract.SchemaVersion, ID: "campus.bus", Version: "1.0.0",
 		Components: []packagecontract.Component{
-			{ID: "bus.core", Mode: packagecontract.ModeHosted, Entrypoint: "bus-core.wasm"},
-			{ID: "bus.adapter", Mode: packagecontract.ModeIsolated, Entrypoint: "bus-adapter",
+			{ID: "bus.core", Mode: packagecontract.ModeHosted, Role: packagecontract.RoleProvider, Entrypoint: "bus-core.wasm"},
+			{ID: "bus.adapter", Mode: packagecontract.ModeIsolated, Role: packagecontract.RoleProvider, Entrypoint: "bus-adapter",
 				Process: &packagecontract.ProcessTemplate{Path: "bus-adapter", Address: "127.0.0.1:9000"}},
 		},
 	}
@@ -269,8 +275,8 @@ func TestLocalRuntimeAddressPolicy(t *testing.T) {
 }
 
 func TestSchemaVersionConstantIsNeutral(t *testing.T) {
-	if packagecontract.SchemaVersion != "ailuo.package.v2" {
-		t.Fatalf("SchemaVersion = %q, want ailuo.package.v2", packagecontract.SchemaVersion)
+	if packagecontract.SchemaVersion != "ailuo.package.v3" {
+		t.Fatalf("SchemaVersion = %q, want ailuo.package.v3", packagecontract.SchemaVersion)
 	}
 }
 

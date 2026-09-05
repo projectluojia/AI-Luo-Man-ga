@@ -6,7 +6,7 @@ from typing import Any, AsyncIterator, Awaitable, Callable
 
 
 @dataclass(frozen=True)
-class ToolCall:
+class CapabilityCall:
     id: str
     name: str
     arguments: str
@@ -29,7 +29,7 @@ class ModelUsage:
 @dataclass(frozen=True)
 class TurnCompleted:
     text: str
-    tool_calls: list[ToolCall] = field(default_factory=list)
+    capability_calls: list[CapabilityCall] = field(default_factory=list)
     assistant_message: dict[str, Any] = field(default_factory=dict)
     usage: ModelUsage | None = None
 
@@ -51,7 +51,7 @@ class ModelProvider(ABC):
         *,
         model: str,
         messages: list[dict[str, Any]],
-        tools: list[dict[str, Any]],
+        capabilities: list[dict[str, Any]],
     ) -> AsyncIterator[ModelEvent]:
         raise NotImplementedError
 
@@ -59,4 +59,4 @@ class ModelProvider(ABC):
         return bool(model)
 
 
-CapabilityExecutor = Callable[[ToolCall], Awaitable[str]]
+CapabilityInvoker = Callable[[CapabilityCall], Awaitable[str]]

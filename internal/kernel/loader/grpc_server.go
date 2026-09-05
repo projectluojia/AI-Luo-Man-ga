@@ -298,10 +298,7 @@ func (s *RuntimeHostProtocolServer) decodeInvoke(request *runtimev1.InvokeReques
 		CallDepth: uint16(request.Context.CallDepth), Deadline: deadline,
 		IdempotencyKey: request.Context.IdempotencyKey, ConfirmationID: request.Context.ConfirmationId,
 		ProtocolVersion: request.Context.ProtocolVersion,
-		TargetType:      request.Context.TargetType,
 		CapabilityID:    request.Context.CapabilityId,
-		ServiceID:       request.Context.ServiceId,
-		ToolID:          request.Context.ToolId,
 		PermissionScope: append([]string(nil), request.Context.PermissionScope...),
 		CallChain:       append([]string(nil), request.Context.CallChain...),
 	}

@@ -158,7 +158,7 @@ func validConfig() appconfig.Config {
 	return appconfig.Config{
 		AppID: "campus-services", Enabled: true, Model: "test-model",
 		SystemPrompt: "系统提示", Timezone: "Asia/Shanghai",
-		MaxSteps: 8, MaxToolCalls: 8, MaxInputTokens: 32768, MaxOutputTokens: 8192,
+		MaxSteps: 8, MaxCapabilityCalls: 8, MaxInputTokens: 32768, MaxOutputTokens: 8192,
 		MaxTotalTokens: 40960, MaxOutputBytes: 65536, ProviderTimeout: 30 * time.Second,
 		EnabledCapabilities: []string{"campus.bus.routes.list"}, PermissionScope: []string{"bus.read"},
 	}

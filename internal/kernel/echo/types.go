@@ -72,7 +72,7 @@ type RunRecord struct {
 	ContextSources      json.RawMessage `json:"-"`
 	TaskMessage         string          `json:"-"`
 	MaxSteps            uint32          `json:"max_steps"`
-	MaxToolCalls        uint32          `json:"max_tool_calls"`
+	MaxCapabilityCalls  uint32          `json:"max_capability_calls"`
 	MaxInputTokens      uint64          `json:"max_input_tokens"`
 	MaxOutputTokens     uint64          `json:"max_output_tokens"`
 	MaxTotalTokens      uint64          `json:"max_total_tokens"`

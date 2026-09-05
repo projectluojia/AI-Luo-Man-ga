@@ -131,10 +131,10 @@ func TestPythonMethodName(t *testing.T) {
 // TestGenerateRejectsBadSource 验证生成入口对畸形契约输入 fail-closed。
 func TestGenerateRejectsBadSource(t *testing.T) {
 	tests := []string{
-		``,                                // 空
-		`{"unknown":true}`,                // 未知字段
-		`{"capabilities":[]}`,             // 无 capability
-		`{"capabilities":[{"id":"a.b"}]}`, // 缺 schema
+		``,                 // 空
+		`{"unknown":true}`, // 对象而非能力数组
+		`[]`,               // 无 capability
+		`[{"id":"a.b"}]`,   // 缺 schema
 	}
 	for _, source := range tests {
 		_, err := Generate(json.RawMessage(source), Options{Language: LanguageGo, PackageID: "campus"})

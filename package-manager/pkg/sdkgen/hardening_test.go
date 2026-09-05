@@ -12,7 +12,7 @@ import (
 func TestGenerateRejectsReservedFieldNames(t *testing.T) {
 	for _, name := range []string{"class", "from", "interface"} {
 		schema := `{"type":"object","properties":{"` + name + `":{"type":"string"}},"additionalProperties":false}`
-		source := `{"capabilities":[{"id":"x.y","input_schema_json":` + strconv.Quote(schema) + `}]}`
+		source := `[{"id":"x.y","input_schema_json":` + strconv.Quote(schema) + `}]`
 		_, err := Generate(json.RawMessage(source), Options{Language: LanguagePython, PackageID: "x"})
 		if err == nil || !strings.Contains(err.Error(), "保留字") {
 			t.Errorf("字段名 %q 未被拒为保留字: %v", name, err)
@@ -30,7 +30,7 @@ func TestGenerateRejectsCompositionSchema(t *testing.T) {
 		`{"$ref":"#/definitions/X"}`,
 	}
 	for _, schema := range tests {
-		source := `{"capabilities":[{"id":"x.y","input_schema_json":` + strconv.Quote(schema) + `}]}`
+		source := `[{"id":"x.y","input_schema_json":` + strconv.Quote(schema) + `}]`
 		if _, err := Generate(json.RawMessage(source), Options{Language: LanguageGo, PackageID: "x"}); err == nil {
 			t.Errorf("schema %s 期望拒绝", schema)
 		}
@@ -39,7 +39,7 @@ func TestGenerateRejectsCompositionSchema(t *testing.T) {
 
 // TestGenerateRejectsInvalidCapabilityID 验证 capability ID 格式 fail-closed。
 func TestGenerateRejectsInvalidCapabilityID(t *testing.T) {
-	source := `{"capabilities":[{"id":"UPPER.Case","input_schema_json":"{\"type\":\"object\",\"properties\":{\"a\":{\"type\":\"string\"}},\"required\":[\"a\"],\"additionalProperties\":false}"}]}`
+	source := `[{"id":"UPPER.Case","input_schema_json":"{\"type\":\"object\",\"properties\":{\"a\":{\"type\":\"string\"}},\"required\":[\"a\"],\"additionalProperties\":false}"}]`
 	if _, err := Generate(json.RawMessage(source), Options{Language: LanguageGo, PackageID: "x"}); err == nil {
 		t.Fatal("期望拒绝非法 capability ID")
 	}
@@ -63,7 +63,7 @@ func TestValidateCapabilityID(t *testing.T) {
 func TestGenerateRejectsNonIdentifierFieldNames(t *testing.T) {
 	for _, name := range []string{"user-name", "2fa", "a b", ""} {
 		schema := `{"type":"object","properties":{"` + name + `":{"type":"string"}},"additionalProperties":false}`
-		source := `{"capabilities":[{"id":"x.y","input_schema_json":` + strconv.Quote(schema) + `}]}`
+		source := `[{"id":"x.y","input_schema_json":` + strconv.Quote(schema) + `}]`
 		if _, err := Generate(json.RawMessage(source), Options{Language: LanguagePython, PackageID: "x"}); err == nil {
 			t.Errorf("字段名 %q 期望拒绝，实际通过", name)
 		}
@@ -74,7 +74,7 @@ func TestGenerateRejectsNonIdentifierFieldNames(t *testing.T) {
 // 重复 ID 会生成同名方法与同名输入类型，产物编译不过。
 func TestGenerateRejectsDuplicateCapabilityID(t *testing.T) {
 	capability := `{"id":"x.y","input_schema_json":"{\"type\":\"object\",\"properties\":{\"a\":{\"type\":\"string\"}},\"additionalProperties\":false}"}`
-	source := `{"capabilities":[` + capability + `,` + capability + `]}`
+	source := `[` + capability + `,` + capability + `]`
 	_, err := Generate(json.RawMessage(source), Options{Language: LanguageGo, PackageID: "x"})
 	if err == nil || !strings.Contains(err.Error(), "重复") {
 		t.Fatalf("重复 capability ID 未被拒绝: %v", err)
@@ -83,7 +83,7 @@ func TestGenerateRejectsDuplicateCapabilityID(t *testing.T) {
 
 func TestGenerateRejectsNormalizedCapabilityNameCollision(t *testing.T) {
 	schema := `{"type":"object","properties":{"value":{"type":"string"}},"additionalProperties":false}`
-	source := `{"capabilities":[{"id":"x.foo-bar","input_schema_json":` + strconv.Quote(schema) + `},{"id":"x.foo_bar","input_schema_json":` + strconv.Quote(schema) + `}]}`
+	source := `[{"id":"x.foo-bar","input_schema_json":` + strconv.Quote(schema) + `},{"id":"x.foo_bar","input_schema_json":` + strconv.Quote(schema) + `}]`
 	if _, err := Generate(json.RawMessage(source), Options{Language: LanguageTypeScript, PackageID: "x"}); err == nil || !strings.Contains(err.Error(), "名称") {
 		t.Fatalf("normalized capability name collision = %v", err)
 	}
@@ -93,7 +93,7 @@ func TestGenerateRejectsNormalizedCapabilityNameCollision(t *testing.T) {
 // 具名类型，直接打印 TypeModel.Name 会生成 `input ` 这样的语法错误（Go 侧
 // format.Source 会直接失败）。
 func TestGenerateScalarRootSchema(t *testing.T) {
-	source := `{"capabilities":[{"id":"x.y","input_schema_json":"{\"type\":\"string\"}"}]}`
+	source := `[{"id":"x.y","input_schema_json":"{\"type\":\"string\"}"}]`
 	wants := map[Language]string{
 		LanguageGo:         "input string, options ...CallOption)",
 		LanguagePython:     "input: str, options: Optional[CallOptions] = None)",
@@ -115,7 +115,7 @@ func TestGenerateScalarRootSchema(t *testing.T) {
 // client.py 定义的一致：方法名按完整包 ID 去前缀派生，pythonInit 若只拿包 ID
 // 首段（campus.bus → campus）就会导出不存在的符号，import 即 ImportError。
 func TestGeneratePythonInitExportsDefinedNames(t *testing.T) {
-	source := `{"capabilities":[{"id":"campus.bus.stops.search","input_schema_json":"{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\"}},\"additionalProperties\":false}"}]}`
+	source := `[{"id":"campus.bus.stops.search","input_schema_json":"{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\"}},\"additionalProperties\":false}"}]`
 	files, err := Generate(json.RawMessage(source), Options{Language: LanguagePython, PackageID: "campus.bus"})
 	if err != nil {
 		t.Fatal(err)

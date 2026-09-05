@@ -43,7 +43,7 @@ func run(arguments []string, output io.Writer) error {
 }
 
 // runPackageCommand 执行包管理 CLI：sync/install 支持项目或本地包，install 还
-// 支持 GitHub Release 源（owner/repo[@约束]），upgrade/uninstall/list/pack/publish
+// 支持 GitHub Release 源（owner/repo[@约束]），upgrade/uninstall/list/unlock/pack/publish
 // 见各分支。
 func runPackageCommand(parent context.Context, arguments []string, output io.Writer) error {
 	command := arguments[0]
@@ -51,6 +51,8 @@ func runPackageCommand(parent context.Context, arguments []string, output io.Wri
 	flags.SetOutput(io.Discard)
 	root := flags.String("root", "", "安装根目录（默认 AILUO_PACKAGE_INSTALL_ROOT，再默认用户配置目录 ailuo/runtime）")
 	project := flags.String("project", ".", "项目目录或 ailuo.toml 路径（sync 使用）")
+	update := flags.Bool("update", false, "sync 时显式重新求解并更新项目锁")
+	force := flags.Bool("force", false, "unlock 时显式清理确认过的遗留锁")
 	repo := flags.String("repo", "", "GitHub 仓库（owner/repo），publish 使用")
 	version := flags.String("version", "", "零声明包自动生成的 semver 版本")
 	if err := flags.Parse(arguments[1:]); err != nil {
@@ -65,6 +67,12 @@ func runPackageCommand(parent context.Context, arguments []string, output io.Wri
 	if *root == "" && command != "pack" && command != "publish" && command != "sdk-go" && command != "sdk-py" && command != "sdk-ts" {
 		return fmt.Errorf("configuration error: %s requires --root 或 AILUO_PACKAGE_INSTALL_ROOT", command)
 	}
+	if *update && command != "sync" {
+		return fmt.Errorf("configuration error: --update 只适用于 sync")
+	}
+	if *force && command != "unlock" {
+		return fmt.Errorf("configuration error: --force 只适用于 unlock")
+	}
 	ctx, cancel := context.WithTimeout(parent, 2*time.Minute)
 	defer cancel()
 	switch command {
@@ -76,7 +84,7 @@ func runPackageCommand(parent context.Context, arguments []string, output io.Wri
 		if err != nil {
 			return err
 		}
-		lock, err := projectmgr.Sync(ctx, projectFile, *root, packmgr.NewGitHubClient())
+		lock, err := projectmgr.SyncWithOptions(ctx, projectFile, *root, packmgr.NewGitHubClient(), projectmgr.SyncOptions{Update: *update})
 		if err != nil {
 			return err
 		}
@@ -147,6 +155,19 @@ func runPackageCommand(parent context.Context, arguments []string, output io.Wri
 			return err
 		}
 		return nil
+	case "unlock":
+		if flags.NArg() != 0 || !*force {
+			return fmt.Errorf("configuration error: unlock 不接受位置参数且必须指定 --force")
+		}
+		absoluteRoot, err := filepath.Abs(*root)
+		if err != nil {
+			return err
+		}
+		if err := packageio.RemoveFileLock(packageio.InstallRootLockPath(absoluteRoot)); err != nil {
+			return fmt.Errorf("清理安装根锁失败: %w", err)
+		}
+		_, err = fmt.Fprintf(output, "已清理安装根遗留锁：%s\n", packageio.InstallRootLockPath(absoluteRoot))
+		return err
 	case "pack":
 		if flags.NArg() < 1 || flags.NArg() > 2 {
 			return fmt.Errorf("configuration error: pack requires source package directory [and optional output directory]")
@@ -203,11 +224,11 @@ func runPackageCommand(parent context.Context, arguments []string, output io.Wri
 		if command == "sdk-ts" {
 			language = sdkgen.LanguageTypeScript
 		}
-		packageID, extensions, err := resolveSDKSource(ctx, flags.Arg(0))
+		packageID, capabilitiesJSON, err := resolveSDKSource(ctx, flags.Arg(0))
 		if err != nil {
 			return err
 		}
-		files, err := sdkgen.Generate(extensions, sdkgen.Options{Language: language, PackageID: packageID})
+		files, err := sdkgen.Generate(capabilitiesJSON, sdkgen.Options{Language: language, PackageID: packageID})
 		if err != nil {
 			return err
 		}
@@ -309,14 +330,21 @@ func resolveSource(ctx context.Context, sourceDir, version string) (manifest pac
 	return packagefmt.Resolve(ctx, sourceDir, version)
 }
 
-// resolveSDKSource 读取显式源清单，或只提取零声明源码的 extensions；SDK 生成不构建
+// resolveSDKSource 读取显式源清单，或只提取零声明源码的 Capability；SDK 生成不构建
 // guest 工件，也不需要虚构一个包版本。
 func resolveSDKSource(ctx context.Context, sourceDir string) (string, json.RawMessage, error) {
 	path := packagefmt.SourcePath(sourceDir)
 	_, statErr := os.Stat(path)
 	if statErr == nil {
 		manifest, _, _, err := packagefmt.Parse(path)
-		return manifest.ID, manifest.Extensions, err
+		capabilities, marshalErr := json.Marshal(manifest.Capabilities)
+		if err != nil {
+			return "", nil, err
+		}
+		if marshalErr != nil {
+			return "", nil, marshalErr
+		}
+		return manifest.ID, capabilities, nil
 	}
 	if !errors.Is(statErr, fs.ErrNotExist) {
 		return "", nil, fmt.Errorf("读取源清单失败: %w", statErr)
@@ -329,9 +357,9 @@ func resolveSDKSource(ctx context.Context, sourceDir string) (string, json.RawMe
 	if err != nil {
 		return "", nil, err
 	}
-	extensions, err := packagefmt.ExtensionsFromCapabilities(filepath.Base(absolute), capabilities)
+	capabilitiesJSON, err := packagefmt.CapabilitiesJSON(filepath.Base(absolute), capabilities)
 	if err != nil {
 		return "", nil, err
 	}
-	return filepath.Base(absolute), extensions, nil
+	return filepath.Base(absolute), capabilitiesJSON, nil
 }

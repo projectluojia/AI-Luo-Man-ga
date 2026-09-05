@@ -44,7 +44,7 @@ func TestGenerateTypeScriptCompiles(t *testing.T) {
 		t.Skip("npx 不可用，跳过 tsc 编译验证")
 	}
 	dir := t.TempDir()
-	files, err := Generate(json.RawMessage(campusExtensions), Options{Language: LanguageTypeScript, PackageID: "campus"})
+	files, err := Generate(json.RawMessage(campusCapabilities), Options{Language: LanguageTypeScript, PackageID: "campus"})
 	if err != nil {
 		t.Fatal(err)
 	}

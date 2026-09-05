@@ -52,7 +52,7 @@ func VerifyHostedProtocol(ctx context.Context, sourceDir string, manifest packag
 		for _, capabilityID := range component.Exports {
 			_, invokeErr := invoker.Invoke(ctx, contracts.RequestContext{
 				AppID: manifest.ID, EchoID: "package-verify", RequestID: capabilityID,
-				ToolID: capabilityID, Deadline: time.Now().UTC().Add(30 * time.Second),
+				CapabilityID: capabilityID, Deadline: time.Now().UTC().Add(30 * time.Second),
 			}, []byte(`{}`))
 			if invokeErr != nil && !errors.Is(invokeErr, loader.ErrHostedCallRejected) {
 				stopErr := stopRuntime()

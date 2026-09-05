@@ -26,11 +26,11 @@ func hostedArtifact(t *testing.T, name string) []byte {
 	return data
 }
 
-// hostedTestRequest 构造携带工具标识的治理上下文。
-func hostedTestRequest(toolID string) contracts.RequestContext {
+// hostedTestRequest 构造携带能力标识的治理上下文。
+func hostedTestRequest(capabilityID string) contracts.RequestContext {
 	return contracts.RequestContext{
 		AppID: "app.test", EchoID: "echo-1", RequestID: "request-1",
-		ToolID: toolID,
+		CapabilityID: capabilityID,
 	}
 }
 
@@ -49,7 +49,7 @@ func TestWasmHostRejectsInvalidConfiguration(t *testing.T) {
 		t.Fatalf("NewWasmHost: %v", err)
 	}
 	if err := host.Verify(context.Background(), loader.Manifest{
-		ID: testPackageID, Version: "1.0.0", Mode: loader.ModeHosted, Role: loader.RoleCapability, LockedDigest: digest,
+		ID: testPackageID, Version: "1.0.0", Mode: loader.ModeHosted, Role: loader.RoleProvider, LockedDigest: digest,
 	}); !errors.Is(err, loader.ErrUnavailable) {
 		t.Fatalf("Verify with incomplete host function error = %v, want ErrUnavailable", err)
 	}
@@ -65,7 +65,7 @@ func TestWasmHostRejectsInvalidConfiguration(t *testing.T) {
 		t.Fatalf("NewWasmHost: %v", err)
 	}
 	if err := host.Verify(context.Background(), loader.Manifest{
-		ID: testPackageID, Version: "1.0.0", Mode: loader.ModeHosted, Role: loader.RoleCapability, LockedDigest: digest,
+		ID: testPackageID, Version: "1.0.0", Mode: loader.ModeHosted, Role: loader.RoleProvider, LockedDigest: digest,
 	}); !errors.Is(err, loader.ErrDuplicateID) {
 		t.Fatalf("Verify with duplicate host function error = %v, want ErrDuplicateID", err)
 	}
@@ -90,7 +90,7 @@ func TestWasmHostServesHostedArtifactThroughLoader(t *testing.T) {
 	}
 	ctx := context.Background()
 	manifest := loader.Manifest{
-		ID: testPackageID, Version: "1.0.0", Mode: loader.ModeHosted, Role: loader.RoleCapability, LockedDigest: digest,
+		ID: testPackageID, Version: "1.0.0", Mode: loader.ModeHosted, Role: loader.RoleProvider, LockedDigest: digest,
 	}
 	if err := manager.Register(ctx, manifest); err != nil {
 		t.Fatalf("Register: %v", err)
@@ -102,14 +102,14 @@ func TestWasmHostServesHostedArtifactThroughLoader(t *testing.T) {
 		t.Fatalf("已加载运行时应幂等返回：%v", err)
 	}
 
-	invoke := func(toolID string, payload string) (map[string]any, error) {
+	invoke := func(capabilityID string, payload string) (map[string]any, error) {
 		t.Helper()
 		lease, err := manager.Acquire(ctx, testPackageID)
 		if err != nil {
 			return nil, err
 		}
 		defer lease.Release()
-		result, err := lease.Invoke(ctx, hostedTestRequest(toolID), json.RawMessage(payload))
+		result, err := lease.Invoke(ctx, hostedTestRequest(capabilityID), json.RawMessage(payload))
 		if err != nil {
 			return nil, err
 		}
@@ -120,9 +120,9 @@ func TestWasmHostServesHostedArtifactThroughLoader(t *testing.T) {
 		return decoded, nil
 	}
 
-	echo, err := invoke(testToolID, `{"value":"hello"}`)
+	echo, err := invoke(testInvokeCapabilityID, `{"value":"hello"}`)
 	if err != nil {
-		t.Fatalf("invoke %s: %v", testToolID, err)
+		t.Fatalf("invoke %s: %v", testInvokeCapabilityID, err)
 	}
 	if echo["value"] != "hello" {
 		t.Fatalf("echo result = %v, want original payload", echo)
@@ -130,7 +130,7 @@ func TestWasmHostServesHostedArtifactThroughLoader(t *testing.T) {
 	// 载荷本身不是合法 JSON 属于协议违例，在进入 guest 之前被拒绝。
 	// guest 显式拒绝路径的错误码映射由 wasm_host_internal_test 覆盖；
 	// 固件不做工具路由，Loader 不测 guest 的分发行为。
-	if _, err := invoke(testToolID, `{"value":`); !errors.Is(err, loader.ErrRuntimeProtocol) {
+	if _, err := invoke(testInvokeCapabilityID, `{"value":`); !errors.Is(err, loader.ErrRuntimeProtocol) {
 		t.Fatalf("malformed payload error = %v, want ErrRuntimeProtocol", err)
 	}
 
@@ -158,7 +158,7 @@ func TestWasmHostHostFunctionProjectionBindsGovernedContext(t *testing.T) {
 		t.Fatalf("NewWasmHost: %v", err)
 	}
 	runtime, err := host.Load(context.Background(), loader.Manifest{
-		ID: "hostfn.test", Version: "1.0.0", Mode: loader.ModeHosted, Role: loader.RoleCapability, LockedDigest: digest,
+		ID: "hostfn.test", Version: "1.0.0", Mode: loader.ModeHosted, Role: loader.RoleProvider, LockedDigest: digest,
 		HostFunctions: []packagecontract.HostedFunctionDecl{{Module: "ailuo.host", Name: "echo"}},
 	})
 	if err != nil {
@@ -180,7 +180,7 @@ func TestWasmHostHostFunctionProjectionBindsGovernedContext(t *testing.T) {
 	}
 	select {
 	case request := <-seen:
-		if request.AppID != "app.test" || request.ToolID != "hostfn.echo" {
+		if request.AppID != "app.test" || request.CapabilityID != "hostfn.echo" {
 			t.Fatalf("host function received request = %+v, want app.test/hostfn.echo", request)
 		}
 	case <-time.After(5 * time.Second):
@@ -202,7 +202,7 @@ func TestWasmHostRejectsUndeclaredHostFunctionImport(t *testing.T) {
 	}
 	// manifest 未声明宿主函数，但 hostfn 工件 import ailuo.host.echo → 加载期拒绝。
 	if _, err := host.Load(context.Background(), loader.Manifest{
-		ID: "hostfn.undeclared", Version: "1.0.0", Mode: loader.ModeHosted, Role: loader.RoleCapability, LockedDigest: digest,
+		ID: "hostfn.undeclared", Version: "1.0.0", Mode: loader.ModeHosted, Role: loader.RoleProvider, LockedDigest: digest,
 	}); !errors.Is(err, loader.ErrLoadFailed) {
 		t.Fatalf("Load with undeclared host function import error = %v, want ErrLoadFailed", err)
 	}
@@ -221,7 +221,7 @@ func TestWasmHostVerifyRejectsUndeclaredHostFunction(t *testing.T) {
 		t.Fatalf("NewWasmHost: %v", err)
 	}
 	manifest := loader.Manifest{
-		ID: "hostfn.verify", Version: "1.0.0", Mode: loader.ModeHosted, Role: loader.RoleCapability, LockedDigest: digest,
+		ID: "hostfn.verify", Version: "1.0.0", Mode: loader.ModeHosted, Role: loader.RoleProvider, LockedDigest: digest,
 		HostFunctions: []packagecontract.HostedFunctionDecl{{Module: "ailuo.nonexistent", Name: "missing"}},
 	}
 	if err := host.Verify(context.Background(), manifest); !errors.Is(err, loader.ErrInvalidManifest) {
@@ -244,7 +244,7 @@ func TestWasmHostConcurrentInvocationsAreIsolated(t *testing.T) {
 		t.Fatalf("NewWasmHost: %v", err)
 	}
 	runtime, err := host.Load(context.Background(), loader.Manifest{
-		ID: "hostfn.conc", Version: "1.0.0", Mode: loader.ModeHosted, Role: loader.RoleCapability, LockedDigest: digest,
+		ID: "hostfn.conc", Version: "1.0.0", Mode: loader.ModeHosted, Role: loader.RoleProvider, LockedDigest: digest,
 		HostFunctions: []packagecontract.HostedFunctionDecl{{Module: "ailuo.host", Name: "echo"}},
 	})
 	if err != nil {
@@ -302,7 +302,7 @@ func TestWasmHostEnforcesMemoryLimit(t *testing.T) {
 		t.Fatalf("NewWasmHost: %v", err)
 	}
 	manifest := loader.Manifest{
-		ID: "memory.test", Version: "1.0.0", Mode: loader.ModeHosted, Role: loader.RoleCapability, LockedDigest: digest,
+		ID: "memory.test", Version: "1.0.0", Mode: loader.ModeHosted, Role: loader.RoleProvider, LockedDigest: digest,
 	}
 	// 编译阶段强制线性内存上限：超限工件无法加载。
 	if _, err := host.Load(context.Background(), manifest); !errors.Is(err, loader.ErrLoadFailed) {
@@ -319,7 +319,7 @@ func TestWasmHostRejectsOversizedArtifact(t *testing.T) {
 		t.Fatalf("NewWasmHost: %v", err)
 	}
 	manifest := loader.Manifest{
-		ID: "oversized.test", Version: "1.0.0", Mode: loader.ModeHosted, Role: loader.RoleCapability, LockedDigest: digest,
+		ID: "oversized.test", Version: "1.0.0", Mode: loader.ModeHosted, Role: loader.RoleProvider, LockedDigest: digest,
 	}
 	if err := host.Verify(context.Background(), manifest); !errors.Is(err, loader.ErrInvalidManifest) {
 		t.Fatalf("Verify error = %v, want ErrInvalidManifest", err)
@@ -345,7 +345,7 @@ func TestWasmHostTerminatesRunawayGuest(t *testing.T) {
 		t.Fatalf("NewWasmHost: %v", err)
 	}
 	runtime, err := host.Load(context.Background(), loader.Manifest{
-		ID: "busy.test", Version: "1.0.0", Mode: loader.ModeHosted, Role: loader.RoleCapability, LockedDigest: digest,
+		ID: "busy.test", Version: "1.0.0", Mode: loader.ModeHosted, Role: loader.RoleProvider, LockedDigest: digest,
 	})
 	if err != nil {
 		t.Fatalf("Load: %v", err)

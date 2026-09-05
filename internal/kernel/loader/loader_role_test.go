@@ -87,7 +87,7 @@ func TestLoaderRejectsCapabilityRoleWithoutInvoker(t *testing.T) {
 	}
 	if err := manager.Register(context.Background(), loader.Manifest{
 		ID: description.ID, Version: description.Version, Mode: description.Mode,
-		Role: loader.RoleCapability, LockedDigest: digest,
+		Role: loader.RoleProvider, LockedDigest: digest,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +149,7 @@ func TestManagerExecutorFailsClosedWithoutExecutor(t *testing.T) {
 	}
 	if err := manager.Register(context.Background(), loader.Manifest{
 		ID: "cap.test", Version: "1.0.0", Mode: loader.ModeHosted,
-		Role: loader.RoleCapability, LockedDigest: digest,
+		Role: loader.RoleProvider, LockedDigest: digest,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -188,7 +188,7 @@ func TestLoaderRoleConsistencyEnforcedAtLoad(t *testing.T) {
 	}
 	capability := loader.Manifest{
 		ID: description.ID, Version: "1.0.0", Mode: loader.ModeHosted,
-		Role: loader.RoleCapability, LockedDigest: digest,
+		Role: loader.RoleProvider, LockedDigest: digest,
 	}
 	if err := manager.Register(context.Background(), capability); err != nil {
 		t.Fatal(err)

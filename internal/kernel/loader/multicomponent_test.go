@@ -48,8 +48,8 @@ func (h *multiModeKeyedHost) Load(_ context.Context, manifest loader.Manifest) (
 }
 
 // writeMultiComponentFixture 构造 test.multi 两组件包目录：
-// multi.adapter（isolated，Provider，导出 transport）先于 multi.core（hosted，导入
-// transport，导出 query）启动——依赖拓扑要求 Provider 在前。
+// multi.adapter（isolated，Provider，导出 transport）先于 multi.core（hosted，导出
+// query）启动——组件顺序由 Package 清单显式声明。
 func writeMultiComponentFixture(t *testing.T, root, version string) string {
 	t.Helper()
 	directory := filepath.Join(root, "test.multi")
@@ -65,31 +65,22 @@ func writeMultiComponentFixture(t *testing.T, root, version string) string {
 			t.Fatal(err)
 		}
 	}
-	extensions, err := json.Marshal(map[string]any{
-		"service": capability.ServiceSpec{
-			ID: "test.service", Version: version, Description: "多组件测试包",
-		},
-		"capabilities": []capability.CapabilitySpec{
-			{ID: "test.multi.query", Version: version, Name: "基础查询", Description: "多组件基础查询",
-				ServiceID: "test.service", InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
-				SideEffect: capability.SideEffectRead},
-			{ID: "test.multi.transport", Version: version, Name: "传输", Description: "多组件传输",
-				ServiceID: "test.service", InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
-				SideEffect: capability.SideEffectRead},
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	installed := packagecontract.Manifest{
 		SchemaVersion: packagecontract.SchemaVersion, ID: "test.multi", Version: version,
-		Extensions: extensions,
+		Capabilities: []capability.CapabilitySpec{
+			{ID: "test.multi.query", Version: version, Name: "基础查询", Description: "多组件基础查询",
+				InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
+				SideEffect:      capability.SideEffectRead},
+			{ID: "test.multi.transport", Version: version, Name: "传输", Description: "多组件传输",
+				InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
+				SideEffect:      capability.SideEffectRead},
+		},
 		Components: []packagecontract.Component{
-			{ID: "multi.core", Mode: loader.ModeHosted, Entrypoint: "multi-core.wasm",
-				Exports: []string{"test.multi.query"}, Imports: []string{"test.multi.transport"}},
-			{ID: "multi.adapter", Mode: loader.ModeIsolated, Entrypoint: "multi-adapter",
+			{ID: "multi.adapter", Mode: loader.ModeIsolated, Role: packagecontract.RoleProvider, Entrypoint: "multi-adapter",
 				Process: &packagecontract.ProcessTemplate{Path: "multi-adapter", Address: "127.0.0.1:50051"},
 				Exports: []string{"test.multi.transport"}},
+			{ID: "multi.core", Mode: loader.ModeHosted, Role: packagecontract.RoleProvider, Entrypoint: "multi-core.wasm",
+				Exports: []string{"test.multi.query"}},
 		},
 	}
 	manifest, err := json.Marshal(installed)
@@ -155,24 +146,24 @@ func TestMultiComponentPackageRoutesCapabilitiesAndUpgradesGroup(t *testing.T) {
 		}
 		orderByID[record.ComponentID] = record.ComponentOrder
 	}
-	// 依赖拓扑：Provider（adapter）先于 consumer（core）。
+	// 清单顺序：Provider（adapter）先于 core。
 	if orderByID["multi.adapter"] >= orderByID["multi.core"] {
 		t.Fatalf("topo order adapter=%d core=%d, want adapter < core", orderByID["multi.adapter"], orderByID["multi.core"])
 	}
 	// Capability 按 exports 映射：query → core，transport → adapter。
 	for _, record := range records {
 		exported := map[string]bool{}
-		for _, capability := range record.Capabilities {
+		for _, capability := range record.Runtime.Capabilities {
 			exported[capability.ID] = true
 		}
 		switch record.ComponentID {
 		case "multi.core":
 			if !exported["test.multi.query"] || exported["test.multi.transport"] {
-				t.Fatalf("core capabilities = %v, want only test.multi.query", record.Capabilities)
+				t.Fatalf("core capabilities = %v, want only test.multi.query", record.Runtime.Capabilities)
 			}
 		case "multi.adapter":
 			if !exported["test.multi.transport"] || exported["test.multi.query"] {
-				t.Fatalf("adapter capabilities = %v, want only test.multi.transport", record.Capabilities)
+				t.Fatalf("adapter capabilities = %v, want only test.multi.transport", record.Runtime.Capabilities)
 			}
 		}
 	}
@@ -241,9 +232,9 @@ func TestMultiComponentPackageRoutesCapabilitiesAndUpgradesGroup(t *testing.T) {
 		ID: "test.multi",
 		Components: []loader.ComponentSpec{
 			{Runtime: loader.Manifest{ID: multiAdapterRuntimeID, Version: "2.0.0", Mode: loader.ModeIsolated,
-				Role: loader.RoleCapability, LockedDigest: digest}},
+				Role: loader.RoleProvider, LockedDigest: digest}},
 			{Runtime: loader.Manifest{ID: multiCoreRuntimeID, Version: "2.0.0", Mode: loader.ModeHosted,
-				Role: loader.RoleCapability, LockedDigest: digest}},
+				Role: loader.RoleProvider, LockedDigest: digest}},
 		},
 	}); err != nil {
 		t.Fatalf("UpgradePackage: %v", err)

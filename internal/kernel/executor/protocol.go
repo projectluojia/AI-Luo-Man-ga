@@ -31,7 +31,7 @@ const (
 	MaxDescriptionBytes       = 4096
 	MaxNameBytes              = 256
 	MaxProtocolSteps          = 64
-	MaxToolCalls              = 256
+	MaxCapabilityCalls        = 256
 	MaxTokenBudget            = 1_000_000_000
 	MaxCostMicrousd           = 1_000_000_000_000_000
 	MaxProviderTimeoutMS      = 120_000
@@ -79,7 +79,7 @@ func ValidateStartFrame(frame *Frame) error {
 		!validText(start.Model, 1, MaxIdentifierBytes) ||
 		!validText(start.SystemPrompt, 1, MaxSystemPromptBytes) ||
 		start.MaxSteps == 0 || start.MaxSteps > MaxProtocolSteps ||
-		start.MaxToolCalls == 0 || start.MaxToolCalls > MaxToolCalls ||
+		start.MaxCapabilityCalls == 0 || start.MaxCapabilityCalls > MaxCapabilityCalls ||
 		start.MaxInputTokens == 0 || start.MaxInputTokens > MaxTokenBudget ||
 		start.MaxOutputTokens == 0 || start.MaxOutputTokens > MaxTokenBudget ||
 		start.MaxTotalTokens == 0 || start.MaxTotalTokens > MaxTokenBudget ||

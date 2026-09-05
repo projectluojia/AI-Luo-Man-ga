@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/identity"
-	promptservice "github.com/projectluojia/AI-Luo-Man-ga/internal/services/prompt"
+	promptservice "github.com/projectluojia/AI-Luo-Man-ga/internal/providers/prompt"
 )
 
 // 编译期断言：sqlite.Store 必须完整实现 prompt.SettingsStore 端口。

@@ -79,8 +79,6 @@ type Metrics struct {
 
 	capabilities outcomeCounters
 	capability   durationHistogram
-	tools        outcomeCounters
-	tool         durationHistogram
 	storage      outcomeCounters
 	storageTime  durationHistogram
 	runtimeLoads outcomeCounters
@@ -178,15 +176,6 @@ func (m *Metrics) ObserveCapability(success bool, duration time.Duration) {
 	m.capability.observe(duration)
 }
 
-func (m *Metrics) ObserveTool(success bool, duration time.Duration) {
-	if success {
-		m.tools.success.Add(1)
-	} else {
-		m.tools.failure.Add(1)
-	}
-	m.tool.observe(duration)
-}
-
 func (m *Metrics) ObserveStorage(success bool, duration time.Duration) {
 	if success {
 		m.storage.success.Add(1)
@@ -243,8 +232,6 @@ func (m *Metrics) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	writeMetric(output, "ailuo_model_cost_microusd_total", m.modelCost.Load())
 	writeOutcomes(output, "ailuo_capability_calls_total", &m.capabilities)
 	writeHistogram(output, "ailuo_capability_duration_seconds", &m.capability)
-	writeOutcomes(output, "ailuo_tool_calls_total", &m.tools)
-	writeHistogram(output, "ailuo_tool_duration_seconds", &m.tool)
 	writeOutcomes(output, "ailuo_storage_operations_total", &m.storage)
 	writeHistogram(output, "ailuo_storage_duration_seconds", &m.storageTime)
 	writeOutcomes(output, "ailuo_runtime_loads_total", &m.runtimeLoads)

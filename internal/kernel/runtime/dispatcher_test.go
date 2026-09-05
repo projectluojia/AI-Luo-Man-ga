@@ -23,32 +23,18 @@ func TestDispatcherRejectsNonProgressingCapabilityCycle(t *testing.T) {
 	policy := runtimetest.NewStaticAppPolicy()
 	policy.Enable("app", "cycle")
 	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{})
-	if err := reg.RegisterService(registry.ServiceRegistration{
-		Spec: capability.ServiceSpec{ID: "service", Version: "1.0.0"},
-		Capabilities: map[string]struct {
-			Spec    capability.CapabilitySpec
-			Handler registry.Handler
-		}{
-			"cycle": {
-				Spec: capability.CapabilitySpec{
-					ID:              "cycle",
-					Version:         "1.0.0",
-					ServiceID:       "service",
-					InputSchemaJSON: `{"type":"object","properties":{"a":{"type":"integer"},"b":{"type":"integer"}},"additionalProperties":false}`,
-					SideEffect:      capability.SideEffectRead,
-				},
-				Handler: func(ctx context.Context, request contracts.RequestContext, payload json.RawMessage) (json.RawMessage, error) {
-					return dispatcher.InvokeCapability(ctx, request, "cycle", payload)
-				},
-			},
+	if err := reg.Register(registry.CapabilityRegistration{
+		Spec: capability.CapabilitySpec{
+			ID: "cycle", Version: "1.0.0", InputSchemaJSON: `{"type":"object","properties":{"a":{"type":"integer"},"b":{"type":"integer"}},"additionalProperties":false}`,
+			SideEffect: capability.SideEffectRead,
+		},
+		Handler: func(ctx context.Context, request contracts.RequestContext, payload json.RawMessage) (json.RawMessage, error) {
+			return dispatcher.InvokeCapability(ctx, request, "cycle", payload)
 		},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	request := contracts.RequestContext{
-		AppID: "app", EchoID: "echo", RequestID: "request", Deadline: time.Now().Add(time.Minute),
-	}
-	_, err := dispatcher.InvokeCapability(context.Background(), request, "cycle", json.RawMessage(`{"a":1,"b":2}`))
+	_, err := dispatcher.InvokeCapability(context.Background(), validRequest(), "cycle", json.RawMessage(`{"a":1,"b":2}`))
 	if !errors.Is(err, runtime.ErrCycleDetected) {
 		t.Fatalf("got %v, want ErrCycleDetected", err)
 	}
@@ -62,9 +48,7 @@ func TestDispatcherValidatesCapabilitySchemaBeforeHandler(t *testing.T) {
 	policy.Enable("app", "capability")
 	called := false
 	registerCapability(t, reg, capability.CapabilitySpec{
-		ID:              "capability",
-		Version:         "1.0.0",
-		ServiceID:       "service",
+		ID: "capability", Version: "1.0.0",
 		InputSchemaJSON: `{"type":"object","properties":{"value":{"type":"integer"}},"required":["value"],"additionalProperties":false}`,
 		SideEffect:      capability.SideEffectRead,
 	}, func(context.Context, contracts.RequestContext, json.RawMessage) (json.RawMessage, error) {
@@ -92,12 +76,8 @@ func TestDispatcherEnforcesAndNarrowsPermissions(t *testing.T) {
 	policy.Grant("app", "system.admin")
 	var observed []string
 	registerCapability(t, reg, capability.CapabilitySpec{
-		ID:                  "capability",
-		Version:             "1.0.0",
-		ServiceID:           "service",
-		InputSchemaJSON:     `{"type":"object","additionalProperties":false}`,
-		SideEffect:          capability.SideEffectRead,
-		RequiredPermissions: []string{"bus.read"},
+		ID: "capability", Version: "1.0.0", InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
+		SideEffect: capability.SideEffectRead, RequiredPermissions: []string{"bus.read"},
 	}, func(_ context.Context, request contracts.RequestContext, _ json.RawMessage) (json.RawMessage, error) {
 		observed = append([]string(nil), request.PermissionScope...)
 		return json.RawMessage(`{}`), nil
@@ -119,64 +99,27 @@ func TestDispatcherEnforcesAndNarrowsPermissions(t *testing.T) {
 	}
 }
 
-func TestDispatcherProjectsClosedTargetIdentityToHandlers(t *testing.T) {
+func TestDispatcherProjectsCapabilityIdentityToHandler(t *testing.T) {
 	t.Parallel()
 
 	reg := registry.New()
 	policy := runtimetest.NewStaticAppPolicy()
-	policy.Enable("app", "service.capability")
+	policy.Enable("app", "campus.bus.routes.list")
 	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{})
-	var capabilityContext, toolContext contracts.RequestContext
-	if err := reg.RegisterTool(registry.ToolRegistration{
-		Spec: capability.ToolSpec{
-			ID: "service.tool", Version: "1.0.0",
-			InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
-			SideEffect:      capability.SideEffectRead,
-		},
-		Handler: func(_ context.Context, request contracts.RequestContext, _ json.RawMessage) (json.RawMessage, error) {
-			toolContext = request
-			return json.RawMessage(`{"ok":true}`), nil
-		},
-	}); err != nil {
+	var observed contracts.RequestContext
+	registerCapability(t, reg, capability.CapabilitySpec{
+		ID: "campus.bus.routes.list", Version: "1.0.0", InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
+		SideEffect: capability.SideEffectRead,
+	}, func(_ context.Context, request contracts.RequestContext, _ json.RawMessage) (json.RawMessage, error) {
+		observed = request
+		return json.RawMessage(`{"ok":true}`), nil
+	})
+
+	if _, err := dispatcher.InvokeCapability(t.Context(), validRequest(), "campus.bus.routes.list", json.RawMessage(`{}`)); err != nil {
 		t.Fatal(err)
 	}
-	if err := reg.RegisterService(registry.ServiceRegistration{
-		Spec: capability.ServiceSpec{
-			ID: "service", Version: "1.0.0", ToolDependencies: []string{"service.tool"},
-		},
-		Capabilities: map[string]struct {
-			Spec    capability.CapabilitySpec
-			Handler registry.Handler
-		}{
-			"service.capability": {
-				Spec: capability.CapabilitySpec{
-					ID: "service.capability", Version: "1.0.0", ServiceID: "service",
-					InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
-					SideEffect:      capability.SideEffectRead,
-				},
-				Handler: func(ctx context.Context, request contracts.RequestContext, payload json.RawMessage) (json.RawMessage, error) {
-					capabilityContext = request
-					return dispatcher.UseTool(ctx, request, "service", "service.tool", payload)
-				},
-			},
-		},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := dispatcher.InvokeCapability(t.Context(), validRequest(), "service.capability", json.RawMessage(`{}`)); err != nil {
-		t.Fatal(err)
-	}
-	if capabilityContext.TargetType != "capability" ||
-		capabilityContext.CapabilityID != "service.capability" ||
-		capabilityContext.ServiceID != "service" ||
-		capabilityContext.ToolID != "" {
-		t.Fatalf("Capability 目标上下文=%#v", capabilityContext)
-	}
-	if toolContext.TargetType != "tool" ||
-		toolContext.CapabilityID != "" ||
-		toolContext.ServiceID != "service" ||
-		toolContext.ToolID != "service.tool" {
-		t.Fatalf("Tool 目标上下文=%#v", toolContext)
+	if observed.CapabilityID != "campus.bus.routes.list" || observed.CallDepth != 1 {
+		t.Fatalf("Capability identity context=%#v", observed)
 	}
 }
 
@@ -184,12 +127,8 @@ func TestDispatcherUsesPersistentAppPolicyAndRevalidatesChanges(t *testing.T) {
 	reg := registry.New()
 	called := 0
 	registerCapability(t, reg, capability.CapabilitySpec{
-		ID:                  "capability",
-		Version:             "1.0.0",
-		ServiceID:           "service",
-		InputSchemaJSON:     `{"type":"object","additionalProperties":false}`,
-		SideEffect:          capability.SideEffectRead,
-		RequiredPermissions: []string{"bus.read"},
+		ID: "capability", Version: "1.0.0", InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
+		SideEffect: capability.SideEffectRead, RequiredPermissions: []string{"bus.read"},
 	}, func(context.Context, contracts.RequestContext, json.RawMessage) (json.RawMessage, error) {
 		called++
 		return json.RawMessage(`{}`), nil
@@ -244,11 +183,8 @@ func TestDispatcherFailsClosedWhenAppPolicyIsUnavailable(t *testing.T) {
 	reg := registry.New()
 	called := false
 	registerCapability(t, reg, capability.CapabilitySpec{
-		ID:              "capability",
-		Version:         "1.0.0",
-		ServiceID:       "service",
-		InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
-		SideEffect:      capability.SideEffectRead,
+		ID: "capability", Version: "1.0.0", InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
+		SideEffect: capability.SideEffectRead,
 	}, func(context.Context, contracts.RequestContext, json.RawMessage) (json.RawMessage, error) {
 		called = true
 		return json.RawMessage(`{}`), nil
@@ -264,60 +200,32 @@ func TestDispatcherFailsClosedWhenAppPolicyIsUnavailable(t *testing.T) {
 	}
 }
 
-func TestDispatcherPreventsInternalPermissionGain(t *testing.T) {
+func TestDispatcherPreventsNestedCapabilityPermissionGain(t *testing.T) {
 	t.Parallel()
 
 	reg := registry.New()
 	policy := runtimetest.NewStaticAppPolicy()
-	policy.Enable("app", "capability")
+	policy.Enable("app", "outer.capability")
+	policy.Enable("app", "private.capability")
 	policy.Grant("app", "private.read")
 	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{})
-	if err := reg.RegisterTool(registry.ToolRegistration{
-		Spec: capability.ToolSpec{
-			ID:                  "private-tool",
-			Version:             "1.0.0",
-			InputSchemaJSON:     `{"type":"object","additionalProperties":false}`,
-			SideEffect:          capability.SideEffectRead,
-			RequiredPermissions: []string{"private.read"},
-		},
-		Handler: func(context.Context, contracts.RequestContext, json.RawMessage) (json.RawMessage, error) {
-			return json.RawMessage(`{}`), nil
-		},
-	}); err != nil {
-		t.Fatalf("register tool: %v", err)
-	}
-	if err := reg.RegisterService(registry.ServiceRegistration{
-		Spec: capability.ServiceSpec{
-			ID:                   "service",
-			Version:              "1.0.0",
-			ToolDependencies:     []string{"private-tool"},
-			RequestedPermissions: []string{"private.read"},
-		},
-		Capabilities: map[string]struct {
-			Spec    capability.CapabilitySpec
-			Handler registry.Handler
-		}{
-			"capability": {
-				Spec: capability.CapabilitySpec{
-					ID:              "capability",
-					Version:         "1.0.0",
-					ServiceID:       "service",
-					InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
-					SideEffect:      capability.SideEffectRead,
-				},
-				Handler: func(ctx context.Context, request contracts.RequestContext, payload json.RawMessage) (json.RawMessage, error) {
-					return dispatcher.UseTool(ctx, request, "service", "private-tool", payload)
-				},
-			},
-		},
-	}); err != nil {
-		t.Fatalf("register service: %v", err)
-	}
+	registerCapability(t, reg, capability.CapabilitySpec{
+		ID: "private.capability", Version: "1.0.0", InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
+		SideEffect: capability.SideEffectRead, RequiredPermissions: []string{"private.read"},
+	}, func(context.Context, contracts.RequestContext, json.RawMessage) (json.RawMessage, error) {
+		return json.RawMessage(`{}`), nil
+	})
+	registerCapability(t, reg, capability.CapabilitySpec{
+		ID: "outer.capability", Version: "1.0.0", InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
+		SideEffect: capability.SideEffectRead,
+	}, func(ctx context.Context, request contracts.RequestContext, payload json.RawMessage) (json.RawMessage, error) {
+		return dispatcher.InvokeCapability(ctx, request, "private.capability", payload)
+	})
 
 	request := validRequest()
 	request.PermissionScope = []string{"private.read"}
-	if _, err := dispatcher.InvokeCapability(context.Background(), request, "capability", json.RawMessage(`{}`)); !errors.Is(err, registry.ErrPermissionDenied) {
-		t.Fatalf("got %v, want permission narrowing to deny internal gain", err)
+	if _, err := dispatcher.InvokeCapability(t.Context(), request, "outer.capability", json.RawMessage(`{}`)); !errors.Is(err, registry.ErrPermissionDenied) {
+		t.Fatalf("got %v, want nested permission narrowing to deny gain", err)
 	}
 }
 
@@ -329,9 +237,7 @@ func TestDispatcherEnforcesSideEffectIdempotency(t *testing.T) {
 	policy.Enable("app", "write-capability")
 	called := 0
 	registerCapability(t, reg, capability.CapabilitySpec{
-		ID:              "write-capability",
-		Version:         "1.0.0",
-		ServiceID:       "service",
+		ID: "write-capability", Version: "1.0.0",
 		InputSchemaJSON: `{"type":"object","properties":{"value":{"type":"string"}},"additionalProperties":false}`,
 		SideEffect:      capability.SideEffectWrite,
 	}, func(context.Context, contracts.RequestContext, json.RawMessage) (json.RawMessage, error) {
@@ -372,12 +278,8 @@ func TestDispatcherRequiresGovernedConfirmation(t *testing.T) {
 	policy := runtimetest.NewStaticAppPolicy()
 	policy.Enable("app", "external-capability")
 	registerCapability(t, reg, capability.CapabilitySpec{
-		ID:                   "external-capability",
-		Version:              "1.0.0",
-		ServiceID:            "service",
-		InputSchemaJSON:      `{"type":"object","additionalProperties":false}`,
-		SideEffect:           capability.SideEffectExternal,
-		RequiresConfirmation: true,
+		ID: "external-capability", Version: "1.0.0", InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
+		SideEffect: capability.SideEffectExternal, RequiresConfirmation: true,
 	}, func(context.Context, contracts.RequestContext, json.RawMessage) (json.RawMessage, error) {
 		return json.RawMessage(`{}`), nil
 	})
@@ -402,61 +304,41 @@ func TestDispatcherRequiresGovernedConfirmation(t *testing.T) {
 	if _, err := withVerifier.InvokeCapability(context.Background(), request, "external-capability", json.RawMessage(`{}`)); err != nil {
 		t.Fatalf("invoke confirmed capability: %v", err)
 	}
-	if verified.AppID != "app" || verified.ConfirmationID != "confirmation-1" || verified.TargetID != "external-capability" || verified.IdempotencyKey != "operation-1" {
+	if verified.AppID != "app" || verified.ConfirmationID != "confirmation-1" || verified.CapabilityID != "external-capability" || verified.IdempotencyKey != "operation-1" {
 		t.Fatalf("unexpected confirmation request: %#v", verified)
 	}
 }
 
-func TestDispatcherRevalidatesAtToolBoundary(t *testing.T) {
+func TestDispatcherRevalidatesNestedCapabilityBoundary(t *testing.T) {
 	t.Parallel()
 
 	reg := registry.New()
 	policy := runtimetest.NewStaticAppPolicy()
-	policy.Enable("app", "capability")
+	policy.Enable("app", "outer.capability")
+	policy.Enable("app", "inner.capability")
 	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{})
-	toolCalled := false
-	if err := reg.RegisterTool(registry.ToolRegistration{
-		Spec: capability.ToolSpec{
-			ID:              "tool",
-			Version:         "1.0.0",
-			InputSchemaJSON: `{"type":"object","properties":{"value":{"type":"integer"}},"required":["value"],"additionalProperties":false}`,
-			SideEffect:      capability.SideEffectRead,
-		},
-		Handler: func(context.Context, contracts.RequestContext, json.RawMessage) (json.RawMessage, error) {
-			toolCalled = true
-			return json.RawMessage(`{}`), nil
-		},
-	}); err != nil {
-		t.Fatalf("register tool: %v", err)
-	}
-	if err := reg.RegisterService(registry.ServiceRegistration{
-		Spec: capability.ServiceSpec{ID: "service", Version: "1.0.0", ToolDependencies: []string{"tool"}},
-		Capabilities: map[string]struct {
-			Spec    capability.CapabilitySpec
-			Handler registry.Handler
-		}{
-			"capability": {
-				Spec: capability.CapabilitySpec{
-					ID:              "capability",
-					Version:         "1.0.0",
-					ServiceID:       "service",
-					InputSchemaJSON: `{"type":"object","properties":{"value":{"type":"string"}},"required":["value"],"additionalProperties":false}`,
-					SideEffect:      capability.SideEffectRead,
-				},
-				Handler: func(ctx context.Context, request contracts.RequestContext, payload json.RawMessage) (json.RawMessage, error) {
-					return dispatcher.UseTool(ctx, request, "service", "tool", payload)
-				},
-			},
-		},
-	}); err != nil {
-		t.Fatalf("register service: %v", err)
-	}
+	innerCalled := false
+	registerCapability(t, reg, capability.CapabilitySpec{
+		ID: "inner.capability", Version: "1.0.0",
+		InputSchemaJSON: `{"type":"object","properties":{"value":{"type":"integer"}},"required":["value"],"additionalProperties":false}`,
+		SideEffect:      capability.SideEffectRead,
+	}, func(context.Context, contracts.RequestContext, json.RawMessage) (json.RawMessage, error) {
+		innerCalled = true
+		return json.RawMessage(`{}`), nil
+	})
+	registerCapability(t, reg, capability.CapabilitySpec{
+		ID: "outer.capability", Version: "1.0.0",
+		InputSchemaJSON: `{"type":"object","properties":{"value":{"type":"string"}},"required":["value"],"additionalProperties":false}`,
+		SideEffect:      capability.SideEffectRead,
+	}, func(ctx context.Context, request contracts.RequestContext, payload json.RawMessage) (json.RawMessage, error) {
+		return dispatcher.InvokeCapability(ctx, request, "inner.capability", payload)
+	})
 
-	if _, err := dispatcher.InvokeCapability(context.Background(), validRequest(), "capability", json.RawMessage(`{"value":"not-an-integer"}`)); !errors.Is(err, registry.ErrSchemaValidation) {
-		t.Fatalf("got %v, want tool schema rejection", err)
+	if _, err := dispatcher.InvokeCapability(context.Background(), validRequest(), "outer.capability", json.RawMessage(`{"value":"not-an-integer"}`)); !errors.Is(err, registry.ErrSchemaValidation) {
+		t.Fatalf("got %v, want nested schema rejection", err)
 	}
-	if toolCalled {
-		t.Fatal("tool handler ran after tool-boundary schema rejection")
+	if innerCalled {
+		t.Fatal("inner capability handler ran after nested schema rejection")
 	}
 }
 
@@ -474,29 +356,14 @@ func (f appPolicyFunc) Snapshot(ctx context.Context, appID string) (appconfig.Po
 
 func registerCapability(t *testing.T, reg *registry.Registry, spec capability.CapabilitySpec, handler registry.Handler) {
 	t.Helper()
-	if err := reg.RegisterService(registry.ServiceRegistration{
-		Spec: capability.ServiceSpec{
-			ID:                   spec.ServiceID,
-			Version:              "1.0.0",
-			RequestedPermissions: append([]string(nil), spec.RequiredPermissions...),
-		},
-		Capabilities: map[string]struct {
-			Spec    capability.CapabilitySpec
-			Handler registry.Handler
-		}{
-			spec.ID: {Spec: spec, Handler: handler},
-		},
-	}); err != nil {
+	if err := reg.Register(registry.CapabilityRegistration{Spec: spec, Handler: handler}); err != nil {
 		t.Fatalf("register capability: %v", err)
 	}
 }
 
 func validRequest() contracts.RequestContext {
 	return contracts.RequestContext{
-		AppID:     "app",
-		EchoID:    "echo",
-		RequestID: "request",
-		Deadline:  time.Now().Add(time.Minute),
+		AppID: "app", EchoID: "echo", RequestID: "request", Deadline: time.Now().Add(time.Minute),
 	}
 }
 
@@ -517,7 +384,7 @@ func openIdempotencyStore(t *testing.T) *sqlite.Store {
 func dispatcherAppConfig() appconfig.Config {
 	return appconfig.Config{
 		AppID: "app", Enabled: true, Model: "test-model", SystemPrompt: "系统提示",
-		Timezone: "Asia/Shanghai", MaxSteps: 8, MaxToolCalls: 8,
+		Timezone: "Asia/Shanghai", MaxSteps: 8, MaxCapabilityCalls: 8,
 		MaxInputTokens: 32768, MaxOutputTokens: 8192, MaxTotalTokens: 40960,
 		MaxOutputBytes: 65536, ProviderTimeout: 30 * time.Second,
 		EnabledCapabilities: []string{"capability"}, PermissionScope: []string{"bus.read"},
