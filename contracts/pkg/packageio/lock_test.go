@@ -71,6 +71,26 @@ func TestCanonicalLockDigestPreservesExplicitExternalSocketAddress(t *testing.T)
 	if firstDigest != secondDigest {
 		t.Fatalf("digests differ for explicit external socket: %s != %s", firstDigest, secondDigest)
 	}
+	changed := lock(first)
+	changed.Artifacts[0].Process.Address = "unix:/var/run/other-runtime.sock"
+	changedDigest, err := packageio.CanonicalLockDigest(context.Background(), first, changed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstDigest == changedDigest {
+		t.Fatal("digests match for different explicit external sockets")
+	}
+}
+
+func TestCanonicalLockDigestRejectsDuplicateComponentIDs(t *testing.T) {
+	root := t.TempDir()
+	lock := packagecontract.Lock{Artifacts: []packagecontract.LockedArtifact{
+		{ComponentID: "runtime", Path: filepath.Join(root, "one")},
+		{ComponentID: "runtime", Path: filepath.Join(root, "two")},
+	}}
+	if _, err := packageio.CanonicalLockDigest(context.Background(), root, lock); err == nil {
+		t.Fatal("CanonicalLockDigest accepted duplicate component IDs")
+	}
 }
 
 func TestCanonicalLockDigestRejectsOutsidePath(t *testing.T) {

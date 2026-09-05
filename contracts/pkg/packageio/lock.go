@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -26,11 +27,16 @@ func CanonicalLockDigest(ctx context.Context, directory string, lock packagecont
 	}
 	canonical := lock
 	canonical.Artifacts = append([]packagecontract.LockedArtifact(nil), lock.Artifacts...)
+	seenComponents := make(map[string]struct{}, len(canonical.Artifacts))
 	for index := range canonical.Artifacts {
 		if err := ctx.Err(); err != nil {
 			return "", err
 		}
 		artifact := &canonical.Artifacts[index]
+		if _, exists := seenComponents[artifact.ComponentID]; exists {
+			return "", fmt.Errorf("%w: duplicate component id %q", packagecontract.ErrInvalidFormat, artifact.ComponentID)
+		}
+		seenComponents[artifact.ComponentID] = struct{}{}
 		artifact.Path, err = relativePath(root, artifact.Path, false)
 		if err != nil {
 			return "", err
@@ -79,7 +85,11 @@ func canonicalAddress(root, address string) (string, error) {
 	}
 	socketPath := strings.TrimPrefix(address, "unix:")
 	relative, err := filepath.Rel(root, socketPath)
-	if err != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+	if err != nil {
+		// 不同盘符/挂载点的 Unix 地址属于外部运行时，保留其显式稳定值。
+		return address, nil //nolint:nilerr // filepath.Rel 无法跨卷计算相对路径
+	}
+	if relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
 		// 安装根外的绝对 Unix 地址是外部 executor 的稳定地址，不随安装根归一化。
 		return address, nil
 	}
