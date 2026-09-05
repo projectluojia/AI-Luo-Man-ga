@@ -64,3 +64,5 @@ GOCACHE=/tmp/github.com/projectluojia/AI-Luo-Man-ga-gocache go test -tags=integr
 ## 数据授权
 
 涉及真实机构数据（如智慧珞珈校巴数据）的接入必须先完成 `docs/数据需求与授权清单.md` 的授权前提；未授权数据不得抓取、逆向或导入。
+
+**当前状态**：智慧珞珈官方数据接口尚未落地，依赖机构数据的功能无法做真实闭环测试。开发与联调一律使用 demo/mock 数据（非权威、显式标记、与生产隔离），生产环境对真实数据 fail closed；数据类 enhancement issue 的验收以书面授权接入为前提，详见 `docs/鉴权与委托授权设计.md`。

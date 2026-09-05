@@ -8,6 +8,8 @@ import (
 	"unsafe"
 
 	"golang.org/x/sys/windows"
+
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/packmgr"
 )
 
 // jobObjectEndOfJobTimeInformation 设置 Job 累计 CPU 时间耗尽时的动作
@@ -35,8 +37,8 @@ const (
 // 崩溃后由操作系统兜底防孤儿）。返回的释放器必须在子进程回收后调用以释放句柄；
 // 提前释放会立即终止子进程。分配或分配失败一律 fail-closed：未受 Job 约束的
 // 进程不允许继续运行。
-func applyProcessLimits(process *os.Process, limits ProcessLimits) (func() error, error) {
-	if !ValidProcessLimits(limits) {
+func applyProcessLimits(process *os.Process, limits packmgr.ProcessLimits) (func() error, error) {
+	if !packmgr.ValidProcessLimits(limits) {
 		return nil, ErrInvalidProcessSpec
 	}
 	if limits.MaxOpenFiles != 0 || limits.MaxFileBytes != 0 {

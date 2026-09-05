@@ -453,9 +453,9 @@ func (s *Server) runNext() bool {
 	s.activeMu.Lock()
 	delete(s.active, key)
 	s.activeMu.Unlock()
-	s.activeWG.Done()
 	s.finishEchoIfTerminal(runContext, key.echoID)
 	cancel()
+	s.activeWG.Done()
 	if runErr != nil && !errors.Is(runErr, context.Canceled) && !errors.Is(runErr, kernelecho.ErrInvalidTransition) &&
 		!errors.Is(runErr, kernelecho.ErrRunRetryScheduled) {
 		observe.Error(runContext, "持久调度 Run 执行失败", runErr)

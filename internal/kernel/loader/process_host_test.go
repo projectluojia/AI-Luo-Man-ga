@@ -16,6 +16,7 @@ import (
 	runtimev1 "github.com/projectluojia/AI-Luo-Man-ga/gen/runtimev1"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/packmgr"
 
 	"google.golang.org/grpc"
 )
@@ -115,7 +116,7 @@ func TestIsolatedProcessHostRunsOutsideKernelAndShutsDownGracefully(t *testing.T
 	}
 	workDir := t.TempDir()
 	socketPath := filepath.Join(workDir, "runtime.sock")
-	spec := loader.ProcessSpec{
+	spec := packmgr.ProcessSpec{
 		Path: executable, Args: []string{"-test.run=^TestIsolatedRuntimeHelper$"},
 		Env: []string{
 			helperEnabled + "=1", helperSocket + "=" + socketPath, helperMode + "=" + loader.ModeIsolated,
@@ -125,11 +126,11 @@ func TestIsolatedProcessHostRunsOutsideKernelAndShutsDownGracefully(t *testing.T
 	var resolves atomic.Int32
 	var verifies atomic.Int32
 	host, err := loader.NewIsolatedProcessHost(loader.IsolatedProcessHostConfig{
-		ResolveInstalled: func(context.Context, loader.Manifest) (loader.ProcessSpec, error) {
+		ResolveInstalled: func(context.Context, loader.Manifest) (packmgr.ProcessSpec, error) {
 			resolves.Add(1)
 			return spec, nil
 		},
-		VerifyInstalled: func(_ context.Context, manifest loader.Manifest, resolved loader.ProcessSpec) error {
+		VerifyInstalled: func(_ context.Context, manifest loader.Manifest, resolved packmgr.ProcessSpec) error {
 			verifies.Add(1)
 			if manifest.LockedDigest != digest || resolved.Path != executable {
 				t.Fatalf("manifest=%#v spec=%#v", manifest, resolved)
@@ -186,7 +187,7 @@ func TestIsolatedProcessHostEnforcesFileSizeLimit(t *testing.T) {
 	workDir := t.TempDir()
 	socketPath := filepath.Join(workDir, "runtime.sock")
 	writeTarget := filepath.Join(workDir, "out.bin")
-	spec := loader.ProcessSpec{
+	spec := packmgr.ProcessSpec{
 		Path: executable, Args: []string{"-test.run=^TestIsolatedRuntimeHelper$"},
 		Env: []string{
 			helperEnabled + "=1", helperSocket + "=" + socketPath, helperMode + "=" + loader.ModeIsolated,
@@ -194,11 +195,11 @@ func TestIsolatedProcessHostEnforcesFileSizeLimit(t *testing.T) {
 		},
 		WorkDir: workDir, Address: "unix:" + socketPath,
 		// RLIMIT_FSIZE=1 KiB：helper 写入 8 KiB 必须被限额阻止。
-		Limits: loader.ProcessLimits{MaxFileBytes: 1024},
+		Limits: packmgr.ProcessLimits{MaxFileBytes: 1024},
 	}
 	host, err := loader.NewIsolatedProcessHost(loader.IsolatedProcessHostConfig{
-		ResolveInstalled: func(context.Context, loader.Manifest) (loader.ProcessSpec, error) { return spec, nil },
-		VerifyInstalled:  func(context.Context, loader.Manifest, loader.ProcessSpec) error { return nil },
+		ResolveInstalled: func(context.Context, loader.Manifest) (packmgr.ProcessSpec, error) { return spec, nil },
+		VerifyInstalled:  func(context.Context, loader.Manifest, packmgr.ProcessSpec) error { return nil },
 		DialTimeout:      3 * time.Second, StopGrace: time.Second, TerminateGrace: time.Second,
 	})
 	if err != nil {
@@ -240,7 +241,7 @@ func TestIsolatedProcessHostForcesBoundedExitAfterStopGrace(t *testing.T) {
 	}
 	workDir := t.TempDir()
 	socketPath := filepath.Join(workDir, "runtime.sock")
-	spec := loader.ProcessSpec{
+	spec := packmgr.ProcessSpec{
 		Path: executable, Args: []string{"-test.run=^TestIsolatedRuntimeHelper$"},
 		Env: []string{
 			helperEnabled + "=1", helperSocket + "=" + socketPath, helperMode + "=" + loader.ModeIsolated,
@@ -249,8 +250,8 @@ func TestIsolatedProcessHostForcesBoundedExitAfterStopGrace(t *testing.T) {
 		WorkDir: workDir, Address: "unix:" + socketPath,
 	}
 	host, err := loader.NewIsolatedProcessHost(loader.IsolatedProcessHostConfig{
-		ResolveInstalled: func(context.Context, loader.Manifest) (loader.ProcessSpec, error) { return spec, nil },
-		VerifyInstalled:  func(context.Context, loader.Manifest, loader.ProcessSpec) error { return nil },
+		ResolveInstalled: func(context.Context, loader.Manifest) (packmgr.ProcessSpec, error) { return spec, nil },
+		VerifyInstalled:  func(context.Context, loader.Manifest, packmgr.ProcessSpec) error { return nil },
 		DialTimeout:      3 * time.Second,
 		StopGrace:        100 * time.Millisecond,
 		TerminateGrace:   100 * time.Millisecond,
@@ -285,27 +286,27 @@ func TestIsolatedProcessHostRejectsUnsafeLaunchSpecifications(t *testing.T) {
 		t.Fatal(err)
 	}
 	workDir := t.TempDir()
-	base := loader.ProcessSpec{
+	base := packmgr.ProcessSpec{
 		Path: executable, WorkDir: workDir, Address: "unix:" + filepath.Join(workDir, "runtime.sock"),
 	}
-	tests := []loader.ProcessSpec{
-		func() loader.ProcessSpec { value := base; value.Path = "relative"; return value }(),
-		func() loader.ProcessSpec { value := base; value.WorkDir = "relative"; return value }(),
-		func() loader.ProcessSpec { value := base; value.Address = "192.0.2.1:9000"; return value }(),
-		func() loader.ProcessSpec { value := base; value.Env = []string{"API_TOKEN=private"}; return value }(),
-		func() loader.ProcessSpec {
+	tests := []packmgr.ProcessSpec{
+		func() packmgr.ProcessSpec { value := base; value.Path = "relative"; return value }(),
+		func() packmgr.ProcessSpec { value := base; value.WorkDir = "relative"; return value }(),
+		func() packmgr.ProcessSpec { value := base; value.Address = "192.0.2.1:9000"; return value }(),
+		func() packmgr.ProcessSpec { value := base; value.Env = []string{"API_TOKEN=private"}; return value }(),
+		func() packmgr.ProcessSpec {
 			value := base
 			value.Env = []string{"LD_PRELOAD=/tmp/inject.so"}
 			return value
 		}(),
-		func() loader.ProcessSpec { value := base; value.Env = []string{"SAFE=1", "SAFE=2"}; return value }(),
-		func() loader.ProcessSpec { value := base; value.Args = []string{"bad\x00argument"}; return value }(),
+		func() packmgr.ProcessSpec { value := base; value.Env = []string{"SAFE=1", "SAFE=2"}; return value }(),
+		func() packmgr.ProcessSpec { value := base; value.Args = []string{"bad\x00argument"}; return value }(),
 	}
 	for _, spec := range tests {
 		var verifies atomic.Int32
 		host, err := loader.NewIsolatedProcessHost(loader.IsolatedProcessHostConfig{
-			ResolveInstalled: func(context.Context, loader.Manifest) (loader.ProcessSpec, error) { return spec, nil },
-			VerifyInstalled: func(context.Context, loader.Manifest, loader.ProcessSpec) error {
+			ResolveInstalled: func(context.Context, loader.Manifest) (packmgr.ProcessSpec, error) { return spec, nil },
+			VerifyInstalled: func(context.Context, loader.Manifest, packmgr.ProcessSpec) error {
 				verifies.Add(1)
 				return nil
 			},
