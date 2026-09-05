@@ -83,24 +83,23 @@ type runKey struct {
 // Scheduler 以持久化 queued Run 为事实源，负责固定并发、恢复、取消和事件发布。
 // 入口只通过 Enqueue 提供低延迟提示；进程重启后仍由 Recover 从存储恢复。
 type Scheduler struct {
-	ctx       context.Context
-	stop      context.CancelFunc
-	runner    SchedulerRunner
-	reader    Reader
-	events    EventSink
-	appID     string
-	activeMu  sync.Mutex
-	active    map[runKey]context.CancelFunc
-	pending   map[string]context.Context
-	activeWG  sync.WaitGroup
-	workerWG  sync.WaitGroup
-	work      chan struct{}
-	startOnce sync.Once
-	stopOnce  sync.Once
-	stopErr   error
-	workers   int
-	poll      time.Duration
-	batchSize int
+	ctx        context.Context
+	stop       context.CancelFunc
+	runner     SchedulerRunner
+	reader     Reader
+	events     EventSink
+	appID      string
+	activeMu   sync.Mutex
+	active     map[runKey]context.CancelFunc
+	pending    map[string]context.Context
+	activeWG   sync.WaitGroup
+	workerWG   sync.WaitGroup
+	work       chan struct{}
+	startOnce  sync.Once
+	shutdownMu sync.Mutex
+	workers    int
+	poll       time.Duration
+	batchSize  int
 }
 
 // NewScheduler 构造 App 范围的持久 Run 调度器。
@@ -200,6 +199,9 @@ func (s *Scheduler) Cancel(ctx context.Context, echoID string) (bool, error) {
 	s.activeMu.Unlock()
 	for _, cancel := range cancellations {
 		cancel()
+	}
+	if cancelled && len(cancellations) == 0 {
+		s.finishEchoIfTerminal(ctx, echoID)
 	}
 	return cancelled || len(cancellations) > 0, nil
 }
@@ -309,10 +311,9 @@ func (s *Scheduler) signal() {
 
 // Shutdown 停止 worker，取消持久队列中的 Echo，并等待活动 Run 结束。
 func (s *Scheduler) Shutdown(ctx context.Context) error {
-	s.stopOnce.Do(func() {
-		s.stopErr = s.shutdown(ctx)
-	})
-	return s.stopErr
+	s.shutdownMu.Lock()
+	defer s.shutdownMu.Unlock()
+	return s.shutdown(ctx)
 }
 
 func (s *Scheduler) shutdown(ctx context.Context) error {

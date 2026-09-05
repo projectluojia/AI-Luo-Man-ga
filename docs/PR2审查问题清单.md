@@ -13,7 +13,7 @@
 
 ## 建议处理顺序
 
-1. ~~`PR2-001` 平台 ingress 认证与来源绑定~~（用户确认忽略，不实施）
+1. `PR2-001` 平台 ingress 认证与来源绑定（用户确认忽略，不实施）
 2. ~~`PR2-002` 会话隔离与会话键规则~~（已修复并验证）
 3. ~~`PR2-003` 跨入口幂等命名空间与完整指纹~~（用户确认忽略，不实施）
 4. `PR2-004` 消息、Echo、Run 的原子接纳
@@ -43,7 +43,7 @@
 - 批量创建持久消息和 Run，消耗 App 队列、模型额度与存储容量；
 - 猜测或复用平台消息标识，触发幂等冲突或错误重放。
 
-### 修复结果
+### 未实施方向（保留风险）
 
 - 为每个平台适配器建立可轮换的机器身份，不允许匿名调用平台 ingress；
 - 使用经过认证的适配器配置确定 `platform`，不能把 URL 路径当作可信身份；
@@ -327,7 +327,7 @@ QQ 处理器忽略 `CreateIdempotent` 返回的 `created`。平台重复投递�
 - 优先级：P1
 - 类型：优雅关闭、持久队列状态
 - 位置：`internal/access/web/chat.go`、`internal/access/web/server.go`
-- 当前状态：已解决。持久 Run 调度已移入 `internal/kernel/echo.Scheduler`，HTTP Server 负责 admission 排空，Web/QQ/ingress 通过统一 `Enqueue` 通知内核调度器。
+- 当前状态：已解决。持久 Run 调度已移入 `internal/kernel/echo.Scheduler`；Web、Ingress 和 QQ 的 admission 必须覆盖校验、`CreateIdempotent`、`Enqueue` 的完整接纳区间，主关闭流程先停止全部入口并等待接纳完成，再调用 `Scheduler.Shutdown`。
 
 ### 问题
 
