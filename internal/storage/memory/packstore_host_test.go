@@ -140,3 +140,17 @@ func TestHostRejectsNamespaceOwnedByAnotherPackage(t *testing.T) {
 		t.Fatalf("foreign namespace error=%v, want ErrInvalidScope", err)
 	}
 }
+
+func TestHostRejectsUnknownJSONFields(t *testing.T) {
+	docs := memory.NewDocuments()
+	listFn := hostFunctionByName(packstore.HostFunctions(docs, "test", "test/pkg", testCapabilities()), packstore.OpList)
+	for _, payload := range []string{
+		`{"collection":"routes","limit":10,"extra":true}`,
+		`{"collection":"routes","limit":10} trailing`,
+	} {
+		_, err := listFn.Call(context.Background(), contracts.RequestContext{AppID: "app-a", CapabilityID: "test.capability"}, []byte(payload))
+		if !errors.Is(err, packstore.ErrInvalidKey) {
+			t.Fatalf("payload %q error=%v, want ErrInvalidKey", payload, err)
+		}
+	}
+}

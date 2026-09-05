@@ -97,7 +97,7 @@ func HostFunctions(store Store, packageID, namespace string, capabilities []capa
 		}
 	}
 	decode := func(body []byte, target any) error {
-		if err := json.Unmarshal(body, target); err != nil {
+		if err := packagecontract.DecodeStrictJSON(body, target); err != nil {
 			return fmt.Errorf("%w: %v", ErrInvalidKey, err)
 		}
 		return nil
