@@ -1,6 +1,7 @@
 package web
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -22,6 +23,33 @@ type chatRequest struct {
 	Text     string   `json:"text"`
 	ImageIDs []string `json:"image_ids"`
 	FileIDs  []string `json:"file_ids"`
+}
+
+func (r *chatRequest) UnmarshalJSON(data []byte) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	for key := range fields {
+		if key != "text" && key != "image_ids" && key != "file_ids" {
+			return fmt.Errorf("unknown chat field %q", key)
+		}
+	}
+	var wire struct {
+		Text     string   `json:"text"`
+		ImageIDs []string `json:"image_ids"`
+		FileIDs  []string `json:"file_ids"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	for _, key := range []string{"image_ids", "file_ids"} {
+		if raw, exists := fields[key]; exists && bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+			return fmt.Errorf("chat field %q cannot be null", key)
+		}
+	}
+	r.Text, r.ImageIDs, r.FileIDs = wire.Text, wire.ImageIDs, wire.FileIDs
+	return nil
 }
 
 // chatStream 提供前端流式聊天契约：POST /chat/stream。请求经标准 Intake →
