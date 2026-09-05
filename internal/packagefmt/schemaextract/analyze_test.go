@@ -91,6 +91,20 @@ type Hello struct { Name string ` + "`json:\"name\"`" + ` }
 	}
 }
 
+func TestAnalyzeGoRejectsGroupedMultipleParameters(t *testing.T) {
+	source := []byte(`package main
+func hello(first, second Hello) {}
+type Hello struct { Name string ` + "`json:\"name\"`" + ` }
+`)
+	capabilities, err := AnalyzeGo(source, "x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(capabilities) != 0 {
+		t.Fatalf("capabilities = %+v, want no grouped multi-parameter capability", capabilities)
+	}
+}
+
 func TestAnalyzeGoMapsByteSlicesToBase64(t *testing.T) {
 	source := []byte(`package main
 func upload(args UploadArgs) {}
@@ -107,6 +121,16 @@ type UploadArgs struct { Data []byte ` + "`json:\"data\"`" + ` }
 	data := schema["properties"].(map[string]any)["data"].(map[string]any)
 	if data["type"] != "string" || data["contentEncoding"] != "base64" {
 		t.Fatalf("data schema = %+v", data)
+	}
+}
+
+func TestAnalyzeGoRejectsFixedByteArrays(t *testing.T) {
+	source := []byte(`package main
+func upload(args UploadArgs) {}
+type UploadArgs struct { Data [32]byte ` + "`json:\"data\"`" + ` }
+`)
+	if _, err := AnalyzeGo(source, "x"); err == nil {
+		t.Fatal("期望拒绝不受支持的定长字节数组")
 	}
 }
 

@@ -68,7 +68,9 @@ export function hello(args: HelloArgs): any {
 		t.Fatalf("description = %q", capabilities[0].Description)
 	}
 	var schema map[string]any
-	json.Unmarshal(capabilities[0].InputSchema, &schema)
+	if err := json.Unmarshal(capabilities[0].InputSchema, &schema); err != nil {
+		t.Fatalf("schema 解码失败: %v", err)
+	}
 	if schema["additionalProperties"] != false {
 		t.Fatalf("schema 缺少 additionalProperties:false: %+v", schema)
 	}
@@ -101,7 +103,9 @@ export interface HelloArgs {
 `)
 	dir := t.TempDir()
 	// 写临时 package.json 使 npx 能解析 ts-json-schema-generator
-	os.WriteFile(filepath.Join(dir, "package.json"), []byte(`{"name":"test","private":true}`), 0644)
+	if err := os.WriteFile(filepath.Join(dir, "package.json"), []byte(`{"name":"test","private":true}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	capabilities, err := AnalyzeTS(context.Background(), source, "my.pkg", dir)
 	if err != nil {
 		t.Fatal(err)
@@ -111,7 +115,9 @@ export interface HelloArgs {
 	}
 	t.Logf("生成的 schema: %s", capabilities[0].InputSchema)
 	var schema map[string]any
-	json.Unmarshal(capabilities[0].InputSchema, &schema)
+	if err := json.Unmarshal(capabilities[0].InputSchema, &schema); err != nil {
+		t.Fatalf("schema 解码失败: %v", err)
+	}
 	if schema["type"] != "object" {
 		t.Fatalf("schema type = %v", schema["type"])
 	}
