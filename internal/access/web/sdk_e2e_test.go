@@ -169,7 +169,7 @@ func newCampusE2E(t *testing.T) (*httptest.Server, json.RawMessage) {
 	// 权威数据播种：快照元数据与行程文档经 packstore 一次性原子写入。
 	docs := memory.NewDocuments()
 	now := time.Now().UTC()
-	scope := packstore.Scope{AppID: campus.AppID, Namespace: campus.StorageNamespace}
+	scope := packstore.Scope{AppID: campus.AppID, PackageID: campus.PackageID, Namespace: campus.StorageNamespace}
 	baseTime := time.Date(2026, time.July, 24, 8, 0, 0, 0, time.FixedZone("Asia/Shanghai", 8*60*60))
 	revision := "e2e-revision"
 	journeys := []journeyDoc{
@@ -207,7 +207,7 @@ func newCampusE2E(t *testing.T) (*httptest.Server, json.RawMessage) {
 		web.WithDispatcher(dispatcher),
 	)
 	testServer := httptest.NewServer(server.Handler())
-	extensions, err := campus.Extensions()
+	extensions, err := campus.CapabilitiesJSON()
 	if err != nil {
 		testServer.Close()
 		t.Fatalf("构造 extensions: %v", err)

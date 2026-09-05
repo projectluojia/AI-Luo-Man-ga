@@ -93,6 +93,9 @@ func requestConfirmation(
 	expiresAt time.Time,
 ) confirmation.Confirmation {
 	t.Helper()
+	if spec.SideEffect == "" {
+		spec.SideEffect = confirmation.SideEffectExternal
+	}
 	record, err := service.Request(context.Background(), appID, echoID, runID, callID, spec, []byte(arguments), expiresAt)
 	if err != nil {
 		t.Fatalf("request confirmation: %v", err)
@@ -106,8 +109,7 @@ func verifyRequest(record confirmation.Confirmation) runtime.ConfirmationRequest
 		EchoID:         record.EchoID,
 		RunID:          record.RunID,
 		ConfirmationID: record.ConfirmationID,
-		TargetType:     record.TargetType,
-		TargetID:       record.TargetID,
+		CapabilityID:   record.CapabilityID,
 		SideEffect:     record.SideEffect,
 		IdempotencyKey: record.IdempotencyKey,
 	}
@@ -118,8 +120,7 @@ func TestServiceRequestCreatesWaitingConfirmationWithDigest(t *testing.T) {
 	service, _, clock := openService(t)
 	record := requestConfirmation(t, service, "app", "echo", "run", "call-1",
 		confirmation.RequestSpec{
-			CapabilityID: "campus.bus.notify", TargetType: confirmation.TargetTypeCapability,
-			TargetID: "campus.bus.notify", SideEffect: confirmation.SideEffectExternal,
+			CapabilityID:   "campus.bus.notify",
 			IdempotencyKey: "operation-1",
 		},
 		`{"message":"发车提醒"}`, time.Time{})
@@ -146,8 +147,7 @@ func TestServiceRequestCreatesWaitingConfirmationWithDigest(t *testing.T) {
 	// 参数不同则摘要不同：同一目标不同参数必须生成不同的确认。
 	other := requestConfirmation(t, service, "app", "echo", "run", "call-2",
 		confirmation.RequestSpec{
-			CapabilityID: "campus.bus.notify", TargetType: confirmation.TargetTypeCapability,
-			TargetID: "campus.bus.notify", SideEffect: confirmation.SideEffectExternal,
+			CapabilityID:   "campus.bus.notify",
 			IdempotencyKey: "operation-2",
 		},
 		`{"message":"取消提醒"}`, time.Time{})
@@ -167,8 +167,7 @@ func TestServiceConfirmationSurvivesStoreReopen(t *testing.T) {
 	service := confirmation.NewService(store, confirmation.Config{Now: clock.current})
 	record := requestConfirmation(t, service, "app", "echo", "run", "call-1",
 		confirmation.RequestSpec{
-			CapabilityID: "campus.bus.notify", TargetType: confirmation.TargetTypeCapability,
-			TargetID: "campus.bus.notify", SideEffect: confirmation.SideEffectExternal,
+			CapabilityID:   "campus.bus.notify",
 			IdempotencyKey: "operation-1",
 		},
 		`{"message":"发车提醒"}`, clock.current().Add(time.Hour))
@@ -188,7 +187,7 @@ func TestServiceConfirmationSurvivesStoreReopen(t *testing.T) {
 		t.Fatalf("resolve after reopen: %v", err)
 	}
 	if resolved.Status != confirmation.StatusWaiting || resolved.ArgumentDigest != record.ArgumentDigest ||
-		resolved.TargetID != record.TargetID || resolved.EchoID != record.EchoID || resolved.RunID != record.RunID {
+		resolved.CapabilityID != record.CapabilityID || resolved.EchoID != record.EchoID || resolved.RunID != record.RunID {
 		t.Fatalf("confirmation state lost across reopen: %#v", resolved)
 	}
 	// 重开后仍可正常决策。
@@ -206,8 +205,7 @@ func TestServiceVerifyApprovedSucceedsAndRejectsNonApproved(t *testing.T) {
 	service, _, clock := openService(t)
 	record := requestConfirmation(t, service, "app", "echo", "run", "call-1",
 		confirmation.RequestSpec{
-			CapabilityID: "campus.bus.notify", TargetType: confirmation.TargetTypeCapability,
-			TargetID: "campus.bus.notify", SideEffect: confirmation.SideEffectExternal,
+			CapabilityID:   "campus.bus.notify",
 			IdempotencyKey: "operation-1",
 		},
 		`{"message":"发车提醒"}`, clock.current().Add(time.Hour))
@@ -231,8 +229,7 @@ func TestServiceVerifyApprovedSucceedsAndRejectsNonApproved(t *testing.T) {
 	// 拒绝状态不可执行。
 	rejected := requestConfirmation(t, service, "app", "echo", "run", "call-2",
 		confirmation.RequestSpec{
-			CapabilityID: "campus.bus.notify", TargetType: confirmation.TargetTypeCapability,
-			TargetID: "campus.bus.notify", SideEffect: confirmation.SideEffectExternal,
+			CapabilityID:   "campus.bus.notify",
 			IdempotencyKey: "operation-2",
 		},
 		`{"message":"发车提醒"}`, clock.current().Add(time.Hour))
@@ -251,8 +248,7 @@ func TestServiceVerifyRejectsScopeMismatch(t *testing.T) {
 	seedEchoRun(t, store, "other", "echo-other", "run-other")
 	record := requestConfirmation(t, service, "app", "echo", "run", "call-1",
 		confirmation.RequestSpec{
-			CapabilityID: "campus.bus.notify", TargetType: confirmation.TargetTypeCapability,
-			TargetID: "campus.bus.notify", SideEffect: confirmation.SideEffectExternal,
+			CapabilityID:   "campus.bus.notify",
 			IdempotencyKey: "operation-1",
 		},
 		`{"message":"发车提醒"}`, clock.current().Add(time.Hour))
@@ -268,8 +264,7 @@ func TestServiceVerifyRejectsScopeMismatch(t *testing.T) {
 		t.Fatalf("跨 App got %v, want ErrNotFound", err)
 	}
 	for name, mutate := range map[string]func(*runtime.ConfirmationRequest){
-		"跨 Capability": func(r *runtime.ConfirmationRequest) { r.TargetID = "other.capability" },
-		"跨目标类型":        func(r *runtime.ConfirmationRequest) { r.TargetType = confirmation.TargetTypeTool },
+		"跨 Capability": func(r *runtime.ConfirmationRequest) { r.CapabilityID = "other.capability" },
 		"跨 Echo":       func(r *runtime.ConfirmationRequest) { r.EchoID = "echo-other" },
 		"跨 Run":        func(r *runtime.ConfirmationRequest) { r.RunID = "run-other" },
 		"跨副作用类型":       func(r *runtime.ConfirmationRequest) { r.SideEffect = confirmation.SideEffectWrite },
@@ -293,8 +288,7 @@ func TestServiceVerifyRejectsExpiredAndRevoked(t *testing.T) {
 
 	expired := requestConfirmation(t, service, "app", "echo", "run", "call-1",
 		confirmation.RequestSpec{
-			CapabilityID: "campus.bus.notify", TargetType: confirmation.TargetTypeCapability,
-			TargetID: "campus.bus.notify", SideEffect: confirmation.SideEffectExternal,
+			CapabilityID:   "campus.bus.notify",
 			IdempotencyKey: "operation-1",
 		},
 		`{"message":"发车提醒"}`, clock.current().Add(5*time.Minute))
@@ -313,8 +307,7 @@ func TestServiceVerifyRejectsExpiredAndRevoked(t *testing.T) {
 	// 有效期已过但状态机未显式标记：验证仍必须失败（fail-closed 时间过期）。
 	lapsed := requestConfirmation(t, service, "app", "echo", "run", "call-2",
 		confirmation.RequestSpec{
-			CapabilityID: "campus.bus.notify", TargetType: confirmation.TargetTypeCapability,
-			TargetID: "campus.bus.notify", SideEffect: confirmation.SideEffectExternal,
+			CapabilityID:   "campus.bus.notify",
 			IdempotencyKey: "operation-2",
 		},
 		`{"message":"发车提醒"}`, clock.current().Add(5*time.Minute))
@@ -333,8 +326,7 @@ func TestServiceVerifyRejectsExpiredAndRevoked(t *testing.T) {
 	// 撤销后验证失败；重复撤销幂等成功。
 	revoked := requestConfirmation(t, service, "app", "echo", "run", "call-3",
 		confirmation.RequestSpec{
-			CapabilityID: "campus.bus.notify", TargetType: confirmation.TargetTypeCapability,
-			TargetID: "campus.bus.notify", SideEffect: confirmation.SideEffectExternal,
+			CapabilityID:   "campus.bus.notify",
 			IdempotencyKey: "operation-3",
 		},
 		`{"message":"发车提醒"}`, clock.current().Add(time.Hour))
@@ -358,8 +350,7 @@ func TestServiceDecideConflictAndExpirySemantics(t *testing.T) {
 	service, _, clock := openService(t)
 	record := requestConfirmation(t, service, "app", "echo", "run", "call-1",
 		confirmation.RequestSpec{
-			CapabilityID: "campus.bus.notify", TargetType: confirmation.TargetTypeCapability,
-			TargetID: "campus.bus.notify", SideEffect: confirmation.SideEffectExternal,
+			CapabilityID:   "campus.bus.notify",
 			IdempotencyKey: "operation-1",
 		},
 		`{"message":"发车提醒"}`, clock.current().Add(time.Hour))
@@ -388,8 +379,7 @@ func TestServiceDecideConflictAndExpirySemantics(t *testing.T) {
 	// 拒绝后重复拒绝幂等；拒绝后批准冲突。
 	rejected := requestConfirmation(t, service, "app", "echo", "run", "call-2",
 		confirmation.RequestSpec{
-			CapabilityID: "campus.bus.notify", TargetType: confirmation.TargetTypeCapability,
-			TargetID: "campus.bus.notify", SideEffect: confirmation.SideEffectExternal,
+			CapabilityID:   "campus.bus.notify",
 			IdempotencyKey: "operation-2",
 		},
 		`{"message":"发车提醒"}`, clock.current().Add(time.Hour))
@@ -409,8 +399,7 @@ func TestServiceDecideConflictAndExpirySemantics(t *testing.T) {
 	// 有效期已过的待确认记录不可再决策。
 	short := requestConfirmation(t, service, "app", "echo", "run", "call-3",
 		confirmation.RequestSpec{
-			CapabilityID: "campus.bus.notify", TargetType: confirmation.TargetTypeCapability,
-			TargetID: "campus.bus.notify", SideEffect: confirmation.SideEffectExternal,
+			CapabilityID:   "campus.bus.notify",
 			IdempotencyKey: "operation-3",
 		},
 		`{"message":"发车提醒"}`, clock.current().Add(5*time.Minute))
@@ -430,8 +419,7 @@ func TestServiceRevokeRunInvalidatesConfirmations(t *testing.T) {
 	service, store, clock := openService(t)
 	seedEchoRun(t, store, "app", "echo-2", "run-2")
 	spec := confirmation.RequestSpec{
-		CapabilityID: "campus.bus.notify", TargetType: confirmation.TargetTypeCapability,
-		TargetID: "campus.bus.notify", SideEffect: confirmation.SideEffectExternal,
+		CapabilityID:   "campus.bus.notify",
 		IdempotencyKey: "operation-1",
 	}
 	waiting := requestConfirmation(t, service, "app", "echo", "run", "call-1", spec, `{}`, clock.current().Add(time.Hour))
@@ -470,8 +458,7 @@ func TestServiceExpireDueBatchExpiresOnlyDueConfirmations(t *testing.T) {
 	t.Parallel()
 	service, _, clock := openService(t)
 	spec := confirmation.RequestSpec{
-		CapabilityID: "campus.bus.notify", TargetType: confirmation.TargetTypeCapability,
-		TargetID: "campus.bus.notify", SideEffect: confirmation.SideEffectExternal,
+		CapabilityID:   "campus.bus.notify",
 		IdempotencyKey: "operation-1",
 	}
 	due := requestConfirmation(t, service, "app", "echo", "run", "call-1", spec, `{}`, clock.current().Add(5*time.Minute))
@@ -497,8 +484,7 @@ func TestServiceDoesNotFabricateUnknownExecutionOutcome(t *testing.T) {
 	service, store, clock := openService(t)
 	record := requestConfirmation(t, service, "app", "echo", "run", "call-1",
 		confirmation.RequestSpec{
-			CapabilityID: "campus.bus.notify", TargetType: confirmation.TargetTypeCapability,
-			TargetID: "campus.bus.notify", SideEffect: confirmation.SideEffectExternal,
+			CapabilityID:   "campus.bus.notify",
 			IdempotencyKey: "operation-1",
 		},
 		`{"message":"发车提醒"}`, clock.current().Add(time.Hour))
@@ -570,8 +556,7 @@ func TestServiceConcurrentRepeatedApprovalIsIdempotent(t *testing.T) {
 	service, _, clock := openService(t)
 	record := requestConfirmation(t, service, "app", "echo", "run", "call-1",
 		confirmation.RequestSpec{
-			CapabilityID: "campus.bus.notify", TargetType: confirmation.TargetTypeCapability,
-			TargetID: "campus.bus.notify", SideEffect: confirmation.SideEffectExternal,
+			CapabilityID:   "campus.bus.notify",
 			IdempotencyKey: "operation-1",
 		},
 		`{"message":"发车提醒"}`, clock.current().Add(time.Hour))
@@ -611,29 +596,25 @@ func TestServiceRequestRejectsInvalidInputs(t *testing.T) {
 	service, _, clock := openService(t)
 	ctx := context.Background()
 	spec := confirmation.RequestSpec{
-		CapabilityID: "campus.bus.notify", TargetType: confirmation.TargetTypeCapability,
-		TargetID: "campus.bus.notify", SideEffect: confirmation.SideEffectExternal,
+		CapabilityID:   "campus.bus.notify",
 		IdempotencyKey: "operation-1",
 	}
 	if _, err := service.Request(ctx, "", "echo", "run", "call-1", spec, nil, clock.current().Add(time.Hour)); !errors.Is(err, confirmation.ErrInvalidRequest) {
 		t.Fatalf("empty app got %v, want ErrInvalidRequest", err)
 	}
 	if _, err := service.Request(ctx, "app", "echo", "run", "call-1", confirmation.RequestSpec{
-		CapabilityID: "campus.bus.notify", TargetType: "database",
-		TargetID: "x", SideEffect: confirmation.SideEffectExternal, IdempotencyKey: "operation-1",
+		CapabilityID: "campus.bus.notify",
 	}, nil, clock.current().Add(time.Hour)); !errors.Is(err, confirmation.ErrInvalidRequest) {
 		t.Fatalf("invalid target type got %v, want ErrInvalidRequest", err)
 	}
 	// 只读副作用不需要确认，必须在请求边界拒绝（确认仅治理 write/external）。
 	if _, err := service.Request(ctx, "app", "echo", "run", "call-1", confirmation.RequestSpec{
-		CapabilityID: "campus.bus.notify", TargetType: confirmation.TargetTypeCapability,
-		TargetID: "campus.bus.notify", SideEffect: capability.SideEffectRead, IdempotencyKey: "operation-1",
+		CapabilityID: "campus.bus.notify",
 	}, nil, clock.current().Add(time.Hour)); !errors.Is(err, confirmation.ErrInvalidRequest) {
 		t.Fatalf("read side effect got %v, want ErrInvalidRequest", err)
 	}
 	if _, err := service.Request(ctx, "app", "echo", "run", "call-1", confirmation.RequestSpec{
-		CapabilityID: "campus.bus.notify", TargetType: confirmation.TargetTypeCapability,
-		TargetID: "campus.bus.notify", SideEffect: confirmation.SideEffectExternal, IdempotencyKey: "bad key!",
+		CapabilityID: "campus.bus.notify",
 	}, nil, clock.current().Add(time.Hour)); !errors.Is(err, confirmation.ErrInvalidRequest) {
 		t.Fatalf("invalid idempotency key got %v, want ErrInvalidRequest", err)
 	}
@@ -649,19 +630,7 @@ func TestServiceRequestRejectsInvalidInputs(t *testing.T) {
 
 func registerCapability(t *testing.T, reg *registry.Registry, spec capability.CapabilitySpec, handler registry.Handler) {
 	t.Helper()
-	if err := reg.RegisterService(registry.ServiceRegistration{
-		Spec: capability.ServiceSpec{
-			ID:                   spec.ServiceID,
-			Version:              "1.0.0",
-			RequestedPermissions: append([]string(nil), spec.RequiredPermissions...),
-		},
-		Capabilities: map[string]struct {
-			Spec    capability.CapabilitySpec
-			Handler registry.Handler
-		}{
-			spec.ID: {Spec: spec, Handler: handler},
-		},
-	}); err != nil {
+	if err := reg.Register(registry.CapabilityRegistration{Spec: spec, Handler: handler}); err != nil {
 		t.Fatalf("register capability: %v", err)
 	}
 }
@@ -680,8 +649,7 @@ func TestDispatcherExecutesApprovedSideEffectExactlyOnce(t *testing.T) {
 	service, store, clock := openService(t)
 	record := requestConfirmation(t, service, "app", "echo", "run", "call-1",
 		confirmation.RequestSpec{
-			CapabilityID: "external-capability", TargetType: confirmation.TargetTypeCapability,
-			TargetID: "external-capability", SideEffect: confirmation.SideEffectExternal,
+			CapabilityID:   "external-capability",
 			IdempotencyKey: "operation-1",
 		},
 		`{"value":1}`, clock.current().Add(time.Hour))
@@ -697,7 +665,6 @@ func TestDispatcherExecutesApprovedSideEffectExactlyOnce(t *testing.T) {
 	registerCapability(t, reg, capability.CapabilitySpec{
 		ID:                   "external-capability",
 		Version:              "1.0.0",
-		ServiceID:            "service",
 		InputSchemaJSON:      `{"type":"object","properties":{"value":{"type":"integer"}},"additionalProperties":false}`,
 		SideEffect:           capability.SideEffectExternal,
 		RequiresConfirmation: true,
@@ -740,8 +707,7 @@ func TestDispatcherExecutesApprovedSideEffectExactlyOnce(t *testing.T) {
 func TestDispatcherRejectsUnapprovedConfirmation(t *testing.T) {
 	service, store, clock := openService(t)
 	spec := confirmation.RequestSpec{
-		CapabilityID: "external-capability", TargetType: confirmation.TargetTypeCapability,
-		TargetID: "external-capability", SideEffect: confirmation.SideEffectExternal,
+		CapabilityID:   "external-capability",
 		IdempotencyKey: "operation-1",
 	}
 	waiting := requestConfirmation(t, service, "app", "echo", "run", "call-1", spec, `{"value":1}`, clock.current().Add(time.Hour))
@@ -757,7 +723,6 @@ func TestDispatcherRejectsUnapprovedConfirmation(t *testing.T) {
 	registerCapability(t, reg, capability.CapabilitySpec{
 		ID:                   "external-capability",
 		Version:              "1.0.0",
-		ServiceID:            "service",
 		InputSchemaJSON:      `{"type":"object","additionalProperties":false}`,
 		SideEffect:           capability.SideEffectExternal,
 		RequiresConfirmation: true,

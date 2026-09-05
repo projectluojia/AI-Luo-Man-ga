@@ -383,10 +383,9 @@ func openIdempotencyStore(t *testing.T) *sqlite.Store {
 
 func dispatcherAppConfig() appconfig.Config {
 	return appconfig.Config{
-		AppID: "app", Enabled: true, Model: "test-model", SystemPrompt: "系统提示",
-		Timezone: "Asia/Shanghai", MaxSteps: 8, MaxCapabilityCalls: 8,
-		MaxInputTokens: 32768, MaxOutputTokens: 8192, MaxTotalTokens: 40960,
-		MaxOutputBytes: 65536, ProviderTimeout: 30 * time.Second,
+		AppID: "app", Enabled: true, ExecutorID: "executor.test", ExecutorConfig: json.RawMessage(`{"strategy":"test"}`),
+		MaxSteps: 8, MaxCapabilityCalls: 8, MaxExecutionUnits: 4096,
+		MaxOutputBytes: 65536, ExecutionTimeout: 30 * time.Second,
 		EnabledCapabilities: []string{"capability"}, PermissionScope: []string{"bus.read"},
 	}
 }

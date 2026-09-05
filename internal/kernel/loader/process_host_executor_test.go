@@ -63,7 +63,7 @@ func TestProcessHostServesExecutorOverConnectMode(t *testing.T) {
 	if err := manager.Warmup(t.Context(), []string{manifest.ID}, 1); err != nil {
 		t.Fatalf("warmup: %v", err)
 	}
-	lease, err := manager.Executor(t.Context(), manifest.ID)
+	lease, err := manager.Executor(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}

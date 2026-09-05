@@ -29,7 +29,7 @@ func TestStorePersistsPackageDocumentsAndEchoAudit(t *testing.T) {
 	defer store.Close()
 	ctx := context.Background()
 	docs := store.PackageDocuments()
-	scope := packstore.Scope{AppID: "campus-services", Namespace: "campus/bus"}
+	scope := packstore.Scope{AppID: "campus-services", PackageID: "campus", Namespace: "campus/bus"}
 	importedAt := time.Now().UTC()
 	meta := packstore.SnapshotMeta{
 		Revision: "rev-1", Source: "test", Authoritative: true,
@@ -45,7 +45,7 @@ func TestStorePersistsPackageDocumentsAndEchoAudit(t *testing.T) {
 	if err != nil || !documents.MetaFound || len(documents.Documents) != 1 || documents.Documents[0].ID != "r" {
 		t.Fatalf("documents=%#v err=%v", documents, err)
 	}
-	if missing, err := docs.Get(ctx, packstore.Scope{AppID: "another-app", Namespace: "campus/bus"}, "routes", "r"); err != nil || missing.Found {
+	if missing, err := docs.Get(ctx, packstore.Scope{AppID: "another-app", PackageID: "campus", Namespace: "campus/bus"}, "routes", "r"); err != nil || missing.Found {
 		t.Fatalf("cross-app read=%#v err=%v, want not found", missing, err)
 	}
 	now := time.Now().UTC()

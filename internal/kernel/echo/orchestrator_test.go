@@ -43,25 +43,17 @@ const (
 // calls 非空时统计调用次数（幂等/去重断言用）。
 func registerRouteCapability(t *testing.T, reg *registry.Registry, calls *atomic.Int32) {
 	t.Helper()
-	if err := reg.RegisterService(registry.ServiceRegistration{
-		Spec: capability.ServiceSpec{ID: "demo", Version: "1.0.0", Description: "编排测试服务"},
-		Capabilities: map[string]struct {
-			Spec    capability.CapabilitySpec
-			Handler registry.Handler
-		}{
-			routeCapabilityID: {
-				Spec: capability.CapabilitySpec{
-					ID: routeCapabilityID, Version: "1.0.0", Name: "线路查询", Description: "编排测试能力",
-					ServiceID: "demo", SideEffect: capability.SideEffectRead, ToolID: routeCapabilityID,
-					InputSchemaJSON: `{"type":"object","properties":{"limit":{"type":"integer","minimum":1,"maximum":50}},"additionalProperties":false}`,
-				},
-				Handler: func(ctx context.Context, request contracts.RequestContext, payload json.RawMessage) (json.RawMessage, error) {
-					if calls != nil {
-						calls.Add(1)
-					}
-					return json.RawMessage(`{"data_status":{"state":"authoritative_fresh"},"routes":[{"id":"r","name":"测试线路","direction":"去程"}]}`), nil
-				},
-			},
+	if err := reg.Register(registry.CapabilityRegistration{
+		Spec: capability.CapabilitySpec{
+			ID: routeCapabilityID, Version: "1.0.0", Name: "线路查询", Description: "编排测试能力",
+			SideEffect:      capability.SideEffectRead,
+			InputSchemaJSON: `{"type":"object","properties":{"limit":{"type":"integer","minimum":1,"maximum":50}},"additionalProperties":false}`,
+		},
+		Handler: func(ctx context.Context, request contracts.RequestContext, payload json.RawMessage) (json.RawMessage, error) {
+			if calls != nil {
+				calls.Add(1)
+			}
+			return json.RawMessage(`{"data_status":{"state":"authoritative_fresh"},"routes":[{"id":"r","name":"测试线路","direction":"去程"}]}`), nil
 		},
 	}); err != nil {
 		t.Fatal(err)
@@ -932,24 +924,16 @@ func TestOrchestratorRevalidatesCapabilityPolicyAfterProjection(t *testing.T) {
 	}
 	reg := registry.New()
 	var called atomic.Int32
-	if err := reg.RegisterService(registry.ServiceRegistration{
-		Spec: capability.ServiceSpec{ID: "test", Version: "1.0.0"},
-		Capabilities: map[string]struct {
-			Spec    capability.CapabilitySpec
-			Handler registry.Handler
-		}{
-			capabilityID: {
-				Spec: capability.CapabilitySpec{
-					ID: capabilityID, Version: "1.0.0", Name: "测试读取",
-					Description: "验证运行中动态撤权", ServiceID: "test",
-					InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
-					SideEffect:      capability.SideEffectRead,
-				},
-				Handler: func(context.Context, contracts.RequestContext, json.RawMessage) (json.RawMessage, error) {
-					called.Add(1)
-					return json.RawMessage(`{}`), nil
-				},
-			},
+	if err := reg.Register(registry.CapabilityRegistration{
+		Spec: capability.CapabilitySpec{
+			ID: capabilityID, Version: "1.0.0", Name: "测试读取",
+			Description:     "验证运行中动态撤权",
+			InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
+			SideEffect:      capability.SideEffectRead,
+		},
+		Handler: func(context.Context, contracts.RequestContext, json.RawMessage) (json.RawMessage, error) {
+			called.Add(1)
+			return json.RawMessage(`{}`), nil
 		},
 	}); err != nil {
 		t.Fatal(err)
@@ -1035,7 +1019,7 @@ func TestOrchestratorAcceptedRunScopeCannotExpandAfterGrant(t *testing.T) {
 		}{
 			Spec: capability.CapabilitySpec{
 				ID: capabilityID, Version: "1.0.0", Name: "测试读取",
-				Description: "验证已接受 Run 的授权范围不可扩张", ServiceID: "test",
+				Description:         "验证已接受 Run 的授权范围不可扩张",
 				InputSchemaJSON:     `{"type":"object","additionalProperties":false}`,
 				SideEffect:          capability.SideEffectRead,
 				RequiredPermissions: requiredPermissions,
@@ -1043,13 +1027,10 @@ func TestOrchestratorAcceptedRunScopeCannotExpandAfterGrant(t *testing.T) {
 			Handler: handler,
 		}
 	}
-	if err := reg.RegisterService(registry.ServiceRegistration{
-		Spec: capability.ServiceSpec{
-			ID: "test", Version: "1.0.0", RequestedPermissions: []string{permission},
-		},
-		Capabilities: capabilities,
-	}); err != nil {
-		t.Fatal(err)
+	for _, registration := range capabilities {
+		if err := reg.Register(registry.CapabilityRegistration{Spec: registration.Spec, Handler: registration.Handler}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	listener := bufconn.Listen(1 << 20)
 	grpcServer := grpc.NewServer()
@@ -1326,23 +1307,15 @@ func TestOrchestratorDoesNotAutomaticallyRetryAfterSideEffect(t *testing.T) {
 	policy := runtimetest.NewStaticAppPolicy()
 	policy.Enable(testAppID, "test.external")
 	var calls atomic.Int32
-	if err := reg.RegisterService(registry.ServiceRegistration{
-		Spec: capability.ServiceSpec{ID: "test", Version: "1.0.0"},
-		Capabilities: map[string]struct {
-			Spec    capability.CapabilitySpec
-			Handler registry.Handler
-		}{
-			"test.external": {
-				Spec: capability.CapabilitySpec{
-					ID: "test.external", Version: "1.0.0", Name: "外部测试", Description: "验证副作用重试边界", ServiceID: "test",
-					InputSchemaJSON: `{"type":"object","properties":{},"additionalProperties":false}`,
-					SideEffect:      capability.SideEffectExternal,
-				},
-				Handler: func(context.Context, contracts.RequestContext, json.RawMessage) (json.RawMessage, error) {
-					calls.Add(1)
-					return json.RawMessage(`{"ok":true}`), nil
-				},
-			},
+	if err := reg.Register(registry.CapabilityRegistration{
+		Spec: capability.CapabilitySpec{
+			ID: "test.external", Version: "1.0.0", Name: "外部测试", Description: "验证副作用重试边界",
+			InputSchemaJSON: `{"type":"object","properties":{},"additionalProperties":false}`,
+			SideEffect:      capability.SideEffectExternal,
+		},
+		Handler: func(context.Context, contracts.RequestContext, json.RawMessage) (json.RawMessage, error) {
+			calls.Add(1)
+			return json.RawMessage(`{"ok":true}`), nil
 		},
 	}); err != nil {
 		t.Fatal(err)

@@ -163,8 +163,16 @@ func (s *Store) migrateThrough(ctx context.Context, maximumVersion int) error {
 		if total > 0 && applied != 1 {
 			return fmt.Errorf("SQLite 数据库仍使用旧开发版 Schema，请删除数据库并重新部署")
 		}
+		if total == 0 {
+			if err := s.applyMigration(ctx, schemaBaselineVersion, registeredMigrations[schemaBaselineVersion]); err != nil {
+				return err
+			}
+		}
 	}
 	for _, version := range versions {
+		if maximumVersion == 0 && version < schemaBaselineVersion {
+			continue
+		}
 		if maximumVersion > 0 && version > maximumVersion {
 			continue
 		}

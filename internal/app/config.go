@@ -165,7 +165,7 @@ func initialCapabilityIDs(reg *registry.Registry, records []loader.InstalledReco
 		ids[spec.ID] = struct{}{}
 	}
 	for _, record := range records {
-		for _, spec := range record.Capabilities {
+		for _, spec := range record.Runtime.Capabilities {
 			ids[spec.ID] = struct{}{}
 		}
 	}

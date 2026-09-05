@@ -226,7 +226,7 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 	if err := runtimeLoader.Warmup(ctx, pinnedRuntimes, min(len(pinnedRuntimes), 4)); err != nil {
 		return fmt.Errorf("warm pinned runtimes: %w", err)
 	}
-	executorLease, err := runtimeLoader.Executor(ctx, config.executorID)
+	executorLease, err := runtimeLoader.Executor(ctx)
 	if err != nil {
 		return fmt.Errorf("resolve executor runtime: %w", err)
 	}
@@ -266,7 +266,6 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 		MaxRunAttempts: config.orchestration.MaxRunAttempts, QueueCapacity: config.orchestration.QueueCapacity,
 	})
 	observe.Info(ctx, "已安装服务与执行 Capability 注册完成",
-		observe.IntAttr("service_count", len(reg.Services())), observe.IntAttr("tool_count", len(reg.Tools())),
 		observe.IntAttr("capability_count", len(reg.Capabilities())),
 	)
 	taskTypes := task.NewTypeRegistry()

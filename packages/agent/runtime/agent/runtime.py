@@ -15,7 +15,7 @@ import grpc
 
 from agent.core import AgentKernel, BudgetExceeded, Capability, CapabilityRequested, FinalReply, ReplyDelta, UsageReported
 from agent.generated import executor_pb2, executor_pb2_grpc
-from agent.model import ModelProvider, ProviderFailure, ToolCall
+from agent.model import CapabilityCall, ModelProvider, ProviderFailure
 from agent.observe import bind, configure, get_logger
 from agent.openai_compatible import OpenAICompatibleProvider
 
@@ -167,7 +167,7 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
                 expected_capabilities: dict[str, str] = {}
                 expected_kernel_sequence = 2
 
-                async def execute(call: ToolCall) -> str:
+                async def execute(call: CapabilityCall) -> str:
                     nonlocal expected_kernel_sequence
                     expected_capability_id = expected_capabilities.pop(call.id, "")
                     if not expected_capability_id:
@@ -215,7 +215,7 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
                     capabilities=capabilities,
                     execute=execute,
                     max_steps=start.max_steps,
-                    max_tool_calls=start.max_capability_calls,
+                    max_capability_calls=start.max_capability_calls,
                     max_input_tokens=unit_budget,
                     max_output_tokens=unit_budget,
                     max_total_tokens=unit_budget,

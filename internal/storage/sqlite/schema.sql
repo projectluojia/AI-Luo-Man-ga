@@ -287,8 +287,6 @@ CREATE TABLE confirmations (
   run_id TEXT NOT NULL,
   call_id TEXT NOT NULL,
   capability_id TEXT NOT NULL DEFAULT '',
-  target_type TEXT NOT NULL CHECK(target_type IN ('capability','tool')),
-  target_id TEXT NOT NULL,
   side_effect TEXT NOT NULL CHECK(side_effect IN ('write','external')),
   idempotency_key TEXT NOT NULL CHECK(length(idempotency_key) BETWEEN 1 AND 128),
   argument_digest TEXT NOT NULL CHECK(length(argument_digest)=64),

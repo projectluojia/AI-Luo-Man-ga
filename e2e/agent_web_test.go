@@ -245,7 +245,7 @@ func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 	defer executorLease.Release()
 
 	docs := memory.NewDocuments()
-	scope := packstore.Scope{AppID: campus.AppID, Namespace: campus.StorageNamespace}
+	scope := packstore.Scope{AppID: campus.AppID, PackageID: campus.PackageID, Namespace: campus.StorageNamespace}
 	routes := []packstore.Document{{ID: "r", Payload: []byte(`{"id":"r","name":"测试线路","direction":"去程","source_revision":"e2e-revision"}`)}}
 	if err := docs.ReplaceSnapshot(context.Background(), scope, packstore.SnapshotMeta{
 		Revision: "e2e-revision", Source: "zhihui-luojia", Authoritative: true, Complete: true,
