@@ -48,9 +48,12 @@ func TestChatStreamRejectsInvalidRequests(t *testing.T) {
 	}{
 		{name: "empty text", body: `{"text":"  "}`, code: "invalid_message"},
 		{name: "client identity field", body: `{"text":"hi","user_id":"spoofed"}`, code: "invalid_request"},
+		{name: "legacy user name", body: `{"text":"hi","user_name":"web-user"}`, code: "invalid_request"},
+		{name: "legacy session id", body: `{"text":"hi","session_id":"session"}`, code: "invalid_request"},
+		{name: "image attachment", body: `{"text":"hi","image_ids":["image"]}`, code: "invalid_request"},
+		{name: "file attachment", body: `{"text":"hi","file_ids":["file"]}`, code: "invalid_request"},
 		{name: "malformed json", body: `{"text":`, code: "invalid_request"},
 		{name: "trailing json", body: `{"text":"hi"}{}`, code: "invalid_request"},
-		{name: "legacy client field", body: `{"text":"hi","user_id":"web-user"}`, code: "invalid_request"},
 	}
 	for _, test := range tests {
 		test := test
