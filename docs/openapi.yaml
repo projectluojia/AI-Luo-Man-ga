@@ -5,7 +5,7 @@ info:
   description: Every HTTP response carries X-Request-ID, X-Trace-ID, and a W3C traceparent generated from validated input correlation headers.
 servers:
   - url: https://api.example.invalid
-    description: Production endpoint; HTTPS is required when sending authentication material.
+    description: Example HTTPS endpoint; deployments must replace this hostname with their real production endpoint.
   - url: http://127.0.0.1:8080
     description: Local development only; do not send real credentials.
 paths:
