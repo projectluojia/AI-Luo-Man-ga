@@ -367,7 +367,7 @@ func InstallFromRelease(ctx context.Context, root string, client *GitHubClient, 
 	if err != nil || packagecontract.CompareVersions(resolved, manifestVersion) != 0 {
 		return InstalledRecord{}, fmt.Errorf("发布包版本 %s 与解析版本 %s 不一致", source.Manifest.Version, version)
 	}
-	record, err := Install(ctx, root, sourceDir)
+	record, err := Install(ctx, root, tarball)
 	if err != nil {
 		return InstalledRecord{}, err
 	}
