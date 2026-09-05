@@ -4,7 +4,10 @@ info:
   version: 2.0.0
   description: Every HTTP response carries X-Request-ID, X-Trace-ID, and a W3C traceparent generated from validated input correlation headers.
 servers:
+  - url: https://api.example.invalid
+    description: Production endpoint; HTTPS is required when sending authentication material.
   - url: http://127.0.0.1:8080
+    description: Local development only; do not send real credentials.
 paths:
   /api/v2/echoes:
     post:
@@ -350,11 +353,13 @@ paths:
                   maxLength: 4000
                 image_ids:
                   type: array
+                  maxItems: 0
                   items:
                     type: string
                   description: Unsupported in the current slice; non-empty arrays are rejected.
                 file_ids:
                   type: array
+                  maxItems: 0
                   items:
                     type: string
                   description: Unsupported in the current slice; non-empty arrays are rejected.
