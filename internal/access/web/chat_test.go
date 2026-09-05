@@ -53,6 +53,7 @@ func TestChatStreamRejectsInvalidRequests(t *testing.T) {
 		{name: "image attachment", body: `{"text":"hi","image_ids":["image"]}`, code: "attachments_unsupported"},
 		{name: "file attachment", body: `{"text":"hi","file_ids":["file"]}`, code: "attachments_unsupported"},
 		{name: "null image attachment", body: `{"text":"hi","image_ids":null}`, code: "invalid_request"},
+		{name: "duplicate image attachment", body: `{"text":"hi","image_ids":["one"],"image_ids":[]}`, code: "invalid_request"},
 		{name: "null file attachment", body: `{"text":"hi","file_ids":null}`, code: "invalid_request"},
 		{name: "malformed json", body: `{"text":`, code: "invalid_request"},
 		{name: "trailing json", body: `{"text":"hi"}{}`, code: "invalid_request"},

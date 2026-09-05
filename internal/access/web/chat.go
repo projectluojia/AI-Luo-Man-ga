@@ -30,6 +30,32 @@ func (r *chatRequest) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &fields); err != nil {
 		return err
 	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	if _, err := decoder.Token(); err != nil {
+		return err
+	}
+	seen := make(map[string]struct{}, len(fields))
+	for decoder.More() {
+		token, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		key, ok := token.(string)
+		if !ok {
+			return fmt.Errorf("chat field name must be a string")
+		}
+		if _, exists := seen[key]; exists {
+			return fmt.Errorf("duplicate chat field %q", key)
+		}
+		seen[key] = struct{}{}
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return err
+		}
+	}
+	if _, err := decoder.Token(); err != nil {
+		return err
+	}
 	for key := range fields {
 		if key != "text" && key != "image_ids" && key != "file_ids" {
 			return fmt.Errorf("unknown chat field %q", key)
