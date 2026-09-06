@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packagecontract"
+	packageiotest "github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packageio/testutil"
 	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/packmgr"
 )
 
@@ -81,7 +82,7 @@ func TestPackFromSourceRoundTripsThroughInstall(t *testing.T) {
 	if filepath.Base(tarball) != "demo.pkg-1.4.2.tgz" {
 		t.Fatalf("tarball = %q, want demo.pkg-1.4.2.tgz", filepath.Base(tarball))
 	}
-	record, err := packmgr.Install(ctx, t.TempDir(), tarball)
+	record, err := packmgr.Install(ctx, packageiotest.TempDir(t), tarball)
 	if err != nil {
 		t.Fatalf("Install from tarball: %v", err)
 	}

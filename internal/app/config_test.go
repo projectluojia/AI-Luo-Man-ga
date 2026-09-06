@@ -16,6 +16,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/capability"
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packagecontract"
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packageio"
+	packageiotest "github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packageio/testutil"
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/projectcontract"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access/configui"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
@@ -75,10 +76,7 @@ func TestDefaultInstallRootIsAbsoluteOrEmpty(t *testing.T) {
 }
 
 func TestConfigureInstalledRuntimesAllowsEmptySecureCatalog(t *testing.T) {
-	root := t.TempDir()
-	if err := os.Chmod(root, 0o700); err != nil {
-		t.Fatal(err)
-	}
+	root := packageiotest.TempDir(t)
 	projectRoot := t.TempDir()
 	writeEmptyProject(t, projectRoot)
 	hosts, records, err := configureInstalledRuntimes(t.Context(), config{projectRoot: projectRoot, runtimeInstallRoot: root}, nil)
@@ -203,16 +201,13 @@ func writeProjectLock(t *testing.T, projectRoot, installRoot string) {
 
 func writeInstalledFixture(t *testing.T) string {
 	t.Helper()
-	root := t.TempDir()
+	root := packageiotest.TempDir(t)
 	writeInstalledPackage(t, root, "main.extension")
 	return root
 }
 
 func writeInstalledPackage(t *testing.T, root, packageID string) {
 	t.Helper()
-	if err := os.Chmod(root, 0o700); err != nil {
-		t.Fatal(err)
-	}
 	directory := filepath.Join(root, packageID)
 	if err := os.Mkdir(directory, 0o750); err != nil {
 		t.Fatal(err)

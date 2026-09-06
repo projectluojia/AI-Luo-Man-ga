@@ -14,7 +14,7 @@ entrypoint = "runtime"
 
 [component.process]
 path = ".venv/python"
-args = ["-m", "agent.runtime", "--listen", "${address}"]
+args = ["-B", "-m", "agent.runtime", "--listen", "${address}"]
 work_dir = "."
 address = "127.0.0.1:50051"
 

@@ -8,6 +8,9 @@ require (
 	github.com/projectluojia/AI-Luo-Man-ga/contracts v0.0.0
 )
 
-require github.com/Masterminds/semver/v3 v3.5.0 // indirect
+require (
+	github.com/Masterminds/semver/v3 v3.5.0 // indirect
+	golang.org/x/sys v0.45.0 // indirect
+)
 
 replace github.com/projectluojia/AI-Luo-Man-ga/contracts => ../contracts

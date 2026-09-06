@@ -15,6 +15,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/capability"
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packagecontract"
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packageio"
+	packageiotest "github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packageio/testutil"
 	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/packmgr"
 )
 
@@ -56,7 +57,7 @@ func writeSourcePackage(t *testing.T, dir, id, version, mode, artifactName strin
 
 func TestInstallReplacesVersionsAndVerifiesIntegrity(t *testing.T) {
 	ctx := context.Background()
-	root := t.TempDir()
+	root := packageiotest.TempDir(t)
 	sourceV1 := filepath.Join(t.TempDir(), "pkg")
 	writeSourcePackage(t, sourceV1, "demo.pkg", "1.0.0", packagecontract.ModeHosted, "app.wasm", nil)
 
@@ -109,7 +110,7 @@ func TestInstallReplacesVersionsAndVerifiesIntegrity(t *testing.T) {
 
 func TestInstallResolvesDependenciesAgainstInstalled(t *testing.T) {
 	ctx := context.Background()
-	root := t.TempDir()
+	root := packageiotest.TempDir(t)
 	depSource := filepath.Join(t.TempDir(), "dep")
 	writeSourcePackage(t, depSource, "demo.dep", "1.2.0", packagecontract.ModeHosted, "dep.wasm", nil)
 	if _, err := packmgr.Install(ctx, root, depSource); err != nil {
@@ -131,7 +132,7 @@ func TestInstallResolvesDependenciesAgainstInstalled(t *testing.T) {
 }
 
 func TestInstallIsolatedWritesProcessSpec(t *testing.T) {
-	root := t.TempDir()
+	root := packageiotest.TempDir(t)
 	source := filepath.Join(t.TempDir(), "isolated")
 	writeSourcePackage(t, source, "demo.isolated", "1.0.0", packagecontract.ModeIsolated, "app", nil)
 	record, err := packmgr.Install(context.Background(), root, source)
@@ -164,7 +165,7 @@ func TestInstallRejectsFileProcessPathOutsideArtifact(t *testing.T) {
 	if err := os.WriteFile(manifestPath, manifestBytes, 0o640); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := packmgr.Install(context.Background(), t.TempDir(), source); !errors.Is(err, packagecontract.ErrInvalidFormat) {
+	if _, err := packmgr.Install(context.Background(), packageiotest.TempDir(t), source); !errors.Is(err, packagecontract.ErrInvalidFormat) {
 		t.Fatalf("Install with file process path outside artifact = %v, want ErrInvalidFormat", err)
 	}
 }
@@ -218,18 +219,18 @@ func TestInstallAndPackDirectoryArtifact(t *testing.T) {
 		}
 		return record
 	}
-	install(t.TempDir(), source)
+	install(packageiotest.TempDir(t), source)
 
 	tarball, err := packmgr.PackFromSource(ctx, source, t.TempDir(), manifest, manifestBytes)
 	if err != nil {
 		t.Fatalf("PackFromSource: %v", err)
 	}
-	install(t.TempDir(), tarball)
+	install(packageiotest.TempDir(t), tarball)
 }
 
 func TestInstallRejectsBreakingReverseDependency(t *testing.T) {
 	ctx := context.Background()
-	root := t.TempDir()
+	root := packageiotest.TempDir(t)
 	depV1 := filepath.Join(t.TempDir(), "dep-v1")
 	writeSourcePackage(t, depV1, "demo.dep", "1.0.0", packagecontract.ModeHosted, "dep.wasm", nil)
 	if _, err := packmgr.Install(ctx, root, depV1); err != nil {
@@ -299,7 +300,7 @@ func TestInstallRejectsInvalidSource(t *testing.T) {
 }
 
 func TestInstallRejectsCorruptExistingPackage(t *testing.T) {
-	root := t.TempDir()
+	root := packageiotest.TempDir(t)
 	target := filepath.Join(root, "demo.pkg")
 	if err := os.Mkdir(target, 0o750); err != nil {
 		t.Fatal(err)
@@ -316,7 +317,7 @@ func TestInstallRejectsCorruptExistingPackage(t *testing.T) {
 
 func TestReadInstalledRejectsArtifactOutsidePackage(t *testing.T) {
 	ctx := context.Background()
-	root := t.TempDir()
+	root := packageiotest.TempDir(t)
 	source := filepath.Join(t.TempDir(), "pkg")
 	writeSourcePackage(t, source, "demo.pkg", "1.0.0", packagecontract.ModeHosted, "app.wasm", nil)
 	if _, err := packmgr.Install(ctx, root, source); err != nil {
@@ -354,7 +355,7 @@ func TestReadInstalledRejectsArtifactOutsidePackage(t *testing.T) {
 
 func TestUpgradeAndUninstall(t *testing.T) {
 	ctx := context.Background()
-	root := t.TempDir()
+	root := packageiotest.TempDir(t)
 	source := filepath.Join(t.TempDir(), "pkg")
 	writeSourcePackage(t, source, "demo.pkg", "1.0.0", packagecontract.ModeHosted, "app.wasm", nil)
 	if _, err := packmgr.Install(ctx, root, source); err != nil {
@@ -412,7 +413,7 @@ func TestInstallAcceptsRelativeSourceDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := packmgr.Install(context.Background(), t.TempDir(), relative); err != nil {
+	if _, err := packmgr.Install(context.Background(), packageiotest.TempDir(t), relative); err != nil {
 		t.Fatalf("Install relative source: %v", err)
 	}
 }
@@ -450,7 +451,7 @@ func TestInstallRejectsEntrypointBasenameCollision(t *testing.T) {
 // 本机 Unix socket），否则宿主装载时拿不到启动参数。
 func TestInstallLocksProcessSpecForIsolatedComponent(t *testing.T) {
 	ctx := context.Background()
-	root := t.TempDir()
+	root := packageiotest.TempDir(t)
 	source := filepath.Join(t.TempDir(), "pkg")
 	writeSourcePackage(t, source, "demo.svc", "1.0.0", packagecontract.ModeIsolated, "svc-bin", nil)
 	record, err := packmgr.Install(ctx, root, source)
@@ -475,7 +476,7 @@ func TestInstallLocksProcessSpecForIsolatedComponent(t *testing.T) {
 }
 
 func TestInstallSerializesSamePackagePublication(t *testing.T) {
-	root := t.TempDir()
+	root := packageiotest.TempDir(t)
 	sources := make([]string, 2)
 	for i, version := range []string{"1.0.0", "2.0.0"} {
 		sources[i] = filepath.Join(t.TempDir(), "pkg")
@@ -531,7 +532,7 @@ func TestInstallRejectsExistingCrossProcessInstallLock(t *testing.T) {
 // 解析。其他非包条目仍然 fail closed。
 func TestListInstalledSkipsInternalWorkDirs(t *testing.T) {
 	ctx := context.Background()
-	root := t.TempDir()
+	root := packageiotest.TempDir(t)
 	source := filepath.Join(t.TempDir(), "pkg")
 	writeSourcePackage(t, source, "demo.pkg", "1.0.0", packagecontract.ModeHosted, "app.wasm", nil)
 	if _, err := packmgr.Install(ctx, root, source); err != nil {
