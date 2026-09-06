@@ -236,7 +236,7 @@ VALUES('app','revision-1','2026-08-30T07:00:00.000Z');`,
 	defer upgraded.Close()
 	ctx := context.Background()
 	docs := upgraded.PackageDocuments()
-	scope := packstore.Scope{AppID: "app", Namespace: "campus/bus"}
+	scope := packstore.Scope{AppID: "app", PackageID: "campus", Namespace: "campus/bus"}
 	// 快照元数据随 namespace 迁移并保持 current（经 List 一致性读出）。
 	listed, err := docs.List(ctx, scope, "routes", 10, "")
 	if err != nil || !listed.MetaFound || listed.Meta.Revision != "revision-1" ||

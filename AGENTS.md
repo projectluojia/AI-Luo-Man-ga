@@ -38,21 +38,21 @@ AI珞 V3 是长期维护的生产级项目。功能范围可以窄，但已实�
 
 - Go kernel 是唯一系统核心和事实来源，负责 Access、Echo/Run 编排、授权、Registry、路由、Loader、持久化、调度、审计、取消和恢复。
 - 前端与外部平台只连接 Go。Executor 只能通过 Go 投影的 Capability 请求动作，不拥有内核授权、系统状态、调度或业务持久化。
-- Tool 是可复用原子能力；Service 是薄业务组合并暴露 Capability。Agent 和外部调用方只看 Capability，不看内部 Tool 目录。
-- 所有 Capability、Service、Tool 调用经过内核 Dispatcher，并携带受治理上下文。权限和数据范围只能收窄，内部调用不得提权。
+- Package 是分发/版本/依赖单位；Component 是运行单元；Capability 是唯一对外调用、授权、Schema、幂等和审计边界。Provider 与 Executor 是 Component 的两种运行协议角色。
+- 所有 Capability 调用经过内核 Dispatcher，并携带受治理上下文。权限和数据范围只能收窄，内部调用不得提权。
 - `Deployment` 是物理安全边界；`App` 是业务、数据、权限、Agent 配置和会话边界。
-- Core 不硬编码具体 App、Service、Tool 或 Executor 标识；当前活动 App 由 Deployment 配置选择，已安装能力只通过清单发现。
+- Core 不硬编码具体 App、Package、Component、Capability 或 Executor 标识；当前活动 App 由 Deployment 配置选择，已安装能力只通过清单发现。
 - 跨进程通信使用版本化 gRPC/Protobuf，不引入私有传输协议。
 - 逻辑边界不等于一组件一进程、一端口、一队列或一数据库。
-- 可变业务状态不得只存在内存。Go 在 Agent、Tool Host、客户端或进程崩溃后仍保持权威。
+- 可变业务状态不得只存在内存。Go 在 Agent、Runtime Host、客户端或进程崩溃后仍保持权威。
 - Subagent 是 Go 创建的持久 child Run，具有 `parent_run_id`、收窄权限、独立预算、受治理取消和显式结果路由；root 可并行创建多个直接 child（默认最多 4 个，受配置上限约束），但 child 不得再创建 Subagent，Python 不得私建未跟踪子任务。
 
 ## Repository Layout
 
 - `internal/kernel`：治理、编排、协议、Registry、Loader 和领域端口。
 - `internal/access`、`internal/storage`、`internal/observe`：平台基础设施。
-- `internal/tools`：跨 Service 可复用的原子 Tool，绝不反向依赖 Service。
-- `internal/services`：业务 Service 与运行时装配；通过 `ToolDependencies` 使用 Tool。
+- `internal/providers`：内核内置或测试装配的 Capability Provider；不作为 Package 类型系统，不反向依赖 Core 业务实现。
+- 纯代码复用走各语言的编译期 Package 依赖；需要独立运行、权限和数据边界时才声明 Provider Component。
 - 具体存储实现位于领域/内核窄端口之后；测试适配器可放 `internal/storage/memory`。
 - `contracts`：独立 Go module，提供 Core 与外部包共同消费的
   `capability`、`packagecontract`、`packageio` 和 `projectcontract` 稳定契约；其中
@@ -72,8 +72,8 @@ AI珞 V3 是长期维护的生产级项目。功能范围可以窄，但已实�
 
 - 生产 Executor 必须遵循版本化执行协议；包内部的认知、模型和 Provider 实现不进入 Core。
 - Go 为每个 Run 计算精确 Capability 投影；Executor 拒绝未投影调用、畸形参数、重复 call ID 和错配结果。
-- ToolCall 参数在 Go 信任边界再次按注册 Schema 验证；Provider strict mode 不是安全边界。
-- Run 必须具备 deadline、步骤、ToolCall、载荷、输出、Token 和可用成本预算。
+- CapabilityCall 参数在 Go 信任边界再次按注册 Schema 验证；Executor strict mode 不是安全边界。
+- Run 必须具备 deadline、步骤、CapabilityCall、载荷、输出、Token 和可用成本预算。
 - Executor 调用具备超时、取消传播、稳定错误分类和确定的重试语义；不安全副作用不自动重试。
 - readiness 反映 Executor 及其必要依赖的真实能力，不得只检查对象构造成功。
 - 原始上游响应、Headers、提示词、消息和凭据不得进入日志或公共 API。
@@ -86,7 +86,7 @@ AI珞 V3 是长期维护的生产级项目。功能范围可以窄，但已实�
 - 外部输入不可信。分配或持久化前限制 body、字段、字符串、集合、帧、事件和 gRPC 消息大小。
 - 使用严格解码和 Schema；除非版本化契约允许，否则拒绝未知字段。
 - 公共响应不得泄露内部错误、SQL、文件路径、Provider 响应、堆栈或秘密。
-- 不在普通日志或非授权存储记录凭据、认证头、Cookie、用户/模型正文、提示词、Tool 参数或 Tool 结果。
+- 不在普通日志或非授权存储记录凭据、认证头、Cookie、用户/模型正文、提示词、Capability 参数或 Capability 结果。
 - 审计不是普通日志，必须集中净化、App 隔离，并具备保留、访问与删除策略。
 - 非 loopback/远程边界需要认证传输和文档化信任模型；明文 gRPC 仅限显式同 Deployment loopback。
 - Secret 来自批准的秘密源，不提交、不启动回显，并具备轮换和撤销路径。
@@ -98,7 +98,7 @@ AI珞 V3 是长期维护的生产级项目。功能范围可以窄，但已实�
 - Echo 创建与 Run 入队必须跨崩溃安全；调度使用持久 work/lease，不只依赖 `go func`。
 - 启动时确定性处理遗留 `running` 记录；重试、恢复、取消或失败策略必须明确。
 - 写入和外部副作用使用幂等键并支持重放安全；未知执行结果不得伪报成功或失败。
-- 取消和 deadline 贯穿 HTTP、Echo、Run、gRPC、Capability、Service、Tool 与存储。
+- 取消和 deadline 贯穿 HTTP、Echo、Run、gRPC、Capability、Provider 与存储。
 - 取消后的终态/清理只能用新的有界 context，不使用无界后台清理。
 - 慢或断开的 SSE 客户端不得阻塞 Run；事件持久可重放，驱逐与重连有测试。
 - 优雅关闭停止接入、取消或排空活动工作、保存状态、停止 Executor 子进程并在期限内关闭存储。
@@ -109,9 +109,11 @@ AI珞 V3 是长期维护的生产级项目。功能范围可以窄，但已实�
 - Schema 只做新的前向迁移，不改写已应用迁移；测试从上一版本升级。
 - 表结构使用外键、唯一约束、检查约束和包含 `app_id` 的复合键/索引，不只依赖 Go 校验。
 - 快照导入在原子替换前验证稳定 ID、引用、时间、来源修订、权威性、完整性和重复项；失败保留上一完整版本。
+- Package 文档存储必须使用包归属的 namespace；hosted 包的存储写操作只能由声明为
+  write/external 且带幂等键的 Capability 触发。
 - 时间使用文档化 UTC 表示，边界转换使用显式 IANA 时区。
 - 保持数据库适配端口；SQLite 支持不代表适合所有生产部署。
-- 公共 HTTP、SSE、Protobuf、Capability Schema、Tool spec 和持久事件都是版本化契约；优先加法兼容。
+- 公共 HTTP、SSE、Protobuf、Capability Schema、Package manifest/lock 和持久事件都是版本化契约；优先加法兼容。
 - OpenAPI 必须描述真实请求、响应、错误、Headers、SSE 信封和状态行为。
 
 ## Code And Observability
@@ -119,7 +121,7 @@ AI珞 V3 是长期维护的生产级项目。功能范围可以窄，但已实�
 - 所有手写代码注释使用中文；生成文件、`//go:build`、`//go:embed` 例外。
 - Go 日志统一使用 `internal/observe`，Python 使用 `agent.observe`，不创建组件私有日志系统。
 - 用户可见日志使用清晰中文；稳定字段键保持英文。
-- 适用时传播 `request_id`、`trace_id`、`app_id`、`echo_id`、`run_id`、`parent_run_id`、`call_id`、`capability_id`、`service_id`、`tool_id`。
+- 适用时传播 `request_id`、`trace_id`、`app_id`、`echo_id`、`run_id`、`parent_run_id`、`call_id`、`capability_id`、`package_id`、`component_id`。
 - 新敏感字段必须加入净化并有 console/JSON 负向测试。
 - 优先标准库；仅在维护良好的依赖显著降低风险时引入，并有意锁定版本。
 - 所有阻塞或外部 Go 操作传递 `context.Context`；Python async 保留取消和 deadline。

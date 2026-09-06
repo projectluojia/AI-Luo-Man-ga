@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/identity"
-	promptservice "github.com/projectluojia/AI-Luo-Man-ga/internal/services/prompt"
+	promptservice "github.com/projectluojia/AI-Luo-Man-ga/internal/providers/prompt"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite"
 )
 

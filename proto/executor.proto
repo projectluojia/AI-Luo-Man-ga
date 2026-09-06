@@ -50,7 +50,7 @@ message StartRun {
   string system_prompt = 6;
   uint32 max_steps = 7;
   string protocol_version = 8;
-  uint32 max_tool_calls = 9;
+  uint32 max_capability_calls = 9;
   uint64 max_input_tokens = 10;
   uint64 max_output_tokens = 11;
   uint64 max_total_tokens = 12;

@@ -6,7 +6,7 @@ import unittest
 from typing import Any, AsyncIterator
 
 from agent.core import AgentKernel, BudgetExceeded, Capability, CapabilityRequested, FinalReply, UsageReported
-from agent.model import ModelEvent, ModelProvider, ModelUsage, ProviderFailure, TextDelta, ToolCall, TurnCompleted
+from agent.model import CapabilityCall, ModelEvent, ModelProvider, ModelUsage, ProviderFailure, TextDelta, TurnCompleted
 
 
 class FakeModel(ModelProvider):
@@ -18,14 +18,14 @@ class FakeModel(ModelProvider):
         *,
         model: str,
         messages: list[dict[str, Any]],
-        tools: list[dict[str, Any]],
+        capabilities: list[dict[str, Any]],
     ) -> AsyncIterator[ModelEvent]:
         self.turn += 1
         if self.turn == 1:
-            call = ToolCall("call-1", "cap_campus_bus_routes_list", "{}")
+            call = CapabilityCall("call-1", "cap_campus_bus_routes_list", "{}")
             yield TurnCompleted(
                 text="",
-                tool_calls=[call],
+                capability_calls=[call],
                 assistant_message={
                     "role": "assistant",
                     "content": None,
@@ -62,7 +62,7 @@ class AgentKernelTest(unittest.IsolatedAsyncioTestCase):
             input_schema={"type": "object", "properties": {}, "additionalProperties": False},
         )
 
-    def test_model_tool_normalizes_optional_fields_for_strict_provider_schema(self) -> None:
+    def test_model_capability_normalizes_optional_fields_for_strict_provider_schema(self) -> None:
         capability = Capability(
             id="test.optional",
             name="可选字段",
@@ -78,7 +78,7 @@ class AgentKernelTest(unittest.IsolatedAsyncioTestCase):
                 "additionalProperties": False,
             },
         )
-        parameters = capability.as_model_tool()["function"]["parameters"]
+        parameters = capability.as_model_function()["function"]["parameters"]
         self.assertEqual(parameters["required"], ["name", "count", "metadata"])
         self.assertEqual(parameters["properties"]["count"], {
             "anyOf": [{"type": "integer"}, {"type": "null"}],
@@ -88,13 +88,13 @@ class AgentKernelTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(metadata["additionalProperties"])
 
     @staticmethod
-    async def execute(call: ToolCall) -> str:
+    async def execute(call: CapabilityCall) -> str:
         return "{}"
 
-    async def test_model_driven_tool_loop(self) -> None:
-        calls: list[ToolCall] = []
+    async def test_model_driven_capability_loop(self) -> None:
+        calls: list[CapabilityCall] = []
 
-        async def execute(call: ToolCall) -> str:
+        async def execute(call: CapabilityCall) -> str:
             calls.append(call)
             return json.dumps({"routes": [{"id": "route-1"}]})
 
@@ -117,15 +117,15 @@ class AgentKernelTest(unittest.IsolatedAsyncioTestCase):
     async def test_rejects_unprojected_capability(self) -> None:
         class BadModel(FakeModel):
             async def stream_turn(self, **kwargs):
-                call = ToolCall("bad", "private.tool", "{}")
+                call = CapabilityCall("bad", "private.capability", "{}")
                 yield TurnCompleted(
                     text="",
-                    tool_calls=[call],
+                    capability_calls=[call],
                     assistant_message={"role": "assistant"},
                     usage=ModelUsage(input_tokens=1, output_tokens=1, total_tokens=2),
                 )
 
-        async def execute(call: ToolCall) -> str:
+        async def execute(call: CapabilityCall) -> str:
             return "{}"
 
         with self.assertRaises(PermissionError):
@@ -140,7 +140,7 @@ class AgentKernelTest(unittest.IsolatedAsyncioTestCase):
                 pass
 
     async def test_reports_cumulative_usage_and_enforces_token_budget(self) -> None:
-        async def execute(call: ToolCall) -> str:
+        async def execute(call: CapabilityCall) -> str:
             return json.dumps({"routes": [{"id": "route-1"}]})
 
         events = []
@@ -188,18 +188,18 @@ class AgentKernelTest(unittest.IsolatedAsyncioTestCase):
                 pass
         self.assertEqual(captured.exception.code, "provider_protocol_error")
 
-    async def test_enforces_tool_call_and_output_byte_budgets(self) -> None:
+    async def test_enforces_capability_call_and_output_byte_budgets(self) -> None:
         capability = self.capability()
 
         class TooManyCalls(ModelProvider):
             async def stream_turn(self, **kwargs):
                 calls = [
-                    ToolCall("one", capability.model_name, "{}"),
-                    ToolCall("two", capability.model_name, "{}"),
+                    CapabilityCall("one", capability.model_name, "{}"),
+                    CapabilityCall("two", capability.model_name, "{}"),
                 ]
                 yield TurnCompleted(
                     text="",
-                    tool_calls=calls,
+                    capability_calls=calls,
                     assistant_message={"role": "assistant"},
                     usage=ModelUsage(input_tokens=1, output_tokens=1, total_tokens=2),
                 )
@@ -212,7 +212,7 @@ class AgentKernelTest(unittest.IsolatedAsyncioTestCase):
                 capabilities=[capability],
                 execute=self.execute,
                 max_steps=1,
-                max_tool_calls=1,
+                max_capability_calls=1,
             ):
                 pass
 

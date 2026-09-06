@@ -73,6 +73,9 @@ func NormalizeSettings(settings Settings) (Settings, error) {
 		if levelErr != nil {
 			return Settings{}, levelErr
 		}
+		if _, exists := levels[trait]; exists {
+			return Settings{}, ErrInvalid
+		}
 		levels[trait] = level
 	}
 	settings.ExtraTraitLevels = levels

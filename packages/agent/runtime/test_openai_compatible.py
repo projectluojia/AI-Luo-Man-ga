@@ -122,11 +122,11 @@ class OpenAICompatibleProviderTest(unittest.IsolatedAsyncioTestCase):
             async for event in provider.stream_turn(
                 model="test-model",
                 messages=[{"role": "user", "content": "线路"}],
-                tools=[],
+                capabilities=[],
             )
         ]
 
-    async def test_streams_text_and_assembles_native_tool_calls(self):
+    async def test_streams_text_and_assembles_native_capability_calls(self):
         completions = FakeCompletions([
             chunk(content="我来查询。"),
             chunk(tool_calls=[partial(0, call_id="call_", name="cap_campus_", arguments='{"limit":')]),
@@ -139,15 +139,15 @@ class OpenAICompatibleProviderTest(unittest.IsolatedAsyncioTestCase):
         async for event in provider.stream_turn(
             model="test-model",
             messages=[{"role": "user", "content": "线路"}],
-            tools=[{"type": "function", "function": {"name": "cap_campus_bus_routes_list"}}],
+            capabilities=[{"type": "function", "function": {"name": "cap_campus_bus_routes_list"}}],
         ):
             events.append(event)
 
         self.assertEqual([event.text for event in events if isinstance(event, TextDelta)], ["我来查询。"])
         completed = [event for event in events if isinstance(event, TurnCompleted)][0]
-        self.assertEqual(completed.tool_calls[0].id, "call_1")
-        self.assertEqual(completed.tool_calls[0].name, "cap_campus_bus_routes_list")
-        self.assertEqual(completed.tool_calls[0].arguments, '{"limit":10}')
+        self.assertEqual(completed.capability_calls[0].id, "call_1")
+        self.assertEqual(completed.capability_calls[0].name, "cap_campus_bus_routes_list")
+        self.assertEqual(completed.capability_calls[0].arguments, '{"limit":10}')
         self.assertEqual(completed.usage, ModelUsage(input_tokens=10, output_tokens=2, total_tokens=12))
         self.assertTrue(completions.request["stream"])
         self.assertEqual(completions.request["tool_choice"], "auto")

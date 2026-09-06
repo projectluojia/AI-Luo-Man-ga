@@ -50,7 +50,29 @@ func Inspect(ctx context.Context, sourcePath string) (packagecontract.Manifest, 
 // 校验源（manifest + 每组件 entrypoint 工件）、解析依赖、原子发布
 // manifest+lock+全部组件工件，并回读验证。目标已有同 ID 且版本不同时替换；
 // 版本相同且内容相同则幂等返回，否则拒绝覆盖已发布内容。
-func Install(ctx context.Context, root, sourcePath string) (InstalledRecord, error) {
+func Install(ctx context.Context, root, sourcePath string) (record InstalledRecord, err error) {
+	if root == "" {
+		return InstalledRecord{}, packagecontract.ErrInvalidFormat
+	}
+	absoluteRoot, err := filepath.Abs(root)
+	if err != nil {
+		return InstalledRecord{}, err
+	}
+	if err := os.MkdirAll(filepath.Dir(absoluteRoot), 0o750); err != nil {
+		return InstalledRecord{}, err
+	}
+	rootLock := packageio.InstallRootLock(absoluteRoot)
+	rootLock.Lock()
+	defer rootLock.Unlock()
+	fileLock, err := packageio.AcquireFileLock(ctx, packageio.InstallRootLockPath(absoluteRoot))
+	if err != nil {
+		return InstalledRecord{}, err
+	}
+	defer func() { err = errors.Join(err, fileLock.Close()) }()
+	return install(ctx, root, sourcePath, "", "")
+}
+
+func install(ctx context.Context, root, sourcePath, expectedID, expectedVersion string) (InstalledRecord, error) {
 	if root == "" {
 		return InstalledRecord{}, packagecontract.ErrInvalidFormat
 	}
@@ -71,6 +93,10 @@ func Install(ctx context.Context, root, sourcePath string) (InstalledRecord, err
 	}
 	if err := validatePackagedSource(ctx, sourceDir, source, packaged); err != nil {
 		return InstalledRecord{}, err
+	}
+	if (expectedID != "" && source.Manifest.ID != expectedID) ||
+		(expectedVersion != "" && source.Manifest.Version != expectedVersion) {
+		return InstalledRecord{}, fmt.Errorf("源包身份在校验后发生变化")
 	}
 	artifacts, err := readSourceArtifacts(ctx, sourceDir, source.Manifest)
 	if err != nil {
@@ -143,7 +169,7 @@ func Install(ctx context.Context, root, sourcePath string) (InstalledRecord, err
 			SHA256:      stageDigest,
 		}
 		if component, ok := packagecontract.FindComponent(source.Manifest, artifact.componentID); ok && component.Mode == packagecontract.ModeIsolated {
-			locked.Process, err = defaultProcessSpec(component, filepath.Join(targetDir, artifactName), targetDir, artifact.directory)
+			locked.Process, err = resolveProcessSpec(component, filepath.Join(targetDir, artifactName), targetDir, artifact.directory)
 			if err != nil {
 				return InstalledRecord{}, err
 			}
@@ -237,36 +263,29 @@ func reserveBackupDir(root, targetDir string) (string, error) {
 	return backupDir, nil
 }
 
-// defaultProcessSpec 把 isolated 组件的相对进程模板解析为安装期绝对规格。
-// 没有模板时保持原有约定：工件本身是可执行文件，工作目录是包目录。
-func defaultProcessSpec(component packagecontract.Component, artifactPath, packageDir string, artifactDirectory bool) (*packagecontract.ProcessSpec, error) {
+// resolveProcessSpec 把 isolated 组件的相对进程模板解析为安装期绝对规格。
+func resolveProcessSpec(component packagecontract.Component, artifactPath, packageDir string, artifactDirectory bool) (*packagecontract.ProcessSpec, error) {
+	if component.Process == nil {
+		return nil, packagecontract.ErrInvalidFormat
+	}
 	artifactRoot := packageDir
 	if artifactDirectory {
 		artifactRoot = artifactPath
 	}
-	base := strings.TrimSuffix(filepath.Base(artifactPath), filepath.Ext(artifactPath))
-	process := &packagecontract.ProcessSpec{
-		Path: artifactPath, WorkDir: packageDir,
-		Address: "unix:" + filepath.Join(packageDir, base+"-"+component.ID+".sock"),
-	}
-	if component.Process == nil {
-		if artifactDirectory {
-			return nil, packagecontract.ErrInvalidFormat
-		}
-		return process, nil
+	// 文件工件只会复制并锁定 entrypoint；其他进程路径没有对应工件，
+	// 既不能启动也不能通过 ValidateLock 的路径闭合校验。
+	if !artifactDirectory && component.Process.Path != component.Entrypoint {
+		return nil, packagecontract.ErrInvalidFormat
 	}
 	executable, err := resolveProcessPath(artifactRoot, component.Process.Path)
 	if err != nil {
 		return nil, err
 	}
-	process.Path = executable
+	process := &packagecontract.ProcessSpec{Path: executable, Address: component.Process.Address}
 	process.Args = append([]string(nil), component.Process.Args...)
 	process.WorkDir = artifactRoot
 	if component.Process.WorkDir != "" {
 		process.WorkDir = filepath.Join(artifactRoot, filepath.FromSlash(component.Process.WorkDir))
-	}
-	if component.Process.Address != "" {
-		process.Address = component.Process.Address
 	}
 	for index, argument := range process.Args {
 		process.Args[index] = strings.ReplaceAll(argument, "${address}", process.Address)
@@ -291,7 +310,7 @@ func resolveProcessPath(artifactRoot, relative string) (string, error) {
 }
 
 // Upgrade 要求包已安装且源包版本号不同，然后安装。
-func Upgrade(ctx context.Context, root, id, sourcePath string) (InstalledRecord, error) {
+func Upgrade(ctx context.Context, root, id, sourcePath string) (record InstalledRecord, err error) {
 	if root == "" || !capability.IsStableID(id) {
 		return InstalledRecord{}, fmt.Errorf("包 %q 标识非法", id)
 	}
@@ -299,6 +318,17 @@ func Upgrade(ctx context.Context, root, id, sourcePath string) (InstalledRecord,
 	if err != nil {
 		return InstalledRecord{}, err
 	}
+	if err := os.MkdirAll(filepath.Dir(absoluteRoot), 0o750); err != nil {
+		return InstalledRecord{}, err
+	}
+	rootLock := packageio.InstallRootLock(absoluteRoot)
+	rootLock.Lock()
+	defer rootLock.Unlock()
+	fileLock, err := packageio.AcquireFileLock(ctx, packageio.InstallRootLockPath(absoluteRoot))
+	if err != nil {
+		return InstalledRecord{}, err
+	}
+	defer func() { err = errors.Join(err, fileLock.Close()) }()
 	if err := packageio.RecoverInstallRoot(ctx, absoluteRoot); err != nil {
 		return InstalledRecord{}, err
 	}
@@ -323,11 +353,11 @@ func Upgrade(ctx context.Context, root, id, sourcePath string) (InstalledRecord,
 	if source.Manifest.Version == existing.Manifest.Version {
 		return InstalledRecord{}, fmt.Errorf("包 %s 已安装版本 %s，升级目标版本相同", id, existing.Manifest.Version)
 	}
-	return Install(ctx, root, sourceDir)
+	return install(ctx, root, sourceDir, source.Manifest.ID, source.Manifest.Version)
 }
 
 // Uninstall 删除已安装包目录。仅当目录包含 manifest.json 时删除（安全防护）。
-func Uninstall(ctx context.Context, root, id string) error {
+func Uninstall(ctx context.Context, root, id string) (err error) {
 	if root == "" || !capability.IsStableID(id) {
 		return fmt.Errorf("包 %q 标识非法", id)
 	}
@@ -335,6 +365,17 @@ func Uninstall(ctx context.Context, root, id string) error {
 	if err != nil {
 		return err
 	}
+	if err := os.MkdirAll(filepath.Dir(absoluteRoot), 0o750); err != nil {
+		return err
+	}
+	rootLock := packageio.InstallRootLock(absoluteRoot)
+	rootLock.Lock()
+	defer rootLock.Unlock()
+	fileLock, err := packageio.AcquireFileLock(ctx, packageio.InstallRootLockPath(absoluteRoot))
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, fileLock.Close()) }()
 	if err := os.MkdirAll(absoluteRoot, 0o750); err != nil {
 		return err
 	}

@@ -74,7 +74,7 @@ func (s *Store) Revision(ctx context.Context, appID, revision string) (result ap
 	}
 	row := s.db.QueryRowContext(ctx, `
 SELECT r.app_id,r.revision,0,r.enabled,r.model,r.system_prompt,r.channel_prompts,r.timezone,
-       r.max_steps,r.max_tool_calls,r.max_input_tokens,r.max_output_tokens,r.max_total_tokens,
+	   r.max_steps,r.max_capability_calls,r.max_input_tokens,r.max_output_tokens,r.max_total_tokens,
        r.max_output_bytes,r.max_cost_microusd,r.provider_timeout_ms,
        r.enabled_capabilities,r.permission_scope,r.created_at,r.created_at
 FROM app_config_revisions r
@@ -148,7 +148,7 @@ WHERE app_id=? AND generation=?`,
 func readCurrentAppConfig(ctx context.Context, queryer rowQueryer, appID string) (appconfig.Config, error) {
 	row := queryer.QueryRowContext(ctx, `
 SELECT r.app_id,r.revision,h.generation,r.enabled,r.model,r.system_prompt,r.channel_prompts,r.timezone,
-       r.max_steps,r.max_tool_calls,r.max_input_tokens,r.max_output_tokens,r.max_total_tokens,
+	   r.max_steps,r.max_capability_calls,r.max_input_tokens,r.max_output_tokens,r.max_total_tokens,
        r.max_output_bytes,r.max_cost_microusd,r.provider_timeout_ms,
        r.enabled_capabilities,r.permission_scope,h.created_at,h.updated_at
 FROM app_config_heads h
@@ -176,13 +176,13 @@ func insertAppConfigRevision(ctx context.Context, tx *sql.Tx, config appconfig.C
 	}
 	if _, err := tx.ExecContext(ctx, `
 INSERT INTO app_config_revisions(
-  app_id,revision,enabled,model,system_prompt,channel_prompts,timezone,max_steps,max_tool_calls,
+  app_id,revision,enabled,model,system_prompt,channel_prompts,timezone,max_steps,max_capability_calls,
   max_input_tokens,max_output_tokens,max_total_tokens,max_output_bytes,max_cost_microusd,
   provider_timeout_ms,enabled_capabilities,permission_scope,created_at
 ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(app_id,revision) DO NOTHING`,
 		config.AppID, config.Revision, config.Enabled, config.Model, config.SystemPrompt, string(channelPrompts), config.Timezone,
-		config.MaxSteps, config.MaxToolCalls, config.MaxInputTokens, config.MaxOutputTokens,
+		config.MaxSteps, config.MaxCapabilityCalls, config.MaxInputTokens, config.MaxOutputTokens,
 		config.MaxTotalTokens, config.MaxOutputBytes, config.MaxCostMicrousd,
 		config.ProviderTimeout.Milliseconds(), string(capabilities), string(permissions),
 		config.CreatedAt.UTC().Format(time.RFC3339Nano),
@@ -199,7 +199,7 @@ func scanAppConfig(scanner rowScanner) (appconfig.Config, error) {
 	var capabilitiesJSON, permissionsJSON, channelPromptsJSON, createdAt, updatedAt string
 	if err := scanner.Scan(
 		&config.AppID, &config.Revision, &config.Generation, &enabled, &config.Model,
-		&config.SystemPrompt, &channelPromptsJSON, &config.Timezone, &config.MaxSteps, &config.MaxToolCalls,
+		&config.SystemPrompt, &channelPromptsJSON, &config.Timezone, &config.MaxSteps, &config.MaxCapabilityCalls,
 		&config.MaxInputTokens, &config.MaxOutputTokens, &config.MaxTotalTokens,
 		&config.MaxOutputBytes, &config.MaxCostMicrousd, &providerTimeoutMS,
 		&capabilitiesJSON, &permissionsJSON, &createdAt, &updatedAt,

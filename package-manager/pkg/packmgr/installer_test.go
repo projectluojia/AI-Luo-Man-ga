@@ -12,6 +12,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/capability"
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packagecontract"
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packageio"
 	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/packmgr"
@@ -27,11 +28,22 @@ func writeSourcePackage(t *testing.T, dir, id, version, mode, artifactName strin
 	if err := os.WriteFile(filepath.Join(dir, artifactName), artifact, 0o640); err != nil {
 		t.Fatal(err)
 	}
+	var process *packagecontract.ProcessTemplate
+	if mode == packagecontract.ModeIsolated {
+		process = &packagecontract.ProcessTemplate{Path: artifactName, Address: "127.0.0.1:50051"}
+	}
 	manifest, err := json.Marshal(packagecontract.Manifest{
 		SchemaVersion: packagecontract.SchemaVersion, ID: id, Version: version,
 		Dependencies: deps,
+		Capabilities: []capability.CapabilitySpec{{
+			ID: id + ".capability", Version: version, Name: "测试能力", Description: "测试能力",
+			InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
+			SideEffect:      capability.SideEffectRead,
+		}},
 		Components: []packagecontract.Component{{
-			ID: "core", Mode: mode, Entrypoint: artifactName,
+			ID: "core", Mode: mode, Role: packagecontract.RoleProvider, Entrypoint: artifactName,
+			Exports: []string{id + ".capability"},
+			Process: process,
 		}},
 	})
 	if err != nil {
@@ -132,6 +144,31 @@ func TestInstallIsolatedWritesProcessSpec(t *testing.T) {
 	}
 }
 
+func TestInstallRejectsFileProcessPathOutsideArtifact(t *testing.T) {
+	source := filepath.Join(t.TempDir(), "isolated")
+	writeSourcePackage(t, source, "demo.isolated", "1.0.0", packagecontract.ModeIsolated, "app", nil)
+	manifestPath := filepath.Join(source, "manifest.json")
+	manifestBytes, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest packagecontract.Manifest
+	if err := packagecontract.DecodeStrictJSON(manifestBytes, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	manifest.Components[0].Process.Path = "runner"
+	manifestBytes, err = json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manifestPath, manifestBytes, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := packmgr.Install(context.Background(), t.TempDir(), source); !errors.Is(err, packagecontract.ErrInvalidFormat) {
+		t.Fatalf("Install with file process path outside artifact = %v, want ErrInvalidFormat", err)
+	}
+}
+
 // 目录工件用于携带解释器、源码和依赖环境；安装必须保留树结构并把进程
 // 模板解析到目录工件内部，而不是把目录当作可执行文件。
 func TestInstallAndPackDirectoryArtifact(t *testing.T) {
@@ -223,18 +260,28 @@ func TestInstallRejectsInvalidSource(t *testing.T) {
 	}{
 		{name: "missing manifest", mutate: func(_ string) {}},
 		{name: "invalid manifest json", mutate: func(dir string) {
-			os.WriteFile(filepath.Join(dir, "manifest.json"), []byte("{"), 0o640)
+			if err := os.WriteFile(filepath.Join(dir, "manifest.json"), []byte("{"), 0o640); err != nil {
+				t.Fatal(err)
+			}
 		}},
 		{name: "missing artifact", mutate: func(dir string) {
 			writeSourcePackage(t, dir, "demo.pkg", "1.0.0", packagecontract.ModeHosted, "app.wasm", nil)
-			os.Remove(filepath.Join(dir, "app.wasm"))
+			if err := os.Remove(filepath.Join(dir, "app.wasm")); err != nil {
+				t.Fatal(err)
+			}
 		}},
 		{name: "entrypoint escapes source dir", mutate: func(dir string) {
-			manifest := []byte(`{"schema_version":"ailuo.package.v2","id":"demo.pkg","version":"1.0.0","components":[{"id":"core","mode":"hosted","entrypoint":"../outside"}]}`)
-			os.WriteFile(filepath.Join(dir, "manifest.json"), manifest, 0o640)
+			writeSourcePackage(t, dir, "demo.pkg", "1.0.0", packagecontract.ModeHosted, "app.wasm", nil)
+			manifest := []byte(`{"schema_version":"ailuo.package.v3","id":"demo.pkg","version":"1.0.0","components":[{"id":"core","mode":"hosted","role":"provider","entrypoint":"../outside"}]}`)
+			if err := os.WriteFile(filepath.Join(dir, "manifest.json"), manifest, 0o640); err != nil {
+				t.Fatal(err)
+			}
 		}},
 		{name: "entrypoint uses foreign separator", mutate: func(dir string) {
-			os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(`{"schema_version":"ailuo.package.v2","id":"demo.pkg","version":"1.0.0","components":[{"id":"core","mode":"hosted","entrypoint":"..\\outside"}]}`), 0o640)
+			writeSourcePackage(t, dir, "demo.pkg", "1.0.0", packagecontract.ModeHosted, "app.wasm", nil)
+			if err := os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(`{"schema_version":"ailuo.package.v3","id":"demo.pkg","version":"1.0.0","components":[{"id":"core","mode":"hosted","role":"provider","entrypoint":"..\\outside"}]}`), 0o640); err != nil {
+				t.Fatal(err)
+			}
 		}},
 	}
 	for _, tc := range cases {
@@ -383,8 +430,8 @@ func TestInstallRejectsEntrypointBasenameCollision(t *testing.T) {
 	manifest, err := json.Marshal(packagecontract.Manifest{
 		SchemaVersion: packagecontract.SchemaVersion, ID: "demo.pkg", Version: "1.0.0",
 		Components: []packagecontract.Component{
-			{ID: "one", Mode: packagecontract.ModeHosted, Entrypoint: "mod.wasm"},
-			{ID: "two", Mode: packagecontract.ModeHosted, Entrypoint: "mod.wasm"},
+			{ID: "one", Mode: packagecontract.ModeHosted, Role: packagecontract.RoleProvider, Entrypoint: "mod.wasm"},
+			{ID: "two", Mode: packagecontract.ModeHosted, Role: packagecontract.RoleProvider, Entrypoint: "mod.wasm"},
 		},
 	})
 	if err != nil {
@@ -460,6 +507,22 @@ func TestInstallSerializesSamePackagePublication(t *testing.T) {
 	}
 	if record.Manifest.Version != "1.0.0" && record.Manifest.Version != "2.0.0" {
 		t.Fatalf("version=%s, want one complete installation", record.Manifest.Version)
+	}
+}
+
+func TestInstallRejectsExistingCrossProcessInstallLock(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(t.TempDir(), "pkg")
+	writeSourcePackage(t, source, "demo.locked", "1.0.0", packagecontract.ModeHosted, "app.wasm", nil)
+	lockPath := packageio.InstallRootLockPath(root)
+	if err := os.WriteFile(lockPath, []byte("unknown-owner\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := packmgr.Install(context.Background(), root, source); !errors.Is(err, packageio.ErrFileLocked) {
+		t.Fatalf("Install with existing cross-process lock=%v, want ErrFileLocked", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "demo.locked")); !os.IsNotExist(err) {
+		t.Fatalf("locked Install mutated target: %v", err)
 	}
 }
 

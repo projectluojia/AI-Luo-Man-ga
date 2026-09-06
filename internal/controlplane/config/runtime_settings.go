@@ -10,14 +10,14 @@ import (
 // AgentRunSettings 是当前 App 的执行预算与时区。它们会写入 App 配置，
 // 因此校验边界与 internal/kernel/appconfig 保持一致。
 type AgentRunSettings struct {
-	Timezone        string `json:"timezone"`
-	MaxSteps        uint32 `json:"max_steps"`
-	MaxToolCalls    uint32 `json:"max_tool_calls"`
-	MaxInputTokens  uint64 `json:"max_input_tokens"`
-	MaxOutputTokens uint64 `json:"max_output_tokens"`
-	MaxTotalTokens  uint64 `json:"max_total_tokens"`
-	MaxOutputBytes  uint64 `json:"max_output_bytes"`
-	MaxChildRuns    uint32 `json:"max_child_runs"`
+	Timezone           string `json:"timezone"`
+	MaxSteps           uint32 `json:"max_steps"`
+	MaxCapabilityCalls uint32 `json:"max_capability_calls"`
+	MaxInputTokens     uint64 `json:"max_input_tokens"`
+	MaxOutputTokens    uint64 `json:"max_output_tokens"`
+	MaxTotalTokens     uint64 `json:"max_total_tokens"`
+	MaxOutputBytes     uint64 `json:"max_output_bytes"`
+	MaxChildRuns       uint32 `json:"max_child_runs"`
 }
 
 // OrchestrationSettings 是 Echo/Run 编排参数。
@@ -65,7 +65,7 @@ type GovernanceSettings struct {
 
 func defaultAgentRunSettings() AgentRunSettings {
 	return AgentRunSettings{
-		Timezone: "Asia/Shanghai", MaxSteps: 8, MaxToolCalls: 8,
+		Timezone: "Asia/Shanghai", MaxSteps: 8, MaxCapabilityCalls: 8,
 		MaxInputTokens: 32768, MaxOutputTokens: 8192, MaxTotalTokens: 40960,
 		MaxOutputBytes: 65536, MaxChildRuns: kernelecho.DefaultMaxChildRunsPerRoot,
 	}
@@ -113,7 +113,7 @@ func normalizeAgentRun(value AgentRunSettings) (AgentRunSettings, error) {
 	if _, err := time.LoadLocation(value.Timezone); err != nil {
 		return AgentRunSettings{}, ErrInvalid
 	}
-	if value.MaxSteps < 1 || value.MaxSteps > 64 || value.MaxToolCalls < 1 || value.MaxToolCalls > 128 ||
+	if value.MaxSteps < 1 || value.MaxSteps > 64 || value.MaxCapabilityCalls < 1 || value.MaxCapabilityCalls > 128 ||
 		value.MaxInputTokens < 1 || value.MaxInputTokens > 10_000_000 || value.MaxOutputTokens < 1 || value.MaxOutputTokens > 1_000_000 ||
 		value.MaxTotalTokens < value.MaxInputTokens || value.MaxTotalTokens > 11_000_000 ||
 		value.MaxOutputBytes < 1 || value.MaxOutputBytes > 256<<10 || value.MaxChildRuns < 1 || value.MaxChildRuns > kernelecho.MaxChildRunsPerRoot {

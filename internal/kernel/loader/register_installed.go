@@ -16,121 +16,91 @@ var (
 	ErrInvalidInstalledRecord = errors.New("invalid installed runtime record")
 )
 
-// InstalledRecord 是安装目录中单个组件（运行单元）的内核记录。
-// 一个包产生多条记录（每组件一条）；Runtime.ID 是包命名空间内的稳定组件标识。
+// InstalledRecord 是安装目录中单个组件的内核记录。PackageID 和 ComponentID
+// 只用于绑定依赖拓扑与运行时身份；组件对外只发布 Capability。
 type InstalledRecord struct {
 	Runtime     Manifest
 	PackageID   string
 	ComponentID string
-	// ComponentOrder 是该组件在包内的依赖拓扑序号（Provider 小号在前）。
+	// ComponentOrder 是组件在 Package 清单中的声明顺序。
 	ComponentOrder int
-	Tools          []capability.ToolSpec
-	Service        capability.ServiceSpec
-	Capabilities   []capability.CapabilitySpec
 }
 
+// RegisterInstalled 在一次装配流程中校验并注册安装包的所有运行时和 Capability。
 func RegisterInstalled(ctx context.Context, manager *Manager, target *registry.Registry, records []InstalledRecord) error {
 	if manager == nil || target == nil || len(records) == 0 || len(records) > MaxRegisteredRuntimes {
 		return ErrInvalidInstalledRecord
-	}
-	for _, record := range records {
-		if err := ValidateInstalledRecord(record); err != nil {
-			return err
-		}
 	}
 	if err := validatePackageGroups(records); err != nil {
 		return err
 	}
 	manifests := make([]Manifest, 0, len(records))
-	tools := make([]registry.ToolRegistration, 0)
-	// 按包分组：合并每包内所有组件的 Capability 到一条 Service 注册。
-	serviceByPackage := make(map[string]registry.ServiceRegistration)
+	registrations := make([]registry.CapabilityRegistration, 0)
 	for _, record := range records {
+		if err := ValidateInstalledRecord(record); err != nil {
+			return err
+		}
 		manifests = append(manifests, record.Runtime)
 		handler := manager.Handler(record.Runtime.ID)
-		for _, spec := range record.Tools {
-			tools = append(tools, registry.ToolRegistration{Spec: spec, Handler: handler})
-		}
-		entry := serviceByPackage[record.PackageID]
-		if entry.Capabilities == nil {
-			entry.Capabilities = make(map[string]struct {
-				Spec    capability.CapabilitySpec
-				Handler registry.Handler
+		for _, spec := range record.Runtime.Capabilities {
+			registrations = append(registrations, registry.CapabilityRegistration{
+				Spec: spec, Handler: handler,
 			})
 		}
-		if record.ComponentOrder == 0 {
-			entry.Spec = record.Service
-		}
-		for _, spec := range record.Capabilities {
-			entry.Capabilities[spec.ID] = struct {
-				Spec    capability.CapabilitySpec
-				Handler registry.Handler
-			}{Spec: spec, Handler: handler}
-		}
-		serviceByPackage[record.PackageID] = entry
 	}
 	if err := manager.RegisterBatch(ctx, manifests); err != nil {
 		return err
 	}
-	services := make([]registry.ServiceRegistration, 0, len(serviceByPackage))
-	for _, service := range serviceByPackage {
-		if service.Spec.ID != "" {
-			services = append(services, service)
-		}
-	}
-	if len(tools) > 0 || len(services) > 0 {
-		if err := target.RegisterBatch(tools, services); err != nil {
-			return errors.Join(err, manager.rollbackRegistered(manifests))
-		}
-	}
-	// 记录包分组（组件已注册）：按 PackageID 分组，按依赖拓扑序排序。
-	orderByPackage := make(map[string][]componentWithOrder)
+	groups := make(map[string][]componentWithOrder)
 	for _, record := range records {
-		orderByPackage[record.PackageID] = append(orderByPackage[record.PackageID], componentWithOrder{
+		groups[record.PackageID] = append(groups[record.PackageID], componentWithOrder{
 			id: record.Runtime.ID, order: record.ComponentOrder,
 		})
 	}
-	for pkgID, components := range orderByPackage {
+	packageIDs := make([]string, 0, len(groups))
+	packageComponents := make(map[string][]string, len(groups))
+	for packageID, components := range groups {
 		sort.Slice(components, func(i, j int) bool { return components[i].order < components[j].order })
 		ordered := make([]string, 0, len(components))
-		for _, component := range components {
+		for index, component := range components {
+			if component.order != index {
+				return errors.Join(ErrInvalidInstalledRecord, manager.rollbackRegistered(manifests))
+			}
 			ordered = append(ordered, component.id)
 		}
-		if err := manager.RegisterPackage(pkgID, ordered); err != nil {
-			return err
+		packageIDs = append(packageIDs, packageID)
+		packageComponents[packageID] = ordered
+	}
+	if err := manager.RegisterPackages(packageComponents); err != nil {
+		return errors.Join(err, manager.rollbackRegistered(manifests))
+	}
+	if len(registrations) > 0 {
+		if err := target.RegisterBatch(registrations); err != nil {
+			return errors.Join(err, manager.rollbackPackageRegistration(manifests, packageIDs))
 		}
 	}
 	return nil
 }
 
-// validatePackageGroups 确保包含能力组件的包恰好有一个主 Service 记录。
-// Service 只从 ComponentOrder=0 的记录取出；缺失或重复都会让包的能力面
-// 与运行时注册结果不一致，因此必须在发布 Loader 前拒绝。
 func validatePackageGroups(records []InstalledRecord) error {
-	groups := make(map[string][]InstalledRecord)
+	groups := make(map[string]map[string]struct{})
+	orders := make(map[string]map[int]struct{})
 	for _, record := range records {
-		groups[record.PackageID] = append(groups[record.PackageID], record)
-	}
-	for packageID, group := range groups {
-		hasCapabilityComponent := false
-		primaryCount := 0
-		for _, record := range group {
-			if record.Runtime.Role == RoleExecutor {
-				continue
-			}
-			hasCapabilityComponent = true
-			if record.ComponentOrder == 0 {
-				primaryCount++
-				if record.Service.ID == "" {
-					return fmt.Errorf("%w: package %q primary component has no service", ErrInvalidInstalledRecord, packageID)
-				}
-			} else if record.Service.ID != "" {
-				return fmt.Errorf("%w: package %q service is not on primary component", ErrInvalidInstalledRecord, packageID)
-			}
+		if !capability.IsStableID(record.PackageID) || !capability.IsStableID(record.ComponentID) || record.ComponentOrder < 0 {
+			return ErrInvalidInstalledRecord
 		}
-		if hasCapabilityComponent && primaryCount != 1 {
-			return fmt.Errorf("%w: package %q must have exactly one primary service component", ErrInvalidInstalledRecord, packageID)
+		if groups[record.PackageID] == nil {
+			groups[record.PackageID] = make(map[string]struct{})
+			orders[record.PackageID] = make(map[int]struct{})
 		}
+		if _, duplicate := groups[record.PackageID][record.ComponentID]; duplicate {
+			return fmt.Errorf("%w: package %q component %q 重复", ErrInvalidInstalledRecord, record.PackageID, record.ComponentID)
+		}
+		if _, duplicate := orders[record.PackageID][record.ComponentOrder]; duplicate {
+			return fmt.Errorf("%w: package %q component order %d 重复", ErrInvalidInstalledRecord, record.PackageID, record.ComponentOrder)
+		}
+		groups[record.PackageID][record.ComponentID] = struct{}{}
+		orders[record.PackageID][record.ComponentOrder] = struct{}{}
 	}
 	return nil
 }
@@ -141,39 +111,26 @@ type componentWithOrder struct {
 }
 
 func ValidateInstalledRecord(record InstalledRecord) error {
-	// executor 记录不携带能力面：会话客户端经 executor 契约取用，
-	// 不进 Registry——注册管线对其只校验运行时清单。
-	if record.Runtime.Role == RoleExecutor {
-		if err := ValidateManifest(record.Runtime); err != nil {
-			return errors.Join(ErrInvalidInstalledRecord, err)
-		}
-		return nil
-	}
-	if len(record.Capabilities) == 0 {
+	if !capability.IsStableID(record.PackageID) || !capability.IsStableID(record.ComponentID) {
 		return ErrInvalidInstalledRecord
 	}
-	return validateRecordSpecs(record)
-}
-
-// validateRecordSpecs 校验所有安装记录共用的规格契约：运行时清单、
-// 宿主函数声明，以及 Tool/Service/Capability 与运行时版本一致。
-// 运行时专用记录不携带 Service 规格，只校验运行时清单与声明。
-func validateRecordSpecs(record InstalledRecord) error {
+	if record.Runtime.PackageID != "" && record.Runtime.PackageID != record.PackageID {
+		return ErrInvalidInstalledRecord
+	}
 	if err := ValidateManifest(record.Runtime); err != nil {
 		return errors.Join(ErrInvalidInstalledRecord, err)
 	}
-	if record.Service.ID != "" {
-		if record.Service.Version != record.Runtime.Version {
+	if record.Runtime.Role == RoleExecutor {
+		if len(record.Runtime.Capabilities) > 0 {
 			return ErrInvalidInstalledRecord
 		}
-		for _, tool := range record.Tools {
-			if tool.Version != record.Runtime.Version {
-				return ErrInvalidInstalledRecord
-			}
-		}
+		return nil
 	}
-	for _, capability := range record.Capabilities {
-		if capability.Version != record.Runtime.Version {
+	if len(record.Runtime.Capabilities) == 0 {
+		return ErrInvalidInstalledRecord
+	}
+	for _, spec := range record.Runtime.Capabilities {
+		if spec.Version != record.Runtime.Version {
 			return ErrInvalidInstalledRecord
 		}
 	}

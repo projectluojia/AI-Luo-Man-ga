@@ -117,13 +117,13 @@ func insertRun(ctx context.Context, tx *sql.Tx, run kernelecho.RunRecord) error 
 	if _, err := tx.ExecContext(ctx, `
 INSERT INTO runs(
   app_id,run_id,run_group_id,echo_id,parent_run_id,origin_call_id,attempt,status,model,model_config_version,protocol_version,
-  max_steps,max_tool_calls,max_input_tokens,max_output_tokens,max_total_tokens,max_output_bytes,
+  max_steps,max_capability_calls,max_input_tokens,max_output_tokens,max_total_tokens,max_output_bytes,
   max_cost_microusd,provider_timeout_ms,deadline_at,available_at,last_agent_sequence,
   capability_scope,permission_scope,recoverable_state,result_message,created_at,
   session_id,user_id,message_id,context_digest,context_sources,channel,task_message
 ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		run.AppID, run.ID, run.RunGroupID, run.EchoID, parentRunID, run.OriginCallID, run.Attempt, run.Status, run.Model, run.ModelConfigVersion, run.ProtocolVersion,
-		run.MaxSteps, run.MaxToolCalls, run.MaxInputTokens, run.MaxOutputTokens, run.MaxTotalTokens, run.MaxOutputBytes,
+		run.MaxSteps, run.MaxCapabilityCalls, run.MaxInputTokens, run.MaxOutputTokens, run.MaxTotalTokens, run.MaxOutputBytes,
 		run.MaxCostMicrousd, run.ProviderTimeoutMS, run.Deadline.UTC().Format(time.RFC3339Nano), run.AvailableAt.UTC().Format(time.RFC3339Nano), run.LastAgentSequence,
 		string(capabilityScope), string(permissionScope), string(run.RecoverableState), run.ResultMessage, run.CreatedAt.UTC().Format(time.RFC3339Nano),
 		run.SessionID, run.UserID, run.MessageID, run.ContextDigest, string(contextSources),
@@ -1095,7 +1095,7 @@ func (s *Store) ListCapabilityCalls(ctx context.Context, appID, echoID string) (
 const runSelect = `
 SELECT
   app_id,run_id,run_group_id,echo_id,coalesce(parent_run_id,''),origin_call_id,attempt,status,model,model_config_version,protocol_version,
-  max_steps,max_tool_calls,max_input_tokens,max_output_tokens,max_total_tokens,max_output_bytes,
+  max_steps,max_capability_calls,max_input_tokens,max_output_tokens,max_total_tokens,max_output_bytes,
   max_cost_microusd,provider_timeout_ms,used_input_tokens,used_output_tokens,used_total_tokens,used_cost_microusd,used_provider_retries,
   deadline_at,available_at,coalesce(lease_token,''),lease_expires_at,last_agent_sequence,
   capability_scope,permission_scope,recoverable_state,result_message,
@@ -1108,7 +1108,7 @@ func queryRun(scanner rowScanner) (kernelecho.RunRecord, error) {
 	var run kernelecho.RunRecord
 	var attempt int64
 	var maxSteps int64
-	var maxToolCalls int64
+	var maxCapabilityCalls int64
 	var maxInputTokens int64
 	var maxOutputTokens int64
 	var maxTotalTokens int64
@@ -1138,7 +1138,7 @@ func queryRun(scanner rowScanner) (kernelecho.RunRecord, error) {
 	if err := scanner.Scan(
 		&run.AppID, &run.ID, &run.RunGroupID, &run.EchoID, &run.ParentRunID, &run.OriginCallID, &attempt, &run.Status,
 		&run.Model, &run.ModelConfigVersion, &run.ProtocolVersion,
-		&maxSteps, &maxToolCalls, &maxInputTokens, &maxOutputTokens, &maxTotalTokens, &maxOutputBytes,
+		&maxSteps, &maxCapabilityCalls, &maxInputTokens, &maxOutputTokens, &maxTotalTokens, &maxOutputBytes,
 		&maxCostMicrousd, &providerTimeoutMS, &usedInputTokens, &usedOutputTokens, &usedTotalTokens, &usedCostMicrousd, &usedProviderRetries,
 		&deadlineAt, &availableAt,
 		&run.LeaseToken, &leaseExpiresAt, &lastAgentSequence,
@@ -1149,7 +1149,7 @@ func queryRun(scanner rowScanner) (kernelecho.RunRecord, error) {
 	); err != nil {
 		return kernelecho.RunRecord{}, err
 	}
-	if attempt < 0 || maxSteps < 0 || maxToolCalls < 0 || maxInputTokens < 0 || maxOutputTokens < 0 ||
+	if attempt < 0 || maxSteps < 0 || maxCapabilityCalls < 0 || maxInputTokens < 0 || maxOutputTokens < 0 ||
 		maxTotalTokens < 0 || maxOutputBytes < 0 || maxCostMicrousd < 0 || providerTimeoutMS < 0 ||
 		usedInputTokens < 0 || usedOutputTokens < 0 || usedTotalTokens < 0 || usedCostMicrousd < 0 ||
 		usedProviderRetries < 0 || usedProviderRetries > 320 ||
@@ -1158,7 +1158,7 @@ func queryRun(scanner rowScanner) (kernelecho.RunRecord, error) {
 	}
 	run.Attempt = uint32(attempt)
 	run.MaxSteps = uint32(maxSteps)
-	run.MaxToolCalls = uint32(maxToolCalls)
+	run.MaxCapabilityCalls = uint32(maxCapabilityCalls)
 	run.MaxInputTokens = uint64(maxInputTokens)
 	run.MaxOutputTokens = uint64(maxOutputTokens)
 	run.MaxTotalTokens = uint64(maxTotalTokens)
@@ -1228,7 +1228,7 @@ func validateNewRun(echo kernelecho.Record, run kernelecho.RunRecord) error {
 		run.AppID != echo.AppID || run.EchoID != echo.ID ||
 		run.Attempt == 0 || run.Status != kernelecho.RunStatusQueued || run.Model == "" || run.ModelConfigVersion == "" ||
 		run.ProtocolVersion == "" || run.MaxSteps == 0 || run.MaxSteps > executor.MaxProtocolSteps ||
-		run.MaxToolCalls == 0 || run.MaxToolCalls > executor.MaxToolCalls ||
+		run.MaxCapabilityCalls == 0 || run.MaxCapabilityCalls > executor.MaxCapabilityCalls ||
 		run.MaxInputTokens == 0 || run.MaxInputTokens > executor.MaxTokenBudget ||
 		run.MaxOutputTokens == 0 || run.MaxOutputTokens > executor.MaxTokenBudget ||
 		run.MaxTotalTokens == 0 || run.MaxTotalTokens > executor.MaxTokenBudget ||

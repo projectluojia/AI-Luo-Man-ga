@@ -178,7 +178,7 @@ func TestInstallFromReleaseEndToEnd(t *testing.T) {
 	writeSourcePackage(t, source, "demo.pkg", "1.0.0", packagecontract.ModeHosted, "app.wasm", nil)
 	manifest := packagecontract.Manifest{
 		SchemaVersion: packagecontract.SchemaVersion, ID: "demo.pkg", Version: "1.0.0",
-		Components: []packagecontract.Component{{ID: "core", Mode: packagecontract.ModeHosted, Entrypoint: "app.wasm"}},
+		Components: []packagecontract.Component{{ID: "core", Mode: packagecontract.ModeHosted, Role: packagecontract.RoleProvider, Entrypoint: "app.wasm"}},
 	}
 	manifestBytes, err := json.Marshal(manifest)
 	if err != nil {

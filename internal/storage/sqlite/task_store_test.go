@@ -58,8 +58,8 @@ func TestTaskMigration18CreatesTasksSchema(t *testing.T) {
 	if err := db.QueryRowContext(t.Context(), `SELECT max(version) FROM schema_migrations`).Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != 25 {
-		t.Fatalf("schema 版本=%d，期望 25", version)
+	if version != 27 {
+		t.Fatalf("schema 版本=%d，期望 27", version)
 	}
 	var tables, indexes int
 	if err := db.QueryRowContext(t.Context(), `

@@ -75,7 +75,7 @@ func TestProcessHostServesExecutorOverConnectMode(t *testing.T) {
 	if _, ok := runtime.(loader.Invoker); ok {
 		t.Fatal("executor runtime must not expose capability invocation")
 	}
-	if _, err := lease.Invoke(t.Context(), contracts.RequestContext{ToolID: "executor.call"}, []byte(`{}`)); !errors.Is(err, loader.ErrUnavailable) {
+	if _, err := lease.Invoke(t.Context(), contracts.RequestContext{CapabilityID: "executor.call"}, []byte(`{}`)); !errors.Is(err, loader.ErrUnavailable) {
 		t.Fatalf("invoke error = %v, want ErrUnavailable", err)
 	}
 	lease.Release()
@@ -99,7 +99,7 @@ func TestProcessHostRequiresSpawnForCapabilityRole(t *testing.T) {
 	}
 	err = host.Verify(t.Context(), loader.Manifest{
 		ID: "capability.test", Version: "1.0.0", Mode: loader.ModeIsolated,
-		Role: loader.RoleCapability, LockedDigest: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		Role: loader.RoleProvider, LockedDigest: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
 	})
 	if !errors.Is(err, loader.ErrInvalidProcessSpec) {
 		t.Fatalf("verify error = %v, want ErrInvalidProcessSpec", err)

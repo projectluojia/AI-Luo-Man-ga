@@ -135,7 +135,7 @@ func newRuntimeGRPCHost(t *testing.T, mode string, dialer func(context.Context, 
 
 func runtimeManifest(id, mode string) loader.Manifest {
 	return loader.Manifest{
-		ID: id, Version: "1.2.3", Mode: mode, Role: loader.RoleCapability, LockedDigest: digest,
+		ID: id, Version: "1.2.3", Mode: mode, Role: loader.RoleProvider, LockedDigest: digest,
 	}
 }
 
@@ -144,7 +144,7 @@ func governedRuntimeRequest() contracts.RequestContext {
 		AppID: "app.test", EchoID: "echo-1", RequestID: "request-1", TraceID: "trace-1",
 		RunID: "run-1", ParentRunID: "parent-1", CallID: "call-1", CallDepth: 2,
 		IdempotencyKey: "operation-1", ConfirmationID: "confirmation-1", ProtocolVersion: "1.0",
-		TargetType: "capability", CapabilityID: "test.capability", ServiceID: "test.service",
+		CapabilityID:    "test.capability",
 		PermissionScope: []string{"test.read"}, CallChain: []string{"first"},
 	}
 }
@@ -197,8 +197,7 @@ func TestHostedGRPCHostSharesConnectionAndPreservesGovernedContext(t *testing.T)
 	got := requests[0].Context
 	if got.AppId != "app.test" || got.EchoId != "echo-1" || got.RunId != "run-1" ||
 		got.CallId != "call-1" || got.CallDepth != 2 || got.DeadlineUnixMs != 0 ||
-		got.TargetType != "capability" || got.CapabilityId != "test.capability" ||
-		got.ServiceId != "test.service" || got.ToolId != "" ||
+		got.CapabilityId != "test.capability" ||
 		len(got.PermissionScope) != 1 || got.PermissionScope[0] != "test.read" {
 		t.Fatalf("governed context=%#v", got)
 	}
@@ -243,7 +242,7 @@ func TestIsolatedGRPCHostUsesOwnedConnectionsAndRejectsLoadAfterClose(t *testing
 
 func TestGRPCHostRejectsProtocolMismatchAndCleansLoadedRuntime(t *testing.T) {
 	implementation := &fakeRuntimeHostServer{
-		mode: loader.ModeHosted, describeProtocols: []string{"3.0"},
+		mode: loader.ModeHosted, describeProtocols: []string{"2.0"},
 	}
 	dialer, _ := startRuntimeHost(t, implementation)
 	var verifies atomic.Int32

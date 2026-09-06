@@ -12,13 +12,9 @@ import (
 	"time"
 )
 
-// campusExtensions 是 packages/campus-bus 三个 capability 的
-// 契约快照（packagefmt 输出的 extensions 段形状），用于驱动生成测试。
+// campusCapabilities 是 packages/campus-bus 三个 Capability 的契约快照，用于驱动生成测试。
 // sdkgen 是中立包（不依赖内核 internal），故以静态快照而非实时契约驱动。
-const campusExtensions = `{
-	"tools": [],
-	"service": {"id": "campus"},
-	"capabilities": [
+const campusCapabilities = `[
 		{
 			"id": "campus.bus.stops.search",
 			"version": "1.0.0",
@@ -40,12 +36,11 @@ const campusExtensions = `{
 			"description": "Search authoritative campus bus journeys by stops and departure time.",
 			"input_schema_json": "{\"type\":\"object\",\"properties\":{\"origin_stop_id\":{\"type\":\"string\",\"minLength\":1},\"destination_stop_id\":{\"type\":\"string\",\"minLength\":1},\"depart_after\":{\"type\":\"string\",\"format\":\"date-time\"},\"limit\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":50}},\"required\":[\"origin_stop_id\",\"destination_stop_id\"],\"additionalProperties\":false}"
 		}
-	]
-}`
+]`
 
 func generateForTest(t *testing.T, language Language) string {
 	t.Helper()
-	files, err := Generate(json.RawMessage(campusExtensions), Options{Language: language, PackageID: "campus"})
+	files, err := Generate(json.RawMessage(campusCapabilities), Options{Language: language, PackageID: "campus"})
 	if err != nil {
 		t.Fatalf("Generate(%s): %v", language, err)
 	}
@@ -126,7 +121,7 @@ func TestGenerateGoCompiles(t *testing.T) {
 	// 生成代码必须可独立编译：写临时模块并 go build。
 	// 验证 import 不依赖内核 internal 包（仅标准库）。
 	dir := t.TempDir()
-	files, err := Generate(json.RawMessage(campusExtensions), Options{Language: LanguageGo, PackageID: "campus"})
+	files, err := Generate(json.RawMessage(campusCapabilities), Options{Language: LanguageGo, PackageID: "campus"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +137,7 @@ func TestGenerateGoCompiles(t *testing.T) {
 func TestGeneratePythonCompiles(t *testing.T) {
 	// 生成的 Python SDK 必须可导入（compileall 编译检查）。
 	dir := t.TempDir()
-	files, err := Generate(json.RawMessage(campusExtensions), Options{Language: LanguagePython, PackageID: "campus"})
+	files, err := Generate(json.RawMessage(campusCapabilities), Options{Language: LanguagePython, PackageID: "campus"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,7 +157,7 @@ func TestGeneratePythonCompiles(t *testing.T) {
 func TestGeneratePythonDropsNestedNone(t *testing.T) {
 	dir := t.TempDir()
 	schema := `{"type":"object","properties":{"inner":{"type":"object","properties":{"a":{"type":"string"},"b":{"type":"string"}},"required":["a"],"additionalProperties":false}},"additionalProperties":false}`
-	source := `{"capabilities":[{"id":"x.y","input_schema_json":` + strconv.Quote(schema) + `}]}`
+	source := `[{"id":"x.y","input_schema_json":` + strconv.Quote(schema) + `}]`
 	files, err := Generate(json.RawMessage(source), Options{Language: LanguagePython, PackageID: "x"})
 	if err != nil {
 		t.Fatal(err)

@@ -37,7 +37,7 @@ type Config struct {
 	ChannelPrompts      map[string]string // 渠道提示段（channel → 提示）；装配时按 Run 渠道追加
 	Timezone            string
 	MaxSteps            uint32
-	MaxToolCalls        uint32
+	MaxCapabilityCalls  uint32
 	MaxInputTokens      uint64
 	MaxOutputTokens     uint64
 	MaxTotalTokens      uint64
@@ -131,7 +131,7 @@ func Normalize(config Config) (Config, error) {
 		ChannelPrompts      map[string]string `json:",omitempty"` // 空时省略，旧行摘要与迁移前一致
 		Timezone            string
 		MaxSteps            uint32
-		MaxToolCalls        uint32
+		MaxCapabilityCalls  uint32
 		MaxInputTokens      uint64
 		MaxOutputTokens     uint64
 		MaxTotalTokens      uint64
@@ -143,7 +143,7 @@ func Normalize(config Config) (Config, error) {
 	}{
 		AppID: config.AppID, Enabled: config.Enabled, Model: config.Model,
 		SystemPrompt: config.SystemPrompt, ChannelPrompts: config.ChannelPrompts, Timezone: config.Timezone,
-		MaxSteps: config.MaxSteps, MaxToolCalls: config.MaxToolCalls,
+		MaxSteps: config.MaxSteps, MaxCapabilityCalls: config.MaxCapabilityCalls,
 		MaxInputTokens: config.MaxInputTokens, MaxOutputTokens: config.MaxOutputTokens,
 		MaxTotalTokens: config.MaxTotalTokens, MaxOutputBytes: config.MaxOutputBytes,
 		MaxCostMicrousd: config.MaxCostMicrousd, ProviderTimeoutMS: config.ProviderTimeout.Milliseconds(),
@@ -163,7 +163,7 @@ func Validate(config Config) error {
 		!utf8.ValidString(config.SystemPrompt) || strings.ContainsRune(config.SystemPrompt, '\x00') ||
 		len(config.Timezone) == 0 || len(config.Timezone) > 128 ||
 		config.MaxSteps < 1 || config.MaxSteps > 64 ||
-		config.MaxToolCalls < 1 || config.MaxToolCalls > 128 ||
+		config.MaxCapabilityCalls < 1 || config.MaxCapabilityCalls > 128 ||
 		config.MaxInputTokens < 1 || config.MaxInputTokens > 10_000_000 ||
 		config.MaxOutputTokens < 1 || config.MaxOutputTokens > 1_000_000 ||
 		config.MaxTotalTokens < config.MaxInputTokens || config.MaxTotalTokens > 11_000_000 ||

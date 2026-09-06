@@ -3,9 +3,11 @@ package memory_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
+	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/capability"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/packstore"
@@ -22,11 +24,19 @@ func hostFunctionByName(functions []loader.HostedFunction, name string) loader.H
 	return loader.HostedFunction{}
 }
 
+func testCapabilities() []capability.CapabilitySpec {
+	return []capability.CapabilitySpec{{
+		ID: "test.capability", Version: "1.0.0", Name: "测试能力",
+		InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
+		SideEffect:      capability.SideEffectRead,
+	}}
+}
+
 // TestHostListCallReturnsEnvelopeAndMeta 验证 ailuo.store list 宿主函数的
 // 端到端信封：治理上下文注入 App、响应内嵌一致快照元数据。
 func TestHostListCallReturnsEnvelopeAndMeta(t *testing.T) {
 	docs := memory.NewDocuments()
-	scope := packstore.Scope{AppID: "app-a", Namespace: "test/pkg"}
+	scope := packstore.Scope{AppID: "app-a", PackageID: "test", Namespace: "test/pkg"}
 	importedAt := time.Now().UTC().Add(-time.Hour)
 	meta := packstore.SnapshotMeta{
 		Revision: "rev-1", Source: "test-source", Authoritative: true,
@@ -37,8 +47,8 @@ func TestHostListCallReturnsEnvelopeAndMeta(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	listFn := hostFunctionByName(packstore.HostFunctions(docs, "test/pkg"), packstore.OpList)
-	response, err := listFn.Call(context.Background(), contracts.RequestContext{AppID: "app-a"}, []byte(`{"collection":"routes","limit":10}`))
+	listFn := hostFunctionByName(packstore.HostFunctions(docs, "test", "test/pkg", testCapabilities()), packstore.OpList)
+	response, err := listFn.Call(context.Background(), contracts.RequestContext{AppID: "app-a", CapabilityID: "test.capability"}, []byte(`{"collection":"routes","limit":10}`))
 	if err != nil {
 		t.Fatalf("list call error: %v", err)
 	}
@@ -66,12 +76,12 @@ func TestHostListCallReturnsEnvelopeAndMeta(t *testing.T) {
 // TestHostGetCallReturnsEnvelope 验证 get 宿主函数的信封形状。
 func TestHostGetCallReturnsEnvelope(t *testing.T) {
 	docs := memory.NewDocuments()
-	scope := packstore.Scope{AppID: "app-a", Namespace: "test/pkg"}
+	scope := packstore.Scope{AppID: "app-a", PackageID: "test", Namespace: "test/pkg"}
 	if err := docs.Put(context.Background(), scope, "routes", "route-a", []byte(`{"id":"route-a"}`)); err != nil {
 		t.Fatal(err)
 	}
-	getFn := hostFunctionByName(packstore.HostFunctions(docs, "test/pkg"), packstore.OpGet)
-	response, err := getFn.Call(context.Background(), contracts.RequestContext{AppID: "app-a"}, []byte(`{"collection":"routes","id":"route-a"}`))
+	getFn := hostFunctionByName(packstore.HostFunctions(docs, "test", "test/pkg", testCapabilities()), packstore.OpGet)
+	response, err := getFn.Call(context.Background(), contracts.RequestContext{AppID: "app-a", CapabilityID: "test.capability"}, []byte(`{"collection":"routes","id":"route-a"}`))
 	if err != nil {
 		t.Fatalf("get call error: %v", err)
 	}
@@ -86,8 +96,47 @@ func TestHostGetCallReturnsEnvelope(t *testing.T) {
 // TestHostCallRejectsForeignScope 验证治理上下文缺失 AppID 时 fail-closed。
 func TestHostCallRejectsForeignScope(t *testing.T) {
 	docs := memory.NewDocuments()
-	listFn := hostFunctionByName(packstore.HostFunctions(docs, "test/pkg"), packstore.OpList)
+	listFn := hostFunctionByName(packstore.HostFunctions(docs, "test", "test/pkg", testCapabilities()), packstore.OpList)
 	if _, err := listFn.Call(context.Background(), contracts.RequestContext{}, []byte(`{"collection":"routes","limit":10}`)); err == nil {
 		t.Fatal("empty AppID call unexpectedly succeeded")
+	}
+}
+
+func TestHostWriteRequiresWriteCapabilityAndIdempotency(t *testing.T) {
+	docs := memory.NewDocuments()
+	read := testCapabilities()
+	write := capability.CapabilitySpec{
+		ID: "test.write", Version: "1.0.0", Name: "写入能力",
+		InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
+		SideEffect:      capability.SideEffectWrite,
+	}
+	functions := packstore.HostFunctions(docs, "test", "test/pkg", append(read, write))
+	putFn := hostFunctionByName(functions, packstore.OpPut)
+	payload := []byte(`{"collection":"routes","id":"route-a","doc":{"name":"A"}}`)
+	if _, err := putFn.Call(context.Background(), contracts.RequestContext{
+		AppID: "app-a", CapabilityID: "test.capability", IdempotencyKey: "call-1",
+	}, payload); !errors.Is(err, packstore.ErrAccessDenied) {
+		t.Fatalf("read Capability write error=%v, want ErrAccessDenied", err)
+	}
+	if _, err := putFn.Call(context.Background(), contracts.RequestContext{
+		AppID: "app-a", CapabilityID: "test.write",
+	}, payload); !errors.Is(err, packstore.ErrAccessDenied) {
+		t.Fatalf("write without idempotency error=%v, want ErrAccessDenied", err)
+	}
+	if _, err := putFn.Call(context.Background(), contracts.RequestContext{
+		AppID: "app-a", CapabilityID: "test.write", IdempotencyKey: "call-1",
+	}, payload); err != nil {
+		t.Fatalf("write Capability error=%v", err)
+	}
+}
+
+func TestHostRejectsNamespaceOwnedByAnotherPackage(t *testing.T) {
+	docs := memory.NewDocuments()
+	listFn := hostFunctionByName(packstore.HostFunctions(docs, "test", "other/pkg", testCapabilities()), packstore.OpList)
+	_, err := listFn.Call(context.Background(), contracts.RequestContext{
+		AppID: "app-a", CapabilityID: "test.capability",
+	}, []byte(`{"collection":"routes","limit":10}`))
+	if !errors.Is(err, packstore.ErrInvalidScope) {
+		t.Fatalf("foreign namespace error=%v, want ErrInvalidScope", err)
 	}
 }

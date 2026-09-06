@@ -8,64 +8,63 @@ import (
 	"net"
 	"path"
 	"path/filepath"
+	"runtime"
+	"slices"
 	"strings"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/capability"
 )
 
 // Package 是分发、版本与升级单位；Component 是运行单元，每个组件恰好一种
-// 运行模式（hosted/isolated）。包级清单声明组件列表与包级扩展段；组件间
-// 通过统一 Capability（imports/exports）通信，依赖拓扑决定启动与停止顺序。
-// 宿主扩展段（Extensions）由宿主解释（AI珞 内核期望 tools/service/capabilities）。
+// 运行模式（hosted/isolated）。包级清单声明组件和 Capability；包间组合由
+// Core 通过统一 Dispatcher 编排，不在组件之间保留私有直连依赖。
 
 // Manifest 是中立的包清单。
 type Manifest struct {
-	SchemaVersion string       `json:"schema_version"`
-	ID            string       `json:"id"`
-	Version       string       `json:"version"`
-	Pin           bool         `json:"pin,omitempty"`
-	IdleTTLMS     uint64       `json:"idle_ttl_ms,omitempty"`
-	Components    []Component  `json:"components"`
-	Storage       *Storage     `json:"storage,omitempty"`
-	Dependencies  []Dependency `json:"dependencies,omitempty"`
-	// Extensions 是宿主扩展段（json.RawMessage），原样保留给宿主解释。
-	Extensions json.RawMessage `json:"extensions,omitempty"`
+	SchemaVersion string                      `json:"schema_version"`
+	ID            string                      `json:"id"`
+	Version       string                      `json:"version"`
+	Pin           bool                        `json:"pin,omitempty"`
+	IdleTTLMS     uint64                      `json:"idle_ttl_ms,omitempty"`
+	Components    []Component                 `json:"components"`
+	Capabilities  []capability.CapabilitySpec `json:"capabilities,omitempty"`
+	Storage       *Storage                    `json:"storage,omitempty"`
+	Dependencies  []Dependency                `json:"dependencies,omitempty"`
 }
 
-// Component 是一个运行单元：恰好一种 mode、一个 entrypoint 工件，export 提供
-// 的 Capability、import 消费的 Capability。HostFunctions 是 wasm 沙箱权利
-// （第二权限轴），isolated 组件的进程规格由 lock 固化。
+// Component 是一个运行单元：恰好一种 mode、一个 entrypoint 工件，exports 提供
+// 的 Capability。HostFunctions 是 wasm 沙箱权利（第二权限轴），isolated 组件
+// 的进程规格由 lock 固化。
 type Component struct {
 	ID string `json:"id"`
 	// Mode 是运行形态：hosted（内核内 wasm 沙箱）或 isolated（独立进程）。
 	Mode string `json:"mode"`
-	// Role 是运行角色：capability（缺省，被调用的功能）或 executor（发起调用
-	// 的认知运行时）。executor 必须 isolated——wasm 沙箱无出站，装不下思考者；
+	// Role 是运行角色：provider（响应 Capability）或 executor（发起调用的认知
+	// 运行时）。executor 必须 isolated——wasm 沙箱无出站，装不下思考者；
 	// 部署策略要求 executor 包经过签名信任。
-	Role       string `json:"role,omitempty"`
+	Role       string `json:"role"`
 	Entrypoint string `json:"entrypoint"`
 	// Process 是 isolated 组件的包内相对进程模板；安装时由 packmgr 解析为
 	// lock 中的绝对 ProcessSpec。模板不包含凭据，Provider 等部署配置不属于
 	// Core 包契约。
 	Process       *ProcessTemplate     `json:"process,omitempty"`
 	Exports       []string             `json:"exports,omitempty"`
-	Imports       []string             `json:"imports,omitempty"`
 	HostFunctions []HostedFunctionDecl `json:"host_functions,omitempty"`
 }
 
 // ProcessTemplate 是包作者声明的 isolated 进程启动模板。Path 与 WorkDir
-// 相对组件工件目录，Address 只允许本机地址；安装器负责转换为绝对路径。
+// 相对组件工件目录，Address 必填且只允许本机地址；安装器负责转换为绝对路径。
 type ProcessTemplate struct {
 	Path    string   `json:"path"`
 	Args    []string `json:"args,omitempty"`
 	WorkDir string   `json:"work_dir,omitempty"`
-	Address string   `json:"address,omitempty"`
+	Address string   `json:"address"`
 }
 
 // 组件运行角色的闭式取值。
 const (
-	RoleCapability = "capability"
-	RoleExecutor   = "executor"
+	RoleProvider = "provider"
+	RoleExecutor = "executor"
 )
 
 // Lock 是安装目录的锁定记录：固定包版本、清单摘要与每组件工件/进程规格。
@@ -104,8 +103,8 @@ type ProcessLimits struct {
 	MaxFileBytes    uint64 `json:"max_file_bytes,omitempty"`
 }
 
-// ValidateManifest 校验包清单：组件唯一性、mode/entrypoint 闭合、imports/exports
-// 标识合法、依赖拓扑无环。宿主扩展段在宿主解析时严格解码。
+// ValidateManifest 校验包清单：组件唯一性、mode/entrypoint 闭合、exports 标识
+// 合法、包依赖无环。宿主扩展段在宿主解析时严格解码。
 func ValidateManifest(manifest Manifest) error {
 	if manifest.SchemaVersion != SchemaVersion || !capability.IsStableID(manifest.ID) {
 		return ErrInvalidFormat
@@ -116,11 +115,17 @@ func ValidateManifest(manifest Manifest) error {
 	if manifest.IdleTTLMS > 2592000000 { // 30 天
 		return ErrInvalidFormat
 	}
-	if len(manifest.Components) == 0 {
+	if len(manifest.Components) == 0 || len(manifest.Components) > MaxComponents ||
+		len(manifest.Capabilities) > MaxCapabilities || len(manifest.Dependencies) > MaxDependencies {
 		return ErrInvalidFormat
 	}
 	if manifest.Storage != nil {
 		if err := ValidateStorage(*manifest.Storage); err != nil {
+			return ErrInvalidFormat
+		}
+		// 存储命名空间必须属于当前 Package。共享数据应通过 Capability，
+		// 不能靠两个包声明同一个裸 namespace 形成隐式共享。
+		if !strings.HasPrefix(manifest.Storage.Namespace, manifest.ID+"/") {
 			return ErrInvalidFormat
 		}
 	}
@@ -134,8 +139,35 @@ func ValidateManifest(manifest Manifest) error {
 		}
 		seenDependencies[dep.ID] = struct{}{}
 	}
-	if len(manifest.Extensions) > 0 && !json.Valid(manifest.Extensions) {
-		return ErrInvalidFormat
+	seenCapabilities := make(map[string]struct{}, len(manifest.Capabilities))
+	for _, spec := range manifest.Capabilities {
+		if !capability.IsStableID(spec.ID) {
+			return ErrInvalidFormat
+		}
+		if _, duplicate := seenCapabilities[spec.ID]; duplicate {
+			return ErrInvalidFormat
+		}
+		seenCapabilities[spec.ID] = struct{}{}
+		if _, err := ParseVersion(spec.Version); err != nil {
+			return ErrInvalidFormat
+		}
+		if len(spec.InputSchemaJSON) == 0 ||
+			!json.Valid([]byte(spec.InputSchemaJSON)) {
+			return ErrInvalidFormat
+		}
+		switch spec.SideEffect {
+		case capability.SideEffectNone, capability.SideEffectRead,
+			capability.SideEffectWrite, capability.SideEffectExternal:
+		default:
+			return ErrInvalidFormat
+		}
+		if spec.RequiresConfirmation && spec.SideEffect != capability.SideEffectWrite && spec.SideEffect != capability.SideEffectExternal {
+			return ErrInvalidFormat
+		}
+	}
+	capabilityIDs := make(map[string]struct{}, len(manifest.Capabilities))
+	for _, spec := range manifest.Capabilities {
+		capabilityIDs[spec.ID] = struct{}{}
 	}
 	seenComponents := make(map[string]struct{}, len(manifest.Components))
 	for _, component := range manifest.Components {
@@ -150,7 +182,7 @@ func ValidateManifest(manifest Manifest) error {
 			return ErrInvalidFormat
 		}
 		switch component.Role {
-		case "", RoleCapability:
+		case RoleProvider:
 		case RoleExecutor:
 			// wasm 沙箱零出站，装不下认知运行时：executor 必须 isolated。
 			if component.Mode != ModeIsolated {
@@ -166,15 +198,26 @@ func ValidateManifest(manifest Manifest) error {
 		if component.Mode != ModeIsolated && component.Process != nil {
 			return ErrInvalidFormat
 		}
+		if component.Mode == ModeIsolated && component.Process == nil {
+			return ErrInvalidFormat
+		}
 		if component.Process != nil {
 			if err := ValidateProcessTemplate(*component.Process); err != nil {
 				return ErrInvalidFormat
 			}
 		}
-		for _, id := range append(append([]string(nil), component.Exports...), component.Imports...) {
+		for _, id := range component.Exports {
 			if !capability.IsStableID(id) {
 				return ErrInvalidFormat
 			}
+		}
+		for _, id := range component.Exports {
+			if _, exists := capabilityIDs[id]; !exists {
+				return ErrInvalidFormat
+			}
+		}
+		if component.Role == RoleExecutor && len(component.Exports) > 0 {
+			return ErrInvalidFormat
 		}
 		if err := ValidateHostedFunctions(component.HostFunctions); err != nil {
 			return ErrInvalidFormat
@@ -183,6 +226,17 @@ func ValidateManifest(manifest Manifest) error {
 	if _, err := ComponentOrder(manifest.Components); err != nil {
 		return err
 	}
+	exportedCapabilities := make(map[string]int, len(manifest.Capabilities))
+	for _, component := range manifest.Components {
+		for _, id := range component.Exports {
+			exportedCapabilities[id]++
+		}
+	}
+	for _, spec := range manifest.Capabilities {
+		if exportedCapabilities[spec.ID] != 1 {
+			return ErrInvalidFormat
+		}
+	}
 	return nil
 }
 
@@ -190,8 +244,11 @@ func ValidateManifest(manifest Manifest) error {
 func ValidateProcessTemplate(template ProcessTemplate) error {
 	if !IsPackagePath(template.Path) || template.Path == "." ||
 		(template.WorkDir != "" && !IsPackagePath(template.WorkDir)) ||
-		(template.Address != "" && !IsLocalRuntimeAddress(template.Address)) ||
+		!IsLocalRuntimeAddress(template.Address) ||
 		len(template.Args) > 128 {
+		return ErrInvalidFormat
+	}
+	if runtime.GOOS == "windows" && strings.HasPrefix(template.Address, "unix:") {
 		return ErrInvalidFormat
 	}
 	for _, argument := range template.Args {
@@ -202,56 +259,20 @@ func ValidateProcessTemplate(template ProcessTemplate) error {
 	return nil
 }
 
-// ComponentOrder 按依赖拓扑对组件排序（Kahn 算法）：组件 imports 的 Capability
-// 若由同包另一组件 exports，则提供方在前。未在同包解析的 import 不构成边
-// （由包依赖/宿主注册表解析）。有环返回错误。
+// ComponentOrder 返回清单声明的组件顺序。组件之间不建立私有运行时直连，
+// 因而启动顺序由作者在清单中显式给出；包间依赖由包管理器单独排序。
 func ComponentOrder(components []Component) ([]string, error) {
-	exporterByCapability := make(map[string]string, len(components))
-	for _, component := range components {
-		for _, capability := range component.Exports {
-			if _, duplicate := exporterByCapability[capability]; duplicate {
-				return nil, fmt.Errorf("%w: Capability %q 被多个组件导出", ErrInvalidFormat, capability)
-			}
-			exporterByCapability[capability] = component.ID
-		}
-	}
-	indexByID := make(map[string]int, len(components))
-	for index, component := range components {
-		indexByID[component.ID] = index
-	}
-	dependents := make([][]int, len(components)) // 反向边：provider → consumers
-	indegree := make([]int, len(components))
-	for index, component := range components {
-		for _, capability := range component.Imports {
-			provider, ok := exporterByCapability[capability]
-			if !ok {
-				continue // 由包依赖/注册表提供，不构成包内边
-			}
-			providerIndex := indexByID[provider]
-			dependents[providerIndex] = append(dependents[providerIndex], index)
-			indegree[index]++
-		}
-	}
 	order := make([]string, 0, len(components))
-	queue := make([]int, 0)
-	for index, degree := range indegree {
-		if degree == 0 {
-			queue = append(queue, index)
+	seen := make(map[string]struct{}, len(components))
+	for _, component := range components {
+		if !capability.IsStableID(component.ID) {
+			return nil, ErrInvalidFormat
 		}
-	}
-	for len(queue) > 0 {
-		current := queue[0]
-		queue = queue[1:]
-		order = append(order, components[current].ID)
-		for _, dependent := range dependents[current] {
-			indegree[dependent]--
-			if indegree[dependent] == 0 {
-				queue = append(queue, dependent)
-			}
+		if _, duplicate := seen[component.ID]; duplicate {
+			return nil, fmt.Errorf("%w: 组件 %q 重复", ErrInvalidFormat, component.ID)
 		}
-	}
-	if len(order) != len(components) {
-		return nil, fmt.Errorf("%w: 组件依赖存在环", ErrInvalidFormat)
+		seen[component.ID] = struct{}{}
+		order = append(order, component.ID)
 	}
 	return order, nil
 }
@@ -269,7 +290,7 @@ func ValidateLock(lock Lock, manifest Manifest) error {
 	if !IsSHA256Hex(lock.ManifestSHA256) {
 		return ErrInvalidFormat
 	}
-	if len(lock.Artifacts) != len(manifest.Components) {
+	if len(lock.Artifacts) != len(manifest.Components) || len(lock.Artifacts) > MaxComponents {
 		return ErrInvalidFormat
 	}
 	seen := make(map[string]struct{}, len(lock.Artifacts))
@@ -301,7 +322,8 @@ func ValidateLock(lock Lock, manifest Manifest) error {
 		case ModeIsolated:
 			if artifact.Process == nil ||
 				!processPathBelongsToArtifact(artifact.Path, artifact.Process.Path) ||
-				!pathWithin(filepath.Dir(artifact.Path), artifact.Process.WorkDir) {
+				!pathWithin(filepath.Dir(artifact.Path), artifact.Process.WorkDir) ||
+				!processSpecMatchesTemplate(component, artifact.Path, *artifact.Process) {
 				return ErrInvalidFormat
 			}
 			if err := ValidateProcessSpec(*artifact.Process); err != nil {
@@ -312,6 +334,37 @@ func ValidateLock(lock Lock, manifest Manifest) error {
 		}
 	}
 	return nil
+}
+
+func processSpecMatchesTemplate(component Component, artifactPath string, spec ProcessSpec) bool {
+	template := component.Process
+	if template == nil {
+		return false
+	}
+	root := filepath.Dir(artifactPath)
+	if template.Path != component.Entrypoint {
+		root = artifactPath
+	}
+	executable := template.Path
+	if executable == ".venv/python" {
+		if runtime.GOOS == "windows" {
+			executable = filepath.Join(".venv", "Scripts", "python.exe")
+		} else {
+			executable = filepath.Join(".venv", "bin", "python")
+		}
+	}
+	expectedPath := filepath.Join(root, filepath.FromSlash(executable))
+	expectedWorkDir := root
+	if template.WorkDir != "" {
+		expectedWorkDir = filepath.Join(root, filepath.FromSlash(template.WorkDir))
+	}
+	expectedArgs := make([]string, len(template.Args))
+	for index, argument := range template.Args {
+		expectedArgs[index] = strings.ReplaceAll(argument, "${address}", template.Address)
+	}
+	return filepath.Clean(spec.Path) == filepath.Clean(expectedPath) &&
+		filepath.Clean(spec.WorkDir) == filepath.Clean(expectedWorkDir) &&
+		spec.Address == template.Address && slices.Equal(spec.Args, expectedArgs)
 }
 
 // processPathBelongsToArtifact 限制 isolated 进程可执行文件在组件工件内；

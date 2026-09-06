@@ -115,7 +115,7 @@ func TestUpgradePackageDrainsGroupInReverseOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	// 依赖拓扑：a（provider）在前，b（consumer）在后。
-	if err := manager.RegisterPackage("pkg.test", []string{"pkg.test.a", "pkg.test.b"}); err != nil {
+	if err := manager.RegisterPackages(map[string][]string{"pkg.test": {"pkg.test.a", "pkg.test.b"}}); err != nil {
 		t.Fatal(err)
 	}
 	for _, id := range []string{"pkg.test.a", "pkg.test.b"} {
@@ -192,13 +192,13 @@ func TestWarmupLoadsPinnedPackageInTopologyOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	if err := manager.Register(ctx, loader.Manifest{ID: "pkg.warm.provider", Version: "1.0.0", Mode: loader.ModeHosted, Role: loader.RoleCapability, LockedDigest: digest, Pin: true}); err != nil {
+	if err := manager.Register(ctx, loader.Manifest{ID: "pkg.warm.provider", Version: "1.0.0", Mode: loader.ModeHosted, Role: loader.RoleProvider, LockedDigest: digest, Pin: true}); err != nil {
 		t.Fatal(err)
 	}
-	if err := manager.Register(ctx, loader.Manifest{ID: "pkg.warm.consumer", Version: "1.0.0", Mode: loader.ModeHosted, Role: loader.RoleCapability, LockedDigest: digest, Pin: true}); err != nil {
+	if err := manager.Register(ctx, loader.Manifest{ID: "pkg.warm.consumer", Version: "1.0.0", Mode: loader.ModeHosted, Role: loader.RoleProvider, LockedDigest: digest, Pin: true}); err != nil {
 		t.Fatal(err)
 	}
-	if err := manager.RegisterPackage("pkg.warm", []string{"pkg.warm.provider", "pkg.warm.consumer"}); err != nil {
+	if err := manager.RegisterPackages(map[string][]string{"pkg.warm": {"pkg.warm.provider", "pkg.warm.consumer"}}); err != nil {
 		t.Fatal(err)
 	}
 	pinned := manager.Pinned()
@@ -223,10 +223,10 @@ func TestRegisterPackageRejectsDuplicate(t *testing.T) {
 	if err := manager.Register(ctx, upgradeManifest("pkg.test", "1.0.0")); err != nil {
 		t.Fatal(err)
 	}
-	if err := manager.RegisterPackage("pkg.test", []string{"pkg.test"}); err != nil {
+	if err := manager.RegisterPackages(map[string][]string{"pkg.test": {"pkg.test"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := manager.RegisterPackage("pkg.test", []string{"pkg.test"}); err == nil {
+	if err := manager.RegisterPackages(map[string][]string{"pkg.test": {"pkg.test"}}); err == nil {
 		t.Fatal("RegisterPackage duplicate = nil, want error")
 	}
 }

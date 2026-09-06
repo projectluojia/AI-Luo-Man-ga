@@ -35,7 +35,7 @@ func TestRegisterChildCapabilitiesUsesGovernedParentIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if spec.ServiceID != "run" || spec.SideEffect != capability.SideEffectExternal || spec.RequiresConfirmation {
+	if spec.ID != kernelecho.CreateChildRunCapabilityID || spec.SideEffect != capability.SideEffectExternal || spec.RequiresConfirmation {
 		t.Fatalf("spec=%#v", spec)
 	}
 	result, err := handler(context.Background(), contracts.RequestContext{RunID: "parent", CallID: "call"},

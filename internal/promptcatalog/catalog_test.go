@@ -62,11 +62,12 @@ func TestNormalizeTrimsText(t *testing.T) {
 	}
 }
 
-func TestDefaultBaseSystemPromptContainsV2Persona(t *testing.T) {
+func TestDefaultBaseSystemPromptContainsPersonaAndCapabilityLanguage(t *testing.T) {
 	if !strings.Contains(DefaultBaseSystemPrompt, "你是“珞樱”（Luoying）") ||
 		!strings.Contains(DefaultBaseSystemPrompt, "武汉大学人工智能学院专属数字伙伴") ||
-		!strings.Contains(DefaultBaseSystemPrompt, "你可以一次性调用多个工具来提升效率") {
-		t.Fatalf("base prompt missing V2 persona: %q", DefaultBaseSystemPrompt)
+		!strings.Contains(DefaultBaseSystemPrompt, "你可以一次性调用多个 Capability 来提升效率") ||
+		strings.Contains(DefaultBaseSystemPrompt, "调用工具") {
+		t.Fatalf("base prompt missing current Capability language: %q", DefaultBaseSystemPrompt)
 	}
 	if channels := DefaultChannelPrompts(); len(channels) != 3 || channels["web"] == "" || channels["qq_group"] == "" || channels["qq_private"] == "" {
 		t.Fatalf("channels=%#v", channels)

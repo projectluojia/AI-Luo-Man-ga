@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -22,10 +21,9 @@ import (
 	kernelecho "github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/packstore"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/promptcatalog"
-	promptservice "github.com/projectluojia/AI-Luo-Man-ga/internal/services/prompt"
+	promptservice "github.com/projectluojia/AI-Luo-Man-ga/internal/providers/prompt"
 )
 
 type config struct {
@@ -164,29 +162,6 @@ func applyLocalConfig(base config, resolved controlconfig.Resolved) (config, err
 	return base, nil
 }
 
-// initialCapabilityIDs 为新 App 生成首次能力集合：内核能力、已注册的内核服务
-// 能力和安装包清单声明的能力。已有 App 的集合由持久化配置保留，不在启动时扩张。
-func initialCapabilityIDs(reg *registry.Registry, records []loader.InstalledRecord) []string {
-	ids := map[string]struct{}{
-		kernelecho.CreateChildRunCapabilityID: {},
-		kernelecho.GetChildStatusCapabilityID: {},
-	}
-	for _, spec := range reg.Capabilities() {
-		ids[spec.ID] = struct{}{}
-	}
-	for _, record := range records {
-		for _, spec := range record.Capabilities {
-			ids[spec.ID] = struct{}{}
-		}
-	}
-	result := make([]string, 0, len(ids))
-	for id := range ids {
-		result = append(result, id)
-	}
-	sort.Strings(result)
-	return result
-}
-
 // configureInstalledRuntimes 发现安装目录中的 Runtime 包，按声明的运行模式
 // 选择宿主。Loader 只接收已校验的安装记录和通用 Host。宿主函数按清单提供：
 // ailuo.store 通用存储函数绑定到各包声明的 namespace，App 隔离在宿主侧强制。
@@ -283,12 +258,12 @@ func configureInstalledRuntimes(ctx context.Context, cfg config, packageStore pa
 	return hosts, records, nil
 }
 
-type promptServiceRenderer struct {
-	service *promptservice.Service
+type promptProviderRenderer struct {
+	provider *promptservice.Provider
 }
 
-func (r promptServiceRenderer) RenderSystemPrompt(ctx context.Context, request kernelecho.PromptRenderRequest) (string, error) {
-	return r.service.RenderSystemPrompt(ctx, promptservice.RenderRequest{
+func (r promptProviderRenderer) RenderSystemPrompt(ctx context.Context, request kernelecho.PromptRenderRequest) (string, error) {
+	return r.provider.RenderSystemPrompt(ctx, promptservice.RenderRequest{
 		AppID: request.AppID, UserID: request.UserID, BaseSystemPrompt: request.BaseSystemPrompt,
 		Channel: request.Channel, ChannelPrompts: request.ChannelPrompts,
 	})

@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -43,13 +44,16 @@ var (
 	ErrInvalidPayload = errors.New("invalid package document payload")
 	// ErrInvalidSnapshot 表示快照元数据或内容未通过导入校验。
 	ErrInvalidSnapshot = errors.New("invalid package snapshot")
+	// ErrAccessDenied 表示当前 Capability 没有请求的存储操作权限。
+	ErrAccessDenied = errors.New("package storage access denied")
 )
 
 // Scope 是一次包存储访问的强制作用域：AppID 来自治理上下文（guest 不可见、
-// 不可伪造），Namespace 来自包清单 [storage] 声明（guest 不可选择）。两者都
-// 由宿主侧装配，guest ABI 调用无法触达其他作用域。
+// 不可伪造），PackageID 与 Namespace 由宿主侧装配。Namespace 必须带有
+// PackageID 前缀，避免两个包通过声明相同裸 namespace 隐式共享数据。
 type Scope struct {
 	AppID     string
+	PackageID string
 	Namespace string
 }
 
@@ -107,15 +111,18 @@ type Store interface {
 	ReplaceSnapshot(ctx context.Context, scope Scope, meta SnapshotMeta, collections map[string][]Document) error
 }
 
-// ValidateScope 校验作用域：AppID 与 namespace 均为闭式标识。
+// ValidateScope 校验作用域：App、Package 与 namespace 均为闭式标识，且
+// namespace 必须属于当前 Package。
 func ValidateScope(scope Scope) error {
-	if !capability.IsStableID(scope.AppID) {
+	if !capability.IsStableID(scope.AppID) || !capability.IsStableID(scope.PackageID) {
 		return ErrInvalidScope
 	}
 	if packagecontract.ValidateStorage(packagecontract.Storage{
-		Namespace: scope.Namespace, SchemaVersion: 1,
-		Sensitivity: packagecontract.SensitivityPublic, Retention: packagecontract.RetentionPermanent,
+		Namespace: scope.Namespace,
 	}) != nil {
+		return ErrInvalidScope
+	}
+	if !strings.HasPrefix(scope.Namespace, scope.PackageID+"/") {
 		return ErrInvalidScope
 	}
 	return nil

@@ -1,6 +1,6 @@
 //go:build wasip1
 
-// campus 是校园服务的 hosted 包 guest：实现校园三工具（站点搜索/线路列表/
+// campus 是校园能力 Provider 的 hosted 包 guest：实现校园三种能力（站点搜索/线路列表/
 // 行程查询）。业务数据经通用 ailuo.store 宿主函数读取宿主托管的权威存储
 // （App 隔离由宿主治理上下文强制，namespace 绑定为清单 [storage] 声明值，
 // guest 无法选择作用域）。数据新鲜度/权威性治理在本侧完成：快照元数据
@@ -31,9 +31,9 @@ const (
 	stopsCollection    = "stops"
 	journeysCollection = "journeys"
 
-	stopsToolID    = "campus.bus.stops.search"
-	routesToolID   = "campus.bus.routes.list"
-	journeysToolID = "campus.bus.journeys.search"
+	stopsCapabilityID    = "campus.bus.stops.search"
+	routesCapabilityID   = "campus.bus.routes.list"
+	journeysCapabilityID = "campus.bus.journeys.search"
 )
 
 // 稳定错误码（内核闭式集合：guest 自定义码会被内核视为协议违例）。
@@ -50,8 +50,8 @@ var errDataUnavailable = errors.New(codeDataUnavailable)
 
 // requestEnvelope 与宿主约定的 stdin 调用信封。
 type requestEnvelope struct {
-	ToolID  string          `json:"tool_id"`
-	Payload json.RawMessage `json:"payload"`
+	CapabilityID string          `json:"capability_id"`
+	Payload      json.RawMessage `json:"payload"`
 }
 
 // resultEnvelope 与宿主约定的 stdout 结果信封。
@@ -128,7 +128,7 @@ type journeySearchResult struct {
 	Journeys   []journey  `json:"journeys"`
 }
 
-// dataStatus 是工具结果的治理状态（快照元数据扁平展开）。
+// dataStatus 是能力结果的治理状态（快照元数据扁平展开）。
 type dataStatus struct {
 	State          string    `json:"state"`
 	SourceRevision string    `json:"source_revision"`
@@ -191,16 +191,16 @@ func run(input io.Reader, output io.Writer) {
 		writeEnvelope(output, resultEnvelope{Code: codeInvalidArgument, Message: "request envelope is malformed"})
 		return
 	}
-	// 按工具分发：工具标识来自宿主治理上下文，schema 由清单声明约束。
-	switch request.ToolID {
-	case stopsToolID:
+	// 按能力分发：能力标识来自宿主治理上下文，schema 由清单声明约束。
+	switch request.CapabilityID {
+	case stopsCapabilityID:
 		invokeStopSearch(output, request.Payload)
-	case routesToolID:
+	case routesCapabilityID:
 		invokeRouteList(output, request.Payload)
-	case journeysToolID:
+	case journeysCapabilityID:
 		invokeJourneySearch(output, request.Payload)
 	default:
-		writeEnvelope(output, resultEnvelope{Code: codeInvalidArgument, Message: "unknown tool: " + request.ToolID})
+		writeEnvelope(output, resultEnvelope{Code: codeInvalidArgument, Message: "unknown capability: " + request.CapabilityID})
 	}
 }
 

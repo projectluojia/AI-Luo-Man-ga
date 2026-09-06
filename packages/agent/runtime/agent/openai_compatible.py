@@ -11,7 +11,7 @@ from typing import Any, AsyncIterator, Awaitable, Callable
 
 from openai import APIConnectionError, APIStatusError, APITimeoutError, AsyncOpenAI, RateLimitError
 
-from agent.model import ModelEvent, ModelUsage, ProviderFailure, TextDelta, ToolCall, TurnCompleted
+from agent.model import CapabilityCall, ModelEvent, ModelUsage, ProviderFailure, TextDelta, TurnCompleted
 from agent.observe import get_logger
 
 
@@ -113,7 +113,7 @@ class OpenAICompatibleProvider:
         *,
         model: str,
         messages: list[dict[str, Any]],
-        tools: list[dict[str, Any]],
+        capabilities: list[dict[str, Any]],
     ) -> AsyncIterator[ModelEvent]:
         for attempt in range(self._max_retries + 1):
             started = self._monotonic()
@@ -126,14 +126,14 @@ class OpenAICompatibleProvider:
                         model=model,
                         attempt=attempt + 1,
                         message_count=len(messages),
-                        tool_count=len(tools),
+                        capability_count=len(capabilities),
                     )
                     async with asyncio.timeout(self._request_timeout_seconds):
                         stream = await self._client.chat.completions.create(
                             model=model,
                             messages=messages,
-                            tools=tools or None,
-                            tool_choice="auto" if tools else None,
+                        tools=capabilities or None,
+                        tool_choice="auto" if capabilities else None,
                             stream=True,
                             stream_options={"include_usage": True},
                         )
@@ -164,17 +164,17 @@ class OpenAICompatibleProvider:
                                 if partial.function and partial.function.arguments:
                                     current["arguments"] += partial.function.arguments
 
-                        tool_calls = [
-                            ToolCall(id=value["id"], name=value["name"], arguments=value["arguments"])
+                        capability_calls = [
+                            CapabilityCall(id=value["id"], name=value["name"], arguments=value["arguments"])
                             for _, value in sorted(calls.items())
                         ]
-                        if finish_reason == "tool_calls" and not tool_calls:
+                        if finish_reason == "tool_calls" and not capability_calls:
                             raise ProviderFailure("provider_protocol_error", False)
                         if finish_reason not in ("stop", "tool_calls"):
                             raise ProviderFailure("provider_protocol_error", False)
-                        if finish_reason == "stop" and tool_calls:
+                        if finish_reason == "stop" and capability_calls:
                             raise ProviderFailure("provider_protocol_error", False)
-                        if any(not call.id or not call.name or not call.arguments for call in tool_calls):
+                        if any(not call.id or not call.name or not call.arguments for call in capability_calls):
                             raise ProviderFailure("provider_protocol_error", False)
                         if usage is None:
                             raise ProviderFailure("provider_protocol_error", False)
@@ -185,14 +185,14 @@ class OpenAICompatibleProvider:
                             "role": "assistant",
                             "content": text or None,
                         }
-                        if tool_calls:
+                        if capability_calls:
                             assistant_message["tool_calls"] = [
                                 {
                                     "id": call.id,
                                     "type": "function",
                                     "function": {"name": call.name, "arguments": call.arguments},
                                 }
-                                for call in tool_calls
+                                for call in capability_calls
                             ]
 
                         logger.info(
@@ -200,7 +200,7 @@ class OpenAICompatibleProvider:
                             model=model,
                             finish_reason=finish_reason,
                             text_length=len(text),
-                            tool_call_count=len(tool_calls),
+                            capability_count=len(capability_calls),
                             input_tokens=usage.input_tokens if usage else 0,
                             output_tokens=usage.output_tokens if usage else 0,
                             total_tokens=usage.total_tokens if usage else 0,
@@ -208,7 +208,7 @@ class OpenAICompatibleProvider:
                         )
                         yield TurnCompleted(
                             text=text,
-                            tool_calls=tool_calls,
+                            capability_calls=capability_calls,
                             assistant_message=assistant_message,
                             usage=usage,
                         )
