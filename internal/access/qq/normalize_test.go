@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	qqsettings "github.com/projectluojia/AI-Luo-Man-ga/internal/access/qq/settings"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/session"
 )
 
@@ -149,7 +150,7 @@ func TestNormalizeQQID(t *testing.T) {
 		{value: "0", valid: false},
 	}
 	for _, test := range tests {
-		normalized, valid := normalizeQQID(test.value)
+		normalized, valid := qqsettings.NormalizeQQID(test.value)
 		if valid != test.valid {
 			t.Errorf("normalizeQQID(%q) valid=%t, want %t", test.value, valid, test.valid)
 		}

@@ -83,7 +83,7 @@ type Orchestrator struct {
 	registry    *registry.Registry
 	dispatcher  *runtime.Dispatcher
 	policy      runtime.AppPolicy
-	store       Store
+	store       OrchestratorStore
 	idempotency *idempotency.Manager
 	context     *contextasm.Assembler
 	config      Config
@@ -95,7 +95,7 @@ func NewOrchestrator(
 	reg *registry.Registry,
 	dispatcher *runtime.Dispatcher,
 	policy runtime.AppPolicy,
-	store Store,
+	store OrchestratorStore,
 	config Config,
 ) *Orchestrator {
 	if config.RunTimeout == 0 {
@@ -394,6 +394,10 @@ func (o *Orchestrator) Cancel(ctx context.Context, echoID string) (bool, error) 
 		observe.DefaultMetrics().QueueRemoved()
 	}
 	return cancelled, err
+}
+
+func (o *Orchestrator) CancelQueuedRuns(ctx context.Context) error {
+	return o.store.CancelQueuedRuns(ctx, o.config.AppID, o.now().UTC())
 }
 
 func (o *Orchestrator) CreateIdempotent(ctx context.Context, request RunRequest) (string, bool, error) {
@@ -1255,11 +1259,15 @@ func (o *Orchestrator) invokeCapabilityOnce(ctx context.Context, run RunRecord, 
 	if contextDeadline, ok := ctx.Deadline(); ok && contextDeadline.Before(deadline) {
 		deadline = contextDeadline
 	}
+	traceID := observe.String(ctx, "trace_id")
+	if traceID == "" {
+		traceID = echoID
+	}
 	request := contracts.RequestContext{
 		AppID:           o.config.AppID,
 		EchoID:          echoID,
 		RequestID:       requestID,
-		TraceID:         firstNonEmpty(observe.String(ctx, "trace_id"), echoID),
+		TraceID:         traceID,
 		UserID:          run.UserID,
 		SessionID:       run.SessionID,
 		RunID:           runID,
@@ -1483,13 +1491,4 @@ func (o *Orchestrator) completeRun(ctx context.Context, run RunRecord, runStatus
 
 func detachedContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if value != "" {
-			return value
-		}
-	}
-	return ""
 }

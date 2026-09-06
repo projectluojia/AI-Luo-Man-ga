@@ -5,17 +5,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"regexp"
 	"sync"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
 
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/id"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/strictschema"
 )
 
 const maxSchemaBytes = 64 << 10
-
-var typeIDPattern = regexp.MustCompile(`^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$`)
 
 // Handler 执行一次任务。处理器必须遵守传入上下文中的 deadline 与取消；
 // 副作用必须使用 task.IdempotencyKey 保证可重放安全。
@@ -49,7 +47,7 @@ func NewTypeRegistry() *TypeRegistry {
 // Register 原子注册一个封闭任务类型。重复注册、非法标识、缺失处理器或
 // 非法 Schema 都会失败，保证注册表只包含可安全执行的类型。
 func (r *TypeRegistry) Register(spec TypeSpec) error {
-	if len(spec.TypeID) == 0 || len(spec.TypeID) > maxTypeIDBytes || !typeIDPattern.MatchString(spec.TypeID) {
+	if len(spec.TypeID) == 0 || len(spec.TypeID) > maxTypeIDBytes || !id.StableLower.MatchString(spec.TypeID) {
 		return fmt.Errorf("%w: 非法类型标识 %q", ErrInvalidTypeSpec, spec.TypeID)
 	}
 	if spec.Handler == nil {

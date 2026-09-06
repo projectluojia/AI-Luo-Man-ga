@@ -108,40 +108,6 @@ func TestChildRunEnforcesOneLevelConfiguredLimitAndParentLease(t *testing.T) {
 	}
 }
 
-func TestQueuedChildClaimFailureCanBeClosedDurably(t *testing.T) {
-	store, err := sqlite.Open(filepath.Join(t.TempDir(), "child-claim-cleanup.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	ctx := context.Background()
-	now := time.Now().UTC()
-	createTestEchoRun(t, store, "app", "echo", "task", now)
-	parent, err := store.ClaimRun(ctx, "app", "echo", "parent-lease", now, now.Add(time.Minute))
-	if err != nil {
-		t.Fatal(err)
-	}
-	child := childRunRecord(parent, "child", "call", now)
-	if err := store.CreateChildRun(ctx, parent, child, 1); err != nil {
-		t.Fatal(err)
-	}
-	failure := publicerror.Echo("recovery_failed")
-	if err := store.FailQueuedChildRun(ctx, child, failure, now.Add(time.Second)); err != nil {
-		t.Fatal(err)
-	}
-	storedChild, err := store.GetRun(ctx, "app", child.ID)
-	if err != nil || storedChild.Status != kernelecho.RunStatusFailed ||
-		storedChild.ErrorCode != failure.Code || storedChild.ResultMessage != "" {
-		t.Fatalf("child=%#v err=%v", storedChild, err)
-	}
-	if err := store.FailQueuedChildRun(ctx, child, failure, now.Add(2*time.Second)); !errors.Is(err, kernelecho.ErrInvalidTransition) {
-		t.Fatalf("重复清理错误=%v", err)
-	}
-	if err := store.CompleteRun(ctx, parent, kernelecho.RunStatusFailed, kernelecho.StatusFailed, "", failure, now.Add(3*time.Second)); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestRecoveryFailsRunningRootAndOrphanChildAtomically(t *testing.T) {
 	store, err := sqlite.Open(filepath.Join(t.TempDir(), "child-recovery.db"))
 	if err != nil {

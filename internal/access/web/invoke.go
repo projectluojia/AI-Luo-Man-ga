@@ -69,7 +69,7 @@ func (s *Server) invokeCapability(writer http.ResponseWriter, request *http.Requ
 	var envelope struct {
 		Input json.RawMessage `json:"input"`
 	}
-	if !decodeJSONBody(writer, request, &envelope) {
+	if !access.DecodeJSONBody(writer, request, &envelope, 64<<10) {
 		observe.Warn(request.Context(), "Capability 调用请求体解析失败",
 			observe.StringAttr("capability_id", capabilityID),
 		)

@@ -84,12 +84,12 @@ func (b *fakeOneBot) sendEvents(t *testing.T, payloads ...string) {
 	}
 }
 
-type blockingEchoStarter struct {
+type blockingEchoCreator struct {
 	started chan string
 	release chan struct{}
 }
 
-func (s *blockingEchoStarter) CreateIdempotent(ctx context.Context, request kernelecho.RunRequest) (string, bool, error) {
+func (s *blockingEchoCreator) CreateIdempotent(ctx context.Context, request kernelecho.RunRequest) (string, bool, error) {
 	select {
 	case s.started <- request.IdempotencyKey:
 	case <-ctx.Done():
@@ -132,7 +132,7 @@ func newQQTestHub(t *testing.T, store *sqlite.Store, resolver access.IdentityRes
 	return hub
 }
 
-// qqFakeOrchestrator 是 EchoStarter 测试桩：真实写入 sqlite，成功后发信号。
+// qqFakeOrchestrator 是创建端口测试桩：真实写入 sqlite，成功后发信号。
 type qqFakeOrchestrator struct {
 	store       *sqlite.Store
 	created     chan struct{}
@@ -172,7 +172,7 @@ func TestNewRejectsInvalidBotQQID(t *testing.T) {
 		t.Run(botQQID, func(t *testing.T) {
 			_, err := New(Config{
 				AppID: "campus-services", WSURL: "ws://127.0.0.1:1", BotQQID: botQQID,
-				Provisioner: testProvisioner{},
+				Provisioner: testProvisioner{}, Scheduler: testScheduler{},
 			}, hub, access.NewEventHub(), orchestrator, store)
 			if err == nil {
 				t.Fatal("invalid bot QQ ID was accepted")
@@ -192,7 +192,7 @@ func TestQQAdapterIntakesAndReplies(t *testing.T) {
 	orchestrator := &qqFakeOrchestrator{store: store, created: make(chan struct{})}
 	adapter, err := New(Config{
 		AppID: "campus-services", WSURL: bot.wsURL(), Token: "secret", BotQQID: testBotQQID,
-		AllowedGroupIDs: []string{"12345"}, AllowedPrivateUserIDs: []string{"67890"}, Provisioner: testProvisioner{},
+		AllowedGroupIDs: []string{"12345"}, AllowedPrivateUserIDs: []string{"67890"}, Provisioner: testProvisioner{}, Scheduler: testScheduler{},
 		DialTimeout: 2 * time.Second, ReconnectDelay: 50 * time.Millisecond, RunTimeout: 5 * time.Second,
 	}, hub, events, orchestrator, store)
 	if err != nil {
@@ -258,7 +258,7 @@ func TestQQAdapterForwardsEverySubagentTerminalReply(t *testing.T) {
 	orchestrator := &qqFakeOrchestrator{store: store, created: make(chan struct{})}
 	adapter, err := New(Config{
 		AppID: "campus-services", WSURL: bot.wsURL(), BotQQID: testBotQQID,
-		AllowedGroupIDs: []string{"12345"}, Provisioner: testProvisioner{},
+		AllowedGroupIDs: []string{"12345"}, Provisioner: testProvisioner{}, Scheduler: testScheduler{},
 		DialTimeout: 2 * time.Second, ReconnectDelay: 50 * time.Millisecond, RunTimeout: 5 * time.Second,
 	}, hub, events, orchestrator, store)
 	if err != nil {
@@ -345,7 +345,7 @@ func TestQQAdapterQuickReplySkipsAgentAndDoesNotMentionSender(t *testing.T) {
 	adapter, err := New(Config{
 		AppID: "campus-services", WSURL: bot.wsURL(), BotQQID: testBotQQID,
 		AllowedGroupIDs: []string{"12345"}, QuickReplies: []QuickReply{{Trigger: "ping", Reply: "pong"}},
-		Provisioner: testProvisioner{}, DialTimeout: 2 * time.Second, ReconnectDelay: 50 * time.Millisecond,
+		Provisioner: testProvisioner{}, Scheduler: testScheduler{}, DialTimeout: 2 * time.Second, ReconnectDelay: 50 * time.Millisecond,
 	}, hub, access.NewEventHub(), orchestrator, store)
 	if err != nil {
 		t.Fatal(err)
@@ -397,13 +397,13 @@ func TestQQAdapterProcessesEchoesConcurrently(t *testing.T) {
 	store := newQQTestStore(t, "qq-concurrent.db")
 	bot := newFakeOneBot(t)
 	hub := newQQTestHub(t, store, stubResolver{user: "user-1"})
-	orchestrator := &blockingEchoStarter{
+	orchestrator := &blockingEchoCreator{
 		started: make(chan string, echoWorkerCount+1),
 		release: make(chan struct{}),
 	}
 	adapter, err := New(Config{
 		AppID: "campus-services", WSURL: bot.wsURL(), BotQQID: testBotQQID,
-		AllowedGroupIDs: []string{"12345"}, AllowedPrivateUserIDs: []string{"67890"}, Provisioner: testProvisioner{},
+		AllowedGroupIDs: []string{"12345"}, AllowedPrivateUserIDs: []string{"67890"}, Provisioner: testProvisioner{}, Scheduler: testScheduler{},
 		DialTimeout: 2 * time.Second, ReconnectDelay: 50 * time.Millisecond, RunTimeout: 5 * time.Second,
 	}, hub, access.NewEventHub(), orchestrator, store)
 	if err != nil {
@@ -462,7 +462,7 @@ func TestQQAdapterRepliesPublicErrorOnUnboundIdentity(t *testing.T) {
 	hub := newQQTestHub(t, store, stubResolver{err: identity.ErrNotFound})
 	adapter, err := New(Config{
 		AppID: "campus-services", WSURL: bot.wsURL(), BotQQID: testBotQQID,
-		AllowedGroupIDs: []string{"12345"}, AllowedPrivateUserIDs: []string{"67890"}, Provisioner: testProvisioner{},
+		AllowedGroupIDs: []string{"12345"}, AllowedPrivateUserIDs: []string{"67890"}, Provisioner: testProvisioner{}, Scheduler: testScheduler{},
 		DialTimeout: 2 * time.Second, ReconnectDelay: 50 * time.Millisecond, RunTimeout: 5 * time.Second,
 	}, hub, access.NewEventHub(), &qqFakeOrchestrator{store: store, created: make(chan struct{})}, store)
 	if err != nil {

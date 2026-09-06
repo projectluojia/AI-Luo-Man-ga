@@ -213,7 +213,9 @@ func TestDelayedRunAndLeaseRenewalAreGovernedByPersistentState(t *testing.T) {
 	echo, run := echoRunRecords("app", "delayed", "delayed-run", "input", now)
 	run.AvailableAt = now.Add(time.Minute)
 	run.Deadline = run.AvailableAt.Add(time.Minute)
-	if err := store.CreateEchoRun(context.Background(), echo, run); err != nil {
+	if stored, created, err := store.CreateEchoRunIdempotentLimited(
+		context.Background(), "delayed-echo", idempotency.Fingerprint([]byte("input")), echo, run, 0,
+	); err != nil || !created || stored != echo.ID {
 		t.Fatal(err)
 	}
 	if queued, err := store.ListQueuedRuns(context.Background(), "app", 10); err != nil || len(queued) != 1 {
@@ -258,7 +260,9 @@ func TestOrphanedQueuedRunIsDeterministicallyFailed(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC().Truncate(time.Second)
 	echo, run := echoRunRecords("app", "orphan", "orphan-run", "input", now)
-	if err := store.CreateEchoRun(ctx, echo, run); err != nil {
+	if stored, created, err := store.CreateEchoRunIdempotentLimited(
+		ctx, "orphan-echo", idempotency.Fingerprint([]byte("input")), echo, run, 0,
+	); err != nil || !created || stored != echo.ID {
 		t.Fatal(err)
 	}
 	// 模拟崩溃窗口：Echo 已进入终态而 Run 仍排队（绕过 CancelQueuedRun 的正常路径）。
@@ -513,6 +517,50 @@ func TestQueuedCancellationAndAbandonedRunReconciliationAreDurable(t *testing.T)
 	}
 }
 
+func TestCancelQueuedRunsCancelsDelayedRuns(t *testing.T) {
+	store, err := sqlite.Open(filepath.Join(t.TempDir(), "cancel-queued-runs.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	now := time.Now().UTC()
+	echo, run := echoRunRecords("app-a", "delayed", "delayed-run", "delayed", now)
+	run.AvailableAt = now.Add(time.Hour)
+	run.Deadline = run.AvailableAt.Add(time.Minute)
+	if stored, created, err := store.CreateEchoRunIdempotentLimited(
+		ctx, "cancel-delayed", idempotency.Fingerprint([]byte("delayed")), echo, run, 0,
+	); err != nil || !created || stored != echo.ID {
+		t.Fatalf("create delayed Echo/Run: %v", err)
+	}
+	otherEcho, otherRun := echoRunRecords("app-b", "delayed", "delayed-run-b", "delayed", now)
+	otherRun.AvailableAt = now.Add(time.Hour)
+	otherRun.Deadline = otherRun.AvailableAt.Add(time.Minute)
+	if stored, created, err := store.CreateEchoRunIdempotentLimited(
+		ctx, "cancel-delayed-other", idempotency.Fingerprint([]byte("delayed-other")), otherEcho, otherRun, 0,
+	); err != nil || !created || stored != otherEcho.ID {
+		t.Fatalf("create other-app delayed Echo/Run: %v", err)
+	}
+	if err := store.CancelQueuedRuns(ctx, "app-a", now.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	queued, err := store.ListQueuedRuns(ctx, "app-a", 10)
+	if err != nil || len(queued) != 0 {
+		t.Fatalf("queued=%#v err=%v, want no queued Run", queued, err)
+	}
+	record, _, err := store.GetEcho(ctx, "app-a", "delayed")
+	if err != nil || record.Status != kernelecho.StatusCancelled {
+		t.Fatalf("record=%#v err=%v, want cancelled Echo", record, err)
+	}
+	runs, err := store.ListRuns(ctx, "app-a", "delayed")
+	if err != nil || len(runs) != 1 || runs[0].Status != kernelecho.RunStatusCancelled {
+		t.Fatalf("runs=%#v err=%v, want cancelled Run", runs, err)
+	}
+	if queued, err := store.ListQueuedRuns(ctx, "app-b", 10); err != nil || len(queued) != 1 {
+		t.Fatalf("cross-app queued=%#v err=%v, want untouched queued Run", queued, err)
+	}
+}
+
 func TestEchoAndRunCreationRollsBackAtomically(t *testing.T) {
 	store, err := sqlite.Open(filepath.Join(t.TempDir(), "atomic.db"))
 	if err != nil {
@@ -529,10 +577,10 @@ func TestEchoAndRunCreationRollsBackAtomically(t *testing.T) {
 		MaxOutputBytes: 4096, ProviderTimeoutMS: 5000, Deadline: now.Add(time.Minute), AvailableAt: now,
 		RecoverableState: []byte(`{}`), CreatedAt: now,
 	}
-	err = store.CreateEchoRun(context.Background(), kernelecho.Record{
+	_, _, err = store.CreateEchoRunIdempotentLimited(context.Background(), "atomic-second", idempotency.Fingerprint([]byte("two")), kernelecho.Record{
 		ID: "second", AppID: "app", InputMessage: "two",
 		Status: kernelecho.StatusRunning, CreatedAt: now,
-	}, run)
+	}, run, 0)
 	if err == nil {
 		t.Fatal("duplicate Run identity unexpectedly succeeded")
 	}
@@ -942,7 +990,9 @@ func TestConcurrentBusSnapshotReadersNeverObserveMixedRevision(t *testing.T) {
 func createTestEchoRun(t *testing.T, store *sqlite.Store, appID, echoID, input string, createdAt time.Time) kernelecho.RunRecord {
 	t.Helper()
 	echo, run := echoRunRecords(appID, echoID, "run-"+appID+"-"+echoID, input, createdAt)
-	if err := store.CreateEchoRun(context.Background(), echo, run); err != nil {
+	if stored, created, err := store.CreateEchoRunIdempotentLimited(
+		context.Background(), "test-"+echo.ID, idempotency.Fingerprint([]byte(echo.InputMessage)), echo, run, 0,
+	); err != nil || !created || stored != echo.ID {
 		t.Fatalf("create Echo/Run: %v", err)
 	}
 	return run

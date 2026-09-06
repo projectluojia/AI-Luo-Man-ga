@@ -117,82 +117,11 @@ func New() *Registry {
 }
 
 func (r *Registry) RegisterTool(registration ToolRegistration) error {
-	if err := validateToolSpec(registration.Spec, registration.Handler); err != nil {
-		return err
-	}
-	compiled, err := compileInputSchema("tool."+registration.Spec.ID, registration.Spec.InputSchemaJSON)
-	if err != nil {
-		return fmt.Errorf("%w: tool %q input schema: %v", ErrInvalidSpec, registration.Spec.ID, err)
-	}
-	registration.Spec.RequiredPermissions = canonicalStrings(registration.Spec.RequiredPermissions)
-
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if _, exists := r.tools[registration.Spec.ID]; exists {
-		return fmt.Errorf("%w: tool %q", ErrDuplicateID, registration.Spec.ID)
-	}
-	r.tools[registration.Spec.ID] = registeredTool{spec: registration.Spec, handler: registration.Handler, schema: compiled}
-	observe.Debug(context.Background(), "Tool 已注册",
-		observe.Component("registry"),
-		observe.StringAttr("tool_id", registration.Spec.ID),
-		observe.StringAttr("version", registration.Spec.Version),
-		observe.StringAttr("side_effect", registration.Spec.SideEffect),
-	)
-	return nil
+	return r.RegisterBatch([]ToolRegistration{registration}, nil)
 }
 
 func (r *Registry) RegisterService(registration ServiceRegistration) error {
-	if err := validateServiceSpec(registration.Spec, len(registration.Capabilities)); err != nil {
-		return err
-	}
-	registration.Spec.ToolDependencies = canonicalStrings(registration.Spec.ToolDependencies)
-	registration.Spec.RequestedPermissions = canonicalStrings(registration.Spec.RequestedPermissions)
-	compiledSchemas := make(map[string]*jsonschema.Schema, len(registration.Capabilities))
-	for capabilityID, capability := range registration.Capabilities {
-		if err := validateCapabilitySpec(registration.Spec, capabilityID, capability.Spec, capability.Handler); err != nil {
-			return err
-		}
-		compiled, err := compileInputSchema("capability."+capabilityID, capability.Spec.InputSchemaJSON)
-		if err != nil {
-			return fmt.Errorf("%w: capability %q input schema: %v", ErrInvalidSpec, capabilityID, err)
-		}
-		compiledSchemas[capabilityID] = compiled
-	}
-
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if _, exists := r.services[registration.Spec.ID]; exists {
-		return fmt.Errorf("%w: service %q", ErrDuplicateID, registration.Spec.ID)
-	}
-	for _, toolID := range registration.Spec.ToolDependencies {
-		tool, exists := r.tools[toolID]
-		if !exists {
-			return fmt.Errorf("%w: dependency %q", ErrToolNotFound, toolID)
-		}
-		if !permissionSubset(tool.spec.RequiredPermissions, registration.Spec.RequestedPermissions) {
-			return fmt.Errorf("%w: tool %q permissions exceed service %q requested permissions", ErrInvalidSpec, toolID, registration.Spec.ID)
-		}
-	}
-	for capabilityID := range registration.Capabilities {
-		if _, exists := r.capabilities[capabilityID]; exists {
-			return fmt.Errorf("%w: capability %q", ErrDuplicateID, capabilityID)
-		}
-	}
-
-	r.services[registration.Spec.ID] = registration.Spec
-	for capabilityID, capability := range registration.Capabilities {
-		spec := capability.Spec
-		spec.RequiredPermissions = canonicalStrings(spec.RequiredPermissions)
-		r.capabilities[capabilityID] = registeredCapability{spec: spec, handler: capability.Handler, schema: compiledSchemas[capabilityID]}
-	}
-	observe.Info(context.Background(), "Service 及其 Capability 已完成原子注册",
-		observe.Component("registry"),
-		observe.StringAttr("service_id", registration.Spec.ID),
-		observe.StringAttr("version", registration.Spec.Version),
-		observe.IntAttr("tool_dependency_count", len(registration.Spec.ToolDependencies)),
-		observe.IntAttr("capability_count", len(registration.Capabilities)),
-	)
-	return nil
+	return r.RegisterBatch(nil, []ServiceRegistration{registration})
 }
 
 // RegisterBatch 在一次发布临界区内提交整批 Tool、Service 与 Capability。

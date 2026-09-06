@@ -57,12 +57,6 @@ type Source interface {
 	Revision(context.Context, string, string) (Config, error)
 }
 
-type Store interface {
-	Source
-	Ensure(context.Context, Config) (Config, bool, error)
-	CompareAndSwap(context.Context, uint64, Config) (Config, error)
-}
-
 type PolicySnapshot struct {
 	AppID               string
 	Revision            string

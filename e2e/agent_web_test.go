@@ -140,8 +140,8 @@ func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 关闭顺序（defer 逆序）：租约归还 → 关闭 agent → 取消调度 → 关闭存储。
-	// 取消必须先于关库，避免调度轮询打到已关闭的存储。
+	// 关闭顺序（defer 逆序）：取消调度 → 租约归还 → 关闭 agent → 取消上下文 → 关闭存储。
+	// 调度必须先于关库，避免活动 Run 或轮询打到已关闭的存储。
 	defer store.Close()
 	defer cancel()
 	secretPath := filepath.Join(t.TempDir(), "model-key")
@@ -240,6 +240,18 @@ func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 	if err := agent.Register(reg, orchestrator); err != nil {
 		t.Fatal(err)
 	}
+	echoEvents := access.NewEventHub()
+	runScheduler := kernelecho.NewScheduler(ctx, orchestrator, store, echoEvents, campus.AppID)
+	if _, err := runScheduler.Recover(ctx); err != nil {
+		t.Fatalf("recover durable runs: %v", err)
+	}
+	defer func() {
+		shutdownContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := runScheduler.Shutdown(shutdownContext); err != nil {
+			t.Errorf("shutdown run scheduler: %v", err)
+		}
+	}()
 	identities := identity.NewService(store)
 	if _, err := identities.CreateUser(ctx, "integration-user"); err != nil {
 		t.Fatal(err)
@@ -258,9 +270,10 @@ func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 		t.Fatal(err)
 	}
 	handler := web.NewServer(
-		ctx, orchestrator, store,
+		orchestrator, store,
 		health.Combined{store, health.ExecutorChecker{Client: agentClient, Model: "test-model"}},
-		reg, policy, campus.AppID, platformHub, web.WithWebAuthenticator(integrationWebAuthenticator{}),
+		reg, policy, campus.AppID, platformHub, runScheduler, echoEvents,
+		web.WithWebAuthenticator(integrationWebAuthenticator{}),
 	).Handler()
 	readinessRecorder := httptest.NewRecorder()
 	handler.ServeHTTP(readinessRecorder, httptest.NewRequest(http.MethodGet, "/readyz", nil))
