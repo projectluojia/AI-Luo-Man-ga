@@ -12,7 +12,6 @@ import (
 
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/capability"
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packagecontract"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/adapters/packagesource"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
@@ -98,9 +97,6 @@ func TestDeclaredCapabilityRunsThroughDispatcher(t *testing.T) {
 	}
 	if err := packagefmt.Build(ctx, sourceDir, manifest, []packagefmt.BuildSpec{{Tool: packagefmt.BuildToolGoWasm, Components: []string{"main"}}}); err != nil {
 		t.Fatalf("Build: %v", err)
-	}
-	if err := packagesource.VerifyHostedProtocol(ctx, sourceDir, manifest); err != nil {
-		t.Fatalf("VerifyHostedProtocol: %v", err)
 	}
 	artifactPath := filepath.Join(sourceDir, "main.wasm")
 	artifact, err := os.ReadFile(artifactPath)

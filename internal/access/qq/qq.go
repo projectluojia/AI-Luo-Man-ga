@@ -279,66 +279,29 @@ func (a *Adapter) handleEvent(ctx context.Context, raw map[string]any) {
 	a.forwardReplies(ctx, inbound, echoID)
 }
 
-// forwardReplies 按持久事件序号转发 root 回复和子 Agent 生命周期通知。
-// root 回复保留群聊 @，子 Agent 的创建与终态通知始终使用纯文本发送。
+// forwardReplies 按持久事件序号转发 Run 终态回复。
 func (a *Adapter) forwardReplies(ctx context.Context, inbound *access.InboundMessage, echoID string) {
 	live, unsubscribe := a.events.Subscribe(a.cfg.AppID, echoID)
 	defer unsubscribe()
-	lifecycle := newSubagentReplyLifecycle()
 	lastSequence := uint64(0)
-	process := func(event kernelecho.Event) {
+	process := func(event kernelecho.Event) bool {
 		if event.Sequence <= lastSequence {
-			return
+			return false
 		}
 		lastSequence = event.Sequence
-		switch event.Type {
-		case "subagent.created":
-			if !lifecycle.observe(event) {
-				a.logInvalidSubagentLifecycle(ctx, echoID, event)
-			}
-			a.replyPlain(ctx, inbound, "已派出子 Agent")
-		case "subagent.completed":
-			if !lifecycle.observe(event) {
-				a.logInvalidSubagentLifecycle(ctx, echoID, event)
-			}
-			var payload struct {
-				Text string `json:"text"`
-			}
-			if json.Unmarshal(event.Payload, &payload) == nil && strings.TrimSpace(payload.Text) != "" {
-				a.replyPlain(ctx, inbound, "子 Agent 已完成："+payload.Text)
-			} else {
-				a.replyPlain(ctx, inbound, "子 Agent 已完成")
-			}
-		case "subagent.failed":
-			if !lifecycle.observe(event) {
-				a.logInvalidSubagentLifecycle(ctx, echoID, event)
-			}
-			var payload struct {
-				Message string `json:"message"`
-			}
-			message := "子 Agent 执行失败"
-			if json.Unmarshal(event.Payload, &payload) == nil && strings.TrimSpace(payload.Message) != "" {
-				message = payload.Message
-			}
-			a.replyPlain(ctx, inbound, message)
-		case "subagent.cancelled":
-			if !lifecycle.observe(event) {
-				a.logInvalidSubagentLifecycle(ctx, echoID, event)
-			}
-			a.replyPlain(ctx, inbound, "子 Agent 已取消")
-		default:
-			if reply := terminalReply(event); reply != nil {
-				lifecycle.rootTerminal = true
-				a.reply(ctx, inbound, *reply)
-			}
+		if reply := terminalReply(event); reply != nil {
+			a.reply(ctx, inbound, *reply)
+			return true
 		}
+		return false
 	}
 	record, persisted, err := a.reader.GetEcho(ctx, a.cfg.AppID, echoID)
 	if err == nil {
+		done := false
 		for _, event := range persisted {
-			process(event)
+			done = process(event) || done
 		}
-		if record.Status != kernelecho.StatusRunning || lifecycle.complete() {
+		if record.Status != kernelecho.StatusRunning || done {
 			return
 		}
 	} else {
@@ -360,59 +323,11 @@ func (a *Adapter) forwardReplies(ctx context.Context, inbound *access.InboundMes
 			if !open {
 				return
 			}
-			process(event)
-			if lifecycle.complete() {
+			if process(event) {
 				return
 			}
 		}
 	}
-}
-
-type subagentReplyLifecycle struct {
-	pendingChildren   map[string]struct{}
-	terminalChildren  map[string]struct{}
-	untrackedChildren int
-	rootTerminal      bool
-}
-
-func newSubagentReplyLifecycle() *subagentReplyLifecycle {
-	return &subagentReplyLifecycle{
-		pendingChildren:  make(map[string]struct{}),
-		terminalChildren: make(map[string]struct{}),
-	}
-}
-
-func (l *subagentReplyLifecycle) observe(event kernelecho.Event) bool {
-	var payload struct {
-		RunID string `json:"run_id"`
-	}
-	if json.Unmarshal(event.Payload, &payload) != nil || strings.TrimSpace(payload.RunID) == "" {
-		if event.Type == "subagent.created" {
-			l.untrackedChildren++
-		}
-		return false
-	}
-	if event.Type == "subagent.created" {
-		if _, terminal := l.terminalChildren[payload.RunID]; !terminal {
-			l.pendingChildren[payload.RunID] = struct{}{}
-		}
-		return true
-	}
-	l.terminalChildren[payload.RunID] = struct{}{}
-	delete(l.pendingChildren, payload.RunID)
-	return true
-}
-
-func (l *subagentReplyLifecycle) complete() bool {
-	return l.rootTerminal && len(l.pendingChildren) == 0 && l.untrackedChildren == 0
-}
-
-func (a *Adapter) logInvalidSubagentLifecycle(ctx context.Context, echoID string, event kernelecho.Event) {
-	observe.Warn(ctx, "QQ 子 Agent 生命周期事件缺少有效 run_id",
-		observe.StringAttr("echo_id", echoID),
-		observe.StringAttr("event_type", event.Type),
-		observe.Int64Attr("event_sequence", int64(event.Sequence)),
-	)
 }
 
 // publicErrorCode 把重放读取错误归类为稳定日志字段，不输出原始错误正文。
@@ -423,16 +338,22 @@ func publicErrorCode(err error) string {
 	return "echo_read_failed"
 }
 
-// terminalReply 提取终态回复文本：reply.final 返回正文，run.failed 返回安全消息。
+// terminalReply 提取文本型执行结果；run.failed 返回安全消息。
 func terminalReply(event kernelecho.Event) *string {
 	switch event.Type {
-	case "reply.final":
+	case "run.completed":
+		message := "处理完成，但结果暂不支持展示"
 		var payload struct {
-			Text string `json:"text"`
+			ContentType string `json:"content_type"`
+			Data        []byte `json:"data"`
 		}
-		if json.Unmarshal(event.Payload, &payload) == nil && payload.Text != "" {
-			return &payload.Text
+		if json.Unmarshal(event.Payload, &payload) == nil && utf8.Valid(payload.Data) &&
+			(strings.HasPrefix(strings.ToLower(payload.ContentType), "text/plain") ||
+				strings.HasPrefix(strings.ToLower(payload.ContentType), "application/json")) && len(payload.Data) > 0 {
+			text := string(payload.Data)
+			return &text
 		}
+		return &message
 	case "run.failed":
 		message := "处理失败"
 		var payload struct {

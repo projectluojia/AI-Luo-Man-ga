@@ -83,7 +83,7 @@ func (s *Server) getConfig(writer http.ResponseWriter, request *http.Request) {
 	if !authorizeLocal(writer, request) {
 		return
 	}
-	access.WriteJSON(writer, http.StatusOK, s.service.Snapshot())
+	access.WriteJSON(writer, http.StatusOK, s.service.Snapshot().Public())
 }
 
 func (s *Server) updateConfig(writer http.ResponseWriter, request *http.Request) {
@@ -111,7 +111,7 @@ func (s *Server) updateConfig(writer http.ResponseWriter, request *http.Request)
 		observe.Int64Attr("config_revision", int64(snapshot.Settings.Revision)),
 		observe.BoolAttr("qq_enabled", snapshot.Settings.QQEnabled),
 	)
-	access.WriteJSON(writer, http.StatusOK, snapshot)
+	access.WriteJSON(writer, http.StatusOK, snapshot.Public())
 }
 
 func authorizeLocal(writer http.ResponseWriter, request *http.Request) bool {

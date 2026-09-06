@@ -1,6 +1,7 @@
 package appconfig_test
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -24,13 +25,13 @@ func TestNormalizeProducesCanonicalContentRevision(t *testing.T) {
 		first.EnabledCapabilities[0] != "campus.bus.routes.list" {
 		t.Fatalf("first=%#v second=%#v", first, second)
 	}
-	second.SystemPrompt = "不同配置"
+	second.ExecutorConfig = json.RawMessage(`{"strategy":"other"}`)
 	second, err = appconfig.Normalize(second)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if first.Revision == second.Revision {
-		t.Fatal("different configuration reused a revision")
+		t.Fatal("different opaque executor configuration reused a revision")
 	}
 	config = validConfig()
 	config.EnabledCapabilities = nil
@@ -47,12 +48,15 @@ func TestNormalizeProducesCanonicalContentRevision(t *testing.T) {
 func TestNormalizeRejectsUnsafeOrUnboundedConfiguration(t *testing.T) {
 	tests := []appconfig.Config{
 		func() appconfig.Config { value := validConfig(); value.AppID = "../other"; return value }(),
-		func() appconfig.Config { value := validConfig(); value.Model = "model\nsecret"; return value }(),
-		func() appconfig.Config { value := validConfig(); value.SystemPrompt = "bad\x00prompt"; return value }(),
-		func() appconfig.Config { value := validConfig(); value.SystemPrompt = " \n\t"; return value }(),
-		func() appconfig.Config { value := validConfig(); value.Timezone = "unknown/zone"; return value }(),
+		func() appconfig.Config { value := validConfig(); value.ExecutorID = "executor\nsecret"; return value }(),
+		func() appconfig.Config { value := validConfig(); value.ExecutorID = "executor/other"; return value }(),
+		func() appconfig.Config {
+			value := validConfig()
+			value.ExecutorConfig = json.RawMessage(`{`)
+			return value
+		}(),
 		func() appconfig.Config { value := validConfig(); value.MaxSteps = 65; return value }(),
-		func() appconfig.Config { value := validConfig(); value.MaxTotalTokens = 1; return value }(),
+		func() appconfig.Config { value := validConfig(); value.MaxExecutionUnits = 0; return value }(),
 		func() appconfig.Config {
 			value := validConfig()
 			value.PermissionScope = []string{"bus.read", "bus.read"}
@@ -63,21 +67,6 @@ func TestNormalizeRejectsUnsafeOrUnboundedConfiguration(t *testing.T) {
 			value.PermissionScope = []string{strings.Repeat("a", 129)}
 			return value
 		}(),
-		func() appconfig.Config {
-			value := validConfig()
-			value.ChannelPrompts = map[string]string{"Bad/Key": "提示"}
-			return value
-		}(),
-		func() appconfig.Config {
-			value := validConfig()
-			value.ChannelPrompts = map[string]string{"qq_group": " \n\t"}
-			return value
-		}(),
-		func() appconfig.Config {
-			value := validConfig()
-			value.ChannelPrompts = map[string]string{"qq_group": "bad\x00prompt"}
-			return value
-		}(),
 	}
 	for _, config := range tests {
 		if _, err := appconfig.Normalize(config); err == nil {
@@ -86,30 +75,19 @@ func TestNormalizeRejectsUnsafeOrUnboundedConfiguration(t *testing.T) {
 	}
 }
 
-func TestChannelPromptsEnterRevisionDigest(t *testing.T) {
+func TestOpaqueExecutorConfigEntersRevisionDigest(t *testing.T) {
 	config := validConfig()
-	config.ChannelPrompts = map[string]string{"qq_group": "群聊规则", "web": "网页规则"}
 	first, err := appconfig.Normalize(config)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 相同内容（map 顺序无关）必须产生相同修订。
-	config.ChannelPrompts = map[string]string{"web": "网页规则", "qq_group": "群聊规则"}
+	config.ExecutorConfig = json.RawMessage(`{"strategy":"workflow","steps":[]}`)
 	second, err := appconfig.Normalize(config)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first.Revision != second.Revision {
-		t.Fatalf("map 顺序不影响修订：%s != %s", first.Revision, second.Revision)
-	}
-	// 渠道提示变化必须改变修订（配置即契约）。
-	config.ChannelPrompts = map[string]string{"qq_group": "不同的群聊规则", "web": "网页规则"}
-	third, err := appconfig.Normalize(config)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if first.Revision == third.Revision {
-		t.Fatal("渠道提示变化未改变修订")
+	if first.Revision == second.Revision {
+		t.Fatal("opaque executor configuration change did not change revision")
 	}
 }
 
@@ -136,7 +114,7 @@ func TestVerifyRejectsMismatchedIdentityAndRevisionContent(t *testing.T) {
 	if err := appconfig.Verify(config, config.AppID, strings.Repeat("0", 64)); err == nil {
 		t.Fatal("mismatched expected revision passed verification")
 	}
-	config.Model = "tampered-model"
+	config.ExecutorID = "executor.other"
 	if err := appconfig.Verify(config, config.AppID, config.Revision); err == nil {
 		t.Fatal("tampered revision content passed verification")
 	}
@@ -156,10 +134,10 @@ func TestVerifyRejectsMismatchedIdentityAndRevisionContent(t *testing.T) {
 
 func validConfig() appconfig.Config {
 	return appconfig.Config{
-		AppID: "campus-services", Enabled: true, Model: "test-model",
-		SystemPrompt: "系统提示", Timezone: "Asia/Shanghai",
-		MaxSteps: 8, MaxCapabilityCalls: 8, MaxInputTokens: 32768, MaxOutputTokens: 8192,
-		MaxTotalTokens: 40960, MaxOutputBytes: 65536, ProviderTimeout: 30 * time.Second,
+		AppID: "campus-services", Enabled: true, ExecutorID: "executor.test",
+		ExecutorConfig: json.RawMessage(`{"strategy":"test"}`),
+		MaxSteps:       8, MaxCapabilityCalls: 8, MaxExecutionUnits: 40960,
+		MaxOutputBytes: 65536, ExecutionTimeout: 30 * time.Second,
 		EnabledCapabilities: []string{"campus.bus.routes.list"}, PermissionScope: []string{"bus.read"},
 	}
 }

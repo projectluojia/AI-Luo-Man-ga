@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/appconfig"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/executor"
 )
 
 func (s *Store) Ensure(ctx context.Context, seed appconfig.Config) (result appconfig.Config, created bool, resultErr error) {
@@ -44,8 +45,7 @@ func (s *Store) Ensure(ctx context.Context, seed appconfig.Config) (result appco
 INSERT INTO app_config_heads(app_id,revision,generation,created_at,updated_at)
 VALUES(?,?,?,?,?)`,
 		normalized.AppID, normalized.Revision, normalized.Generation,
-		now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano),
-	); err != nil {
+		now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano)); err != nil {
 		return appconfig.Config{}, false, fmt.Errorf("insert app config head: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -73,10 +73,10 @@ func (s *Store) Revision(ctx context.Context, appID, revision string) (result ap
 		return appconfig.Config{}, appconfig.ErrInvalid
 	}
 	row := s.db.QueryRowContext(ctx, `
-SELECT r.app_id,r.revision,0,r.enabled,r.model,r.system_prompt,r.channel_prompts,r.timezone,
-	   r.max_steps,r.max_capability_calls,r.max_input_tokens,r.max_output_tokens,r.max_total_tokens,
-       r.max_output_bytes,r.max_cost_microusd,r.provider_timeout_ms,
-       r.enabled_capabilities,r.permission_scope,r.created_at,r.created_at
+SELECT r.app_id,r.revision,0,r.enabled,r.executor_id,r.executor_config,
+       r.max_steps,r.max_capability_calls,r.max_execution_units,r.max_output_bytes,
+       r.max_cost_microusd,r.execution_timeout_ms,r.enabled_capabilities,r.permission_scope,
+       r.created_at,r.created_at
 FROM app_config_revisions r
 WHERE r.app_id=? AND r.revision=?`, appID, revision)
 	config, err := scanAppConfig(row)
@@ -126,8 +126,7 @@ UPDATE app_config_heads
 SET revision=?,generation=?,updated_at=?
 WHERE app_id=? AND generation=?`,
 		normalized.Revision, normalized.Generation, now.Format(time.RFC3339Nano),
-		normalized.AppID, expectedGeneration,
-	)
+		normalized.AppID, expectedGeneration)
 	if err != nil {
 		return appconfig.Config{}, fmt.Errorf("update app config head: %w", err)
 	}
@@ -147,10 +146,10 @@ WHERE app_id=? AND generation=?`,
 
 func readCurrentAppConfig(ctx context.Context, queryer rowQueryer, appID string) (appconfig.Config, error) {
 	row := queryer.QueryRowContext(ctx, `
-SELECT r.app_id,r.revision,h.generation,r.enabled,r.model,r.system_prompt,r.channel_prompts,r.timezone,
-	   r.max_steps,r.max_capability_calls,r.max_input_tokens,r.max_output_tokens,r.max_total_tokens,
-       r.max_output_bytes,r.max_cost_microusd,r.provider_timeout_ms,
-       r.enabled_capabilities,r.permission_scope,h.created_at,h.updated_at
+SELECT r.app_id,r.revision,h.generation,r.enabled,r.executor_id,r.executor_config,
+       r.max_steps,r.max_capability_calls,r.max_execution_units,r.max_output_bytes,
+       r.max_cost_microusd,r.execution_timeout_ms,r.enabled_capabilities,r.permission_scope,
+       h.created_at,h.updated_at
 FROM app_config_heads h
 JOIN app_config_revisions r ON r.app_id=h.app_id AND r.revision=h.revision
 WHERE h.app_id=?`, appID)
@@ -170,23 +169,17 @@ func insertAppConfigRevision(ctx context.Context, tx *sql.Tx, config appconfig.C
 	if err != nil {
 		return errors.Join(appconfig.ErrInvalid, err)
 	}
-	channelPrompts, err := json.Marshal(config.ChannelPrompts)
-	if err != nil {
-		return errors.Join(appconfig.ErrInvalid, err)
-	}
 	if _, err := tx.ExecContext(ctx, `
 INSERT INTO app_config_revisions(
-  app_id,revision,enabled,model,system_prompt,channel_prompts,timezone,max_steps,max_capability_calls,
-  max_input_tokens,max_output_tokens,max_total_tokens,max_output_bytes,max_cost_microusd,
-  provider_timeout_ms,enabled_capabilities,permission_scope,created_at
-) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+  app_id,revision,enabled,executor_id,executor_config,max_steps,max_capability_calls,
+  max_execution_units,max_output_bytes,max_cost_microusd,execution_timeout_ms,
+  enabled_capabilities,permission_scope,created_at
+) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(app_id,revision) DO NOTHING`,
-		config.AppID, config.Revision, config.Enabled, config.Model, config.SystemPrompt, string(channelPrompts), config.Timezone,
-		config.MaxSteps, config.MaxCapabilityCalls, config.MaxInputTokens, config.MaxOutputTokens,
-		config.MaxTotalTokens, config.MaxOutputBytes, config.MaxCostMicrousd,
-		config.ProviderTimeout.Milliseconds(), string(capabilities), string(permissions),
-		config.CreatedAt.UTC().Format(time.RFC3339Nano),
-	); err != nil {
+		config.AppID, config.Revision, config.Enabled, config.ExecutorID, string(config.ExecutorConfig),
+		config.MaxSteps, config.MaxCapabilityCalls, config.MaxExecutionUnits, config.MaxOutputBytes,
+		config.MaxCostMicrousd, config.ExecutionTimeout.Milliseconds(), string(capabilities), string(permissions),
+		config.CreatedAt.UTC().Format(time.RFC3339Nano)); err != nil {
 		return fmt.Errorf("insert app config revision: %w", err)
 	}
 	return nil
@@ -195,29 +188,27 @@ ON CONFLICT(app_id,revision) DO NOTHING`,
 func scanAppConfig(scanner rowScanner) (appconfig.Config, error) {
 	var config appconfig.Config
 	var enabled bool
-	var providerTimeoutMS int64
-	var capabilitiesJSON, permissionsJSON, channelPromptsJSON, createdAt, updatedAt string
+	var executorConfig []byte
+	var executionTimeoutMS int64
+	var capabilitiesJSON, permissionsJSON, createdAt, updatedAt string
 	if err := scanner.Scan(
-		&config.AppID, &config.Revision, &config.Generation, &enabled, &config.Model,
-		&config.SystemPrompt, &channelPromptsJSON, &config.Timezone, &config.MaxSteps, &config.MaxCapabilityCalls,
-		&config.MaxInputTokens, &config.MaxOutputTokens, &config.MaxTotalTokens,
-		&config.MaxOutputBytes, &config.MaxCostMicrousd, &providerTimeoutMS,
+		&config.AppID, &config.Revision, &config.Generation, &enabled, &config.ExecutorID,
+		&executorConfig, &config.MaxSteps, &config.MaxCapabilityCalls, &config.MaxExecutionUnits,
+		&config.MaxOutputBytes, &config.MaxCostMicrousd, &executionTimeoutMS,
 		&capabilitiesJSON, &permissionsJSON, &createdAt, &updatedAt,
 	); err != nil {
 		return appconfig.Config{}, err
 	}
 	config.Enabled = enabled
-	config.ProviderTimeout = time.Duration(providerTimeoutMS) * time.Millisecond
-	if len(capabilitiesJSON) > 65536 || len(permissionsJSON) > 65536 || len(channelPromptsJSON) > 65536 {
+	config.ExecutorConfig = append(json.RawMessage(nil), executorConfig...)
+	config.ExecutionTimeout = time.Duration(executionTimeoutMS) * time.Millisecond
+	if len(config.ExecutorConfig) > executor.MaxExecutorConfigBytes || len(capabilitiesJSON) > 65536 || len(permissionsJSON) > 65536 {
 		return appconfig.Config{}, appconfig.ErrInvalid
 	}
 	if err := json.Unmarshal([]byte(capabilitiesJSON), &config.EnabledCapabilities); err != nil {
 		return appconfig.Config{}, errors.Join(appconfig.ErrInvalid, err)
 	}
 	if err := json.Unmarshal([]byte(permissionsJSON), &config.PermissionScope); err != nil {
-		return appconfig.Config{}, errors.Join(appconfig.ErrInvalid, err)
-	}
-	if err := json.Unmarshal([]byte(channelPromptsJSON), &config.ChannelPrompts); err != nil {
 		return appconfig.Config{}, errors.Join(appconfig.ErrInvalid, err)
 	}
 	var err error

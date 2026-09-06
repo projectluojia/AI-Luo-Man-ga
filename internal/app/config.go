@@ -2,13 +2,14 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
-	"maps"
 	"os"
 	"path/filepath"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -18,12 +19,10 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access/qq"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/adapters/packagesource"
 	controlconfig "github.com/projectluojia/AI-Luo-Man-ga/internal/controlplane/config"
-	kernelecho "github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/packstore"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/promptcatalog"
-	promptservice "github.com/projectluojia/AI-Luo-Man-ga/internal/providers/prompt"
 )
 
 type config struct {
@@ -32,7 +31,8 @@ type config struct {
 	localConfigRoot     string
 	databasePath        string
 	appID               string
-	model               string
+	executorID          string
+	executorConfig      json.RawMessage
 	executorTimeout     time.Duration
 	manageExecutor      bool
 	environment         string
@@ -51,10 +51,7 @@ type config struct {
 	qqAllowedPrivateIDs []string
 	qqQuickReplies      []qq.QuickReply
 	qqPokeReplies       []string
-	promptCatalog       promptcatalog.Catalog
-	baseSystemPrompt    string
-	channelPrompts      map[string]string
-	agentRun            controlconfig.AgentRunSettings
+	execution           controlconfig.ExecutionSettings
 	orchestration       controlconfig.OrchestrationSettings
 	contextAssembly     controlconfig.ContextAssemblySettings
 	scheduler           controlconfig.SchedulerSettings
@@ -129,7 +126,8 @@ func defaultRuntimeInstallRoot() string {
 func applyLocalConfig(base config, resolved controlconfig.Resolved) (config, error) {
 	settings := resolved.Settings
 	base.appID = settings.AppID
-	base.model = settings.Model
+	base.executorID = settings.ExecutorID
+	base.executorConfig = append(json.RawMessage(nil), settings.ExecutorConfig...)
 	base.executorTimeout = time.Duration(settings.ExecutorTimeoutSeconds * float64(time.Second))
 	base.qqWSURL = settings.QQWSURL
 	base.qqEnabled = settings.QQEnabled
@@ -141,10 +139,7 @@ func applyLocalConfig(base config, resolved controlconfig.Resolved) (config, err
 		base.qqQuickReplies = append(base.qqQuickReplies, qq.QuickReply{Trigger: rule.Trigger, Reply: rule.Reply})
 	}
 	base.qqPokeReplies = slices.Clone(settings.QQPokeReplies)
-	base.promptCatalog = settings.PromptCatalog.Clone()
-	base.baseSystemPrompt = settings.BaseSystemPrompt
-	base.channelPrompts = maps.Clone(settings.ChannelPrompts)
-	base.agentRun = settings.AgentRun
+	base.execution = settings.Execution
 	base.orchestration = settings.Orchestration
 	base.contextAssembly = settings.ContextAssembly
 	base.scheduler = settings.Scheduler
@@ -160,6 +155,26 @@ func applyLocalConfig(base config, resolved controlconfig.Resolved) (config, err
 		base.qqToken = strings.TrimSpace(string(content))
 	}
 	return base, nil
+}
+
+// initialCapabilityIDs 为新 App 生成首次能力集合：已注册的内核服务能力和
+// 安装包清单声明的能力。已有 App 的集合由持久化配置保留，不在启动时扩张。
+func initialCapabilityIDs(reg *registry.Registry, records []loader.InstalledRecord) []string {
+	ids := make(map[string]struct{})
+	for _, spec := range reg.Capabilities() {
+		ids[spec.ID] = struct{}{}
+	}
+	for _, record := range records {
+		for _, spec := range record.Runtime.Capabilities {
+			ids[spec.ID] = struct{}{}
+		}
+	}
+	result := make([]string, 0, len(ids))
+	for id := range ids {
+		result = append(result, id)
+	}
+	sort.Strings(result)
+	return result
 }
 
 // configureInstalledRuntimes 发现安装目录中的 Runtime 包，按声明的运行模式
@@ -256,17 +271,6 @@ func configureInstalledRuntimes(ctx context.Context, cfg config, packageStore pa
 		observe.IntAttr("pinned_count", pinnedCount),
 	)
 	return hosts, records, nil
-}
-
-type promptProviderRenderer struct {
-	provider *promptservice.Provider
-}
-
-func (r promptProviderRenderer) RenderSystemPrompt(ctx context.Context, request kernelecho.PromptRenderRequest) (string, error) {
-	return r.provider.RenderSystemPrompt(ctx, promptservice.RenderRequest{
-		AppID: request.AppID, UserID: request.UserID, BaseSystemPrompt: request.BaseSystemPrompt,
-		Channel: request.Channel, ChannelPrompts: request.ChannelPrompts,
-	})
 }
 
 func envOr(name, fallback string) string {

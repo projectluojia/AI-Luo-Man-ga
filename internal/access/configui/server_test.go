@@ -22,15 +22,12 @@ func TestConfigAPIStoresQQSecretWithoutReturningIt(t *testing.T) {
 	}
 	defaults := controlconfig.DefaultSettings()
 	payload := controlconfig.SaveInput{
-		AppID: "test-app", Model: "test-model", ExecutorTimeoutSeconds: 30,
-		PromptCatalog:    defaults.PromptCatalog,
-		BaseSystemPrompt: "自定义基础系统提示",
-		ChannelPrompts:   map[string]string{"web": "自定义 web", "qq_group": "自定义群", "qq_private": "自定义私聊"},
-		QQEnabled:        true, QQWSURL: "ws://127.0.0.1:3001", QQWSToken: "qq-never-return-this",
+		AppID: "test-app", ExecutorID: "executor.test", ExecutorConfig: json.RawMessage(`{"strategy":"test"}`), ExecutorTimeoutSeconds: 30,
+		QQEnabled: true, QQWSURL: "ws://127.0.0.1:3001", QQWSToken: "qq-never-return-this",
 		QQBotID: "2647414417", QQAllowedGroupIDs: []string{"123456"},
 		QQQuickReplies: []controlconfig.QQQuickReply{{Trigger: "ping", Reply: "pong"}},
 		QQPokeReplies:  []string{"在呢"},
-		AgentRun:       defaults.AgentRun, Orchestration: defaults.Orchestration,
+		Execution:      defaults.Execution, Orchestration: defaults.Orchestration,
 		ContextAssembly: defaults.ContextAssembly, Scheduler: defaults.Scheduler,
 		QQConnection: defaults.QQConnection, RuntimeProcess: defaults.RuntimeProcess,
 		Governance: defaults.Governance,
@@ -46,29 +43,49 @@ func TestConfigAPIStoresQQSecretWithoutReturningIt(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
-	if strings.Contains(recorder.Body.String(), "never-return-this") {
-		t.Fatal("secret leaked in configuration response")
+	if strings.Contains(recorder.Body.String(), "never-return-this") || strings.Contains(recorder.Body.String(), `"executor_config"`) {
+		t.Fatal("protected configuration leaked in response")
 	}
 	if !strings.Contains(recorder.Body.String(), `"qq_ws_token_configured":true`) {
 		t.Fatalf("body=%s", recorder.Body.String())
 	}
-	var snapshot controlconfig.Snapshot
+	var snapshot controlconfig.PublicSnapshot
 	if err := json.Unmarshal(recorder.Body.Bytes(), &snapshot); err != nil {
 		t.Fatal(err)
 	}
 	if len(snapshot.Settings.QQQuickReplies) != 1 || snapshot.Settings.QQQuickReplies[0].Reply != "pong" ||
 		len(snapshot.Settings.QQPokeReplies) != 1 || snapshot.Settings.QQPokeReplies[0] != "在呢" ||
-		snapshot.Settings.AppID != "test-app" ||
-		snapshot.Settings.BaseSystemPrompt != "自定义基础系统提示" ||
-		snapshot.Settings.ChannelPrompts["web"] != "自定义 web" {
+		snapshot.Settings.AppID != "test-app" {
 		t.Fatalf("snapshot=%+v", snapshot.Settings)
+	}
+	resolved, ok := manager.CurrentResolved()
+	if !ok || string(resolved.Settings.ExecutorConfig) != `{"strategy":"test"}` {
+		t.Fatalf("stored executor config=%q", resolved.Settings.ExecutorConfig)
 	}
 	getRequest := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:9178/api/v1/config", nil)
 	getRequest.RemoteAddr = "127.0.0.1:43000"
 	getRecorder := httptest.NewRecorder()
 	server.Handler().ServeHTTP(getRecorder, getRequest)
-	if getRecorder.Code != http.StatusOK || !strings.Contains(getRecorder.Body.String(), `"qq_poke_replies":["在呢"]`) {
+	if getRecorder.Code != http.StatusOK || !strings.Contains(getRecorder.Body.String(), `"qq_poke_replies":["在呢"]`) || strings.Contains(getRecorder.Body.String(), `"executor_config"`) {
 		t.Fatalf("status=%d body=%s", getRecorder.Code, getRecorder.Body.String())
+	}
+	payload.Revision = snapshot.Settings.Revision
+	payload.ExecutorConfig = nil
+	payload.QQWSToken = ""
+	body, err = json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondRequest := httptest.NewRequest(http.MethodPut, "http://127.0.0.1:9178/api/v1/config", bytes.NewReader(body))
+	secondRequest.RemoteAddr = "127.0.0.1:43000"
+	secondRecorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(secondRecorder, secondRequest)
+	if secondRecorder.Code != http.StatusOK {
+		t.Fatalf("second save status=%d body=%s", secondRecorder.Code, secondRecorder.Body.String())
+	}
+	resolved, ok = manager.CurrentResolved()
+	if !ok || string(resolved.Settings.ExecutorConfig) != `{"strategy":"test"}` {
+		t.Fatalf("executor config was overwritten: %q", resolved.Settings.ExecutorConfig)
 	}
 }
 
