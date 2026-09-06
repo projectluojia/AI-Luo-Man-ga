@@ -235,7 +235,9 @@ func writeInstalledFixture(t *testing.T, root, pkgID, mode string, unknown bool)
 	}
 	var process *packagecontract.ProcessTemplate
 	if mode == loader.ModeIsolated {
-		process = &packagecontract.ProcessTemplate{Path: "runtime-artifact", Address: "127.0.0.1:50051"}
+		// 模板地址必须与 lock 中固化的 ProcessSpec 地址一致：安装器原样保留
+		// 模板地址，ValidateLock 会拒绝两者不一致的目录。
+		process = &packagecontract.ProcessTemplate{Path: "runtime-artifact", Address: "unix:" + filepath.Join(root, pkgID, "runtime.sock")}
 	}
 	installed := packagecontract.Manifest{
 		SchemaVersion: packagecontract.SchemaVersion, ID: pkgID, Version: "1.0.0",

@@ -103,8 +103,9 @@ func writeMultiComponentFixture(t *testing.T, root, version string) string {
 			ComponentID: componentID, Path: path, SHA256: hex.EncodeToString(digest[:]),
 		}
 		if componentID == "multi.adapter" {
+			// 地址必须与组件声明的 ProcessTemplate 一致：安装器原样保留模板地址。
 			artifact.Process = &packagecontract.ProcessSpec{
-				Path: path, WorkDir: directory, Address: "unix:" + filepath.Join(directory, "adapter.sock"),
+				Path: path, WorkDir: directory, Address: "127.0.0.1:50051",
 			}
 		}
 		locked = append(locked, artifact)
