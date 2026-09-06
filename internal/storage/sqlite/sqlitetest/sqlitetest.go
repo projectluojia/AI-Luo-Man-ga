@@ -12,6 +12,21 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite"
 )
 
+// NewMemoryStore 打开独立的内存态测试存储，并在测试结束时关闭它。
+func NewMemoryStore(t *testing.T) *sqlite.Store {
+	t.Helper()
+	store, err := sqlite.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("close store: %v", err)
+		}
+	})
+	return store
+}
+
 // CloseAndWait 关闭测试存储并等待文件句柄释放，随后删除临时目录：
 // 反复 GC + 重试直到目录可删（上限 30 秒），避免并行测试负载下 Windows
 // 延迟释放句柄导致 TempDir 清理失败。
