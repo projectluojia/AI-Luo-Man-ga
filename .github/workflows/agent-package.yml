@@ -6,7 +6,21 @@ name: Agent executor package
 on:
   push:
     branches: [main]
+    paths:
+      - packages/agent/**
+      - contracts/**
+      - package-manager/**
+      - go.work
+      - go.work.sum
+      - .github/workflows/agent-package.yml
   pull_request:
+    paths:
+      - packages/agent/**
+      - contracts/**
+      - package-manager/**
+      - go.work
+      - go.work.sum
+      - .github/workflows/agent-package.yml
   workflow_dispatch:
 
 permissions:
@@ -32,13 +46,20 @@ jobs:
           cache-dependency-glob: packages/agent/runtime/uv.lock
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: go.mod
+          go-version-file: package-manager/go.mod
           cache: true
+          cache-dependency-path: |
+            go.sum
+            contracts/go.sum
+            package-manager/go.sum
+            go.work.sum
       - name: 构建 Package Manager CLI
         working-directory: package-manager
-        run: go build -o ../ailuo ./cmd/ailuo-pm
+        run: |
+          go build -o "$RUNNER_TEMP/ailuo" ./cmd/ailuo-pm
       - name: 打包 Agent Executor
-        run: ./ailuo pack packages/agent "$RUNNER_TEMP/agent-package-dist"
+        run: |
+          "$RUNNER_TEMP/ailuo" pack packages/agent "$RUNNER_TEMP/agent-package-dist"
       - name: 同步 Executor 包测试环境
         run: uv sync --project packages/agent/runtime --locked
       - name: 编译 Executor 包
@@ -56,8 +77,8 @@ jobs:
           test "${#agent_tarballs[@]}" -eq 1
           agent_tgz="${agent_tarballs[0]}"
           agent_version="$(tar -xzOf "$agent_tgz" manifest.json | jq -er .version)"
-          ./ailuo install --root "$RUNNER_TEMP/agent-package-root" "$agent_tgz"
-          ./ailuo list --root "$RUNNER_TEMP/agent-package-root" | grep -q "^agent@${agent_version}"
+          "$RUNNER_TEMP/ailuo" install --root "$RUNNER_TEMP/agent-package-root" "$agent_tgz"
+          "$RUNNER_TEMP/ailuo" list --root "$RUNNER_TEMP/agent-package-root" | grep -q "^agent@${agent_version}"
       - name: 运行 Core→Executor 安装后 e2e
         shell: bash
         run: |
