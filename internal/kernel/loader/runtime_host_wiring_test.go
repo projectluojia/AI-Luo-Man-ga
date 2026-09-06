@@ -13,8 +13,11 @@ import (
 
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/capability"
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packagecontract"
+	runtimev1 "github.com/projectluojia/AI-Luo-Man-ga/gen/runtimev1"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/adapters/packagesource"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // TestRuntimeHostProductionWiring 验证外部 Runtime Host 产品接线：真实安装目录
@@ -86,11 +89,44 @@ func TestRuntimeHostProductionWiring(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// 安装一个不在项目锁中的合法 hosted 包，验证 Runtime Host 不会因安装根可见而加载它。
+	unlistedID := "runtime.unlisted"
+	unlistedDirectory := filepath.Join(root, unlistedID)
+	if err := os.Mkdir(unlistedDirectory, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	unlistedArtifactPath := filepath.Join(unlistedDirectory, "success.wasm")
+	if err := os.WriteFile(unlistedArtifactPath, artifactBytes, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	unlistedManifestValue := installed
+	unlistedManifestValue.ID = unlistedID
+	unlistedManifest, err := json.Marshal(unlistedManifestValue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(unlistedDirectory, "manifest.json"), unlistedManifest, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	unlistedManifestDigest := sha256.Sum256(unlistedManifest)
+	unlistedLock := lock
+	unlistedLock.PackageID = unlistedID
+	unlistedLock.ManifestSHA256 = hex.EncodeToString(unlistedManifestDigest[:])
+	unlistedLock.Artifacts = append([]packagecontract.LockedArtifact(nil), lock.Artifacts...)
+	unlistedLock.Artifacts[0].Path = unlistedArtifactPath
+	unlistedLockBytes, err := json.Marshal(unlistedLock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(unlistedDirectory, "lock.json"), unlistedLockBytes, 0o640); err != nil {
+		t.Fatal(err)
+	}
+
 	catalog, err := packagesource.NewCatalog(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	records, err := catalog.Discover(t.Context())
+	records, err := catalog.DiscoverLocked(t.Context(), catalogProjectLockForIDs(t, root, testPackageID))
 	if err != nil || len(records) != 1 || records[0].Runtime.ID != testRuntimeID {
 		t.Fatalf("discover records=%#v err=%v", records, err)
 	}
@@ -99,7 +135,9 @@ func TestRuntimeHostProductionWiring(t *testing.T) {
 		t.Fatal(err)
 	}
 	protocolServer, err := loader.NewRuntimeHostProtocolServer(loader.RuntimeHostServerConfig{
-		Mode: loader.ModeHosted, Backend: backend, MaxRuntimes: 1, MaxConcurrent: 1,
+		Mode: loader.ModeHosted, Backend: backend,
+		AllowedRuntimes: []loader.BackendIdentity{{ID: records[0].Runtime.ID, Version: records[0].Runtime.Version}},
+		MaxRuntimes:     1, MaxConcurrent: 1,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -136,6 +174,15 @@ func TestRuntimeHostProductionWiring(t *testing.T) {
 	// 固件是通用信封回显：原样返回 payload，不做任何业务计算。
 	if decoded["value"] != "hello" {
 		t.Fatalf("result = %v, want original payload", decoded)
+	}
+	_, err = protocolServer.Describe(context.Background(), &runtimev1.DescribeRequest{
+		Identity: &runtimev1.RuntimeIdentity{
+			RuntimeId: unlistedID + ".runtime", Version: "1.0.0",
+			ProtocolVersion: loader.RuntimeHostProtocolVersion,
+		},
+	})
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("unlisted runtime describe error=%v, want NotFound", err)
 	}
 	if err := manager.Shutdown(context.Background()); err != nil {
 		t.Fatal(err)

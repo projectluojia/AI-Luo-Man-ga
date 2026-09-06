@@ -140,7 +140,7 @@ func TestMultiComponentPackageRoutesCapabilitiesAndUpgradesGroup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	records, err := catalog.Discover(ctx)
+	records, err := discoverCatalogLocked(t, catalog, root)
 	if err != nil {
 		t.Fatalf("Discover: %v", err)
 	}

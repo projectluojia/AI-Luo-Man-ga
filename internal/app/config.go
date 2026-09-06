@@ -42,6 +42,7 @@ type config struct {
 	logFormat           string
 	logSource           bool
 	logMaxValueLength   int
+	projectRoot         string
 	runtimeInstallRoot  string
 	runtimeHostAddress  string
 	qqWSURL             string
@@ -84,13 +85,13 @@ func loadConfig() (config, error) {
 	if err != nil {
 		return config{}, err
 	}
+	projectRoot, err := filepath.Abs(envOr("AILUO_PROJECT_ROOT", "."))
+	if err != nil || filepath.Clean(projectRoot) != projectRoot {
+		return config{}, fmt.Errorf("configuration error: AILUO_PROJECT_ROOT must be a clean path")
+	}
 	runtimeInstallRoot := os.Getenv("AILUO_RUNTIME_INSTALL_ROOT")
 	if runtimeInstallRoot == "" {
-		if def := defaultRuntimeInstallRoot(); def != "" {
-			if _, err := os.Stat(def); err == nil {
-				runtimeInstallRoot = def
-			}
-		}
+		runtimeInstallRoot = defaultRuntimeInstallRoot()
 	}
 	result := config{
 		httpAddress:        envOr("AILUO_HTTP_ADDRESS", "127.0.0.1:8080"),
@@ -103,6 +104,7 @@ func loadConfig() (config, error) {
 		logFormat:          envOr("AILUO_LOG_FORMAT", "console"),
 		logSource:          logSource,
 		logMaxValueLength:  logMaxValueLength,
+		projectRoot:        projectRoot,
 		runtimeInstallRoot: runtimeInstallRoot,
 		runtimeHostAddress: os.Getenv("AILUO_RUNTIME_HOST_ADDRESS"),
 	}
@@ -189,14 +191,18 @@ func initialCapabilityIDs(reg *registry.Registry, records []loader.InstalledReco
 // 选择宿主。Loader 只接收已校验的安装记录和通用 Host。宿主函数按清单提供：
 // ailuo.store 通用存储函数绑定到各包声明的 namespace，App 隔离在宿主侧强制。
 func configureInstalledRuntimes(ctx context.Context, cfg config, packageStore packstore.Store) (hosts []loader.Host, records []loader.InstalledRecord, err error) {
-	if cfg.runtimeInstallRoot == "" {
-		return nil, nil, nil
+	if cfg.runtimeInstallRoot == "" || cfg.projectRoot == "" {
+		return nil, nil, fmt.Errorf("configuration error: project root and runtime install root are required")
+	}
+	projectLock, err := packagesource.ReadProjectLock(ctx, cfg.projectRoot)
+	if err != nil {
+		return nil, nil, err
 	}
 	catalog, err := packagesource.NewCatalog(cfg.runtimeInstallRoot)
 	if err != nil {
 		return nil, nil, fmt.Errorf("create installed runtime catalog: %w", err)
 	}
-	records, err = catalog.Discover(ctx)
+	records, err = catalog.DiscoverLocked(ctx, projectLock)
 	if err != nil {
 		return nil, nil, fmt.Errorf("discover installed runtimes: %w", err)
 	}

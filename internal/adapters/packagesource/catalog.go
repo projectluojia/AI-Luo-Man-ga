@@ -15,6 +15,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/capability"
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packagecontract"
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packageio"
+	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/projectcontract"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
 )
 
@@ -38,6 +39,29 @@ type Catalog struct {
 	root string
 }
 
+// ReadProjectLock 读取并校验项目级 ailuo.lock，同时用 ailuo.toml 的文件摘要
+// 拒绝过期锁。项目清单的 TOML 语义由 package-manager 解析；Core 只消费已经
+// 生成的锁和其完整性摘要。
+func ReadProjectLock(ctx context.Context, projectRoot string) (projectcontract.Lock, error) {
+	if projectRoot == "" || !filepath.IsAbs(projectRoot) || filepath.Clean(projectRoot) != projectRoot {
+		return projectcontract.Lock{}, ErrInvalidCatalog
+	}
+	manifestSHA, err := packageio.HashFile(ctx, filepath.Join(projectRoot, "ailuo.toml"), packagecontract.MaxManifestBytes)
+	if err != nil {
+		return projectcontract.Lock{}, errors.Join(ErrInvalidCatalog, err)
+	}
+	lockBytes, err := packageio.ReadFileLimited(filepath.Join(projectRoot, "ailuo.lock"), projectcontract.MaxLockBytes)
+	if err != nil {
+		return projectcontract.Lock{}, errors.Join(ErrInvalidCatalog, err)
+	}
+	var lock projectcontract.Lock
+	if err := packagecontract.DecodeStrictJSON(lockBytes, &lock); err != nil ||
+		projectcontract.ValidateLockShape(lock) != nil || lock.ProjectManifestSHA256 != manifestSHA {
+		return projectcontract.Lock{}, ErrInvalidCatalog
+	}
+	return lock, nil
+}
+
 type installedRecord struct {
 	record       loader.InstalledRecord
 	artifactPath string
@@ -51,8 +75,14 @@ func NewCatalog(root string) (*Catalog, error) {
 	return &Catalog{root: root}, nil
 }
 
-func (c *Catalog) Discover(ctx context.Context) ([]loader.InstalledRecord, error) {
-	if c == nil || c.root == "" {
+// DiscoverLocked 按项目锁定结果读取运行时。未出现在 projectLock 中的安装包
+// 永远不会进入 Core Registry；每个锁定包的版本、manifest 摘要、安装 lock 摘要
+// 及其依赖闭包都在装载前重新验证。
+func (c *Catalog) DiscoverLocked(ctx context.Context, projectLock projectcontract.Lock) ([]loader.InstalledRecord, error) {
+	if c == nil || c.root == "" || projectcontract.ValidateLockShape(projectLock) != nil {
+		return nil, ErrInvalidCatalog
+	}
+	if len(projectLock.Packages) > loader.MaxRegisteredRuntimes {
 		return nil, ErrInvalidCatalog
 	}
 	if err := validateSecureDirectory(c.root); err != nil {
@@ -61,38 +91,62 @@ func (c *Catalog) Discover(ctx context.Context) ([]loader.InstalledRecord, error
 	if err := packageio.RecoverInstallRoot(ctx, c.root); err != nil {
 		return nil, errors.Join(ErrInvalidCatalog, err)
 	}
-	entries, err := os.ReadDir(c.root)
-	if err != nil {
-		return nil, errors.Join(ErrInvalidCatalog, err)
+	lockedIDs := make(map[string]projectcontract.LockedPackage, len(projectLock.Packages))
+	for _, locked := range projectLock.Packages {
+		if _, duplicate := lockedIDs[locked.ID]; duplicate {
+			return nil, ErrInvalidCatalog
+		}
+		lockedIDs[locked.ID] = locked
 	}
-	if len(entries) > loader.MaxRegisteredRuntimes {
-		return nil, ErrInvalidCatalog
+	ids := make([]string, 0, len(lockedIDs))
+	for id := range lockedIDs {
+		ids = append(ids, id)
 	}
-	records := make([]loader.InstalledRecord, 0, len(entries))
-	for _, entry := range entries {
+	sort.Strings(ids)
+	records := make([]loader.InstalledRecord, 0, len(ids))
+	for _, id := range ids {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		if packageio.IsTransientInstallDirectory(entry.Name()) {
-			if !entry.IsDir() {
+		locked := lockedIDs[id]
+		directory := filepath.Join(c.root, id)
+		if err := validateSecureDirectory(directory); err != nil {
+			return nil, errors.Join(ErrInvalidCatalog, err)
+		}
+		installed, err := packageio.ReadInstalled(ctx, directory)
+		if err != nil {
+			return nil, errors.Join(ErrInvalidCatalog, err)
+		}
+		if installed.Manifest.ID != id || installed.Manifest.Version != locked.Version {
+			return nil, ErrInvalidCatalog
+		}
+		manifestSHA, err := packageio.HashFile(ctx, filepath.Join(directory, installManifestName), packagecontract.MaxManifestBytes)
+		if err != nil || manifestSHA != locked.ManifestSHA256 {
+			return nil, ErrInvalidCatalog
+		}
+		lockSHA, err := packageio.CanonicalLockDigest(ctx, directory, installed.Lock)
+		if err != nil || lockSHA != locked.LockSHA256 {
+			return nil, ErrInvalidCatalog
+		}
+		for _, dependency := range installed.Manifest.Dependencies {
+			dependencyPackage, ok := lockedIDs[dependency.ID]
+			if !ok {
 				return nil, ErrInvalidCatalog
 			}
-			continue
-		}
-		if strings.HasPrefix(entry.Name(), ".") {
-			return nil, ErrInvalidCatalog
-		}
-		directory := filepath.Join(c.root, entry.Name())
-		info, err := os.Lstat(directory)
-		if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 ||
-			groupOrWorldWritable(info) || !ownerMatchesProcess(directory, info) {
-			return nil, ErrInvalidCatalog
+			version, err := packagecontract.ParseVersion(dependencyPackage.Version)
+			if err != nil {
+				return nil, ErrInvalidCatalog
+			}
+			constraint, err := packagecontract.ParseConstraint(dependency.Constraint)
+			if err != nil || !constraint.Matches(version) {
+				return nil, ErrInvalidCatalog
+			}
 		}
 		packageRecords, err := c.readPackage(ctx, directory)
 		if err != nil {
 			return nil, err
 		}
-		if len(packageRecords) == 0 || entry.Name() != packageRecords[0].record.PackageID {
+		if len(packageRecords) == 0 || packageRecords[0].record.PackageID != id {
 			return nil, ErrInvalidCatalog
 		}
 		for _, record := range packageRecords {
