@@ -76,3 +76,53 @@ func TestParseProjectPathUsesPackagePathRules(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestParseProjectRejectsSymlinkEscapingProject(t *testing.T) {
+	projectDir := t.TempDir()
+	outsideDir := t.TempDir()
+	link := filepath.Join(projectDir, "linked")
+	if err := os.Symlink(outsideDir, link); err != nil {
+		t.Skipf("当前平台不允许创建目录符号链接: %v", err)
+	}
+	path := filepath.Join(projectDir, ProjectFileName)
+	if err := os.WriteFile(path, []byte(`
+[project]
+id = "ailuo"
+
+[dependencies."demo.pkg"]
+version = "1.0.0"
+path = "linked"
+`), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ParseProject(path); !errors.Is(err, ErrSourceInvalid) {
+		t.Fatalf("ParseProject(symlink escape) = %v, want ErrSourceInvalid", err)
+	}
+}
+
+func TestResolveLocalDependencyPathAcceptsSiblingWithinProject(t *testing.T) {
+	projectDir := t.TempDir()
+	baseDir := filepath.Join(projectDir, "packages", "app")
+	targetDir := filepath.Join(projectDir, "packages", "dep")
+	if err := os.MkdirAll(baseDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(targetDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(baseDir, "linked")
+	if err := os.Symlink(targetDir, link); err != nil {
+		t.Skipf("当前平台不允许创建目录符号链接: %v", err)
+	}
+	resolved, err := ResolveLocalDependencyPath(projectDir, baseDir, "linked")
+	if err != nil {
+		t.Fatalf("ResolveLocalDependencyPath(in-project sibling symlink) = %v", err)
+	}
+	expected, err := filepath.EvalSymlinks(targetDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved != expected {
+		t.Fatalf("resolved = %q, want %q", resolved, expected)
+	}
+}
