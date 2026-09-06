@@ -18,7 +18,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packageio"
 )
 
-// InstalledRecord 是安装操作返回的已安装包记录；目录读取由 contracts 的
+// InstalledRecord 是安装操作返回的已安装包记录；目录读取由公共契约层的
 // packageio 负责。
 type InstalledRecord = packageio.InstalledRecord
 
@@ -26,7 +26,7 @@ type InstalledRecord = packageio.InstalledRecord
 // 项目解析器用它读取远端 tarball 的依赖闭包；最终安装仍必须再次经过 Install
 // 的完整原子发布路径。
 func Inspect(ctx context.Context, sourcePath string) (packagecontract.Manifest, []byte, error) {
-	sourceDir, cleanup, err := unpackSource(sourcePath)
+	sourceDir, cleanup, packaged, err := unpackSource(sourcePath)
 	if err != nil {
 		return packagecontract.Manifest{}, nil, err
 	}
@@ -35,6 +35,9 @@ func Inspect(ctx context.Context, sourcePath string) (packagecontract.Manifest, 
 	}
 	source, err := readManifest(sourceDir)
 	if err != nil {
+		return packagecontract.Manifest{}, nil, err
+	}
+	if err := validatePackagedSource(ctx, sourceDir, source, packaged); err != nil {
 		return packagecontract.Manifest{}, nil, err
 	}
 	if _, err := readSourceArtifacts(ctx, sourceDir, source.Manifest); err != nil {
@@ -55,7 +58,7 @@ func Install(ctx context.Context, root, sourcePath string) (InstalledRecord, err
 	if err != nil {
 		return InstalledRecord{}, err
 	}
-	sourceDir, cleanup, err := unpackSource(sourcePath)
+	sourceDir, cleanup, packaged, err := unpackSource(sourcePath)
 	if err != nil {
 		return InstalledRecord{}, err
 	}
@@ -64,6 +67,9 @@ func Install(ctx context.Context, root, sourcePath string) (InstalledRecord, err
 	}
 	source, err := readManifest(sourceDir)
 	if err != nil {
+		return InstalledRecord{}, err
+	}
+	if err := validatePackagedSource(ctx, sourceDir, source, packaged); err != nil {
 		return InstalledRecord{}, err
 	}
 	artifacts, err := readSourceArtifacts(ctx, sourceDir, source.Manifest)
@@ -284,8 +290,8 @@ func resolveProcessPath(artifactRoot, relative string) (string, error) {
 	return path, nil
 }
 
-// Upgrade 要求包已安装且源目录版本号不同，然后安装。
-func Upgrade(ctx context.Context, root, id, sourceDir string) (InstalledRecord, error) {
+// Upgrade 要求包已安装且源包版本号不同，然后安装。
+func Upgrade(ctx context.Context, root, id, sourcePath string) (InstalledRecord, error) {
 	if root == "" || !capability.IsStableID(id) {
 		return InstalledRecord{}, fmt.Errorf("包 %q 标识非法", id)
 	}
@@ -299,6 +305,13 @@ func Upgrade(ctx context.Context, root, id, sourceDir string) (InstalledRecord, 
 	existing, err := packageio.ReadInstalled(ctx, filepath.Join(absoluteRoot, id))
 	if err != nil {
 		return InstalledRecord{}, fmt.Errorf("包 %q 未安装", id)
+	}
+	sourceDir, cleanup, _, err := unpackSource(sourcePath)
+	if err != nil {
+		return InstalledRecord{}, err
+	}
+	if cleanup != nil {
+		defer cleanup()
 	}
 	source, err := readManifest(sourceDir)
 	if err != nil {
@@ -441,26 +454,64 @@ func sameInstalledPackage(ctx context.Context, existing InstalledRecord, manifes
 }
 
 // unpackSource 解析安装源：目录直接使用；.tgz 发布物严格解压到临时目录。
-func unpackSource(source string) (string, func(), error) {
+func unpackSource(source string) (string, func(), bool, error) {
 	info, err := os.Stat(source)
 	if err != nil {
-		return "", nil, err
+		return "", nil, false, err
 	}
 	if info.IsDir() {
-		return source, nil, nil
+		absolute, err := filepath.Abs(source)
+		if err != nil {
+			return "", nil, false, err
+		}
+		return absolute, nil, false, nil
 	}
 	if !strings.HasSuffix(strings.ToLower(source), ".tgz") {
-		return "", nil, fmt.Errorf("安装源必须是包目录或 .tgz 发布物")
+		return "", nil, false, fmt.Errorf("安装源必须是包目录或 .tgz 发布物")
 	}
 	temp, err := os.MkdirTemp("", "ailuo-unpack-")
 	if err != nil {
-		return "", nil, err
+		return "", nil, false, err
 	}
 	if err := unpackTarball(source, temp); err != nil {
 		_ = os.RemoveAll(temp)
-		return "", nil, err
+		return "", nil, false, err
 	}
-	return temp, func() { _ = os.RemoveAll(temp) }, nil
+	return temp, func() { _ = os.RemoveAll(temp) }, true, nil
+}
+
+func validatePackagedSource(ctx context.Context, sourceDir string, source manifestFile, packaged bool) error {
+	lockPath := filepath.Join(sourceDir, "lock.json")
+	if _, err := os.Stat(lockPath); errors.Is(err, os.ErrNotExist) {
+		if packaged {
+			return packagecontract.ErrInvalidFormat
+		}
+		return nil
+	} else if err != nil {
+		return err
+	}
+	lockBytes, err := packageio.ReadFileLimited(lockPath, packagecontract.MaxLockBytes)
+	if err != nil {
+		return err
+	}
+	var lock packagecontract.Lock
+	if err := packagecontract.DecodeStrictJSON(lockBytes, &lock); err != nil {
+		return err
+	}
+	manifestDigest := sha256.Sum256(source.manifestBytes)
+	if lock.ManifestSHA256 != hex.EncodeToString(manifestDigest[:]) {
+		return packagecontract.ErrInvalidFormat
+	}
+	for index := range lock.Artifacts {
+		if !packagecontract.IsPackagePath(lock.Artifacts[index].Path) || lock.Artifacts[index].Path == "." {
+			return packagecontract.ErrInvalidFormat
+		}
+		lock.Artifacts[index].Path = filepath.Join(sourceDir, lock.Artifacts[index].Path)
+	}
+	if err := validatePackagedLock(lock, source.Manifest); err != nil {
+		return err
+	}
+	return packageio.VerifyInstalledArtifacts(ctx, sourceDir, lock.Artifacts)
 }
 
 // resolveDependencies 检查每个依赖在安装根内存在已安装包且版本满足约束。

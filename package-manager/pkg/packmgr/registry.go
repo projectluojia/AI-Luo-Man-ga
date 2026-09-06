@@ -3,8 +3,6 @@ package packmgr
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,7 +15,6 @@ import (
 	"time"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packagecontract"
-	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packageio"
 )
 
 // 以 GitHub Releases 作为包分发后端（REST，仅标准库）：发布走 tag+Release+
@@ -94,7 +91,7 @@ func (c *GitHubClient) PublishTarball(ctx context.Context, owner, repo, tarballP
 // validateTarball 校验发布物自身的清单、锁和工件，不把部署依赖当作发布前提。
 // 依赖是否已安装属于目标 Deployment 的 Install 阶段，不应阻塞作者发布。
 func validateTarball(ctx context.Context, tarballPath string) (packagecontract.Manifest, error) {
-	sourceDir, cleanup, err := unpackSource(tarballPath)
+	sourceDir, cleanup, _, err := unpackSource(tarballPath)
 	if err != nil {
 		return packagecontract.Manifest{}, err
 	}
@@ -108,28 +105,7 @@ func validateTarball(ctx context.Context, tarballPath string) (packagecontract.M
 	if _, err := readSourceArtifacts(ctx, sourceDir, source.Manifest); err != nil {
 		return packagecontract.Manifest{}, err
 	}
-	lockBytes, err := packageio.ReadFileLimited(filepath.Join(sourceDir, "lock.json"), packagecontract.MaxLockBytes)
-	if err != nil {
-		return packagecontract.Manifest{}, err
-	}
-	var lock packagecontract.Lock
-	if err := packagecontract.DecodeStrictJSON(lockBytes, &lock); err != nil {
-		return packagecontract.Manifest{}, err
-	}
-	manifestDigest := sha256.Sum256(source.manifestBytes)
-	if lock.ManifestSHA256 != hex.EncodeToString(manifestDigest[:]) {
-		return packagecontract.Manifest{}, packagecontract.ErrInvalidFormat
-	}
-	for index := range lock.Artifacts {
-		if !packagecontract.IsPackagePath(lock.Artifacts[index].Path) || lock.Artifacts[index].Path == "." {
-			return packagecontract.Manifest{}, packagecontract.ErrInvalidFormat
-		}
-		lock.Artifacts[index].Path = filepath.Join(sourceDir, lock.Artifacts[index].Path)
-	}
-	if err := validatePackagedLock(lock, source.Manifest); err != nil {
-		return packagecontract.Manifest{}, err
-	}
-	if err := packageio.VerifyInstalledArtifacts(ctx, sourceDir, lock.Artifacts); err != nil {
+	if err := validatePackagedSource(ctx, sourceDir, source, true); err != nil {
 		return packagecontract.Manifest{}, err
 	}
 	return source.Manifest, nil
@@ -374,7 +350,7 @@ func InstallFromRelease(ctx context.Context, root string, client *GitHubClient, 
 	if err := client.DownloadRelease(ctx, assetURL, tarball); err != nil {
 		return InstalledRecord{}, err
 	}
-	sourceDir, cleanup, err := unpackSource(tarball)
+	sourceDir, cleanup, _, err := unpackSource(tarball)
 	if err != nil {
 		return InstalledRecord{}, err
 	}
@@ -391,7 +367,7 @@ func InstallFromRelease(ctx context.Context, root string, client *GitHubClient, 
 	if err != nil || packagecontract.CompareVersions(resolved, manifestVersion) != 0 {
 		return InstalledRecord{}, fmt.Errorf("发布包版本 %s 与解析版本 %s 不一致", source.Manifest.Version, version)
 	}
-	record, err := Install(ctx, root, sourceDir)
+	record, err := Install(ctx, root, tarball)
 	if err != nil {
 		return InstalledRecord{}, err
 	}

@@ -350,6 +350,26 @@ func TestUpgradeAndUninstall(t *testing.T) {
 	}
 }
 
+func TestInstallAcceptsRelativeSourceDirectory(t *testing.T) {
+	source, err := os.MkdirTemp(".", ".test-relative-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(source) })
+	source = filepath.Join(source, "pkg")
+	if err := os.MkdirAll(source, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	writeSourcePackage(t, source, "demo.relative", "1.0.0", packagecontract.ModeHosted, "app.wasm", nil)
+	relative, err := filepath.Rel(".", source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := packmgr.Install(context.Background(), t.TempDir(), relative); err != nil {
+		t.Fatalf("Install relative source: %v", err)
+	}
+}
+
 // 工件按 basename 平铺，两个组件的 entrypoint 同名会互相覆盖并让 lock 的两条
 // 记录指向同一个文件，必须在读源阶段拒绝。
 func TestInstallRejectsEntrypointBasenameCollision(t *testing.T) {
