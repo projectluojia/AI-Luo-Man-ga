@@ -2,7 +2,7 @@
 //
 // guest 源码是本包 testdata 下的真实 Go 文件（testdata/guest/main.go），读入后
 // 由 packagefmt go-wasm 构建器在测试时现场编译——仓库不保存
-// 任何测试用 wasm 包工件。guest 实现校园三工具（站点/线路/行程）并通过通用
+// 任何测试用 wasm 包工件。guest 实现校园三种能力（站点/线路/行程）并通过通用
 // ailuo.store 宿主函数读取宿主存储，与生产形态一致：业务逻辑在 guest，状态
 // 经 packstore 端口留在宿主。数据由测试经 packstore.Store 播种，App 隔离在
 // 宿主侧强制。
@@ -49,13 +49,13 @@ func RegisterHosted(t testing.TB, target *registry.Registry, store packstore.Sto
 	artifactDigest := hex.EncodeToString(digest[:])
 
 	storage := &packagecontract.Storage{
-		Namespace: campus.StorageNamespace, SchemaVersion: 1,
-		Sensitivity: packagecontract.SensitivityPublic, Retention: packagecontract.RetentionPermanent,
+		Namespace: campus.StorageNamespace,
 	}
 	manifest := loader.Manifest{
-		ID: campus.ServiceID, Version: campus.PackageVersion, Mode: loader.ModeHosted,
-		Role: loader.RoleCapability, LockedDigest: artifactDigest, Pin: true,
-		Storage: storage,
+		ID: campus.PackageID, PackageID: campus.PackageID, Version: campus.PackageVersion, Mode: loader.ModeHosted,
+		Role: loader.RoleProvider, LockedDigest: artifactDigest, Pin: true,
+		Storage:      storage,
+		Capabilities: campus.Capabilities(),
 		HostFunctions: []packagecontract.HostedFunctionDecl{
 			{Module: packstore.StoreModule, Name: packstore.OpList, Purpose: "列出包命名空间内的集合文档并携带快照元数据"},
 		},
@@ -77,11 +77,7 @@ func RegisterHosted(t testing.TB, target *registry.Registry, store packstore.Sto
 	}
 	record := loader.InstalledRecord{
 		Runtime:   manifest,
-		PackageID: campus.ServiceID, ComponentID: campus.BusComponentID,
-		Tools:   campus.ToolSpecs(),
-		Service: campus.ServiceSpec(),
-
-		Capabilities: campus.CapabilitySpecs(),
+		PackageID: campus.PackageID, ComponentID: campus.BusComponentID,
 	}
 
 	manager, err := loader.New(host)
@@ -131,17 +127,17 @@ func compileGuest() ([]byte, error) {
 		return nil, err
 	}
 	manifest := packagecontract.Manifest{
-		SchemaVersion: packagecontract.SchemaVersion, ID: campus.ServiceID, Version: campus.PackageVersion,
+		SchemaVersion: packagecontract.SchemaVersion, ID: campus.PackageID, Version: campus.PackageVersion,
 		Storage: &packagecontract.Storage{
-			Namespace: campus.StorageNamespace, SchemaVersion: 1,
-			Sensitivity: packagecontract.SensitivityPublic, Retention: packagecontract.RetentionPermanent,
+			Namespace: campus.StorageNamespace,
 		},
 		Components: []packagecontract.Component{{
-			ID: campus.BusComponentID, Mode: packagecontract.ModeHosted, Entrypoint: guestEntrypointName,
+			ID: campus.BusComponentID, Mode: packagecontract.ModeHosted, Role: packagecontract.RoleProvider, Entrypoint: guestEntrypointName,
 			Exports: []string{
 				campus.BusStopSearchCapabilityID, campus.BusRouteListCapabilityID, campus.BusJourneySearchCapabilityID,
 			},
 		}},
+		Capabilities: campus.Capabilities(),
 	}
 	if err := packagefmt.Build(context.Background(), sourceDir, manifest, []packagefmt.BuildSpec{{Tool: packagefmt.BuildToolGoWasm}}); err != nil {
 		return nil, fmt.Errorf("build guest wasm: %w", err)

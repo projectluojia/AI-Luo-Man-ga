@@ -1,13 +1,11 @@
 package config
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/promptcatalog"
 )
@@ -60,57 +58,14 @@ func TestManagerStartsInSetupModeAndPersistsQQSecretPrivately(t *testing.T) {
 	}
 }
 
-func TestManagerMigratesLegacyProviderAndProcessFields(t *testing.T) {
+func TestManagerRejectsLegacyProviderAndProcessFields(t *testing.T) {
 	root := t.TempDir()
-	settings, err := normalize(validInput())
-	if err != nil {
+	legacy := []byte(`{"app_id":"test-app","agent_process":{},"runtime_process":{}}`)
+	if err := os.WriteFile(filepath.Join(root, "ailuo-settings.json"), legacy, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	settings.Revision = 1
-	settings.UpdatedAt = time.Now().UTC()
-	encoded, err := json.Marshal(settings)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var legacy map[string]json.RawMessage
-	if err := json.Unmarshal(encoded, &legacy); err != nil {
-		t.Fatal(err)
-	}
-	process, err := json.Marshal(settings.RuntimeProcess)
-	if err != nil {
-		t.Fatal(err)
-	}
-	delete(legacy, "runtime_process")
-	legacy["agent_process"] = process
-	for key, value := range map[string]any{
-		"model_base_url":                  "http://127.0.0.1:8081/v1",
-		"model_request_timeout_seconds":   30,
-		"model_readiness_timeout_seconds": 3,
-		"model_max_retries":               2,
-		"model_retry_base_seconds":        0.25,
-		"model_retry_max_seconds":         2,
-		"model_requests_per_minute":       60,
-		"model_max_concurrency":           4,
-	} {
-		legacy[key], err = json.Marshal(value)
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
-	legacyBytes, err := json.Marshal(legacy)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(root, "ailuo-settings.json"), legacyBytes, 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	manager, err := NewService(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := manager.Snapshot().Settings.RuntimeProcess; got != settings.RuntimeProcess {
-		t.Fatalf("migrated runtime process=%+v want=%+v", got, settings.RuntimeProcess)
+	if _, err := NewService(root); err == nil {
+		t.Fatal("legacy provider/process fields were accepted")
 	}
 }
 
@@ -259,7 +214,7 @@ func TestManagerPersistsRuntimeSettings(t *testing.T) {
 	}
 	input := validInput()
 	input.AgentRun = AgentRunSettings{
-		Timezone: "Asia/Tokyo", MaxSteps: 12, MaxToolCalls: 16, MaxInputTokens: 20000,
+		Timezone: "Asia/Tokyo", MaxSteps: 12, MaxCapabilityCalls: 16, MaxInputTokens: 20000,
 		MaxOutputTokens: 6000, MaxTotalTokens: 26000, MaxOutputBytes: 32768, MaxChildRuns: 3,
 	}
 	input.Orchestration = OrchestrationSettings{RunTimeoutSeconds: 120, MaxRunAttempts: 4, QueueCapacity: 256, MaxCallDepth: 20}

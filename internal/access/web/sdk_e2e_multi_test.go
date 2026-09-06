@@ -32,10 +32,10 @@ func assertJourneysResult(t *testing.T, output []byte) {
 // TestGeneratedPythonSDKInvokesRealCapability 端到端：生成的 Python SDK 经真实
 // HTTP 端点调用真实 hosted campus capability（与 Go 版本同装配，验证运行时行为）。
 func TestGeneratedPythonSDKInvokesRealCapability(t *testing.T) {
-	testServer, extensions := newCampusE2E(t)
+	testServer, capabilitiesJSON := newCampusE2E(t)
 	defer testServer.Close()
 
-	files, err := sdkgen.Generate(extensions, sdkgen.Options{Language: sdkgen.LanguagePython, PackageID: campus.ServiceID})
+	files, err := sdkgen.Generate(capabilitiesJSON, sdkgen.Options{Language: sdkgen.LanguagePython, PackageID: campus.PackageID})
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
@@ -85,10 +85,10 @@ func TestGeneratedTypeScriptSDKInvokesRealCapability(t *testing.T) {
 	if _, err := exec.LookPath("npx"); err != nil {
 		t.Skip("npx 不可用，跳过 TS 端到端")
 	}
-	testServer, extensions := newCampusE2E(t)
+	testServer, capabilitiesJSON := newCampusE2E(t)
 	defer testServer.Close()
 
-	files, err := sdkgen.Generate(extensions, sdkgen.Options{Language: sdkgen.LanguageTypeScript, PackageID: campus.ServiceID})
+	files, err := sdkgen.Generate(capabilitiesJSON, sdkgen.Options{Language: sdkgen.LanguageTypeScript, PackageID: campus.PackageID})
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}

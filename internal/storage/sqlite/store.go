@@ -15,6 +15,8 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
 )
 
+const migrationTimeout = 60 * time.Second
+
 type Store struct {
 	db *sql.DB
 	// txMu 按事务生命周期串行化全部写事务：modernc/sqlite 单连接并发事务会破坏
@@ -68,7 +70,7 @@ func Open(path string) (*Store, error) {
 	}
 	db.SetMaxOpenConns(1)
 	store := &Store{db: db}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), migrationTimeout)
 	defer cancel()
 	if err := store.migrate(ctx); err != nil {
 		return nil, errors.Join(err, db.Close())

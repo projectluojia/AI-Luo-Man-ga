@@ -59,12 +59,12 @@ type Config struct {
 	AppConfigSource appconfig.Source
 	Context         contextasm.HistorySource
 	ContextBudget   contextasm.Budget
-	// Prompts 是由 L3 prompt Service 提供的内核系统端口，负责渲染基础提示、渠道
+	// Prompts 是由 L3 prompt Provider 提供的内核系统端口，负责渲染基础提示、渠道
 	// 提示与用户个性化片段。
 	Prompts PromptRenderer
 }
 
-// PromptRenderRequest 是内核向 L3 提示词 Service 投影的受治理输入。
+// PromptRenderRequest 是内核向 L3 提示词 Provider 投影的受治理输入。
 type PromptRenderRequest struct {
 	AppID            string
 	UserID           string
@@ -73,8 +73,8 @@ type PromptRenderRequest struct {
 	ChannelPrompts   map[string]string
 }
 
-// PromptRenderer 是提示词渲染系统端口。实现由 L3 prompt Service 提供，内核不依赖
-// 具体 Service 包，也不把渲染入口暴露为模型可调用的 Capability。
+// PromptRenderer 是提示词渲染系统端口。实现由 L3 prompt Provider 提供，内核不依赖
+// 具体业务包，也不把渲染入口暴露为模型可调用的 Capability。
 type PromptRenderer interface {
 	RenderSystemPrompt(context.Context, PromptRenderRequest) (string, error)
 }
@@ -182,14 +182,14 @@ func runMatchesAppConfig(run RunRecord, config appconfig.Config) bool {
 		return false
 	}
 	if run.ParentRunID == "" {
-		return run.MaxSteps == config.MaxSteps && run.MaxToolCalls == config.MaxToolCalls &&
+		return run.MaxSteps == config.MaxSteps && run.MaxCapabilityCalls == config.MaxCapabilityCalls &&
 			run.MaxInputTokens == config.MaxInputTokens && run.MaxOutputTokens == config.MaxOutputTokens &&
 			run.MaxTotalTokens == config.MaxTotalTokens && run.MaxOutputBytes == config.MaxOutputBytes &&
 			run.MaxCostMicrousd == config.MaxCostMicrousd &&
 			run.ProviderTimeoutMS == uint32(config.ProviderTimeout.Milliseconds())
 	}
 	return run.MaxSteps > 0 && run.MaxSteps <= config.MaxSteps &&
-		run.MaxToolCalls > 0 && run.MaxToolCalls <= config.MaxToolCalls &&
+		run.MaxCapabilityCalls > 0 && run.MaxCapabilityCalls <= config.MaxCapabilityCalls &&
 		run.MaxInputTokens > 0 && run.MaxInputTokens <= config.MaxInputTokens &&
 		run.MaxOutputTokens > 0 && run.MaxOutputTokens <= config.MaxOutputTokens &&
 		run.MaxTotalTokens > 0 && run.MaxTotalTokens <= config.MaxTotalTokens &&
@@ -263,7 +263,7 @@ func (o *Orchestrator) RunChild(ctx context.Context, request ChildRunRequest) (C
 		ModelConfigVersion: parent.ModelConfigVersion,
 		ProtocolVersion:    parent.ProtocolVersion,
 		MaxSteps:           uint32(halfAtLeastOne(uint64(parent.MaxSteps))),
-		MaxToolCalls:       uint32(halfAtLeastOne(uint64(parent.MaxToolCalls))),
+		MaxCapabilityCalls: uint32(halfAtLeastOne(uint64(parent.MaxCapabilityCalls))),
 		MaxInputTokens:     halfAtLeastOne(parent.MaxInputTokens),
 		MaxOutputTokens:    halfAtLeastOne(parent.MaxOutputTokens),
 		MaxTotalTokens:     halfAtLeastOne(parent.MaxTotalTokens),
@@ -459,7 +459,7 @@ func (o *Orchestrator) CreateIdempotent(ctx context.Context, request RunRequest)
 		ModelConfigVersion: app.Revision,
 		ProtocolVersion:    executor.Version,
 		MaxSteps:           app.MaxSteps,
-		MaxToolCalls:       app.MaxToolCalls,
+		MaxCapabilityCalls: app.MaxCapabilityCalls,
 		MaxInputTokens:     app.MaxInputTokens,
 		MaxOutputTokens:    app.MaxOutputTokens,
 		MaxTotalTokens:     app.MaxTotalTokens,
@@ -642,7 +642,7 @@ func (o *Orchestrator) executeClaimedRun(ctx context.Context, request RunRequest
 		ChannelPrompts:   app.ChannelPrompts,
 	})
 	if err != nil {
-		observe.Error(ctx, "提示词 Service 渲染失败", err)
+		observe.Error(ctx, "提示词 Provider 渲染失败", err)
 		return errors.Join(err, o.fail(ctx, run, "context_unavailable", true))
 	}
 	basePrompt := renderedPrompt
@@ -704,24 +704,24 @@ func (o *Orchestrator) executeClaimedRun(ctx context.Context, request RunRequest
 		RunId:    runID,
 		Sequence: 1,
 		Body: &executor.Frame_StartRun{StartRun: &executor.StartRun{
-			AppId:             o.config.AppID,
-			InputMessage:      request.Message,
-			Timezone:          app.Timezone,
-			Capabilities:      capabilities,
-			Model:             run.Model,
-			SystemPrompt:      systemPrompt,
-			MaxSteps:          run.MaxSteps,
-			ProtocolVersion:   executor.Version,
-			MaxToolCalls:      run.MaxToolCalls,
-			MaxInputTokens:    run.MaxInputTokens,
-			MaxOutputTokens:   run.MaxOutputTokens,
-			MaxTotalTokens:    run.MaxTotalTokens,
-			MaxOutputBytes:    run.MaxOutputBytes,
-			MaxCostMicrousd:   run.MaxCostMicrousd,
-			ProviderTimeoutMs: run.ProviderTimeoutMS,
-			TraceId:           observe.String(ctx, "trace_id"),
-			ParentSpanId:      observe.String(ctx, "span_id"),
-			ParentRunId:       run.ParentRunID,
+			AppId:              o.config.AppID,
+			InputMessage:       request.Message,
+			Timezone:           app.Timezone,
+			Capabilities:       capabilities,
+			Model:              run.Model,
+			SystemPrompt:       systemPrompt,
+			MaxSteps:           run.MaxSteps,
+			ProtocolVersion:    executor.Version,
+			MaxCapabilityCalls: run.MaxCapabilityCalls,
+			MaxInputTokens:     run.MaxInputTokens,
+			MaxOutputTokens:    run.MaxOutputTokens,
+			MaxTotalTokens:     run.MaxTotalTokens,
+			MaxOutputBytes:     run.MaxOutputBytes,
+			MaxCostMicrousd:    run.MaxCostMicrousd,
+			ProviderTimeoutMs:  run.ProviderTimeoutMS,
+			TraceId:            observe.String(ctx, "trace_id"),
+			ParentSpanId:       observe.String(ctx, "span_id"),
+			ParentRunId:        run.ParentRunID,
 		}},
 	}
 	if err := executor.ValidateStartFrame(startFrame); err != nil {

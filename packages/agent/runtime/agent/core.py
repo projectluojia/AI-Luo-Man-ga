@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, AsyncIterator
 
-from agent.model import CapabilityExecutor, ModelProvider, ProviderFailure, TextDelta, ToolCall, TurnCompleted
+from agent.model import CapabilityCall, CapabilityInvoker, ModelProvider, ProviderFailure, TextDelta, TurnCompleted
 from agent.observe import get_logger
 
 
@@ -24,7 +24,7 @@ class Capability:
     def model_name(self) -> str:
         return "cap_" + re.sub(r"[^a-zA-Z0-9_-]", "_", self.id)
 
-    def as_model_tool(self) -> dict[str, Any]:
+    def as_model_function(self) -> dict[str, Any]:
         return {
             "type": "function",
             "function": {
@@ -69,7 +69,7 @@ class ReplyDelta:
 
 @dataclass(frozen=True)
 class CapabilityRequested:
-    call: ToolCall
+    call: CapabilityCall
     capability_id: str
 
 
@@ -105,9 +105,9 @@ class AgentKernel:
         system_prompt: str,
         input_message: str,
         capabilities: list[Capability],
-        execute: CapabilityExecutor,
+        execute: CapabilityInvoker,
         max_steps: int,
-        max_tool_calls: int = 8,
+        max_capability_calls: int = 8,
         max_input_tokens: int = 32768,
         max_output_tokens: int = 8192,
         max_total_tokens: int = 40960,
@@ -120,7 +120,7 @@ class AgentKernel:
         if max_steps < 1:
             raise ValueError("max_steps must be positive")
         if (
-            max_tool_calls < 1
+            max_capability_calls < 1
             or max_input_tokens < 1
             or max_output_tokens < 1
             or max_total_tokens < 1
@@ -129,7 +129,7 @@ class AgentKernel:
         ):
             raise ValueError("Agent budgets must be positive")
 
-        tools = [capability.as_model_tool() for capability in capabilities]
+        model_functions = [capability.as_model_function() for capability in capabilities]
         projected = {capability.model_name: capability for capability in capabilities}
         if len(projected) != len(capabilities):
             raise ValueError("Capability 投影后的模型名称发生冲突")
@@ -139,7 +139,7 @@ class AgentKernel:
             {"role": "user", "content": input_message},
         ]
         seen_call_ids: set[str] = set()
-        tool_call_count = 0
+        capability_call_count = 0
         output_bytes = 0
         cumulative_input_tokens = 0
         cumulative_output_tokens = 0
@@ -161,7 +161,7 @@ class AgentKernel:
                     async for model_event in self._provider.stream_turn(
                         model=model,
                         messages=messages,
-                        tools=tools,
+                        capabilities=model_functions,
                     ):
                         if isinstance(model_event, TextDelta):
                             chunk_bytes = len(model_event.text.encode("utf-8"))
@@ -217,7 +217,7 @@ class AgentKernel:
             )
 
             messages.append(completed.assistant_message)
-            if not completed.tool_calls:
+            if not completed.capability_calls:
                 logger.info(
                     "模型已经生成最终回复",
                     model_step=step,
@@ -226,12 +226,12 @@ class AgentKernel:
                 yield FinalReply(completed.text)
                 return
 
-            tool_call_count += len(completed.tool_calls)
-            if tool_call_count > max_tool_calls:
-                raise BudgetExceeded("Agent ToolCall budget exceeded")
-            for call in completed.tool_calls:
+            capability_call_count += len(completed.capability_calls)
+            if capability_call_count > max_capability_calls:
+                raise BudgetExceeded("Agent Capability call budget exceeded")
+            for call in completed.capability_calls:
                 if not call.id or call.id in seen_call_ids:
-                    raise ValueError("模型返回了空白或重复的 ToolCall ID")
+                    raise ValueError("模型返回了空白或重复的 CapabilityCall ID")
                 seen_call_ids.add(call.id)
                 capability = projected.get(call.name)
                 if capability is None:

@@ -14,8 +14,8 @@ func hostEcho(requestPtr unsafe.Pointer, requestLen uint32, responsePtr unsafe.P
 
 // hostedRequest 与宿主约定：stdin 调用信封。
 type hostedRequest struct {
-	ToolID  string          `json:"tool_id"`
-	Payload json.RawMessage `json:"payload"`
+	CapabilityID string          `json:"capability_id"`
+	Payload      json.RawMessage `json:"payload"`
 }
 
 // hostedEnvelope 与宿主约定：stdout 结果信封。

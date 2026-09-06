@@ -22,9 +22,8 @@ import (
 
 const maxTarEntries = 4096
 
-// PackFromSource 用调用方提供的清单（如从 ailuo.toml 源清单或 schemaextract
-// 自动提取）打包：校验清单与源目录工件，生成 tarball 并附带按工件 SHA-256
-// 锁定的 lock.json。清单来源由调用方决定，本函数不读取 manifest.json。
+// PackFromSource 用调用方提供的显式清单打包：校验清单与源目录工件，生成
+// tarball 并附带按工件 SHA-256 锁定的 lock.json。本函数不猜测或读取隐式清单。
 func PackFromSource(ctx context.Context, sourceDir, outputDir string, manifest packagecontract.Manifest, manifestBytes []byte) (string, error) {
 	if err := packagecontract.ValidateManifest(manifest); err != nil {
 		return "", err

@@ -33,8 +33,7 @@ func TestInstalledCatalogDiscoversVerifiesAndRegistersHostedRuntime(t *testing.T
 	}
 	record := records[0]
 	if record.Runtime.ID != "extension.test.extension.test" || record.Runtime.Mode != loader.ModeHosted ||
-		record.Service.ID != "extension" ||
-		len(record.Tools) != 1 || len(record.Capabilities) != 1 {
+		len(record.Runtime.Capabilities) != 1 {
 		t.Fatalf("record=%#v", record)
 	}
 	runtime := &fakeRuntime{description: loader.Description{
@@ -51,7 +50,7 @@ func TestInstalledCatalogDiscoversVerifiesAndRegistersHostedRuntime(t *testing.T
 	if _, _, err := reg.ResolveCapability("extension.query"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := reg.ResolveTool("extension", "extension.read"); err != nil {
+	if _, _, err := reg.ResolveCapability("extension.query"); err != nil {
 		t.Fatal(err)
 	}
 	if err := catalog.VerifyRuntime(t.Context(), record.Runtime); err != nil {
@@ -171,8 +170,8 @@ func TestInstalledRegistrationRollsBackLoaderOnRegistryConflict(t *testing.T) {
 		t.Fatal(err)
 	}
 	reg := registry.New()
-	existing := records[0].Tools[0]
-	if err := reg.RegisterTool(registry.ToolRegistration{Spec: existing, Handler: noopCatalogHandler}); err != nil {
+	existing := records[0].Runtime.Capabilities[0]
+	if err := reg.Register(registry.CapabilityRegistration{Spec: existing, Handler: noopCatalogHandler}); err != nil {
 		t.Fatal(err)
 	}
 	if err := loader.RegisterInstalled(t.Context(), manager, reg, records); !errors.Is(err, registry.ErrDuplicateID) {
@@ -181,9 +180,8 @@ func TestInstalledRegistrationRollsBackLoaderOnRegistryConflict(t *testing.T) {
 	if err := manager.EnsureLoaded(t.Context(), records[0].Runtime.ID); !errors.Is(err, loader.ErrNotFound) {
 		t.Fatalf("失败注册后 Loader 残留=%v", err)
 	}
-	if len(reg.Services()) != 0 || len(reg.Capabilities()) != 0 || len(reg.Tools()) != 1 {
-		t.Fatalf("失败注册污染 Registry：tools=%#v services=%#v capabilities=%#v",
-			reg.Tools(), reg.Services(), reg.Capabilities())
+	if len(reg.Capabilities()) != 1 {
+		t.Fatalf("失败注册污染 Registry：capabilities=%#v", reg.Capabilities())
 	}
 }
 
@@ -197,7 +195,7 @@ func TestInstalledCatalogRejectsDuplicateJSONAndWritableDirectory(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	duplicate := append(manifest[:len(manifest)-1], []byte(`,"schema_version":"ailuo.package.v2"}`)...)
+	duplicate := append(manifest[:len(manifest)-1], []byte(`,"schema_version":"ailuo.package.v3"}`)...)
 	if err := os.WriteFile(manifestPath, duplicate, 0o640); err != nil {
 		t.Fatal(err)
 	}
@@ -235,31 +233,23 @@ func writeInstalledFixture(t *testing.T, root, pkgID, mode string, unknown bool)
 	if err := os.WriteFile(artifact, artifactBody, artifactMode); err != nil {
 		t.Fatal(err)
 	}
-	extensions, err := json.Marshal(map[string]any{
-		"tools": []capability.ToolSpec{{
-			ID: "extension.read", Version: "1.0.0", Description: "读取扩展数据",
-			InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
-			SideEffect:      capability.SideEffectRead,
-		}},
-		"service": capability.ServiceSpec{
-			ID: "extension", Version: "1.0.0", Description: "测试扩展",
-			ToolDependencies: []string{"extension.read"},
-		},
-		"capabilities": []capability.CapabilitySpec{{
-			ID: "extension.query", Version: "1.0.0", Name: "扩展查询",
-			Description: "查询扩展", ServiceID: "extension",
-			InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
-			SideEffect:      capability.SideEffectRead,
-		}},
-	})
-	if err != nil {
-		t.Fatal(err)
+	var process *packagecontract.ProcessTemplate
+	if mode == loader.ModeIsolated {
+		// 模板地址必须与 lock 中固化的 ProcessSpec 地址一致：安装器原样保留
+		// 模板地址，ValidateLock 会拒绝两者不一致的目录。
+		process = &packagecontract.ProcessTemplate{Path: "runtime-artifact", Address: "unix:" + filepath.Join(root, pkgID, "runtime.sock")}
 	}
 	installed := packagecontract.Manifest{
 		SchemaVersion: packagecontract.SchemaVersion, ID: pkgID, Version: "1.0.0",
-		IdleTTLMS: 1000, Extensions: extensions,
+		IdleTTLMS: 1000,
+		Capabilities: []capability.CapabilitySpec{{
+			ID: "extension.query", Version: "1.0.0", Name: "扩展查询",
+			Description: "查询扩展", InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
+			SideEffect: capability.SideEffectRead,
+		}},
 		Components: []packagecontract.Component{{
-			ID: pkgID, Mode: mode, Entrypoint: "runtime-artifact",
+			ID: pkgID, Mode: mode, Role: packagecontract.RoleProvider, Entrypoint: "runtime-artifact",
+			Process: process,
 			Exports: []string{"extension.query"},
 		}},
 	}
@@ -336,31 +326,16 @@ func writeDeclaredFixture(t *testing.T, root, runtimeID string, decls []packagec
 	if err := os.WriteFile(artifact, []byte("hosted artifact"), 0o640); err != nil {
 		t.Fatal(err)
 	}
-	extensions, err := json.Marshal(map[string]any{
-		"tools": []capability.ToolSpec{{
-			ID: "extension.read", Version: "1.0.0", Description: "读取扩展数据",
-			InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
-			SideEffect:      capability.SideEffectRead,
-		}},
-		"service": capability.ServiceSpec{
-			ID: "extension", Version: "1.0.0", Description: "测试扩展",
-			ToolDependencies: []string{"extension.read"},
-		},
-		"capabilities": []capability.CapabilitySpec{{
-			ID: "extension.query", Version: "1.0.0", Name: "扩展查询",
-			Description: "查询扩展", ServiceID: "extension",
-			InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
-			SideEffect:      capability.SideEffectRead,
-		}},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	installed := packagecontract.Manifest{
 		SchemaVersion: packagecontract.SchemaVersion, ID: runtimeID, Version: "1.0.0",
-		IdleTTLMS: 1000, Extensions: extensions,
+		IdleTTLMS: 1000,
+		Capabilities: []capability.CapabilitySpec{{
+			ID: "extension.query", Version: "1.0.0", Name: "扩展查询",
+			Description: "查询扩展", InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
+			SideEffect: capability.SideEffectRead,
+		}},
 		Components: []packagecontract.Component{{
-			ID: runtimeID, Mode: loader.ModeHosted, Entrypoint: "runtime-artifact",
+			ID: runtimeID, Mode: loader.ModeHosted, Role: packagecontract.RoleProvider, Entrypoint: "runtime-artifact",
 			Exports: []string{"extension.query"}, HostFunctions: decls,
 		}},
 	}
@@ -451,28 +426,15 @@ func TestInstalledCatalogRejectsInvalidDeclarations(t *testing.T) {
 				if err := os.WriteFile(artifact, []byte("hosted artifact"), 0o640); err != nil {
 					t.Fatal(err)
 				}
-				extensions, err := json.Marshal(map[string]any{
-					"tools": []capability.ToolSpec{{
-						ID: "extension.read", Version: "1.0.0", Description: "读取扩展数据",
-						InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
-						SideEffect:      capability.SideEffectRead,
-					}},
-					"service": capability.ServiceSpec{ID: "extension", Version: "1.0.0", Description: "测试扩展"},
-					"capabilities": []capability.CapabilitySpec{{
-						ID: "extension.query", Version: "1.0.0", Name: "扩展查询",
-						Description: "查询扩展", ServiceID: "extension",
-						InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
-						SideEffect:      capability.SideEffectRead,
-					}},
-				})
-				if err != nil {
-					t.Fatal(err)
-				}
 				installed := packagecontract.Manifest{
 					SchemaVersion: packagecontract.SchemaVersion, ID: "extension.bad", Version: "1.0.0",
-					Extensions: extensions,
+					Capabilities: []capability.CapabilitySpec{{
+						ID: "extension.query", Version: "1.0.0", Name: "扩展查询",
+						Description: "查询扩展", InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
+						SideEffect: capability.SideEffectRead,
+					}},
 					Components: []packagecontract.Component{{
-						ID: "extension.bad", Mode: loader.ModeHosted, Entrypoint: "runtime-artifact",
+						ID: "extension.bad", Mode: loader.ModeHosted, Role: packagecontract.RoleProvider, Entrypoint: "runtime-artifact",
 						Exports: []string{"extension.query"}, HostFunctions: tc.decls,
 					}},
 				}
@@ -518,21 +480,15 @@ func TestInstalledCatalogRejectsInvalidDeclarations(t *testing.T) {
 			record := loader.InstalledRecord{
 				Runtime: loader.Manifest{
 					ID: "extension.local", Version: "1.0.0", Mode: loader.ModeHosted,
-					Role: loader.RoleCapability, LockedDigest: digest,
+					Role: loader.RoleProvider, LockedDigest: digest,
 					HostFunctions: tc.decls,
+					Capabilities: []capability.CapabilitySpec{{
+						ID: "extension.query", Version: "1.0.0", Name: "扩展查询",
+						Description:     "查询扩展",
+						InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
+						SideEffect:      capability.SideEffectRead,
+					}},
 				},
-				Tools: []capability.ToolSpec{{
-					ID: "extension.read", Version: "1.0.0", Description: "读取扩展数据",
-					InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
-					SideEffect:      capability.SideEffectRead,
-				}},
-				Service: capability.ServiceSpec{ID: "extension", Version: "1.0.0", Description: "测试扩展"},
-				Capabilities: []capability.CapabilitySpec{{
-					ID: "extension.query", Version: "1.0.0", Name: "扩展查询",
-					Description: "查询扩展", ServiceID: "extension",
-					InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
-					SideEffect:      capability.SideEffectRead,
-				}},
 			}
 			if err := loader.RegisterInstalled(t.Context(), manager, reg, []loader.InstalledRecord{record}); !errors.Is(err, loader.ErrInvalidInstalledRecord) {
 				t.Fatalf("RegisterInstalled with invalid declarations error = %v, want ErrInvalidInstalledRecord", err)

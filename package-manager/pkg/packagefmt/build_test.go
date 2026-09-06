@@ -22,6 +22,7 @@ version = "1.0.0"
 [[component]]
 id = "core"
 mode = "hosted"
+role = "provider"
 entrypoint = "demo.wasm"
 
 [component.build]
@@ -51,6 +52,7 @@ version = "1.0.0"
 [[component]]
 id = "core"
 mode = "hosted"
+role = "provider"
 entrypoint = "plain.wasm"
 `)
 	_, _, builds, err = Parse(pathPlain)
@@ -78,6 +80,7 @@ entrypoint = "brain"
 
 [component.process]
 path = "python"
+address = "127.0.0.1:50051"
 
 [component.build]
 tool = "python-uv"
@@ -86,6 +89,7 @@ source = "python"
 [[component]]
 id = "prefs"
 mode = "hosted"
+role = "provider"
 entrypoint = "prefs.wasm"
 
 [component.build]
@@ -110,8 +114,9 @@ func TestBuildRejectsInvalidComponentTargets(t *testing.T) {
 		ID:            "mixed.pkg",
 		Version:       "1.0.0",
 		Components: []packagecontract.Component{
-			{ID: "brain", Mode: packagecontract.ModeIsolated, Role: packagecontract.RoleExecutor, Entrypoint: "brain"},
-			{ID: "prefs", Mode: packagecontract.ModeHosted, Entrypoint: "prefs.wasm"},
+			{ID: "brain", Mode: packagecontract.ModeIsolated, Role: packagecontract.RoleExecutor, Entrypoint: "brain",
+				Process: &packagecontract.ProcessTemplate{Path: "brain", Address: "127.0.0.1:50051"}},
+			{ID: "prefs", Mode: packagecontract.ModeHosted, Role: packagecontract.RoleProvider, Entrypoint: "prefs.wasm"},
 		},
 	}
 	for _, test := range []struct {
@@ -151,6 +156,7 @@ version = "1.0.0"
 [[component]]
 id = "core"
 mode = "hosted"
+role = "provider"
 entrypoint = "demo.wasm"
 
 [component.build]
@@ -195,6 +201,7 @@ version = "1.0.0"
 [[component]]
 id = "core"
 mode = "hosted"
+role = "provider"
 entrypoint = "demo.wasm"
 
 [component.build]
@@ -226,6 +233,7 @@ version = "1.0.0"
 [[component]]
 id = "core"
 mode = "hosted"
+role = "provider"
 entrypoint = "demo.wasm"
 
 [component.build]

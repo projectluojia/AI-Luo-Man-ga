@@ -26,7 +26,7 @@ func TestBuildAssemblyScript(t *testing.T) {
 	}
 	manifest := packagecontract.Manifest{
 		SchemaVersion: packagecontract.SchemaVersion, ID: "ts.pkg", Version: "0.1.0",
-		Components: []packagecontract.Component{{ID: "main", Mode: packagecontract.ModeHosted, Entrypoint: "main.wasm"}},
+		Components: []packagecontract.Component{{ID: "main", Mode: packagecontract.ModeHosted, Role: packagecontract.RoleProvider, Entrypoint: "main.wasm"}},
 	}
 	if err := Build(context.Background(), dir, manifest, []BuildSpec{{Tool: BuildToolAssemblyScript}}); err != nil {
 		t.Fatalf("AssemblyScript 编译失败: %v", err)

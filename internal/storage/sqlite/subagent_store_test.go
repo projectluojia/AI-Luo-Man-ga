@@ -149,7 +149,7 @@ func childRunRecord(parent kernelecho.RunRecord, runID, callID string, now time.
 		ParentRunID: parent.ID, OriginCallID: callID, Attempt: 1, Status: kernelecho.RunStatusQueued,
 		TaskMessage: "child task",
 		Model:       parent.Model, ModelConfigVersion: parent.ModelConfigVersion, ProtocolVersion: parent.ProtocolVersion,
-		MaxSteps: 2, MaxToolCalls: 2, MaxInputTokens: 500, MaxOutputTokens: 500, MaxTotalTokens: 1000,
+		MaxSteps: 2, MaxCapabilityCalls: 2, MaxInputTokens: 500, MaxOutputTokens: 500, MaxTotalTokens: 1000,
 		MaxOutputBytes: 2048, ProviderTimeoutMS: 2500,
 		Deadline: now.Add(30 * time.Second), AvailableAt: now,
 		CapabilityScope: []string{"capability"}, PermissionScope: []string{},

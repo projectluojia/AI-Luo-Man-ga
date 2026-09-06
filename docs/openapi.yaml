@@ -331,9 +331,8 @@ paths:
         event translation) and is delivered as a text/event-stream with events
         track, text_delta, final, error and done. The kernel echo events are
         translated; kernel event types are not exposed.
-        A trusted server-side Web login identity is required. The user_id,
-        user_name and session_id request fields are compatibility display fields only
-        and never establish identity or session ownership.
+        A trusted server-side Web login identity is required. Identity and session
+        ownership always come from that login state.
       requestBody:
         required: true
         content:
@@ -343,29 +342,10 @@ paths:
               additionalProperties: false
               required: [text]
               properties:
-                session_id:
-                  type: string
-                  description: Compatibility field only; ignored for identity and session ownership.
-                user_id:
-                  type: string
-                  description: Compatibility field only; never trusted as an identity credential.
-                user_name:
-                  type: string
-                  description: Compatibility field only; never trusted as an identity credential.
                 text:
                   type: string
                   minLength: 1
                   maxLength: 4000
-                image_ids:
-                  type: array
-                  items:
-                    type: string
-                  description: Unsupported in the current slice; non-empty arrays are rejected.
-                file_ids:
-                  type: array
-                  items:
-                    type: string
-                  description: Unsupported in the current slice; non-empty arrays are rejected.
       responses:
         "200":
           description: SSE event stream (track/text_delta/final/error/done)
@@ -749,7 +729,7 @@ components:
     Capability:
       type: object
       additionalProperties: false
-      required: [id, version, name, description, service_id, input_schema_json, side_effect, requires_confirmation]
+      required: [id, version, name, description, input_schema_json, side_effect, requires_confirmation]
       properties:
         id:
           type: string
@@ -758,8 +738,6 @@ components:
         name:
           type: string
         description:
-          type: string
-        service_id:
           type: string
         input_schema_json:
           type: string
@@ -846,7 +824,7 @@ components:
         - model_config_version
         - protocol_version
         - max_steps
-        - max_tool_calls
+        - max_capability_calls
         - max_input_tokens
         - max_output_tokens
         - max_total_tokens
@@ -893,7 +871,7 @@ components:
         max_steps:
           type: integer
           minimum: 0
-        max_tool_calls:
+        max_capability_calls:
           type: integer
           minimum: 1
         max_input_tokens:
@@ -958,7 +936,7 @@ components:
           description: Safe localized error message.
         result:
           type: string
-          description: Completed user-visible Run output; task text, prompts, reasoning, and Tool arguments are never included.
+          description: Completed user-visible Run output; task text, prompts, reasoning, and Capability arguments are never included.
         created_at:
           type: string
           format: date-time

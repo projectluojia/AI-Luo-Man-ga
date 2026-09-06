@@ -6,7 +6,7 @@ import unittest
 from typing import Any, AsyncIterator
 
 from agent.generated import executor_pb2
-from agent.model import ModelEvent, ModelProvider, ModelUsage, TextDelta, ToolCall, TurnCompleted
+from agent.model import CapabilityCall, ModelEvent, ModelProvider, ModelUsage, TextDelta, TurnCompleted
 from agent.runtime import ExecutorRuntime, PROTOCOL_VERSION, _is_loopback_address
 
 
@@ -19,14 +19,14 @@ class RuntimeModel(ModelProvider):
         *,
         model: str,
         messages: list[dict[str, Any]],
-        tools: list[dict[str, Any]],
+        capabilities: list[dict[str, Any]],
     ) -> AsyncIterator[ModelEvent]:
         self.turn += 1
         if self.turn == 1:
-            call = ToolCall("call-1", "cap_campus_bus_routes_list", '{"limit":10}')
+            call = CapabilityCall("call-1", "cap_campus_bus_routes_list", '{"limit":10}')
             yield TurnCompleted(
                 text="",
-                tool_calls=[call],
+                capability_calls=[call],
                 assistant_message={
                     "role": "assistant",
                     "content": None,
@@ -105,7 +105,7 @@ class RuntimeTest(unittest.IsolatedAsyncioTestCase):
                 system_prompt="test",
                 max_steps=3,
                 protocol_version=PROTOCOL_VERSION,
-                max_tool_calls=4,
+                max_capability_calls=4,
                 max_input_tokens=1000,
                 max_output_tokens=1000,
                 max_total_tokens=2000,
@@ -259,7 +259,7 @@ class RuntimeTest(unittest.IsolatedAsyncioTestCase):
                 system_prompt="test",
                 max_steps=3,
                 protocol_version=PROTOCOL_VERSION,
-                max_tool_calls=4,
+                max_capability_calls=4,
                 max_input_tokens=1000,
                 max_output_tokens=1000,
                 max_total_tokens=2000,

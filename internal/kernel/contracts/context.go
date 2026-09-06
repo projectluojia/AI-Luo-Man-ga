@@ -29,10 +29,7 @@ type RequestContext struct {
 	IdempotencyKey  string
 	ConfirmationID  string
 	ProtocolVersion string
-	TargetType      string
 	CapabilityID    string
-	ServiceID       string
-	ToolID          string
 	PermissionScope []string
 	CallChain       []string
 }

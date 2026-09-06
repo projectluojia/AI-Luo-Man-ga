@@ -163,7 +163,7 @@ func (f *qqFakeOrchestrator) CreateIdempotent(ctx context.Context, request kerne
 		kernelecho.RunRecord{
 			ID: "run-" + id, RunGroupID: "run-" + id, AppID: "campus-services", EchoID: id, Attempt: 1,
 			Status: kernelecho.RunStatusQueued, Model: "test-model", ModelConfigVersion: "test-config",
-			ProtocolVersion: "1.0", MaxSteps: 4, MaxToolCalls: 4,
+			ProtocolVersion: "1.0", MaxSteps: 4, MaxCapabilityCalls: 4,
 			MaxInputTokens: 1000, MaxOutputTokens: 1000, MaxTotalTokens: 2000,
 			MaxOutputBytes: 4096, ProviderTimeoutMS: 5000, Deadline: now.Add(time.Minute), AvailableAt: now,
 			RecoverableState: []byte(`{}`), CreatedAt: now,

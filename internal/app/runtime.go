@@ -31,7 +31,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/session"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/task"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
-	promptservice "github.com/projectluojia/AI-Luo-Man-ga/internal/services/prompt"
+	promptservice "github.com/projectluojia/AI-Luo-Man-ga/internal/providers/prompt"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/blob"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite"
 )
@@ -168,9 +168,9 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 	}
 
 	reg := registry.New()
-	promptService := promptservice.NewService(config.promptCatalog, store)
-	if err := promptservice.Register(reg, promptService); err != nil {
-		return fmt.Errorf("register prompt Service: %w", err)
+	promptProvider := promptservice.NewProvider(config.promptCatalog, store)
+	if err := promptservice.Register(reg, promptProvider); err != nil {
+		return fmt.Errorf("register prompt Provider: %w", err)
 	}
 	installedHosts, installedRecords, err := configureInstalledRuntimes(ctx, config, store.PackageDocuments())
 	if err != nil {
@@ -183,10 +183,10 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 		AppID: config.appID, Enabled: true, Model: config.model,
 		SystemPrompt: config.baseSystemPrompt, ChannelPrompts: config.channelPrompts,
 		Timezone: config.agentRun.Timezone, MaxSteps: config.agentRun.MaxSteps,
-		MaxToolCalls: config.agentRun.MaxToolCalls, MaxInputTokens: config.agentRun.MaxInputTokens,
+		MaxCapabilityCalls: config.agentRun.MaxCapabilityCalls, MaxInputTokens: config.agentRun.MaxInputTokens,
 		MaxOutputTokens: config.agentRun.MaxOutputTokens, MaxTotalTokens: config.agentRun.MaxTotalTokens,
 		MaxOutputBytes: config.agentRun.MaxOutputBytes, ProviderTimeout: config.executorTimeout,
-		EnabledCapabilities: initialCapabilityIDs(reg, installedRecords),
+		EnabledCapabilities: nil,
 	})
 	if err != nil {
 		return fmt.Errorf("ensure App config: %w", err)
@@ -197,7 +197,7 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 		replacement.ProviderTimeout = config.executorTimeout
 		replacement.Timezone = config.agentRun.Timezone
 		replacement.MaxSteps = config.agentRun.MaxSteps
-		replacement.MaxToolCalls = config.agentRun.MaxToolCalls
+		replacement.MaxCapabilityCalls = config.agentRun.MaxCapabilityCalls
 		replacement.MaxInputTokens = config.agentRun.MaxInputTokens
 		replacement.MaxOutputTokens = config.agentRun.MaxOutputTokens
 		replacement.MaxTotalTokens = config.agentRun.MaxTotalTokens
@@ -271,7 +271,7 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 			MaxMessages: config.contextAssembly.MaxMessages, MaxCharsPerMsg: config.contextAssembly.MaxCharsPerMsg,
 			MaxTotalChars: config.contextAssembly.MaxTotalChars, MaxPromptBytes: config.contextAssembly.MaxPromptBytes,
 		},
-		Prompts:        promptServiceRenderer{promptService},
+		Prompts:        promptProviderRenderer{promptProvider},
 		RunTimeout:     secondsDuration(config.orchestration.RunTimeoutSeconds),
 		MaxRunAttempts: config.orchestration.MaxRunAttempts, QueueCapacity: config.orchestration.QueueCapacity,
 		MaxChildRuns: int(config.agentRun.MaxChildRuns),
@@ -279,8 +279,7 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 	if err := kernelecho.RegisterChildCapabilities(reg, orchestrator); err != nil {
 		return fmt.Errorf("register governed child Run capabilities: %w", err)
 	}
-	observe.Info(ctx, "已安装服务与受治理子 Run Capability 注册完成",
-		observe.IntAttr("service_count", len(reg.Services())), observe.IntAttr("tool_count", len(reg.Tools())),
+	observe.Info(ctx, "已安装 Capability 与受治理子 Run Capability 注册完成",
 		observe.IntAttr("capability_count", len(reg.Capabilities())),
 	)
 	taskTypes := task.NewTypeRegistry()

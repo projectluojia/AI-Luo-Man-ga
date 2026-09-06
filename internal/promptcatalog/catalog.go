@@ -1,7 +1,7 @@
 // Package promptcatalog 是提示词配置的共享契约与默认种子。
 //
 // 本包保存 V2 迁移来的基础系统提示、渠道提示，以及“可选择项的模板正文”
-// （基本风格与额外特征）。控制面、App 配置种子和 prompt Service 共享这些
+// （基本风格与额外特征）。控制面、App 配置种子和 prompt Provider 共享这些
 // 默认值，避免同一份正文在多个包内重复维护。
 package promptcatalog
 

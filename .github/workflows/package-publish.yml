@@ -164,17 +164,10 @@ jobs:
           PACKAGE_OUTPUT_DIR: ${{ runner.temp }}/package-dist
         run: |
           set -euo pipefail
-          package_version="0.1.0"
-          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
-            package_version="${GITHUB_REF#refs/tags/}"
-            package_version="${package_version#v}"
-          fi
-          "$RUNNER_TEMP/ailuo" pack --version "$package_version" "$PACKAGE_DIR" "$PACKAGE_OUTPUT_DIR"
+          "$RUNNER_TEMP/ailuo" pack "$PACKAGE_DIR" "$PACKAGE_OUTPUT_DIR"
           mapfile -t tarballs < <(find "$PACKAGE_OUTPUT_DIR" -maxdepth 1 -type f -name '*.tgz' -print)
           test "${#tarballs[@]}" -eq 1
           tarball="${tarballs[0]}"
-          # pack 的输出目录是第二个位置参数；flag 必须在位置参数之前
-          # （Go flag 包遇到首个位置参数即停止解析）。
           # id/version 的权威来源是 tarball 根的 manifest.json：文件名形如
           # <id>-<version>.tgz，用 ${base%-*} 切分会在预发布版本（1.0.0-rc.1）上切错。
           manifest="$(tar -xzOf "$tarball" manifest.json)"

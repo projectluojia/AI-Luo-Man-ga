@@ -20,6 +20,9 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+// testRuntimeID 是 Unix Runtime Host 接线测试中运行组件的稳定标识。
+const testRuntimeID = testPackageID + ".runtime"
+
 // TestRuntimeHostProductionWiring 验证外部 Runtime Host 产品接线：真实安装目录
 // （manifest.json + lock.json + 真实 wasm 工件）经 Catalog.ReadArtifact 供给
 // hostedRuntimeBackend，完整 RuntimeHost 协议链路可装载并执行 hosted 包。
@@ -36,31 +39,17 @@ func TestRuntimeHostProductionWiring(t *testing.T) {
 	if err := os.WriteFile(artifactPath, artifactBytes, 0o640); err != nil {
 		t.Fatal(err)
 	}
-	extensions, err := json.Marshal(map[string]any{
-		"tools": []capability.ToolSpec{{
-			ID: testToolID, Version: "1.0.0", Description: "测试回显",
-			InputSchemaJSON: `{"type":"object","properties":{"value":{"type":"string"}},"required":["value"],"additionalProperties":false}`,
-			SideEffect:      capability.SideEffectRead,
-		}},
-		"service": capability.ServiceSpec{
-			ID: testPackageID, Version: "1.0.0", Description: "通用运行时测试",
-			ToolDependencies: []string{testToolID},
-		},
-		"capabilities": []capability.CapabilitySpec{{
-			ID: testCapabilityID, Version: "1.0.0", Name: "测试回显",
-			Description: "测试回显", ServiceID: testPackageID,
-			InputSchemaJSON: `{"type":"object","properties":{"value":{"type":"string"}},"required":["value"],"additionalProperties":false}`,
-			SideEffect:      capability.SideEffectRead,
-		}},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	installed := packagecontract.Manifest{
 		SchemaVersion: packagecontract.SchemaVersion, ID: testPackageID, Version: "1.0.0",
-		Pin: true, Extensions: extensions,
+		Pin: true,
+		Capabilities: []capability.CapabilitySpec{{
+			ID: testCapabilityID, Version: "1.0.0", Name: "测试回显",
+			Description:     "测试回显",
+			InputSchemaJSON: `{"type":"object","properties":{"value":{"type":"string"}},"required":["value"],"additionalProperties":false}`,
+			SideEffect:      capability.SideEffectRead,
+		}},
 		Components: []packagecontract.Component{{
-			ID: "runtime", Mode: loader.ModeHosted, Entrypoint: "success.wasm",
+			ID: "runtime", Mode: loader.ModeHosted, Role: packagecontract.RoleProvider, Entrypoint: "success.wasm",
 			Exports: []string{testCapabilityID},
 		}},
 	}
@@ -162,7 +151,7 @@ func TestRuntimeHostProductionWiring(t *testing.T) {
 		t.Fatal(err)
 	}
 	result, err := manager.Handler(testRuntimeID)(
-		context.Background(), toolRuntimeRequest(), json.RawMessage(`{"value":"hello"}`),
+		context.Background(), capabilityRuntimeRequest(), json.RawMessage(`{"value":"hello"}`),
 	)
 	if err != nil {
 		t.Fatalf("invoke: %v", err)

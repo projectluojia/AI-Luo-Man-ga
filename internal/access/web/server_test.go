@@ -149,7 +149,7 @@ func (f *fakeOrchestrator) CreateIdempotent(ctx context.Context, request kernele
 		ID: "run-" + id, RunGroupID: "run-" + id, AppID: "campus-services", EchoID: id, Attempt: 1,
 		SessionID: request.SessionID, UserID: request.UserID, MessageID: request.MessageID, Channel: request.Channel,
 		Status: kernelecho.RunStatusQueued, Model: "test-model", ModelConfigVersion: "test-config",
-		ProtocolVersion: "1.0", MaxSteps: 4, MaxToolCalls: 4,
+		ProtocolVersion: "1.0", MaxSteps: 4, MaxCapabilityCalls: 4,
 		MaxInputTokens: 1000, MaxOutputTokens: 1000, MaxTotalTokens: 2000,
 		MaxOutputBytes: 4096, ProviderTimeoutMS: 5000, Deadline: now.Add(time.Minute), AvailableAt: now,
 		RecoverableState: []byte(`{}`), CreatedAt: now,
@@ -458,7 +458,7 @@ func TestWebAccessDoesNotExposeCrossAppEcho(t *testing.T) {
 	}, kernelecho.RunRecord{
 		ID: "other-app-run", RunGroupID: "other-app-run", AppID: "app-b", EchoID: "other-app-echo", Attempt: 1,
 		Status: kernelecho.RunStatusQueued, Model: "test-model", ModelConfigVersion: "test-config",
-		ProtocolVersion: "1.0", MaxSteps: 4, MaxToolCalls: 4,
+		ProtocolVersion: "1.0", MaxSteps: 4, MaxCapabilityCalls: 4,
 		MaxInputTokens: 1000, MaxOutputTokens: 1000, MaxTotalTokens: 2000,
 		MaxOutputBytes: 4096, ProviderTimeoutMS: 5000, Deadline: now.Add(time.Minute), AvailableAt: now,
 		RecoverableState: []byte(`{}`), CreatedAt: now,

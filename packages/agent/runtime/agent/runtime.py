@@ -14,7 +14,7 @@ import grpc
 
 from agent.core import AgentKernel, BudgetExceeded, Capability, CapabilityRequested, FinalReply, ReplyDelta, UsageReported
 from agent.generated import executor_pb2, executor_pb2_grpc
-from agent.model import ModelProvider, ProviderFailure, ToolCall
+from agent.model import CapabilityCall, ModelProvider, ProviderFailure
 from agent.observe import bind, configure, get_logger
 from agent.openai_compatible import OpenAICompatibleProvider
 
@@ -37,7 +37,7 @@ MAX_IDENTIFIER_BYTES = 128
 MAX_DESCRIPTION_BYTES = 4096
 MAX_NAME_BYTES = 256
 MAX_PROTOCOL_STEPS = 64
-MAX_TOOL_CALLS = 256
+MAX_CAPABILITY_CALLS = 256
 TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
 CODE_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
 TRACE_PATTERN = re.compile(r"^[0-9a-f]{32}$")
@@ -151,7 +151,7 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
                 expected_capabilities: dict[str, str] = {}
                 expected_kernel_sequence = 2
 
-                async def execute(call: ToolCall) -> str:
+                async def execute(call: CapabilityCall) -> str:
                     nonlocal expected_kernel_sequence
                     expected_capability_id = expected_capabilities.pop(call.id, "")
                     if not expected_capability_id:
@@ -193,7 +193,7 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
                     capabilities=capabilities,
                     execute=execute,
                     max_steps=start.max_steps or 8,
-                    max_tool_calls=start.max_tool_calls,
+                    max_capability_calls=start.max_capability_calls,
                     max_input_tokens=start.max_input_tokens,
                     max_output_tokens=start.max_output_tokens,
                     max_total_tokens=start.max_total_tokens,
@@ -204,7 +204,7 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
                     outbound_sequence += 1
                     if isinstance(event, CapabilityRequested):
                         if event.call.id in expected_capabilities:
-                            raise ProtocolViolation("模型返回了重复的 ToolCall ID")
+                            raise ProtocolViolation("模型返回了重复的 CapabilityCall ID")
                         self._validate_model_call(event.call.id, event.capability_id, event.call.arguments)
                         expected_capabilities[event.call.id] = event.capability_id
                         logger.info(
@@ -361,8 +361,8 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
         if (
             start.max_steps < 1
             or start.max_steps > MAX_PROTOCOL_STEPS
-            or start.max_tool_calls < 1
-            or start.max_tool_calls > MAX_TOOL_CALLS
+            or start.max_capability_calls < 1
+            or start.max_capability_calls > MAX_CAPABILITY_CALLS
             or start.max_input_tokens < 1
             or start.max_input_tokens > 1_000_000_000
             or start.max_output_tokens < 1

@@ -29,12 +29,6 @@ var (
 	ErrChanged        = errors.New("installed package changed after discovery")
 )
 
-type aiLuoExtensions struct {
-	Tools        []capability.ToolSpec       `json:"tools"`
-	Service      capability.ServiceSpec      `json:"service"`
-	Capabilities []capability.CapabilitySpec `json:"capabilities"`
-}
-
 type Catalog struct {
 	root string
 }
@@ -45,6 +39,13 @@ type Catalog struct {
 func ReadProjectLock(ctx context.Context, projectRoot string) (projectcontract.Lock, error) {
 	if projectRoot == "" || !filepath.IsAbs(projectRoot) || filepath.Clean(projectRoot) != projectRoot {
 		return projectcontract.Lock{}, ErrInvalidCatalog
+	}
+	for _, name := range []string{".ailuo-sync-transaction.json", ".ailuo-sync-transaction.json.backup"} {
+		if _, err := os.Lstat(filepath.Join(projectRoot, name)); err == nil {
+			return projectcontract.Lock{}, ErrInvalidCatalog
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return projectcontract.Lock{}, ErrInvalidCatalog
+		}
 	}
 	manifestSHA, err := packageio.HashFile(ctx, filepath.Join(projectRoot, "ailuo.toml"), packagecontract.MaxManifestBytes)
 	if err != nil {
@@ -130,7 +131,7 @@ func (c *Catalog) DiscoverLocked(ctx context.Context, projectLock projectcontrac
 		}
 		for _, dependency := range installed.Manifest.Dependencies {
 			dependencyPackage, ok := lockedIDs[dependency.ID]
-			if !ok {
+			if !ok || dependencyPackage.Source != dependency.Source {
 				return nil, ErrInvalidCatalog
 			}
 			version, err := packagecontract.ParseVersion(dependencyPackage.Version)
@@ -151,6 +152,9 @@ func (c *Catalog) DiscoverLocked(ctx context.Context, projectLock projectcontrac
 		}
 		for _, record := range packageRecords {
 			records = append(records, record.record)
+			if len(records) > loader.MaxRegisteredRuntimes {
+				return nil, ErrInvalidCatalog
+			}
 		}
 	}
 	sort.Slice(records, func(i, j int) bool { return records[i].Runtime.ID < records[j].Runtime.ID })
@@ -268,7 +272,7 @@ func (c *Catalog) readRecordByID(ctx context.Context, id string) (installedRecor
 
 // readPackage 读取一个包目录并产出每组件一条的内核记录。中性格式（manifest +
 // lock + 每组件工件哈希）由 packageio.ReadInstalled 完成；本函数叠加部署属主
-// 校验、解析 AI珞 扩展段并按组件 exports 映射 Capability 到组件运行时。
+// 校验、解析 Capability 清单并按组件 exports 映射到组件运行时。
 func (c *Catalog) readPackage(ctx context.Context, directory string) ([]installedRecord, error) {
 	if err := validateSecureDirectory(directory); err != nil {
 		return nil, errors.Join(ErrInvalidCatalog, err)
@@ -287,12 +291,6 @@ func (c *Catalog) readPackage(ctx context.Context, directory string) ([]installe
 	}
 	for _, artifact := range neutral.Lock.Artifacts {
 		if err := validateSecureArtifact(ctx, artifact.Path); err != nil {
-			return nil, errors.Join(ErrInvalidCatalog, err)
-		}
-	}
-	var extensions aiLuoExtensions
-	if len(neutral.Manifest.Extensions) > 0 {
-		if err := packagecontract.DecodeStrictJSON(neutral.Manifest.Extensions, &extensions); err != nil {
 			return nil, errors.Join(ErrInvalidCatalog, err)
 		}
 	}
@@ -318,39 +316,30 @@ func (c *Catalog) readPackage(ctx context.Context, directory string) ([]installe
 		if !ok {
 			return nil, ErrInvalidCatalog
 		}
-		role := loader.RoleCapability
-		if component.Role != "" {
-			role = component.Role
-		}
-		runtimeManifest := loader.Manifest{
-			ID: runtimeID, Version: neutral.Manifest.Version, Mode: component.Mode,
-			Role: role, LockedDigest: artifact.SHA256,
-			Pin: neutral.Manifest.Pin, IdleTTL: time.Duration(neutral.Manifest.IdleTTLMS) * time.Millisecond,
-			HostFunctions: slices.Clone(component.HostFunctions),
-			Storage:       cloneStorage(neutral.Manifest.Storage),
-		}
-		if err := loader.ValidateManifest(runtimeManifest); err != nil {
-			return nil, err
-		}
 		exported := make(map[string]struct{}, len(component.Exports))
 		for _, capabilityID := range component.Exports {
 			exported[capabilityID] = struct{}{}
 		}
 		capabilities := make([]capability.CapabilitySpec, 0, len(component.Exports))
-		for _, spec := range extensions.Capabilities {
+		for _, spec := range neutral.Manifest.Capabilities {
 			if _, isExport := exported[spec.ID]; isExport {
 				capabilities = append(capabilities, cloneCapabilitySpec(spec))
 			}
 		}
+		role := component.Role
+		runtimeManifest := loader.Manifest{
+			ID: runtimeID, PackageID: neutral.Manifest.ID, Version: neutral.Manifest.Version, Mode: component.Mode,
+			Role: role, LockedDigest: artifact.SHA256,
+			Pin: neutral.Manifest.Pin, IdleTTL: time.Duration(neutral.Manifest.IdleTTLMS) * time.Millisecond,
+			HostFunctions: slices.Clone(component.HostFunctions),
+			Storage:       cloneStorage(neutral.Manifest.Storage), Capabilities: capabilities,
+		}
+		if err := loader.ValidateManifest(runtimeManifest); err != nil {
+			return nil, err
+		}
 		record := loader.InstalledRecord{
 			Runtime: runtimeManifest, PackageID: neutral.Manifest.ID,
 			ComponentID: component.ID, ComponentOrder: orderIndex[component.ID],
-			Capabilities: capabilities,
-		}
-		// Service 与 Tools 路由到依赖拓扑第一个组件（Provider 基座）。
-		if orderIndex[component.ID] == 0 {
-			record.Service = cloneInstalledService(extensions.Service)
-			record.Tools = cloneToolSpecs(extensions.Tools)
 		}
 		if err := loader.ValidateInstalledRecord(record); err != nil {
 			return nil, errors.Join(ErrInvalidCatalog, err)
@@ -412,21 +401,7 @@ func cloneStorage(storage *packagecontract.Storage) *packagecontract.Storage {
 	return &cloned
 }
 
-func cloneToolSpecs(specs []capability.ToolSpec) []capability.ToolSpec {
-	cloned := slices.Clone(specs)
-	for index := range cloned {
-		cloned[index].RequiredPermissions = slices.Clone(cloned[index].RequiredPermissions)
-	}
-	return cloned
-}
-
 func cloneCapabilitySpec(spec capability.CapabilitySpec) capability.CapabilitySpec {
 	spec.RequiredPermissions = slices.Clone(spec.RequiredPermissions)
-	return spec
-}
-
-func cloneInstalledService(spec capability.ServiceSpec) capability.ServiceSpec {
-	spec.ToolDependencies = slices.Clone(spec.ToolDependencies)
-	spec.RequestedPermissions = slices.Clone(spec.RequestedPermissions)
 	return spec
 }

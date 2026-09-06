@@ -15,7 +15,7 @@ import (
 )
 
 func testScope(appID string) packstore.Scope {
-	return packstore.Scope{AppID: appID, Namespace: "test/pkg"}
+	return packstore.Scope{AppID: appID, PackageID: "test", Namespace: "test/pkg"}
 }
 
 func testSnapshotMeta(revision string) packstore.SnapshotMeta {

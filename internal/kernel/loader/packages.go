@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -56,26 +57,43 @@ func (g *retiredGroup) stopIfDrained() {
 	}
 }
 
-// RegisterPackage 记录包的组件分组。组件运行时已通过 RegisterBatch 注册。
-// orderedComponentIDs 按依赖拓扑排列（Provider 在前）。
-func (m *Manager) RegisterPackage(pkgID string, orderedComponentIDs []string) error {
-	group := &packageGroup{}
-	for _, componentID := range orderedComponentIDs {
-		item, err := m.resolve(componentID)
-		if err != nil {
-			return err
-		}
-		group.order = append(group.order, item)
+// RegisterPackages 一次性提交多个包的组件分组。调用方已经完成清单和运行时
+// 校验；本方法仍在同一锁内检查冲突，避免只发布部分包组。
+func (m *Manager) RegisterPackages(groups map[string][]string) error {
+	if len(groups) == 0 {
+		return ErrInvalidManifest
 	}
+	packageIDs := make([]string, 0, len(groups))
+	resolved := make(map[string]*packageGroup, len(groups))
+	for packageID, componentIDs := range groups {
+		if packageID == "" || len(componentIDs) == 0 {
+			return ErrInvalidManifest
+		}
+		group := &packageGroup{}
+		for _, componentID := range componentIDs {
+			item, err := m.resolve(componentID)
+			if err != nil {
+				return err
+			}
+			group.order = append(group.order, item)
+		}
+		packageIDs = append(packageIDs, packageID)
+		resolved[packageID] = group
+	}
+	sort.Strings(packageIDs)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if !m.accepting {
 		return ErrShuttingDown
 	}
-	if _, exists := m.packages[pkgID]; exists {
-		return ErrDuplicateID
+	for _, packageID := range packageIDs {
+		if _, exists := m.packages[packageID]; exists {
+			return ErrDuplicateID
+		}
 	}
-	m.packages[pkgID] = group
+	for _, packageID := range packageIDs {
+		m.packages[packageID] = resolved[packageID]
+	}
 	return nil
 }
 
@@ -148,15 +166,17 @@ func (m *Manager) UpgradePackage(ctx context.Context, spec PackageSpec) error {
 	retired := &retiredGroup{}
 	for index, item := range entries {
 		old := &retiredRuntime{
-			runtime:  item.runtime,
-			inFlight: item.currentInFlight,
-			stopped:  make(chan struct{}),
-			group:    retired,
+			runtime:    item.runtime,
+			generation: item.generation,
+			inFlight:   item.currentInFlight,
+			stopped:    make(chan struct{}),
+			group:      retired,
 		}
 		item.retired = append(item.retired, old)
 		item.manifest = spec.Components[index].Runtime
 		item.host = candidates[index].host
 		item.runtime = candidates[index].runtime
+		item.generation++
 		item.currentInFlight = 0
 		if old.inFlight > 0 {
 			retired.draining++

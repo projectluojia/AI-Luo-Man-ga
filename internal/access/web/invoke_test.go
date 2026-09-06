@@ -46,34 +46,28 @@ func newInvokeServerWithResolver(t *testing.T, resolver access.IdentityResolver)
 // registerPing 注册 read 侧 echo.ping 与未启用的 echo.hidden，仅启用前者。
 func registerPing(t *testing.T, reg *registry.Registry, policy *runtimetest.StaticAppPolicy) {
 	t.Helper()
-	err := reg.RegisterService(registry.ServiceRegistration{
-		Spec: capability.ServiceSpec{ID: "echo", Version: "1.0.0", Description: "echo service"},
-		Capabilities: map[string]struct {
-			Spec    capability.CapabilitySpec
-			Handler registry.Handler
-		}{
-			"echo.ping": {
-				Spec: capability.CapabilitySpec{
-					ID: "echo.ping", Version: "1.0.0", ServiceID: "echo",
-					Name: "echo", InputSchemaJSON: pingSchema, SideEffect: capability.SideEffectRead,
-				},
-				Handler: func(_ context.Context, _ contracts.RequestContext, payload json.RawMessage) (json.RawMessage, error) {
-					return json.RawMessage(`{"echo":` + string(payload) + `}`), nil
-				},
+	err := reg.RegisterBatch([]registry.CapabilityRegistration{
+		{
+			Spec: capability.CapabilitySpec{
+				ID: "echo.ping", Version: "1.0.0", Name: "echo",
+				InputSchemaJSON: pingSchema, SideEffect: capability.SideEffectRead,
 			},
-			"echo.hidden": {
-				Spec: capability.CapabilitySpec{
-					ID: "echo.hidden", Version: "1.0.0", ServiceID: "echo",
-					Name: "hidden", InputSchemaJSON: pingSchema, SideEffect: capability.SideEffectRead,
-				},
-				Handler: func(_ context.Context, _ contracts.RequestContext, _ json.RawMessage) (json.RawMessage, error) {
-					return json.RawMessage(`{"ok":true}`), nil
-				},
+			Handler: func(_ context.Context, _ contracts.RequestContext, payload json.RawMessage) (json.RawMessage, error) {
+				return json.RawMessage(`{"echo":` + string(payload) + `}`), nil
+			},
+		},
+		{
+			Spec: capability.CapabilitySpec{
+				ID: "echo.hidden", Version: "1.0.0", Name: "hidden",
+				InputSchemaJSON: pingSchema, SideEffect: capability.SideEffectRead,
+			},
+			Handler: func(_ context.Context, _ contracts.RequestContext, _ json.RawMessage) (json.RawMessage, error) {
+				return json.RawMessage(`{"ok":true}`), nil
 			},
 		},
 	})
 	if err != nil {
-		t.Fatalf("RegisterService: %v", err)
+		t.Fatalf("RegisterBatch: %v", err)
 	}
 	policy.Enable("campus-services", "echo.ping")
 }
@@ -252,21 +246,13 @@ func newGovernedWriteServer(t *testing.T, resolver access.IdentityResolver, stor
 	const appID = "campus-services"
 	reg := registry.New()
 	policy := runtimetest.NewStaticAppPolicy()
-	if err := reg.RegisterService(registry.ServiceRegistration{
-		Spec: capability.ServiceSpec{ID: "echo", Version: "1.0.0", Description: "echo service", RequestedPermissions: []string{"echo.write"}},
-		Capabilities: map[string]struct {
-			Spec    capability.CapabilitySpec
-			Handler registry.Handler
-		}{
-			"echo.write": {
-				Spec: capability.CapabilitySpec{
-					ID: "echo.write", Version: "1.0.0", ServiceID: "echo",
-					InputSchemaJSON: pingSchema, SideEffect: capability.SideEffectWrite,
-					RequiresConfirmation: true, RequiredPermissions: []string{"echo.write"},
-				},
-				Handler: handler,
-			},
+	if err := reg.Register(registry.CapabilityRegistration{
+		Spec: capability.CapabilitySpec{
+			ID: "echo.write", Version: "1.0.0", InputSchemaJSON: pingSchema,
+			SideEffect: capability.SideEffectWrite, RequiresConfirmation: true,
+			RequiredPermissions: []string{"echo.write"},
 		},
+		Handler: handler,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -310,7 +296,7 @@ func TestInvokeCapabilityUsesResolvedIdentityAndGovernanceHeaders(t *testing.T) 
 		t.Fatalf("idempotency operation = %#v completed=%t", store.claim.Operation, store.completed)
 	}
 	if confirmation.ConfirmationID != "confirmation-1" || confirmation.IdempotencyKey != "operation-1" ||
-		confirmation.TargetID != "echo.write" || confirmation.AppID != appID {
+		confirmation.CapabilityID != "echo.write" || confirmation.AppID != appID {
 		t.Fatalf("confirmation request = %#v", confirmation)
 	}
 }
