@@ -143,16 +143,33 @@ class Logger:
 def configure(stream: TextIO | None = None) -> None:
     global _environment, _max_length
 
-    _environment = os.getenv("AILUO_ENVIRONMENT", "development")
+    environment = os.getenv("AILUO_ENVIRONMENT", "development")
+    raw_max_length = os.getenv("AILUO_LOG_MAX_VALUE_LENGTH", "4096")
     try:
-        _max_length = max(1, int(os.getenv("AILUO_LOG_MAX_VALUE_LENGTH", "4096")))
-    except ValueError:
-        _max_length = 4096
+        max_length = int(raw_max_length)
+    except ValueError as exc:
+        raise ValueError("AILUO_LOG_MAX_VALUE_LENGTH 必须是正整数") from exc
+    if max_length < 1:
+        raise ValueError("AILUO_LOG_MAX_VALUE_LENGTH 必须是正整数")
     level_name = os.getenv("AILUO_LOG_LEVEL", "INFO").upper()
-    level = getattr(logging, level_name, logging.INFO)
+    levels = {
+        "DEBUG": logging.DEBUG,
+        "INFO": logging.INFO,
+        "WARN": logging.WARNING,
+        "WARNING": logging.WARNING,
+        "ERROR": logging.ERROR,
+        "CRITICAL": logging.CRITICAL,
+    }
+    if level_name not in levels:
+        raise ValueError(f"AILUO_LOG_LEVEL 不受支持: {level_name}")
+    level = levels[level_name]
     output_format = os.getenv("AILUO_LOG_FORMAT", "console").lower()
-    handler = logging.StreamHandler(stream or sys.stdout)
-    handler.setFormatter(_ChineseFormatter("json" if output_format == "json" else "console"))
+    if output_format not in ("console", "json"):
+        raise ValueError(f"AILUO_LOG_FORMAT 不受支持: {output_format}")
+    _environment = environment
+    _max_length = max_length
+    handler = logging.StreamHandler(stream if stream is not None else sys.stdout)
+    handler.setFormatter(_ChineseFormatter(output_format))
     root = logging.getLogger()
     root.handlers.clear()
     root.addHandler(handler)
