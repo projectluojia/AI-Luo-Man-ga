@@ -10,6 +10,13 @@ on:
       - packages/agent/**
       - contracts/**
       - package-manager/**
+      - e2e/**
+      - internal/**
+      - testsupport/**
+      - proto/**
+      - gen/**
+      - go.mod
+      - go.sum
       - go.work
       - go.work.sum
       - .github/workflows/agent-package.yml
@@ -18,6 +25,13 @@ on:
       - packages/agent/**
       - contracts/**
       - package-manager/**
+      - e2e/**
+      - internal/**
+      - testsupport/**
+      - proto/**
+      - gen/**
+      - go.mod
+      - go.sum
       - go.work
       - go.work.sum
       - .github/workflows/agent-package.yml

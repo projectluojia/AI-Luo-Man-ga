@@ -9,6 +9,8 @@ on:
     paths:
       - contracts/**
       - package-manager/**
+      - go.mod
+      - go.sum
       - ailuo.toml
       - go.work
       - go.work.sum
@@ -17,6 +19,8 @@ on:
     paths:
       - contracts/**
       - package-manager/**
+      - go.mod
+      - go.sum
       - ailuo.toml
       - go.work
       - go.work.sum
