@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/capability"
+	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/capability"
 )
 
 // Package 是分发、版本与升级单位；Component 是运行单元，每个组件恰好一种
@@ -124,10 +124,15 @@ func ValidateManifest(manifest Manifest) error {
 			return ErrInvalidFormat
 		}
 	}
+	seenDependencies := make(map[string]struct{}, len(manifest.Dependencies))
 	for _, dep := range manifest.Dependencies {
 		if err := ValidateDependency(dep); err != nil {
 			return ErrInvalidFormat
 		}
+		if _, duplicate := seenDependencies[dep.ID]; duplicate {
+			return ErrInvalidFormat
+		}
+		seenDependencies[dep.ID] = struct{}{}
 	}
 	if len(manifest.Extensions) > 0 && !json.Valid(manifest.Extensions) {
 		return ErrInvalidFormat
@@ -261,7 +266,7 @@ func ValidateLock(lock Lock, manifest Manifest) error {
 	if _, err := ParseVersion(lock.PackageVersion); err != nil {
 		return ErrInvalidFormat
 	}
-	if !isSHA256Hex(lock.ManifestSHA256) {
+	if !IsSHA256Hex(lock.ManifestSHA256) {
 		return ErrInvalidFormat
 	}
 	if len(lock.Artifacts) != len(manifest.Components) {
@@ -277,7 +282,7 @@ func ValidateLock(lock Lock, manifest Manifest) error {
 			return ErrInvalidFormat
 		}
 		seen[artifact.ComponentID] = struct{}{}
-		if !isSHA256Hex(artifact.SHA256) {
+		if !IsSHA256Hex(artifact.SHA256) {
 			return ErrInvalidFormat
 		}
 		if !filepath.IsAbs(artifact.Path) || filepath.Clean(artifact.Path) != artifact.Path {
@@ -327,9 +332,9 @@ func IsPackageEntrypoint(value string) bool {
 	return IsPackagePath(value) && value != "." && !strings.ContainsRune(value, '/')
 }
 
-// isSHA256Hex 判断字符串是否为合法十六进制 SHA-256 摘要。只校验长度会让 64 个
+// IsSHA256Hex 判断字符串是否为合法十六进制 SHA-256 摘要。只校验长度会让 64 个
 // "g" 这类非十六进制垃圾通过 lock 校验，摘要比对之前就该拒掉。
-func isSHA256Hex(digest string) bool {
+func IsSHA256Hex(digest string) bool {
 	raw, err := hex.DecodeString(digest)
 	return err == nil && len(raw) == sha256.Size
 }

@@ -16,8 +16,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/packagecontract"
-	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/packageio"
+	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packagecontract"
+	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packageio"
 )
 
 // 以 GitHub Releases 作为包分发后端（REST，仅标准库）：发布走 tag+Release+

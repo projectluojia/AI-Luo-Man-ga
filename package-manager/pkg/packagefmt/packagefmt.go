@@ -19,8 +19,8 @@ import (
 
 	"github.com/BurntSushi/toml"
 
-	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/capability"
-	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/packagecontract"
+	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/capability"
+	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packagecontract"
 )
 
 // 源清单文件名的唯一约定（作者侧包定义）。
@@ -30,14 +30,14 @@ var ErrSourceInvalid = errors.New("invalid ailuo.toml source manifest")
 
 // sourceManifest 是 ailuo.toml 的完整结构。
 type sourceManifest struct {
-	Package      sourcePackage         `toml:"package"`
-	Components   []sourceComponent     `toml:"component"`
-	Storage      *sourceStorage        `toml:"storage,omitempty"`
-	Dependencies []sourceDependency    `toml:"dependency,omitempty"`
-	Tools        map[string]sourceTool `toml:"tool,omitempty"`
-	Service      *sourceService        `toml:"service,omitempty"`
-	Capabilities []sourceCapability    `toml:"capability,omitempty"`
-	Build        *BuildSpec            `toml:"build,omitempty"`
+	Package      sourcePackage               `toml:"package"`
+	Components   []sourceComponent           `toml:"component"`
+	Storage      *sourceStorage              `toml:"storage,omitempty"`
+	Dependencies map[string]sourceDependency `toml:"dependencies,omitempty"`
+	Tools        map[string]sourceTool       `toml:"tool,omitempty"`
+	Service      *sourceService              `toml:"service,omitempty"`
+	Capabilities []sourceCapability          `toml:"capability,omitempty"`
+	Build        *BuildSpec                  `toml:"build,omitempty"`
 }
 
 type sourcePackage struct {
@@ -80,8 +80,8 @@ type sourceStorage struct {
 }
 
 type sourceDependency struct {
-	ID         string `toml:"id"`
-	Constraint string `toml:"constraint"`
+	Version string `toml:"version"`
+	Source  string `toml:"source"`
 }
 
 // sourceTool 是 `[tool.<id>]` 表的字段；id 由键提供，version 继承 package。
@@ -164,9 +164,15 @@ func (s sourceManifest) convert() (packagecontract.Manifest, error) {
 			Retention:     s.Storage.Retention,
 		}
 	}
-	for _, dep := range s.Dependencies {
+	dependencyIDs := make([]string, 0, len(s.Dependencies))
+	for id := range s.Dependencies {
+		dependencyIDs = append(dependencyIDs, id)
+	}
+	sort.Strings(dependencyIDs)
+	for _, id := range dependencyIDs {
+		dep := s.Dependencies[id]
 		manifest.Dependencies = append(manifest.Dependencies, packagecontract.Dependency{
-			ID: dep.ID, Constraint: dep.Constraint,
+			ID: id, Constraint: dep.Version, Source: dep.Source,
 		})
 	}
 	if len(s.Components) == 0 {
