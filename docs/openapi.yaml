@@ -184,7 +184,7 @@ paths:
       summary: Invoke an enabled Capability with a governed payload
       description: >-
         Synchronous consumer entry point used by generated SDKs. The request body
-        is a single-input envelope; the App policy, permission narrowing, input
+        is a single-input envelope; the App Grant policy, resource matching, input
         schema validation and idempotency/confirmation governance are enforced by
         the kernel Dispatcher. Unknown request fields and trailing content are
         rejected.
@@ -245,7 +245,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
         "403":
-          description: The App is not granted the required permission.
+          description: The App or caller has no matching Capability Grant.
           content:
             application/json:
               schema:
@@ -948,7 +948,7 @@ components:
           description: Safe localized error message.
         result:
           type: string
-          description: Completed user-visible Run output; task text, prompts, reasoning, and Tool arguments are never included.
+          description: Completed user-visible Run output; task text, prompts, reasoning, and Capability arguments are never included.
         created_at:
           type: string
           format: date-time
