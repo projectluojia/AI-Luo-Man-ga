@@ -1,6 +1,7 @@
 package web
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -16,10 +17,65 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
 )
 
-// chatRequest 是产品前端的聊天契约：文本消息经受治理 Intake 进入平台标准链路，
-// 身份和会话只来自可信 Web 登录态。
+// chatRequest 是产品前端（LuoYing-Frontend）的聊天契约：文本消息经受治理
+// Intake 进入平台标准链路，身份和会话只来自可信 Web 登录态。
 type chatRequest struct {
-	Text string `json:"text"`
+	Text     string   `json:"text"`
+	ImageIDs []string `json:"image_ids"`
+	FileIDs  []string `json:"file_ids"`
+}
+
+func (r *chatRequest) UnmarshalJSON(data []byte) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	if _, err := decoder.Token(); err != nil {
+		return err
+	}
+	seen := make(map[string]struct{}, len(fields))
+	for decoder.More() {
+		token, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		key, ok := token.(string)
+		if !ok {
+			return fmt.Errorf("chat field name must be a string")
+		}
+		if _, exists := seen[key]; exists {
+			return fmt.Errorf("duplicate chat field %q", key)
+		}
+		seen[key] = struct{}{}
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return err
+		}
+	}
+	if _, err := decoder.Token(); err != nil {
+		return err
+	}
+	for key := range fields {
+		if key != "text" && key != "image_ids" && key != "file_ids" {
+			return fmt.Errorf("unknown chat field %q", key)
+		}
+	}
+	var wire struct {
+		Text     string   `json:"text"`
+		ImageIDs []string `json:"image_ids"`
+		FileIDs  []string `json:"file_ids"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	for _, key := range []string{"image_ids", "file_ids"} {
+		if raw, exists := fields[key]; exists && bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+			return fmt.Errorf("chat field %q cannot be null", key)
+		}
+	}
+	r.Text, r.ImageIDs, r.FileIDs = wire.Text, wire.ImageIDs, wire.FileIDs
+	return nil
 }
 
 // chatStream 提供前端流式聊天契约：POST /chat/stream。请求经标准 Intake →
@@ -132,6 +188,10 @@ func (s *Server) decodeChatRequest(writer http.ResponseWriter, request *http.Req
 	input.Text = strings.TrimSpace(input.Text)
 	if input.Text == "" || utf8.RuneCountInString(input.Text) > 4000 {
 		access.WriteJSON(writer, http.StatusBadRequest, map[string]string{"code": "invalid_message", "message": "消息长度必须为 1 至 4000 个字符"})
+		return nil, false
+	}
+	if len(input.ImageIDs) > 0 || len(input.FileIDs) > 0 {
+		access.WriteJSON(writer, http.StatusBadRequest, map[string]string{"code": "attachments_unsupported", "message": "附件消息暂不支持"})
 		return nil, false
 	}
 	return &input, true
