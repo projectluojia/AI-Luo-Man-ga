@@ -59,6 +59,13 @@ type schemaSpec struct {
 	UniqueItems     json.RawMessage `json:"uniqueItems"`
 	Pattern         json.RawMessage `json:"pattern"`
 	ContentEncoding json.RawMessage `json:"contentEncoding"`
+	// $schema 是方言声明（ts-json-schema-generator 等工具会自动带上），
+	// 不参与类型派生，按 JSON Schema 规范允许出现。
+	SchemaDialect json.RawMessage `json:"$schema"`
+	// definitions/$defs 只能经 $ref 引用才生效，而 $ref 在下方被显式拒绝，
+	// 因此未引用的定义块是惰性死重，容忍其存在但不参与派生。
+	Definitions       json.RawMessage `json:"definitions"`
+	SchemaDefinitions json.RawMessage `json:"$defs"`
 	// 组合/引用结构（改变类型语义，生成器无法正确表达 → 显式拒绝）：
 	OneOf []json.RawMessage `json:"oneOf"`
 	AllOf []json.RawMessage `json:"allOf"`
