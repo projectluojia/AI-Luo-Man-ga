@@ -187,19 +187,7 @@ func (c *Catalog) readRecordByID(ctx context.Context, id string) (installedRecor
 			if !entry.IsDir() {
 				return installedRecord{}, ErrInvalidCatalog
 			}
-			candidate := id == name || strings.HasPrefix(id, name+".")
-			if (pass == 0) != candidate {
-				continue
-			}
-			records, err := c.readPackage(ctx, filepath.Join(c.root, name))
-			if err != nil {
-				return installedRecord{}, err
-			}
-			for _, record := range records {
-				if record.record.Runtime.ID == id {
-					return record, nil
-				}
-			}
+			continue
 		}
 		if strings.HasPrefix(entry.Name(), ".") || !entry.IsDir() {
 			return installedRecord{}, ErrInvalidCatalog
