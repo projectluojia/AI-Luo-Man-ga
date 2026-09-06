@@ -165,7 +165,7 @@ func TestInstallRejectsFileProcessPathOutsideArtifact(t *testing.T) {
 	if err := os.WriteFile(manifestPath, manifestBytes, 0o640); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := packmgr.Install(context.Background(), t.TempDir(), source); !errors.Is(err, packagecontract.ErrInvalidFormat) {
+	if _, err := packmgr.Install(context.Background(), packageiotest.TempDir(t), source); !errors.Is(err, packagecontract.ErrInvalidFormat) {
 		t.Fatalf("Install with file process path outside artifact = %v, want ErrInvalidFormat", err)
 	}
 }
@@ -413,7 +413,7 @@ func TestInstallAcceptsRelativeSourceDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := packmgr.Install(context.Background(), t.TempDir(), relative); err != nil {
+	if _, err := packmgr.Install(context.Background(), packageiotest.TempDir(t), relative); err != nil {
 		t.Fatalf("Install relative source: %v", err)
 	}
 }

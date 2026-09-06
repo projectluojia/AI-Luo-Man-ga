@@ -111,7 +111,7 @@ path = "packages/demo"
 }
 
 func TestSyncPreservesValidatedPackagesOutsideProjectClosure(t *testing.T) {
-	projectDir := t.TempDir()
+	projectDir := packageiotest.TempDir(t)
 	packageDir := filepath.Join(projectDir, "packages", "demo")
 	extraDir := filepath.Join(projectDir, "packages", "extra")
 	writePackage(t, packageDir, "demo.pkg", "1.0.0", "demo.wasm", "")
