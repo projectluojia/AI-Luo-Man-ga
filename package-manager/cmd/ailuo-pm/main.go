@@ -107,8 +107,13 @@ func runPackageCommand(parent context.Context, arguments []string, output io.Wri
 			if statErr != nil {
 				return statErr
 			}
+			// packmgr fail-closed 要求绝对路径；CLI 负责把用户输入的本地路径解析为绝对路径。
+			absoluteSource, absErr := filepath.Abs(source)
+			if absErr != nil {
+				return absErr
+			}
 			if !info.IsDir() {
-				record, err = packmgr.Install(ctx, *root, source)
+				record, err = packmgr.Install(ctx, *root, absoluteSource)
 			} else {
 				manifest, manifestBytes, resolveErr := resolveSource(ctx, source)
 				if resolveErr != nil {
@@ -137,7 +142,11 @@ func runPackageCommand(parent context.Context, arguments []string, output io.Wri
 		if flags.NArg() != 2 {
 			return fmt.Errorf("configuration error: upgrade requires package id and source package directory")
 		}
-		record, err := packmgr.Upgrade(ctx, *root, flags.Arg(0), flags.Arg(1))
+		absoluteSource, absErr := filepath.Abs(flags.Arg(1))
+		if absErr != nil {
+			return absErr
+		}
+		record, err := packmgr.Upgrade(ctx, *root, flags.Arg(0), absoluteSource)
 		if err != nil {
 			return err
 		}

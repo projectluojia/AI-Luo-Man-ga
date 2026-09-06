@@ -33,7 +33,14 @@ id = "explicit.test.hello"
 name = "Hello"
 description = "Return a greeting"
 schema = """{"type":"object","properties":{"name":{"type":"string"}}}"""
-side_effect = "read"
+
+[capability.authorization]
+resource_type = "test.resource"
+
+[capability.execution]
+effect_target = "none"
+replay = "safe"
+confirmation_floor = "policy"
 `
 	if err := os.WriteFile(filepath.Join(sourceDir, "ailuo.toml"), []byte(manifest), 0o640); err != nil {
 		t.Fatal(err)

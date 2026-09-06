@@ -27,22 +27,21 @@ var (
 // Config 是 App 的持久配置。ExecutorConfig 是只由具体 Executor 解释的
 // 不透明 JSON；Core 只负责限制大小、验证 JSON 和参与修订摘要，不解析其中字段。
 type Config struct {
-	AppID               string
-	Revision            string
-	Generation          uint64
-	Enabled             bool
-	ExecutorID          string
-	ExecutorConfig      json.RawMessage
-	MaxSteps            uint32
-	MaxCapabilityCalls  uint32
-	MaxExecutionUnits   uint64
-	MaxOutputBytes      uint64
-	MaxCostMicrousd     uint64
-	ExecutionTimeout    time.Duration
-	EnabledCapabilities []string
-	PermissionScope     []string
-	CreatedAt           time.Time
-	UpdatedAt           time.Time
+	AppID              string
+	Revision           string
+	Generation         uint64
+	Enabled            bool
+	ExecutorID         string
+	ExecutorConfig     json.RawMessage
+	MaxSteps           uint32
+	MaxCapabilityCalls uint32
+	MaxExecutionUnits  uint64
+	MaxOutputBytes     uint64
+	MaxCostMicrousd    uint64
+	ExecutionTimeout   time.Duration
+	CapabilityGrants   []capability.Grant
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
 }
 
 type Source interface {
@@ -51,25 +50,37 @@ type Source interface {
 }
 
 type PolicySnapshot struct {
-	AppID               string
-	Revision            string
-	Generation          uint64
-	Enabled             bool
-	EnabledCapabilities []string
-	PermissionScope     []string
+	AppID            string
+	Revision         string
+	Generation       uint64
+	Enabled          bool
+	CapabilityGrants []capability.Grant
 }
 
-func (s PolicySnapshot) CapabilityEnabled(capabilityID string) bool {
-	index := sort.SearchStrings(s.EnabledCapabilities, capabilityID)
-	return index < len(s.EnabledCapabilities) && s.EnabledCapabilities[index] == capabilityID
+// CapabilityIDs 返回当前策略可投影的 Capability 标识，结果按稳定顺序排列。
+func (s PolicySnapshot) CapabilityIDs() []string {
+	ids := make([]string, 0, len(s.CapabilityGrants))
+	for _, grant := range s.CapabilityGrants {
+		ids = append(ids, grant.CapabilityID)
+	}
+	sort.Strings(ids)
+	return unique(ids)
+}
+
+// HasCapability 判断策略是否包含指定 Capability 的授权。
+func (s PolicySnapshot) HasCapability(capabilityID string) bool {
+	for _, grant := range s.CapabilityGrants {
+		if grant.CapabilityID == capabilityID {
+			return true
+		}
+	}
+	return false
 }
 
 func (s PolicySnapshot) Verify(expectedAppID string) error {
 	if s.AppID != expectedAppID || !stableIDPattern.MatchString(s.AppID) ||
 		!stableIDPattern.MatchString(s.Revision) || s.Generation == 0 ||
-		len(s.EnabledCapabilities) > 256 || len(s.PermissionScope) > 256 ||
-		!validValues(s.EnabledCapabilities, capability.IsStableID) ||
-		!validValues(s.PermissionScope, id.IsPermission) {
+		len(s.CapabilityGrants) > 256 || !validGrants(s.AppID, s.CapabilityGrants) {
 		return ErrInvalid
 	}
 	return nil
@@ -100,8 +111,7 @@ func (p *PersistentPolicy) Snapshot(ctx context.Context, appID string) (PolicySn
 func Snapshot(config Config) PolicySnapshot {
 	return PolicySnapshot{
 		AppID: config.AppID, Revision: config.Revision, Generation: config.Generation, Enabled: config.Enabled,
-		EnabledCapabilities: append([]string(nil), config.EnabledCapabilities...),
-		PermissionScope:     append([]string(nil), config.PermissionScope...),
+		CapabilityGrants: cloneGrants(config.CapabilityGrants),
 	}
 }
 
@@ -113,34 +123,36 @@ func Normalize(config Config) (Config, error) {
 	} else {
 		config.ExecutorConfig = append(json.RawMessage(nil), config.ExecutorConfig...)
 	}
-	if len(config.EnabledCapabilities) > 256 || len(config.PermissionScope) > 256 {
+	if len(config.CapabilityGrants) > 256 {
 		return Config{}, ErrInvalid
 	}
-	config.EnabledCapabilities = canonical(config.EnabledCapabilities)
-	config.PermissionScope = canonical(config.PermissionScope)
+	var err error
+	config.CapabilityGrants, err = normalizeGrants(config.AppID, config.CapabilityGrants)
+	if err != nil {
+		return Config{}, err
+	}
 	if err := Validate(config); err != nil {
 		return Config{}, err
 	}
 	revisionInput := struct {
-		AppID               string
-		Enabled             bool
-		ExecutorID          string
-		ExecutorConfig      json.RawMessage
-		MaxSteps            uint32
-		MaxCapabilityCalls  uint32
-		MaxExecutionUnits   uint64
-		MaxOutputBytes      uint64
-		MaxCostMicrousd     uint64
-		ExecutionTimeoutMS  int64
-		EnabledCapabilities []string
-		PermissionScope     []string
+		AppID              string
+		Enabled            bool
+		ExecutorID         string
+		ExecutorConfig     json.RawMessage
+		MaxSteps           uint32
+		MaxCapabilityCalls uint32
+		MaxExecutionUnits  uint64
+		MaxOutputBytes     uint64
+		MaxCostMicrousd    uint64
+		ExecutionTimeoutMS int64
+		CapabilityGrants   []capability.Grant
 	}{
 		AppID: config.AppID, Enabled: config.Enabled, ExecutorID: config.ExecutorID,
 		ExecutorConfig: config.ExecutorConfig, MaxSteps: config.MaxSteps,
 		MaxCapabilityCalls: config.MaxCapabilityCalls, MaxExecutionUnits: config.MaxExecutionUnits,
 		MaxOutputBytes: config.MaxOutputBytes, MaxCostMicrousd: config.MaxCostMicrousd,
-		ExecutionTimeoutMS:  config.ExecutionTimeout.Milliseconds(),
-		EnabledCapabilities: config.EnabledCapabilities, PermissionScope: config.PermissionScope,
+		ExecutionTimeoutMS: config.ExecutionTimeout.Milliseconds(),
+		CapabilityGrants:   config.CapabilityGrants,
 	}
 	encoded, err := json.Marshal(revisionInput)
 	if err != nil {
@@ -159,9 +171,7 @@ func Validate(config Config) error {
 		config.MaxOutputBytes < 1 || config.MaxOutputBytes > 256<<10 ||
 		config.MaxCostMicrousd > 1_000_000_000_000_000 ||
 		config.ExecutionTimeout < 100*time.Millisecond || config.ExecutionTimeout > 5*time.Minute ||
-		len(config.EnabledCapabilities) > 256 || len(config.PermissionScope) > 256 ||
-		!validValues(config.EnabledCapabilities, capability.IsStableID) ||
-		!validValues(config.PermissionScope, id.IsPermission) {
+		len(config.CapabilityGrants) > 256 || !validGrants(config.AppID, config.CapabilityGrants) {
 		return ErrInvalid
 	}
 	return nil
@@ -207,18 +217,49 @@ func VerifyCurrent(config Config, expectedAppID string) error {
 	return Verify(config, expectedAppID, "")
 }
 
-func canonical(values []string) []string {
-	result := make([]string, len(values))
-	copy(result, values)
-	sort.Strings(result)
+func normalizeGrants(appID string, grants []capability.Grant) ([]capability.Grant, error) {
+	result := cloneGrants(grants)
+	for index := range result {
+		grant, err := capability.NormalizeGrant(result[index])
+		if err != nil || grant.AppID != appID {
+			return nil, ErrInvalid
+		}
+		result[index] = grant
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
+	if !validGrants(appID, result) {
+		return nil, ErrInvalid
+	}
+	return result, nil
+}
+
+func cloneGrants(grants []capability.Grant) []capability.Grant {
+	result := make([]capability.Grant, len(grants))
+	copy(result, grants)
+	for index := range result {
+		result[index].Resource.IDs = append([]string(nil), result[index].Resource.IDs...)
+	}
 	return result
 }
 
-func validValues(values []string, valid func(string) bool) bool {
-	for index, value := range values {
-		if !valid(value) || (index > 0 && values[index-1] >= value) {
+func validGrants(appID string, grants []capability.Grant) bool {
+	for index, grant := range grants {
+		if grant.AppID != appID || (index > 0 && grants[index-1].ID >= grant.ID) {
+			return false
+		}
+		if _, err := capability.NormalizeGrant(grant); err != nil {
 			return false
 		}
 	}
 	return true
+}
+
+func unique(values []string) []string {
+	result := values[:0]
+	for _, value := range values {
+		if len(result) == 0 || result[len(result)-1] != value {
+			result = append(result, value)
+		}
+	}
+	return result
 }

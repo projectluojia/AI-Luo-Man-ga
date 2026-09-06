@@ -96,12 +96,19 @@ func SyncWithOptions(ctx context.Context, projectFile, installRoot string, clien
 		return projectcontract.Lock{}, err
 	}
 	defer func() { _ = os.RemoveAll(tempDir) }()
+	// 项目根与依赖候选统一换算成解析后的真实路径：Windows 短路径（8.3）或
+	// 符号链接拼写差异会让 filepath.Rel 产生 ../ 逃逸，污染锁内的来源键。
+	resolvedProjectDir, err := filepath.EvalSymlinks(projectDir)
+	if err != nil {
+		return projectcontract.Lock{}, err
+	}
 	resolver := &resolver{
-		projectDir: projectDir,
-		tempDir:    tempDir,
-		client:     client,
-		cache:      make(map[string]candidate),
-		locked:     previousLock,
+		projectDir:         projectDir,
+		resolvedProjectDir: resolvedProjectDir,
+		tempDir:            tempDir,
+		client:             client,
+		cache:              make(map[string]candidate),
+		locked:             previousLock,
 	}
 	if options.Update {
 		resolver.locked = map[string]projectcontract.LockedPackage{}
@@ -131,7 +138,7 @@ func SyncWithOptions(ctx context.Context, projectFile, installRoot string, clien
 	// 先在安装根同级构造完整候选闭包。安装根是项目锁的物化视图，
 	// 因而提交时整体替换，而不是把多个包逐个暴露给运行时。
 	parent := filepath.Dir(installRoot)
-	stageRoot, err := os.MkdirTemp(parent, ".ailuo-stage-")
+	stageRoot, err := packageio.CreateSecureDirectory(parent, ".ailuo-stage-")
 	if err != nil {
 		return projectcontract.Lock{}, err
 	}
@@ -247,11 +254,12 @@ type mergedRequirement struct {
 }
 
 type resolver struct {
-	projectDir string
-	tempDir    string
-	client     *packmgr.GitHubClient
-	cache      map[string]candidate
-	locked     map[string]projectcontract.LockedPackage
+	projectDir         string
+	resolvedProjectDir string
+	tempDir            string
+	client             *packmgr.GitHubClient
+	cache              map[string]candidate
+	locked             map[string]projectcontract.LockedPackage
 }
 
 func (r *resolver) resolve(ctx context.Context, roots []projectcontract.Dependency) (map[string]candidate, error) {
@@ -345,11 +353,9 @@ func (r *resolver) resolveSource(baseDir, source string) (sourceRef, error) {
 		if err != nil {
 			return sourceRef{}, fmt.Errorf("%w: 本地依赖路径无法安全解析: %v", ErrResolutionFailed, err)
 		}
-		logicalAbsolute, err := filepath.Abs(filepath.Join(baseDir, filepath.FromSlash(relative)))
-		if err != nil {
-			return sourceRef{}, fmt.Errorf("%w: 本地依赖路径无法解析: %v", ErrResolutionFailed, err)
-		}
-		projectRelative, err := filepath.Rel(r.projectDir, logicalAbsolute)
+		// 相对值统一基于解析后的真实项目根：项目根可能是 Windows 短路径（8.3）
+		// 或符号链接拼写，直接与解析后的候选路径求相对值会产生 ../ 逃逸键。
+		projectRelative, err := filepath.Rel(r.resolvedProjectDir, absolute)
 		if err != nil {
 			return sourceRef{}, fmt.Errorf("%w: 本地依赖路径无法转换为项目相对路径: %v", ErrResolutionFailed, err)
 		}
@@ -1157,7 +1163,7 @@ func buildLock(ctx context.Context, root string, manifest projectcontract.Manife
 		})
 	}
 	if err := projectcontract.ValidateLock(lock, manifest); err != nil {
-		return projectcontract.Lock{}, err
+		return projectcontract.Lock{}, fmt.Errorf("DEBUG-LOCK: %w", err)
 	}
 	return lock, nil
 }

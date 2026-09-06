@@ -48,10 +48,6 @@ func TestIdentitySchemaEnforcesConstraints(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	permissions, err := store.EffectivePermissions(ctx, "app-a", "user-1")
-	if err != nil || len(permissions) != 0 {
-		t.Fatalf("effective permissions=%v err=%v, want empty", permissions, err)
-	}
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -70,8 +66,12 @@ func TestIdentitySchemaEnforcesConstraints(t *testing.T) {
 		t.Fatalf("schema version=%d err=%v, want a recorded baseline version", version, err)
 	}
 	var tables int
-	if err := db.QueryRow(`SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN ('users','external_identities','app_memberships','roles','permission_grants','identity_binding_revisions')`).Scan(&tables); err != nil || tables != 6 {
-		t.Fatalf("identity tables=%d err=%v, want 6", tables, err)
+	if err := db.QueryRow(`SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN ('users','external_identities','app_memberships','roles','identity_binding_revisions')`).Scan(&tables); err != nil || tables != 5 {
+		t.Fatalf("identity tables=%d err=%v, want 5", tables, err)
+	}
+	var permissionTables int
+	if err := db.QueryRow(`SELECT count(*) FROM sqlite_master WHERE type='table' AND name='permission_grants'`).Scan(&permissionTables); err != nil || permissionTables != 0 {
+		t.Fatalf("legacy permission tables=%d err=%v, want 0", permissionTables, err)
 	}
 	// CHECK：非法用户状态被数据库拒绝。
 	if _, err := db.Exec(`INSERT INTO users(user_id,status,created_at) VALUES('bad','banned','2026-01-01T00:00:00Z')`); err == nil {
@@ -88,13 +88,6 @@ func TestIdentitySchemaEnforcesConstraints(t *testing.T) {
 	// 唯一键：重复 user_id 被拒绝。
 	if _, err := db.Exec(`INSERT INTO users(user_id,status,created_at) VALUES('user-1','active','2026-01-01T00:00:00Z')`); err == nil {
 		t.Fatal("database accepted duplicate user_id")
-	}
-	// CHECK：permission_grants 必须恰好一个 subject。
-	if _, err := db.Exec(`INSERT INTO permission_grants(app_id,permission,granted_at) VALUES('app-a','p','2026-01-01T00:00:00Z')`); err == nil {
-		t.Fatal("database accepted grant without subject")
-	}
-	if _, err := db.Exec(`INSERT INTO permission_grants(app_id,user_id,role_id,permission,granted_at) VALUES('app-a','user-1','member','p','2026-01-01T00:00:00Z')`); err == nil {
-		t.Fatal("database accepted grant with both subjects")
 	}
 	// CHECK：role_ids 必须是合法 JSON 数组。
 	if _, err := db.Exec(`INSERT INTO app_memberships(app_id,user_id,role_ids,created_at,updated_at) VALUES('app-a','user-2','not-json','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`); err == nil {
@@ -146,30 +139,6 @@ func TestIdentityDatabaseEnforcesUniqueKeysAndForeignKeys(t *testing.T) {
 	if _, err := db.Exec(`INSERT INTO app_memberships(app_id,user_id,role_ids,created_at,updated_at) VALUES('app','ghost','[]','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`); err == nil {
 		t.Fatal("database accepted a membership for a missing user")
 	}
-	// 外键：角色权限授予必须指向已存在的角色。
-	if _, err := db.Exec(`INSERT INTO roles(app_id,role_id,name,description,created_at) VALUES('app','member','成员','','2026-01-01T00:00:00Z')`); err != nil {
-		t.Fatalf("first role: %v", err)
-	}
-	if _, err := db.Exec(`INSERT INTO permission_grants(app_id,role_id,permission,granted_at) VALUES('app','ghost-role','bus.read','2026-01-01T00:00:00Z')`); err == nil {
-		t.Fatal("database accepted a grant for a missing role")
-	}
-	// 外键：用户直接授予必须指向已存在的成员关系。
-	if _, err := db.Exec(`INSERT INTO permission_grants(app_id,user_id,permission,granted_at) VALUES('app','user-b','bus.read','2026-01-01T00:00:00Z')`); err == nil {
-		t.Fatal("database accepted a grant for a memberless user")
-	}
-	// 部分唯一索引：同一用户同一权限只允许一条授予记录。
-	if _, err := db.Exec(`INSERT INTO permission_grants(app_id,user_id,permission,granted_at) VALUES('app','user-a','bus.write','2026-01-01T00:00:00Z')`); err != nil {
-		t.Fatalf("first user grant: %v", err)
-	}
-	if _, err := db.Exec(`INSERT INTO permission_grants(app_id,user_id,permission,granted_at) VALUES('app','user-a','bus.write','2026-01-01T00:00:01Z')`); err == nil {
-		t.Fatal("database accepted duplicate user grant")
-	}
-	if _, err := db.Exec(`INSERT INTO permission_grants(app_id,role_id,permission,granted_at) VALUES('app','member','bus.read','2026-01-01T00:00:00Z')`); err != nil {
-		t.Fatalf("first role grant: %v", err)
-	}
-	if _, err := db.Exec(`INSERT INTO permission_grants(app_id,role_id,permission,granted_at) VALUES('app','member','bus.read','2026-01-01T00:00:01Z')`); err == nil {
-		t.Fatal("database accepted duplicate role grant")
-	}
 }
 
 // 验收标准 3 的存储层形态：全部查询同时约束 app_id，跨 App 按不存在处理。
@@ -188,15 +157,7 @@ func TestIdentityStoreEnforcesAppIsolation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	permissions, err := store.EffectivePermissions(ctx, "app-a", "user-1")
-	if err != nil || len(permissions) != 0 {
-		t.Fatalf("app-a permissions=%v err=%v", permissions, err)
-	}
-	// 同一用户在 App B 没有任何权限与成员关系。
-	permissionsB, err := store.EffectivePermissions(ctx, "app-b", "user-1")
-	if err != nil || len(permissionsB) != 0 {
-		t.Fatalf("app-b permissions=%v err=%v, want empty", permissionsB, err)
-	}
+	// 同一用户在 App B 没有成员关系。
 	if _, err := store.GetMembership(ctx, "app-b", "user-1"); !errors.Is(err, identity.ErrNotFound) {
 		t.Fatalf("cross-app membership error=%v, want ErrNotFound", err)
 	}

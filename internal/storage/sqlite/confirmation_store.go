@@ -22,10 +22,10 @@ func (s *Store) Create(ctx context.Context, record confirmation.Confirmation) (r
 	result, err := s.db.ExecContext(ctx, `
 INSERT INTO confirmations(
 	  app_id,confirmation_id,echo_id,run_id,call_id,capability_id,
-  side_effect,idempotency_key,argument_digest,status,expires_at,created_at
+  effect_target,idempotency_key,argument_digest,status,expires_at,created_at
 ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
 		record.AppID, record.ConfirmationID, record.EchoID, record.RunID, record.CallID,
-		record.CapabilityID, record.SideEffect,
+		record.CapabilityID, record.EffectTarget,
 		record.IdempotencyKey, record.ArgumentDigest, record.Status,
 		record.ExpiresAt.UTC().Format(time.RFC3339Nano), record.CreatedAt.UTC().Format(time.RFC3339Nano),
 	)
@@ -54,13 +54,13 @@ func (s *Store) Get(ctx context.Context, appID, confirmationID string) (_ confir
 	var decidedAt sql.NullString
 	err := s.db.QueryRowContext(ctx, `
 SELECT app_id,confirmation_id,echo_id,run_id,call_id,capability_id,
-       side_effect,idempotency_key,argument_digest,status,expires_at,coalesce(confirmed_by,''),decided_at,created_at
+       effect_target,idempotency_key,argument_digest,status,expires_at,coalesce(confirmed_by,''),decided_at,created_at
 FROM confirmations
 WHERE app_id=? AND confirmation_id=?`,
 		appID, confirmationID,
 	).Scan(
 		&record.AppID, &record.ConfirmationID, &record.EchoID, &record.RunID, &record.CallID,
-		&record.CapabilityID, &record.SideEffect,
+		&record.CapabilityID, &record.EffectTarget,
 		&record.IdempotencyKey, &record.ArgumentDigest, &record.Status,
 		&expiresAt, &record.ConfirmedBy, &decidedAt, &createdAt,
 	)

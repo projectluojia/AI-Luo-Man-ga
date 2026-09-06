@@ -93,8 +93,8 @@ func requestConfirmation(
 	expiresAt time.Time,
 ) confirmation.Confirmation {
 	t.Helper()
-	if spec.SideEffect == "" {
-		spec.SideEffect = confirmation.SideEffectExternal
+	if spec.Execution.EffectTarget == "" {
+		spec.Execution.EffectTarget = capability.EffectExternal
 	}
 	record, err := service.Request(context.Background(), appID, echoID, runID, callID, spec, []byte(arguments), expiresAt)
 	if err != nil {
@@ -110,7 +110,7 @@ func verifyRequest(record confirmation.Confirmation) runtime.ConfirmationRequest
 		RunID:          record.RunID,
 		ConfirmationID: record.ConfirmationID,
 		CapabilityID:   record.CapabilityID,
-		SideEffect:     record.SideEffect,
+		EffectTarget:   record.EffectTarget,
 		IdempotencyKey: record.IdempotencyKey,
 	}
 }
@@ -267,7 +267,7 @@ func TestServiceVerifyRejectsScopeMismatch(t *testing.T) {
 		"跨 Capability": func(r *runtime.ConfirmationRequest) { r.CapabilityID = "other.capability" },
 		"跨 Echo":       func(r *runtime.ConfirmationRequest) { r.EchoID = "echo-other" },
 		"跨 Run":        func(r *runtime.ConfirmationRequest) { r.RunID = "run-other" },
-		"跨副作用类型":       func(r *runtime.ConfirmationRequest) { r.SideEffect = confirmation.SideEffectWrite },
+		"跨副作用类型":       func(r *runtime.ConfirmationRequest) { r.EffectTarget = capability.EffectState },
 		"跨幂等键":         func(r *runtime.ConfirmationRequest) { r.IdempotencyKey = "operation-other" },
 	} {
 		request := verifyRequest(record)
@@ -604,7 +604,7 @@ func TestServiceRequestRejectsInvalidInputs(t *testing.T) {
 	}
 	if _, err := service.Request(ctx, "app", "echo", "run", "call-1", confirmation.RequestSpec{
 		CapabilityID:   "campus.bus.notify",
-		SideEffect:     "invalid",
+		Execution:      capability.ExecutionSpec{EffectTarget: "invalid"},
 		IdempotencyKey: "operation-2",
 	}, nil, clock.current().Add(time.Hour)); !errors.Is(err, confirmation.ErrInvalidRequest) {
 		t.Fatalf("invalid side effect got %v, want ErrInvalidRequest", err)
@@ -612,14 +612,14 @@ func TestServiceRequestRejectsInvalidInputs(t *testing.T) {
 	// 只读副作用不需要确认，必须在请求边界拒绝（确认仅治理 write/external）。
 	if _, err := service.Request(ctx, "app", "echo", "run", "call-1", confirmation.RequestSpec{
 		CapabilityID:   "campus.bus.notify",
-		SideEffect:     "read",
+		Execution:      capability.ExecutionSpec{EffectTarget: capability.EffectNone},
 		IdempotencyKey: "operation-3",
 	}, nil, clock.current().Add(time.Hour)); !errors.Is(err, confirmation.ErrInvalidRequest) {
 		t.Fatalf("read side effect got %v, want ErrInvalidRequest", err)
 	}
 	if _, err := service.Request(ctx, "app", "echo", "run", "call-1", confirmation.RequestSpec{
 		CapabilityID:   "campus.bus.notify",
-		SideEffect:     "write",
+		Execution:      capability.ExecutionSpec{EffectTarget: capability.EffectState},
 		IdempotencyKey: " ",
 	}, nil, clock.current().Add(time.Hour)); !errors.Is(err, confirmation.ErrInvalidRequest) {
 		t.Fatalf("invalid idempotency key got %v, want ErrInvalidRequest", err)
@@ -669,11 +669,11 @@ func TestDispatcherExecutesApprovedSideEffectExactlyOnce(t *testing.T) {
 	policy.Enable("app", "external-capability")
 	executions := 0
 	registerCapability(t, reg, capability.CapabilitySpec{
-		ID:                   "external-capability",
-		Version:              "1.0.0",
-		InputSchemaJSON:      `{"type":"object","properties":{"value":{"type":"integer"}},"additionalProperties":false}`,
-		SideEffect:           capability.SideEffectExternal,
-		RequiresConfirmation: true,
+		ID:              "external-capability",
+		Version:         "1.0.0",
+		InputSchemaJSON: `{"type":"object","properties":{"value":{"type":"integer"}},"additionalProperties":false}`,
+		Authorization:   capability.AuthorizationSpec{ResourceType: "capability.resource"},
+		Execution:       capability.ExecutionSpec{EffectTarget: capability.EffectExternal, Replay: capability.ReplayIdempotencyKey, ConfirmationFloor: capability.ConfirmationRequired},
 	}, func(context.Context, contracts.RequestContext, json.RawMessage) (json.RawMessage, error) {
 		executions++
 		return json.RawMessage(`{"sent":true}`), nil
@@ -727,11 +727,11 @@ func TestDispatcherRejectsUnapprovedConfirmation(t *testing.T) {
 	policy := runtimetest.NewStaticAppPolicy()
 	policy.Enable("app", "external-capability")
 	registerCapability(t, reg, capability.CapabilitySpec{
-		ID:                   "external-capability",
-		Version:              "1.0.0",
-		InputSchemaJSON:      `{"type":"object","additionalProperties":false}`,
-		SideEffect:           capability.SideEffectExternal,
-		RequiresConfirmation: true,
+		ID:              "external-capability",
+		Version:         "1.0.0",
+		InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
+		Authorization:   capability.AuthorizationSpec{ResourceType: "capability.resource"},
+		Execution:       capability.ExecutionSpec{EffectTarget: capability.EffectExternal, Replay: capability.ReplayIdempotencyKey, ConfirmationFloor: capability.ConfirmationRequired},
 	}, func(context.Context, contracts.RequestContext, json.RawMessage) (json.RawMessage, error) {
 		t.Error("unapproved capability must never execute")
 		return json.RawMessage(`{}`), nil

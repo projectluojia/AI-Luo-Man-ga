@@ -310,10 +310,9 @@ func (r *grpcRuntime) Invoke(ctx context.Context, request contracts.RequestConte
 			RunId: request.RunID, ParentRunId: request.ParentRunID, CallDepth: uint32(request.CallDepth),
 			DeadlineUnixMs: deadlineUnixMilli(request.Deadline), IdempotencyKey: request.IdempotencyKey,
 			ConfirmationId: request.ConfirmationID, ProtocolVersion: request.ProtocolVersion,
-			PermissionScope: append([]string(nil), request.PermissionScope...),
-			CallChain:       append([]string(nil), request.CallChain...),
-			CallId:          request.CallID,
-			CapabilityId:    request.CapabilityID,
+			CallChain:    append([]string(nil), request.CallChain...),
+			CallId:       request.CallID,
+			CapabilityId: request.CapabilityID,
 		},
 		PayloadJson: append([]byte(nil), payload...),
 	})
@@ -392,7 +391,7 @@ func validateRuntimeInvoke(request contracts.RequestContext, payload json.RawMes
 		return err
 	}
 	if len(payload) == 0 || len(payload) > maxInvokePayloadBytes || !json.Valid(payload) ||
-		request.CallDepth > 64 || len(request.PermissionScope) > maxContextItems || len(request.CallChain) > maxContextItems {
+		request.CallDepth > 64 || len(request.CallChain) > maxContextItems {
 		return ErrRuntimeProtocol
 	}
 	values := []string{
@@ -400,7 +399,6 @@ func validateRuntimeInvoke(request contracts.RequestContext, payload json.RawMes
 		request.RunID, request.ParentRunID, request.CallID, request.IdempotencyKey, request.ConfirmationID, request.ProtocolVersion,
 		request.CapabilityID,
 	}
-	values = append(values, request.PermissionScope...)
 	values = append(values, request.CallChain...)
 	for _, value := range values {
 		if len(value) > maxContextValueBytes || !utf8.ValidString(value) || strings.ContainsAny(value, "\x00\r\n") {

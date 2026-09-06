@@ -40,7 +40,8 @@ func writeSourcePackage(t *testing.T, dir, id, version, mode, artifactName strin
 		Capabilities: []capability.CapabilitySpec{{
 			ID: id + ".capability", Version: version, Name: "测试能力", Description: "测试能力",
 			InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
-			SideEffect:      capability.SideEffectRead,
+			Authorization:   capability.AuthorizationSpec{ResourceType: "test.resource"},
+			Execution:       capability.ExecutionSpec{EffectTarget: capability.EffectNone, Replay: capability.ReplaySafe, ConfirmationFloor: capability.ConfirmationPolicy},
 		}},
 		Components: []packagecontract.Component{{
 			ID: "core", Mode: mode, Role: packagecontract.RoleProvider, Entrypoint: artifactName,
@@ -450,7 +451,9 @@ func TestUpgradeAndUninstall(t *testing.T) {
 	}
 }
 
-func TestInstallAcceptsRelativeSourceDirectory(t *testing.T) {
+// 相对源目录依赖调用方 CWD，无法纳入安全边界校验：Install 必须 fail closed，
+// 要求调用方提供绝对路径。
+func TestInstallRejectsRelativeSourceDirectory(t *testing.T) {
 	source, err := os.MkdirTemp(".", ".test-relative-")
 	if err != nil {
 		t.Fatal(err)
@@ -465,8 +468,8 @@ func TestInstallAcceptsRelativeSourceDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := packmgr.Install(context.Background(), packageiotest.TempDir(t), relative); err != nil {
-		t.Fatalf("Install relative source: %v", err)
+	if _, err := packmgr.Install(context.Background(), t.TempDir(), relative); err == nil {
+		t.Fatal("Install accepted a relative source directory")
 	}
 }
 

@@ -752,7 +752,7 @@ components:
     Capability:
       type: object
       additionalProperties: false
-      required: [id, version, name, description, service_id, input_schema_json, side_effect, requires_confirmation]
+      required: [id, version, name, description, input_schema_json, authorization, execution]
       properties:
         id:
           type: string
@@ -762,20 +762,36 @@ components:
           type: string
         description:
           type: string
-        service_id:
-          type: string
         input_schema_json:
           type: string
           description: Registered strict JSON Schema serialized as JSON.
-        side_effect:
-          type: string
-          enum: [none, read, write, external]
-        requires_confirmation:
-          type: boolean
-        required_permissions:
-          type: array
-          items:
-            type: string
+        authorization:
+          type: object
+          additionalProperties: false
+          required: [resource_type]
+          properties:
+            resource_type:
+              type: string
+            resource_id_from:
+              type: string
+              description: JSON Pointer to the concrete resource identifier in the input.
+            principal:
+              type: string
+              enum: [any, current_user]
+        execution:
+          type: object
+          additionalProperties: false
+          required: [effect_target, replay, confirmation_floor]
+          properties:
+            effect_target:
+              type: string
+              enum: [none, governed_state, external]
+            replay:
+              type: string
+              enum: [safe, idempotency_key, never]
+            confirmation_floor:
+              type: string
+              enum: [policy, required]
     EchoAccepted:
       type: object
       required: [echo_id, status_url, events_url]
@@ -845,25 +861,19 @@ components:
         - echo_id
         - attempt
         - status
-        - model
-        - model_config_version
         - protocol_version
         - max_steps
-        - max_tool_calls
-        - max_input_tokens
-        - max_output_tokens
-        - max_total_tokens
+        - max_capability_calls
+        - max_execution_units
         - max_output_bytes
         - max_cost_microusd
-        - provider_timeout_ms
-        - used_input_tokens
-        - used_output_tokens
-        - used_total_tokens
+        - execution_timeout_ms
+        - used_execution_units
         - used_cost_microusd
-        - used_provider_retries
+        - used_retries
         - deadline
         - available_at
-        - last_agent_sequence
+        - last_executor_sequence
         - created_at
       properties:
         run_id:
@@ -887,25 +897,15 @@ components:
         status:
           type: string
           enum: [queued, running, succeeded, failed, cancelled, timed_out]
-        model:
-          type: string
-        model_config_version:
-          type: string
         protocol_version:
           type: string
         max_steps:
           type: integer
-          minimum: 0
-        max_tool_calls:
+          minimum: 1
+        max_capability_calls:
           type: integer
           minimum: 1
-        max_input_tokens:
-          type: integer
-          minimum: 1
-        max_output_tokens:
-          type: integer
-          minimum: 1
-        max_total_tokens:
+        max_execution_units:
           type: integer
           minimum: 1
         max_output_bytes:
@@ -914,22 +914,16 @@ components:
         max_cost_microusd:
           type: integer
           minimum: 0
-        provider_timeout_ms:
+        execution_timeout_ms:
           type: integer
           minimum: 100
-        used_input_tokens:
-          type: integer
-          minimum: 0
-        used_output_tokens:
-          type: integer
-          minimum: 0
-        used_total_tokens:
+        used_execution_units:
           type: integer
           minimum: 0
         used_cost_microusd:
           type: integer
           minimum: 0
-        used_provider_retries:
+        used_retries:
           type: integer
           minimum: 0
           maximum: 320
@@ -943,16 +937,9 @@ components:
         lease_expires_at:
           type: string
           format: date-time
-        last_agent_sequence:
+        last_executor_sequence:
           type: integer
           minimum: 0
-        capability_scope:
-          type: array
-          maxItems: 64
-          uniqueItems: true
-          description: Persisted acceptance-time Capability ceiling; child Runs contain a further narrowed subset and never contain run.create_child.
-          items:
-            type: string
         error_code:
           type: string
           description: Stable safe error code.

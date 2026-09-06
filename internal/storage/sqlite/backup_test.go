@@ -207,7 +207,7 @@ func TestValidateBackupRejectsPreBaselineDatabase(t *testing.T) {
 	if _, err := db.Exec(`
 CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
 INSERT INTO schema_migrations(version,applied_at)
-VALUES(27,'2026-09-01T00:00:00Z');`); err != nil {
+VALUES(29,'2026-09-01T00:00:00Z');`); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Close(); err != nil {

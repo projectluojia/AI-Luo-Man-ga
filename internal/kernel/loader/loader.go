@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -95,17 +96,8 @@ func equalCapabilitySpecs(left, right []capability.CapabilitySpec) bool {
 		return false
 	}
 	for index := range left {
-		if left[index].ID != right[index].ID || left[index].Version != right[index].Version ||
-			left[index].Name != right[index].Name || left[index].Description != right[index].Description ||
-			left[index].InputSchemaJSON != right[index].InputSchemaJSON || left[index].SideEffect != right[index].SideEffect ||
-			left[index].RequiresConfirmation != right[index].RequiresConfirmation ||
-			len(left[index].RequiredPermissions) != len(right[index].RequiredPermissions) {
+		if !reflect.DeepEqual(left[index], right[index]) {
 			return false
-		}
-		for permissionIndex := range left[index].RequiredPermissions {
-			if left[index].RequiredPermissions[permissionIndex] != right[index].RequiredPermissions[permissionIndex] {
-				return false
-			}
 		}
 	}
 	return true

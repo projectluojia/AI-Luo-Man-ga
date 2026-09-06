@@ -55,11 +55,15 @@ func TestLoadConfigRejectsRelativeRuntimeInstallRoot(t *testing.T) {
 	}
 }
 
-func TestInitialCapabilityIDsUseInstalledMetadata(t *testing.T) {
-	ids := initialCapabilityIDs(registry.New(), []loader.InstalledRecord{{Runtime: loader.Manifest{Capabilities: []capability.CapabilitySpec{
+func TestInitialCapabilityGrantsUseInstalledMetadata(t *testing.T) {
+	grants := initialCapabilityGrants("campus-services", registry.New(), []loader.InstalledRecord{{Runtime: loader.Manifest{Capabilities: []capability.CapabilitySpec{
 		{ID: "z.capability"}, {ID: "a.capability"}, {ID: "z.capability"},
 	}}}})
 	want := []string{"a.capability", "z.capability"}
+	ids := make([]string, 0, len(grants))
+	for _, grant := range grants {
+		ids = append(ids, grant.CapabilityID)
+	}
 	if !slices.Equal(ids, want) {
 		t.Fatalf("initial capabilities=%v, want %v", ids, want)
 	}
@@ -222,7 +226,8 @@ func writeInstalledPackage(t *testing.T, root, packageID string) {
 		Capabilities: []capability.CapabilitySpec{{
 			ID: "main.extension.query", Version: "1.0.0", Name: "扩展查询", Description: "查询测试扩展",
 			InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
-			SideEffect:      capability.SideEffectRead,
+			Authorization:   capability.AuthorizationSpec{ResourceType: "main.extension.resource"},
+			Execution:       capability.ExecutionSpec{EffectTarget: capability.EffectNone, Replay: capability.ReplaySafe, ConfirmationFloor: capability.ConfirmationPolicy},
 		}},
 		Components: []packagecontract.Component{{ID: "main.extension", Mode: loader.ModeHosted, Role: packagecontract.RoleProvider, Entrypoint: "runtime-artifact", Exports: []string{"main.extension.query"}}},
 	})
@@ -245,4 +250,5 @@ func writeInstalledPackage(t *testing.T, root, packageID string) {
 	if err := os.WriteFile(filepath.Join(directory, "lock.json"), lockBytes, 0o640); err != nil {
 		t.Fatal(err)
 	}
+	packageiotest.SecureTree(t, directory)
 }

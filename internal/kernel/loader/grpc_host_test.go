@@ -144,8 +144,7 @@ func governedRuntimeRequest() contracts.RequestContext {
 		AppID: "app.test", EchoID: "echo-1", RequestID: "request-1", TraceID: "trace-1",
 		RunID: "run-1", ParentRunID: "parent-1", CallID: "call-1", CallDepth: 2,
 		IdempotencyKey: "operation-1", ConfirmationID: "confirmation-1", ProtocolVersion: "1.0",
-		CapabilityID:    "test.capability",
-		PermissionScope: []string{"test.read"}, CallChain: []string{"first"},
+		CapabilityID: "test.capability", CallChain: []string{"first"},
 	}
 }
 
@@ -198,7 +197,7 @@ func TestHostedGRPCHostSharesConnectionAndPreservesGovernedContext(t *testing.T)
 	if got.AppId != "app.test" || got.EchoId != "echo-1" || got.RunId != "run-1" ||
 		got.CallId != "call-1" || got.CallDepth != 2 || got.DeadlineUnixMs != 0 ||
 		got.CapabilityId != "test.capability" ||
-		len(got.PermissionScope) != 1 || got.PermissionScope[0] != "test.read" {
+		len(got.CallChain) != 1 || got.CallChain[0] != "first" {
 		t.Fatalf("governed context=%#v", got)
 	}
 

@@ -50,7 +50,9 @@ func registerPing(t *testing.T, reg *registry.Registry, policy *runtimetest.Stat
 		{
 			Spec: capability.CapabilitySpec{
 				ID: "echo.ping", Version: "1.0.0", Name: "echo",
-				InputSchemaJSON: pingSchema, SideEffect: capability.SideEffectRead,
+				InputSchemaJSON: pingSchema,
+				Authorization:   capability.AuthorizationSpec{ResourceType: "echo.ping"},
+				Execution:       capability.ExecutionSpec{EffectTarget: capability.EffectNone, Replay: capability.ReplaySafe, ConfirmationFloor: capability.ConfirmationPolicy},
 			},
 			Handler: func(_ context.Context, _ contracts.RequestContext, payload json.RawMessage) (json.RawMessage, error) {
 				return json.RawMessage(`{"echo":` + string(payload) + `}`), nil
@@ -59,7 +61,9 @@ func registerPing(t *testing.T, reg *registry.Registry, policy *runtimetest.Stat
 		{
 			Spec: capability.CapabilitySpec{
 				ID: "echo.hidden", Version: "1.0.0", Name: "hidden",
-				InputSchemaJSON: pingSchema, SideEffect: capability.SideEffectRead,
+				InputSchemaJSON: pingSchema,
+				Authorization:   capability.AuthorizationSpec{ResourceType: "echo.hidden"},
+				Execution:       capability.ExecutionSpec{EffectTarget: capability.EffectNone, Replay: capability.ReplaySafe, ConfirmationFloor: capability.ConfirmationPolicy},
 			},
 			Handler: func(_ context.Context, _ contracts.RequestContext, _ json.RawMessage) (json.RawMessage, error) {
 				return json.RawMessage(`{"ok":true}`), nil
@@ -119,9 +123,9 @@ func TestInvokeCapabilityNotFound(t *testing.T) {
 func TestInvokeCapabilityDisabled(t *testing.T) {
 	handler, reg, policy := newInvokeServer(t)
 	registerPing(t, reg, policy)
-	// echo.hidden 已注册但未启用，必须返回 404（不泄露存在性）。
+	// echo.hidden 已注册但未授权，必须拒绝调用。
 	response := invokeRequest(t, handler, "echo.hidden", `{"input":{"text":"x"}}`)
-	if response.Code != http.StatusNotFound || !strings.Contains(response.Body.String(), `"code":"capability_not_found"`) {
+	if response.Code != http.StatusForbidden || !strings.Contains(response.Body.String(), `"code":"permission_denied"`) {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
 }
@@ -235,8 +239,7 @@ func permittedIdentityResolver() access.IdentityResolver {
 	return identityResolverFunc(func(_ context.Context, appID, _, _, _ string) (identity.IdentityContext, error) {
 		return identity.IdentityContext{
 			AppID: appID, UserID: "internal-user",
-			Membership:  &identity.AppMembership{AppID: appID, UserID: "internal-user"},
-			Permissions: []string{"echo.write"},
+			Membership: &identity.AppMembership{AppID: appID, UserID: "internal-user"},
 		}, nil
 	})
 }
@@ -249,15 +252,14 @@ func newGovernedWriteServer(t *testing.T, resolver access.IdentityResolver, stor
 	if err := reg.Register(registry.CapabilityRegistration{
 		Spec: capability.CapabilitySpec{
 			ID: "echo.write", Version: "1.0.0", InputSchemaJSON: pingSchema,
-			SideEffect: capability.SideEffectWrite, RequiresConfirmation: true,
-			RequiredPermissions: []string{"echo.write"},
+			Authorization: capability.AuthorizationSpec{ResourceType: "echo.message"},
+			Execution:     capability.ExecutionSpec{EffectTarget: capability.EffectState, Replay: capability.ReplayIdempotencyKey, ConfirmationFloor: capability.ConfirmationRequired},
 		},
 		Handler: handler,
 	}); err != nil {
 		t.Fatal(err)
 	}
 	policy.Enable(appID, "echo.write")
-	policy.Grant(appID, "echo.write")
 	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{IdempotencyStore: store, ConfirmationVerifier: verifier})
 	return web.NewServer(
 		newEchoAdmission(&fakeOrchestrator{}, testController{}), nil, nil, reg, policy, appID, nil, testController{}, access.NewEventHub(),
@@ -288,8 +290,7 @@ func TestInvokeCapabilityUsesResolvedIdentityAndGovernanceHeaders(t *testing.T) 
 	if response.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
-	if observed.UserID != "internal-user" || observed.SessionID != "web-test-session" ||
-		len(observed.PermissionScope) != 1 || observed.PermissionScope[0] != "echo.write" {
+	if observed.UserID != "internal-user" || observed.SessionID != "web-test-session" {
 		t.Fatalf("governed context = %#v", observed)
 	}
 	if store.claim.Key != "operation-1" || !store.completed {

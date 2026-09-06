@@ -3,11 +3,40 @@
 package packageio
 
 import (
+	"fmt"
 	"os"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
+
+func secureCreatedDirectory(path string) error {
+	token := windows.GetCurrentProcessToken()
+	owner, err := tokenOwner(token)
+	if err != nil {
+		return err
+	}
+	userInfo, err := token.GetTokenUser()
+	if err != nil || userInfo == nil || userInfo.User.Sid == nil || !userInfo.User.Sid.IsValid() {
+		return windows.ERROR_INVALID_SID
+	}
+	descriptor, err := windows.SecurityDescriptorFromString(fmt.Sprintf(
+		"D:P(A;OICI;GA;;;%s)(A;OICI;GA;;;%s)(A;OICI;GA;;;SY)(A;OICI;GA;;;BA)",
+		owner.String(), userInfo.User.Sid.String(),
+	))
+	if err != nil {
+		return err
+	}
+	dacl, _, err := descriptor.DACL()
+	if err != nil {
+		return err
+	}
+	return windows.SetNamedSecurityInfo(
+		path, windows.SE_FILE_OBJECT,
+		windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION,
+		owner, nil, dacl, nil,
+	)
+}
 
 func validatePlatformPath(path string, _ os.FileInfo) error {
 	securityDescriptor, err := windows.GetNamedSecurityInfo(

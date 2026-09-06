@@ -55,13 +55,9 @@ func TestExternalPlatformIDNeverBecomesInternalUserID(t *testing.T) {
 	if resolved.UserID != "user-1" {
 		t.Fatalf("resolved user_id=%q, want internal user-1", resolved.UserID)
 	}
-	// 平台标识从未被当作内部用户：以平台 ID 查询用户必须明确不存在，
-	// 权限查询按不存在返回空集合。
+	// 平台标识从未被当作内部用户：以平台 ID 查询用户必须明确不存在。
 	if _, err := store.GetUser(ctx, "external-alice"); !errors.Is(err, identity.ErrNotFound) {
 		t.Fatalf("platform ID became a user: %v", err)
-	}
-	if permissions, err := store.EffectivePermissions(ctx, "app-a", "external-alice"); err != nil || len(permissions) != 0 {
-		t.Fatalf("platform ID resolved as internal user: %v err=%v", permissions, err)
 	}
 	if _, err := store.GetMembership(ctx, "app-a", "external-alice"); !errors.Is(err, identity.ErrNotFound) {
 		t.Fatalf("platform ID resolved as internal member: %v", err)
@@ -144,12 +140,9 @@ func TestIdentityNeverLeaksAcrossApps(t *testing.T) {
 	mustMembership(t, service, "app-a", "user-1")
 	mustBind(t, service, "app-a", "qq", "space", "alice", "user-1")
 
-	// 同一用户在 App B 没有任何成员关系与权限。
+	// 同一用户在 App B 没有成员关系。
 	if _, err := store.GetMembership(ctx, "app-b", "user-1"); !errors.Is(err, identity.ErrNotFound) {
 		t.Fatalf("app-b membership should be absent: %v", err)
-	}
-	if permissions, err := store.EffectivePermissions(ctx, "app-b", "user-1"); err != nil || len(permissions) != 0 {
-		t.Fatalf("app-b permissions=%v err=%v, want empty", permissions, err)
 	}
 	// App 级绑定隔离：身份在 app-a 绑定，在 app-b 解析必须明确不存在。
 	if _, err := service.ResolveIdentity(ctx, "app-b", "qq", "space", "alice"); !errors.Is(err, identity.ErrNotFound) {
@@ -215,8 +208,8 @@ func TestIdentityContextCarriesMembershipAndRevision(t *testing.T) {
 	if resolved.Membership == nil || resolved.Membership.AppID != "app-a" || resolved.Membership.UserID != "user-1" {
 		t.Fatalf("context membership=%#v", resolved.Membership)
 	}
-	if len(resolved.RoleIDs) != 0 || len(resolved.Permissions) != 0 {
-		t.Fatalf("context role_ids=%v permissions=%v, want empty", resolved.RoleIDs, resolved.Permissions)
+	if len(resolved.RoleIDs) != 0 {
+		t.Fatalf("context role_ids=%v, want empty", resolved.RoleIDs)
 	}
 	if resolved.BindingRevision <= 0 {
 		t.Fatalf("binding revision=%d, want > 0", resolved.BindingRevision)
@@ -231,8 +224,8 @@ func TestIdentityContextCarriesMembershipAndRevision(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resolved.Membership != nil || len(resolved.RoleIDs) != 0 || len(resolved.Permissions) != 0 {
-		t.Fatalf("memberless context=%#v, want empty membership/roles/permissions", resolved)
+	if resolved.Membership != nil || len(resolved.RoleIDs) != 0 {
+		t.Fatalf("memberless context=%#v, want empty membership/roles", resolved)
 	}
 }
 
