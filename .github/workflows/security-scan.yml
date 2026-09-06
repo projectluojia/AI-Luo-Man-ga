@@ -15,6 +15,7 @@ on:
       - go.sum
       - packages/agent/**
       - packages/campus-bus/**
+      - .github/workflows/security-scan.yml
   schedule:
     - cron: "0 2 * * 1" # 每周一 02:00 UTC 全量扫描
   workflow_dispatch:
@@ -22,11 +23,17 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: security-scan-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   scan:
     name: scan
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -35,9 +42,40 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      # Go 依赖漏洞：基于完整模块图（含传递依赖）。
+      # Go 依赖漏洞：基于完整模块图（含传递依赖）。先构建本机工具，
+      # 再为 WASI guest 设置目标平台；不能直接让 go run 自身交叉编译。
+      - name: 安装 govulncheck
+        shell: bash
+        run: |
+          set -euo pipefail
+          go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
       - name: 运行 govulncheck
-        run: go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
+        shell: bash
+        run: |
+          set -euo pipefail
+          while IFS= read -r -d '' go_mod; do
+            module="${go_mod%/go.mod}"
+            echo "检查 Go module: $module"
+            host_packages=""
+            if ! host_packages="$(cd "$module" && go list ./... 2>/dev/null)"; then
+              host_packages=""
+            fi
+            if [[ -n "$host_packages" ]]; then
+              (cd "$module" && govulncheck ./...)
+            else
+              wasi_packages=""
+              if ! wasi_packages="$(cd "$module" && GOOS=wasip1 GOARCH=wasm go list ./... 2>/dev/null)"; then
+                wasi_packages=""
+              fi
+              if [[ -n "$wasi_packages" ]]; then
+                (cd "$module" && GOOS=wasip1 GOARCH=wasm govulncheck ./...)
+              else
+                echo "Go module 没有可扫描的 package: $module" >&2
+                exit 1
+              fi
+            fi
+          done < <(find . -name go.mod -not -path './.git/*' -print0 | sort -z)
       # 扫描 Core 与同仓包工作区内的 Go/Python 锁定依赖。
       - uses: google/osv-scanner-action/osv-scanner-action@6e4298ebc4db23e847df9b2e2de2939d6f066c67 # v2.5.1
         with:
@@ -47,10 +85,12 @@ jobs:
             --recursive
             .
       - name: 上传扫描结果为构建产物
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: sarif-results
           path: results.sarif
+          if-no-files-found: error
+          retention-days: 7
 
   upload:
     name: upload
@@ -58,11 +98,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
+      actions: read
       security-events: write
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - name: 下载扫描结果
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: sarif-results
       - name: 上传 SARIF 到 GitHub 安全分析
