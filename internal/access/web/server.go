@@ -14,13 +14,13 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/capability"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access"
 	kernelecho "github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/idempotency"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
-	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/capability"
 )
 
 //go:embed static/*

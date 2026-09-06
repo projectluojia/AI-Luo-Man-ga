@@ -9,7 +9,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/packagecontract"
+	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packagecontract"
 )
 
 // HashArtifact 计算文件或目录工件的确定性 SHA-256。目录摘要包含相对路径、

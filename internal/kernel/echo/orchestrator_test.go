@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/capability"
 	executorv1 "github.com/projectluojia/AI-Luo-Man-ga/gen/executorv1"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/appconfig"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
@@ -26,7 +27,6 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/blob"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite/sqlitetest"
-	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/capability"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"

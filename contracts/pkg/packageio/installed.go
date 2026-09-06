@@ -13,7 +13,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/packagecontract"
+	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packagecontract"
 )
 
 // InstalledRecord 是已安装包的格式层记录。

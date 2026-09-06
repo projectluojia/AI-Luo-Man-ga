@@ -4,7 +4,11 @@ go 1.26
 
 require github.com/projectluojia/AI-Luo-Man-ga/package-manager v0.0.0
 
+require github.com/projectluojia/AI-Luo-Man-ga/contracts v0.0.0
+
 replace github.com/projectluojia/AI-Luo-Man-ga/package-manager => ./package-manager
+
+replace github.com/projectluojia/AI-Luo-Man-ga/contracts => ./contracts
 
 require (
 	github.com/google/uuid v1.6.0

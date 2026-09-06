@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/packagecontract"
+	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packagecontract"
 )
 
 // TestWindowsCPUBurnHelper 是 CPU 燃烧子进程入口：AILUO_CPU_BURN=1 时无限旋转。

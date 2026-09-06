@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/packagecontract"
+	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packagecontract"
 )
 
 func TestValidateManifestAcceptsNeutralCore(t *testing.T) {
@@ -24,7 +24,7 @@ func TestValidateManifestAcceptsNeutralCore(t *testing.T) {
 			Namespace: "campus/bus", SchemaVersion: 1,
 			Sensitivity: packagecontract.SensitivityPublic, Retention: packagecontract.RetentionPermanent,
 		},
-		Dependencies: []packagecontract.Dependency{{ID: "bus.transport", Constraint: "^1.0.0"}},
+		Dependencies: []packagecontract.Dependency{{ID: "bus.transport", Constraint: "^1.0.0", Source: "github:owner/repo"}},
 	}
 	if err := packagecontract.ValidateManifest(manifest); err != nil {
 		t.Fatalf("ValidateManifest: %v", err)
@@ -269,6 +269,22 @@ func TestIsPackagePathIsPlatformNeutral(t *testing.T) {
 func TestValidateDependencyRejectsMalformedConstraint(t *testing.T) {
 	if err := packagecontract.ValidateDependency(packagecontract.Dependency{ID: "bus.query", Constraint: "not-a-constraint"}); !errors.Is(err, packagecontract.ErrInvalidFormat) {
 		t.Fatalf("ValidateDependency error = %v, want ErrInvalidFormat", err)
+	}
+}
+
+func TestValidateSourceRequiresExplicitScheme(t *testing.T) {
+	for _, source := range []string{"path:packages/demo", "github:owner/repo"} {
+		if err := packagecontract.ValidateSource(source); err != nil {
+			t.Fatalf("ValidateSource(%q): %v", source, err)
+		}
+	}
+	for _, source := range []string{
+		"", "packages/demo", "path:../demo", "github:owner", "github:owner/repo/extra",
+		"github:./repo", "github:owner/..",
+	} {
+		if err := packagecontract.ValidateSource(source); !errors.Is(err, packagecontract.ErrInvalidFormat) {
+			t.Fatalf("ValidateSource(%q) = %v, want ErrInvalidFormat", source, err)
+		}
 	}
 }
 

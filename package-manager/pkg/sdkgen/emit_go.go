@@ -5,7 +5,7 @@ import (
 	"strings"
 
 	"github.com/iancoleman/strcase"
-	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/capability"
+	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/capability"
 )
 
 // emitGo 渲染 Go SDK：一个 client.go，包含传输层与每个 capability 的类型化方法。

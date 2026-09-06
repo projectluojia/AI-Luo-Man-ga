@@ -8,7 +8,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/packagecontract"
+	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packagecontract"
 )
 
 // 文件完整性原语：部署级属主、权限位和目录边界由宿主适配器叠加校验。
