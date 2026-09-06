@@ -8,10 +8,11 @@ import (
 
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packagecontract"
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packageio"
+	packageiotest "github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packageio/testutil"
 )
 
 func TestPublishStageRestoresOldDirectoryWhenPublishRenameFails(t *testing.T) {
-	root := t.TempDir()
+	root := packageiotest.TempDir(t)
 	target := filepath.Join(root, "demo.pkg")
 	if err := os.MkdirAll(target, 0o750); err != nil {
 		t.Fatal(err)
@@ -38,7 +39,7 @@ func TestPublishStageRestoresOldDirectoryWhenPublishRenameFails(t *testing.T) {
 // 点——正常路径下 Install 已在源阶段拦掉所有非法输入。
 func TestPublishStageRestoresPreviousInstallOnVerifyFailure(t *testing.T) {
 	ctx := context.Background()
-	root := t.TempDir()
+	root := packageiotest.TempDir(t)
 	source := filepath.Join(t.TempDir(), "pkg")
 	if err := os.MkdirAll(source, 0o750); err != nil {
 		t.Fatal(err)
@@ -86,7 +87,7 @@ func TestPublishStageRestoresPreviousInstallOnVerifyFailure(t *testing.T) {
 
 func TestListInstalledRecoversInterruptedPublication(t *testing.T) {
 	ctx := context.Background()
-	root := t.TempDir()
+	root := packageiotest.TempDir(t)
 	source := filepath.Join(t.TempDir(), "pkg")
 	if err := os.MkdirAll(source, 0o750); err != nil {
 		t.Fatal(err)
@@ -118,7 +119,7 @@ func TestListInstalledRecoversInterruptedPublication(t *testing.T) {
 }
 
 func TestPublishStageRestoresPreviousInstallOnRenameFailure(t *testing.T) {
-	root := t.TempDir()
+	root := packageiotest.TempDir(t)
 	source := filepath.Join(t.TempDir(), "pkg")
 	if err := os.MkdirAll(source, 0o750); err != nil {
 		t.Fatal(err)

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packagecontract"
+	packageiotest "github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packageio/testutil"
 	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/packmgr"
 )
 
@@ -194,7 +195,7 @@ side_effect = "read"
 	if filepath.Base(tarballPath) != "demo.pkg-1.0.0.tgz" {
 		t.Fatalf("tarball name = %s", filepath.Base(tarballPath))
 	}
-	installRoot := t.TempDir()
+	installRoot := packageiotest.TempDir(t)
 	record, err := packmgr.Install(ctx, installRoot, tarballPath)
 	if err != nil {
 		t.Fatalf("Install: %v", err)
