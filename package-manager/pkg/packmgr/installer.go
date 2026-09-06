@@ -511,7 +511,12 @@ func sameInstalledPackage(ctx context.Context, existing InstalledRecord, manifes
 }
 
 // unpackSource 解析安装源：目录直接使用；.tgz 发布物严格解压到临时目录。
+// 相对路径依赖调用方 CWD，无法纳入安全边界校验，一律 fail-closed 拒绝，
+// 要求调用方先解析为绝对路径。
 func unpackSource(source string) (string, func(), bool, error) {
+	if !filepath.IsAbs(source) {
+		return "", nil, false, fmt.Errorf("安装源必须是绝对路径，收到相对路径 %q", source)
+	}
 	info, err := os.Stat(source)
 	if err != nil {
 		return "", nil, false, err
