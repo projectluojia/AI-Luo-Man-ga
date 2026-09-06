@@ -1,10 +1,10 @@
 # AI珞（爱珞） V3
 
-当前仓库实现了“校园综合服务 App”的窄范围、可长期保留的校巴纵向切片。Go 是唯一内核；Python Executor 只负责真实模型推理和 CapabilityCall 闭环。当前重构仍需完成全量门禁，不能据此描述为整体生产就绪。
+当前仓库实现了“校园综合服务 App”的窄范围、可长期保留的校巴纵向切片。Go 是唯一内核；Python Executor 只负责真实模型推理和原生 ToolCall 闭环。2026-07-26 审计列出的 P0 已按仓库证据关闭，但完整平台仍有 `AGENTS.md` 所列 P1 阻断项，不能据此描述为整体生产就绪。
 
 ## 品牌与升级契约
 
-项目统一使用产品名 **AI珞（爱珞）** 和技术命名空间 `ailuo`。部署环境变量统一使用 `AILUO_*`，Prometheus 指标统一使用 `ailuo_*`，默认数据库文件为 `var/ailuo.db`。Agent gRPC 与 Runtime Host gRPC 均使用 `ailuo.*.v1` 包名并协商协议版本 `3.0`；扩展安装目录使用 `ailuo.package.v3`。这是一次有意的破坏性契约迁移：部署配置、监控查询、Agent/Runtime Host 构建产物和扩展安装清单必须原子升级，旧版本不会被误判为兼容。
+项目统一使用产品名 **AI珞（爱珞）** 和技术命名空间 `ailuo`。部署环境变量统一使用 `AILUO_*`，Prometheus 指标统一使用 `ailuo_*`，默认数据库文件为 `var/ailuo.db`。Agent gRPC 与 Runtime Host gRPC 均使用 `ailuo.*.v1` 包名并协商协议版本 `2.0`；扩展安装目录使用 `ailuo.package.v2`。这是一次有意的破坏性品牌迁移：部署配置、监控查询、Agent/Runtime Host 构建产物和扩展安装清单必须原子升级，旧版本不会被误判为兼容。
 
 ## 已实现链路
 
@@ -12,10 +12,10 @@
 Web Access API
   → Echo / Run（Go）
   → Python AI Agent（gRPC 双向流）
-  → OpenAI-compatible 模型函数调用
+  → OpenAI-compatible 模型原生 ToolCall
   → Capability 鉴权与路由（Go）
-  → campus Provider Package
-  → 校巴 Capability
+  → campus Service
+  → 校巴 Tool
   → Go 托管统一数据库
   → SSE 流式回复
 ```
@@ -24,15 +24,13 @@ Web Access API
 
 ## 本地运行
 
-要求：Go 1.26、[uv](https://docs.astral.sh/uv/)、Python 3.11–3.14、Protobuf 编译器，以及支持函数调用的 OpenAI-compatible 模型。Executor 包的 Python 版本与依赖由 `packages/agent/runtime/pyproject.toml` 和 `packages/agent/runtime/uv.lock` 统一管理，不使用系统 `pip` 直接安装。
+要求：Go 1.26、[uv](https://docs.astral.sh/uv/)、Python 3.11–3.14、Protobuf 编译器，以及支持原生 ToolCall 的 OpenAI-compatible 模型。Executor 包的 Python 版本与依赖由 `packages/agent/runtime/pyproject.toml` 和 `packages/agent/runtime/uv.lock` 统一管理，不使用系统 `pip` 直接安装。
 
 ```bash
 make test-agent
-# 根 ailuo.toml 声明 Core 使用的包；sync 按 ailuo.lock 复现，--update 才重新求解
+# 根 ailuo.toml 声明 Core 使用的包；sync 递归解析、构建、安装并生成 ailuo.lock
 export AILUO_RUNTIME_INSTALL_ROOT=/absolute/path/to/ailuo/runtime
 (cd package-manager && go run ./cmd/ailuo-pm sync --project .. --root "$AILUO_RUNTIME_INSTALL_ROOT")
-# 若上次进程崩溃留下安装根锁，确认没有包管理进程后再执行：
-# (cd package-manager && go run ./cmd/ailuo-pm unlock --force --root "$AILUO_RUNTIME_INSTALL_ROOT")
 make run
 ```
 
@@ -87,7 +85,7 @@ make test-e2e
 
 Core Go 开发链路和 `packages/agent` Python 包测试分别支持 Windows、Linux 和 macOS。安装目录属主验证在 Unix/Windows 有对应实现；不支持等价安全语义的平台显式拒绝。CI 在三平台运行 Core 测试；Agent 与 Campus 包分别由独立 workflow 执行语言和分发门禁。
 
-配置 `AILUO_EXECUTOR_PACKAGE_DIR=packages/agent` 后，e2e 测试会启动该 Executor 包并通过真实 OpenAI-compatible 流式协议完成 Go Capability、Provider、数据库和最终回复闭环；Agent 包 workflow 还会从 pack/install 后的安装目录启动同一条 e2e。`go test -tags=integration ./internal/kernel/loader` 另行启动真实 isolated Runtime Host 子进程，验证 Unix gRPC、协议身份、优雅退出和进程组强制清理；该测试需要允许创建本机 Unix Socket。
+配置 `AILUO_EXECUTOR_PACKAGE_DIR=packages/agent` 后，e2e 测试会启动该 Executor 包并通过真实 OpenAI-compatible 流式协议完成 Go Capability、Service、Tool、数据库和最终回复闭环；Agent 包 workflow 还会从 pack/install 后的安装目录启动同一条 e2e。`go test -tags=integration ./internal/kernel/loader` 另行启动真实 isolated Runtime Host 子进程，验证 Unix gRPC、协议身份、优雅退出和进程组强制清理；该测试需要允许创建本机 Unix Socket。
 
 ## 日志与可观测性
 
@@ -99,7 +97,7 @@ Go 内核和 Executor 包统一输出中文结构化日志。控制台格式优�
 - `AILUO_LOG_SOURCE`：必须保持 `false`；源码绝对路径禁止进入日志，启用时拒绝启动。
 - `AILUO_LOG_MAX_VALUE_LENGTH`：单个字符串字段最大字符数，默认 `4096`。
 
-Web 请求会验证并继承 W3C `traceparent`（兼容合法的 32 位十六进制 `X-Trace-ID`），为 HTTP 与 Agent Run 创建 Span，再通过 Protobuf 把追踪上下文传给 Python。日志只记录标识、数量、长度、状态、稳定错误类别和耗时，不记录原始错误正文、用户或模型消息、CapabilityCall 参数、请求体、密钥或凭据。完整规范见 `docs/日志与可观测性设计.md`。
+Web 请求会验证并继承 W3C `traceparent`；缺失或无效时生成新的 trace root，为 HTTP 与 Executor Run 创建 Span，再通过 Protobuf 把追踪上下文传给执行者。日志只记录标识、数量、长度、状态、稳定错误类别和耗时，不记录原始错误正文、用户或模型消息、Tool 参数、请求体、密钥或凭据。完整规范见 `docs/日志与可观测性设计.md`。
 
 ## 运维
 
@@ -111,7 +109,7 @@ Web 请求会验证并继承 W3C `traceparent`（兼容合法的 32 位十六进
 
 - 智慧珞珈是校巴数据的唯一权威来源。
 - 当前不实现用户登录或用户态业务数据。
-- Provider 不持有数据库凭据，只依赖 Go 注入的 Storage Port。
+- Service/Tool 不持有数据库凭据，只依赖 Go 注入的 Storage Port。
 - 测试夹具中的演示数据带 `authoritative=false` 和独立 `source_revision`，不得进入生产启动路径或被描述为真实班次。
 - 成功校巴结果携带权威修订、完整性、导入时间和有效截止时间；缺失、不完整、非权威或过期快照不返回业务行。
 - 真实数据接入前必须完成 `docs/数据需求与授权清单.md` 中的校方审批项。
