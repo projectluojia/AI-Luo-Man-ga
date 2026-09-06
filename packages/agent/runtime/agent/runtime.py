@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import ipaddress
 import json
+import os
 import re
 import secrets
 import signal
@@ -21,23 +22,24 @@ from agent.openai_compatible import OpenAICompatibleProvider
 
 logger = get_logger("agent_runtime")
 
-PROTOCOL_VERSION = "3.0"
+PROTOCOL_VERSION = "4.0"
 MAX_GRPC_MESSAGE_BYTES = 512 << 10
 MAX_FRAME_BYTES = 300 << 10
-MAX_INPUT_MESSAGE_BYTES = 16 << 10
-MAX_SYSTEM_PROMPT_BYTES = 32 << 10
+MAX_INPUT_PAYLOAD_BYTES = 16 << 10
+MAX_CONTEXT_PAYLOAD_BYTES = 64 << 10
+MAX_EXECUTOR_CONFIG_BYTES = 64 << 10
 MAX_CAPABILITIES = 64
 MAX_CAPABILITY_SCHEMA_BYTES = 64 << 10
 MAX_CAPABILITY_PAYLOAD_BYTES = 64 << 10
 MAX_RESULT_PAYLOAD_BYTES = 256 << 10
-MAX_REPLY_DELTA_BYTES = 16 << 10
-MAX_FINAL_MESSAGE_BYTES = 64 << 10
+MAX_OUTPUT_DELTA_BYTES = 16 << 10
+MAX_OUTPUT_PAYLOAD_BYTES = 256 << 10
 MAX_FAILURE_MESSAGE_BYTES = 1024
 MAX_IDENTIFIER_BYTES = 128
 MAX_DESCRIPTION_BYTES = 4096
 MAX_NAME_BYTES = 256
 MAX_PROTOCOL_STEPS = 64
-MAX_CAPABILITY_CALLS = 256
+MAX_TOOL_CALLS = 256
 TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
 CODE_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
 TRACE_PATTERN = re.compile(r"^[0-9a-f]{32}$")
@@ -51,7 +53,7 @@ def _frame(echo_id: str, run_id: str, sequence: int, **body) -> executor_pb2.Exe
 def _failure(echo_id: str, run_id: str, sequence: int, code: str, message: str, *, retryable: bool = False):
     safe_message = message
     if len(safe_message.encode("utf-8")) > MAX_FAILURE_MESSAGE_BYTES:
-        safe_message = "Agent 执行失败"
+        safe_message = "执行者执行失败"
     return _frame(
         echo_id,
         run_id,
@@ -60,36 +62,51 @@ def _failure(echo_id: str, run_id: str, sequence: int, code: str, message: str, 
     )
 
 
+def _execution_failure_code(provider_code: str) -> str:
+    return {
+        "provider_timeout": "execution_timeout",
+        "rate_limited": "execution_rate_limited",
+        "provider_unavailable": "execution_unavailable",
+        "provider_rejected": "execution_rejected",
+        "provider_failure": "execution_failed",
+        "provider_protocol_error": "execution_protocol_error",
+    }.get(provider_code, "execution_failed")
+
+
 class ProtocolViolation(Exception):
     pass
 
 
+class ExecutorConfigurationUnavailable(Exception):
+    pass
+
+
 class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
-    def __init__(self, provider: ModelProvider | None = None) -> None:
+    def __init__(self, provider: ModelProvider | None = None, model_name: str | None = None) -> None:
         self._provider = provider or OpenAICompatibleProvider.from_environment()
         self._provider_name = type(self._provider).__name__
+        self._model_name = model_name or os.getenv("AILUO_MODEL_NAME", "").strip()
 
     async def Health(self, request, context):
-        logger.debug("收到 Agent 健康检查", provider=self._provider_name)
+        logger.debug("收到执行者健康检查", provider=self._provider_name)
         accepted = set(request.accepted_protocol_versions)
         compatible = PROTOCOL_VERSION in accepted
         provider_ready = False
         status_code = ""
-        if compatible and request.model:
+        if compatible and self._model_name:
             try:
-                provider_ready = await asyncio.wait_for(self._provider.check_readiness(request.model), timeout=3.0)
+                provider_ready = await asyncio.wait_for(self._provider.check_readiness(self._model_name), timeout=3.0)
             except Exception as exc:
                 logger.warning("模型 Provider 就绪检查失败", error_type=type(exc).__name__)
                 status_code = "provider_unavailable"
         if not compatible:
             status_code = "protocol_version_mismatch"
-        elif not request.model:
-            status_code = "invalid_model"
+        elif not self._model_name:
+            status_code = "executor_configuration_unavailable"
         elif not provider_ready and not status_code:
             status_code = "provider_unavailable"
         return executor_pb2.HealthResponse(
             ready=compatible and provider_ready,
-            provider=self._provider_name,
             supported_protocol_versions=[PROTOCOL_VERSION],
             status_code=status_code,
         )
@@ -126,7 +143,6 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
             app_id=start.app_id,
             echo_id=first_frame.echo_id,
             run_id=first_frame.run_id,
-            model=start.model,
             trace_id=start.trace_id,
             parent_span_id=start.parent_span_id,
             span_id=secrets.token_hex(8),
@@ -137,7 +153,7 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
                 "开始执行 Agent Run",
                 capability_count=len(start.capabilities),
                 max_steps=start.max_steps,
-                input_length=len(start.input_message),
+                input_length=len(start.input_payload.data),
             )
             outbound_sequence = 1
             yield _frame(
@@ -186,26 +202,31 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
                     raise ProtocolViolation("等待 Capability 结果时输入流提前结束")
 
                 kernel = AgentKernel(self._provider)
+                if not self._model_name:
+                    raise ExecutorConfigurationUnavailable("执行者未配置自身运行所需的模型")
+                agent_config = self._parse_executor_config(start.executor_config)
+                input_message = _decode_text_payload(start.input_payload, "执行输入")
+                context_text = _render_agent_context(start.context_payload, agent_config)
+                unit_budget = start.max_execution_units
                 async for event in kernel.run(
-                    model=start.model,
-                    system_prompt=start.system_prompt,
-                    input_message=start.input_message,
+                    model=self._model_name,
+                    system_prompt=context_text,
+                    input_message=input_message,
                     capabilities=capabilities,
                     execute=execute,
-                    max_steps=start.max_steps or 8,
+                    max_steps=start.max_steps,
                     max_capability_calls=start.max_capability_calls,
-                    max_input_tokens=start.max_input_tokens,
-                    max_output_tokens=start.max_output_tokens,
-                    max_total_tokens=start.max_total_tokens,
+                    max_input_tokens=unit_budget,
+                    max_output_tokens=unit_budget,
+                    max_total_tokens=unit_budget,
                     max_output_bytes=start.max_output_bytes,
                     max_cost_microusd=start.max_cost_microusd,
-                    provider_timeout_seconds=start.provider_timeout_ms / 1000,
                 ):
                     outbound_sequence += 1
                     if isinstance(event, CapabilityRequested):
                         if event.call.id in expected_capabilities:
-                            raise ProtocolViolation("模型返回了重复的 CapabilityCall ID")
-                        self._validate_model_call(event.call.id, event.capability_id, event.call.arguments)
+                            raise ProtocolViolation("模型返回了重复的 ToolCall ID")
+                        self._validate_capability_call(event.call.id, event.capability_id, event.call.arguments)
                         expected_capabilities[event.call.id] = event.capability_id
                         logger.info(
                             "向 Go 内核请求执行 Capability",
@@ -225,7 +246,7 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
                             ),
                         )
                     elif isinstance(event, ReplyDelta):
-                        self._validate_text(event.text, 1, MAX_REPLY_DELTA_BYTES, "回复片段")
+                        self._validate_text(event.text, 1, MAX_OUTPUT_DELTA_BYTES, "输出片段")
                         logger.debug(
                             "向 Go 内核发送模型回复片段",
                             sequence=outbound_sequence,
@@ -235,10 +256,15 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
                             first_frame.echo_id,
                             first_frame.run_id,
                             outbound_sequence,
-                            reply_delta=executor_pb2.ReplyDelta(text=event.text),
+                            output_delta=executor_pb2.OutputDelta(
+                                payload=executor_pb2.Payload(
+                                    content_type="text/plain; charset=utf-8",
+                                    data=event.text.encode("utf-8"),
+                                ),
+                            ),
                         )
                     elif isinstance(event, FinalReply):
-                        self._validate_text(event.text, 1, MAX_FINAL_MESSAGE_BYTES, "最终回复")
+                        self._validate_text(event.text, 1, MAX_OUTPUT_PAYLOAD_BYTES, "最终结果")
                         logger.info(
                             "Agent Run 已生成最终回复",
                             sequence=outbound_sequence,
@@ -249,19 +275,22 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
                             first_frame.echo_id,
                             first_frame.run_id,
                             outbound_sequence,
-                            final_message=executor_pb2.FinalMessage(text=event.text),
+                            final_result=executor_pb2.FinalResult(
+                                payload=executor_pb2.Payload(
+                                    content_type="text/plain; charset=utf-8",
+                                    data=event.text.encode("utf-8"),
+                                ),
+                            ),
                         )
                     elif isinstance(event, UsageReported):
                         yield _frame(
                             first_frame.echo_id,
                             first_frame.run_id,
                             outbound_sequence,
-                            run_usage=executor_pb2.RunUsage(
-                                input_tokens=event.input_tokens,
-                                output_tokens=event.output_tokens,
-                                total_tokens=event.total_tokens,
+                            resource_usage=executor_pb2.ResourceUsage(
+                                execution_units=max(1, event.total_tokens),
                                 cost_microusd=event.cost_microusd,
-                                provider_retries=event.provider_retries,
+                                retries=event.provider_retries,
                             ),
                         )
             except asyncio.CancelledError:
@@ -282,19 +311,21 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
                 retryable = False
                 if isinstance(exc, ProtocolViolation):
                     code = "protocol_violation"
+                elif isinstance(exc, ExecutorConfigurationUnavailable):
+                    code = "executor_configuration_unavailable"
                 elif isinstance(exc, ProviderFailure):
-                    code = exc.code
+                    code = _execution_failure_code(exc.code)
                     retryable = exc.retryable
                 elif isinstance(exc, BudgetExceeded):
                     code = "budget_exceeded"
                 else:
-                    code = "agent_run_failed"
+                    code = "execution_failed"
                 yield _failure(
                     first_frame.echo_id,
                     first_frame.run_id,
                     outbound_sequence,
                     code,
-                    f"Agent 执行失败：{type(exc).__name__}",
+                    "执行者执行失败",
                     retryable=retryable,
                 )
             finally:
@@ -340,6 +371,20 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
         return capabilities
 
     @staticmethod
+    def _parse_executor_config(payload) -> dict:
+        if not payload or not payload.data:
+            return {}
+        if payload.content_type != "application/json":
+            raise ProtocolViolation("执行者配置必须使用 application/json")
+        try:
+            value = json.loads(payload.data)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ProtocolViolation("执行者配置不是有效 JSON") from exc
+        if not isinstance(value, dict):
+            raise ProtocolViolation("执行者配置必须是 JSON 对象")
+        return value
+
+    @staticmethod
     def _validate_start_frame(frame) -> None:
         if (
             frame.ByteSize() > MAX_FRAME_BYTES
@@ -354,31 +399,29 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
         if start.protocol_version != PROTOCOL_VERSION:
             raise ProtocolViolation("Agent 协议版本不兼容")
         ExecutorRuntime._valid_token(start.app_id)
-        ExecutorRuntime._validate_text(start.input_message, 1, MAX_INPUT_MESSAGE_BYTES, "输入消息")
-        ExecutorRuntime._validate_text(start.timezone, 1, MAX_IDENTIFIER_BYTES, "时区")
-        ExecutorRuntime._validate_text(start.model, 1, MAX_IDENTIFIER_BYTES, "模型")
-        ExecutorRuntime._validate_text(start.system_prompt, 1, MAX_SYSTEM_PROMPT_BYTES, "系统提示")
+        ExecutorRuntime._validate_payload(start.input_payload, True, MAX_INPUT_PAYLOAD_BYTES, "执行输入")
+        ExecutorRuntime._validate_payload(start.context_payload, False, MAX_CONTEXT_PAYLOAD_BYTES, "执行上下文")
+        if start.executor_config.data or start.executor_config.content_type != "application/json":
+            ExecutorRuntime._validate_payload(start.executor_config, False, MAX_EXECUTOR_CONFIG_BYTES, "执行者配置")
         if (
             start.max_steps < 1
             or start.max_steps > MAX_PROTOCOL_STEPS
             or start.max_capability_calls < 1
-            or start.max_capability_calls > MAX_CAPABILITY_CALLS
-            or start.max_input_tokens < 1
-            or start.max_input_tokens > 1_000_000_000
-            or start.max_output_tokens < 1
-            or start.max_output_tokens > 1_000_000_000
-            or start.max_total_tokens < 1
-            or start.max_total_tokens > 1_000_000_000
+            or start.max_capability_calls > MAX_TOOL_CALLS
+            or start.max_execution_units < 1
+            or start.max_execution_units > 1_000_000_000
             or start.max_output_bytes < 1
-            or start.max_output_bytes > MAX_FINAL_MESSAGE_BYTES
+            or start.max_output_bytes > MAX_OUTPUT_PAYLOAD_BYTES
             or start.max_cost_microusd > 1_000_000_000_000_000
-            or start.provider_timeout_ms < 100
-            or start.provider_timeout_ms > 120_000
             or (start.parent_run_id and start.parent_run_id == frame.run_id)
-            or TRACE_PATTERN.fullmatch(start.trace_id) is None
-            or SPAN_PATTERN.fullmatch(start.parent_span_id) is None
-            or start.trace_id == "0" * 32
-            or start.parent_span_id == "0" * 16
+            or (
+                start.trace_id
+                and (TRACE_PATTERN.fullmatch(start.trace_id) is None or start.trace_id == "0" * 32)
+            )
+            or (
+                start.parent_span_id
+                and (SPAN_PATTERN.fullmatch(start.parent_span_id) is None or start.parent_span_id == "0" * 16)
+            )
         ):
             raise ProtocolViolation("start_run 字段无效")
         if start.parent_run_id:
@@ -421,7 +464,7 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
         ExecutorRuntime._validate_text(result.error_message, 1, MAX_FAILURE_MESSAGE_BYTES, "Capability 错误消息")
 
     @staticmethod
-    def _validate_model_call(call_id: str, capability_id: str, arguments: str) -> None:
+    def _validate_capability_call(call_id: str, capability_id: str, arguments: str) -> None:
         ExecutorRuntime._valid_token(call_id)
         ExecutorRuntime._valid_token(capability_id)
         ExecutorRuntime._validate_text(arguments, 2, MAX_CAPABILITY_PAYLOAD_BYTES, "Capability 参数")
@@ -453,6 +496,22 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
             raise ProtocolViolation(f"{field}长度超出协议限制")
 
     @staticmethod
+    def _validate_payload(value, required: bool, maximum: int, field: str) -> None:
+        if value is None:
+            if required:
+                raise ProtocolViolation(f"{field}不能为空")
+            return
+        if not value.data:
+            if required or value.content_type:
+                raise ProtocolViolation(f"{field}不能为空或 content type 无效")
+            return
+        if not value.content_type or len(value.content_type.encode("utf-8")) > 128:
+            raise ProtocolViolation(f"{field} content type 无效")
+        size = len(value.data)
+        if size > maximum:
+            raise ProtocolViolation(f"{field}长度超出协议限制")
+
+    @staticmethod
     def _model_result(result) -> str:
         if result.success:
             return result.payload_json.decode("utf-8")
@@ -462,6 +521,77 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
                 "message": result.error_message,
             },
         }, ensure_ascii=False, separators=(",", ":"))
+
+
+def _decode_text_payload(payload, field: str) -> str:
+    if payload is None or not payload.data or not payload.content_type.startswith("text/plain"):
+        raise ProtocolViolation(f"{field} 必须是非空 text/plain payload")
+    try:
+        return payload.data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ProtocolViolation(f"{field} 不是有效 UTF-8") from exc
+
+
+def _render_agent_context(payload, config: dict) -> str:
+    parts: list[str] = []
+    system_prompt = config.get("system_prompt", "")
+    if not isinstance(system_prompt, str):
+        raise ProtocolViolation("执行者配置中的 system_prompt 必须是字符串")
+    if system_prompt:
+        parts.append(system_prompt)
+
+    if payload is None or not payload.data:
+        return "\n\n".join(parts)
+    if payload.content_type != "application/ailuo.context+json":
+        raise ProtocolViolation("执行上下文必须使用 application/ailuo.context+json")
+    try:
+        envelope = json.loads(payload.data)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ProtocolViolation("执行上下文不是有效 JSON") from exc
+    if not isinstance(envelope, dict) or envelope.get("schema_version") != "ailuo.context.v1":
+        raise ProtocolViolation("执行上下文版本不受支持")
+    blocks = envelope.get("blocks")
+    if not isinstance(blocks, list):
+        raise ProtocolViolation("执行上下文 blocks 无效")
+    channel = ""
+    history: list[dict] = []
+    for block in blocks:
+        if not isinstance(block, dict) or not isinstance(block.get("type"), str):
+            raise ProtocolViolation("执行上下文 block 无效")
+        block_type = block["type"]
+        value = block.get("payload")
+        if block_type == "execution.metadata":
+            if not isinstance(value, dict) or not isinstance(value.get("channel", ""), str):
+                raise ProtocolViolation("执行上下文 metadata 无效")
+            channel = value.get("channel", "")
+        elif block_type == "conversation.history":
+            if not isinstance(value, dict) or not isinstance(value.get("entries"), list):
+                raise ProtocolViolation("执行上下文 history 无效")
+            history = value["entries"]
+        else:
+            raise ProtocolViolation(f"执行上下文包含 Agent 不支持的 block：{block_type}")
+
+    channel_prompts = config.get("channel_prompts", {})
+    if not isinstance(channel_prompts, dict) or any(not isinstance(item, str) for item in channel_prompts.values()):
+        raise ProtocolViolation("执行者配置中的 channel_prompts 无效")
+    if channel_prompts:
+        if channel_prompts.get(channel):
+            parts.append(channel_prompts[channel])
+    if history:
+        lines = ["【历史对话】"]
+        for entry in history:
+            if not isinstance(entry, dict) or not isinstance(entry.get("sender"), str):
+                raise ProtocolViolation("执行上下文历史条目无效")
+            timestamp = entry.get("created_at", "")
+            content = entry.get("content", "")
+            if not isinstance(timestamp, str) or not isinstance(content, str):
+                raise ProtocolViolation("执行上下文历史正文无效")
+            line = f"{entry['sender']}（{timestamp}）"
+            if content:
+                line += "：" + content
+            lines.append(line)
+        parts.append("\n".join(lines))
+    return "\n\n".join(parts)
 
 
 async def serve(address: str) -> None:

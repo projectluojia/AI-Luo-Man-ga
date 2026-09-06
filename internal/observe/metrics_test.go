@@ -20,7 +20,7 @@ func TestMetricsExposeOnlyClosedLabelsAndExpectedValues(t *testing.T) {
 	metrics.ObserveRuntimeLoad(true, 2*time.Millisecond)
 	metrics.ObserveRuntimeStop(false, 3*time.Millisecond)
 	metrics.RuntimeCallStarted()
-	metrics.AddModelUsage(11, 7, 9)
+	metrics.AddExecutorUsage(18, 9)
 
 	response := httptest.NewRecorder()
 	metrics.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/metrics", nil))
@@ -33,7 +33,7 @@ func TestMetricsExposeOnlyClosedLabelsAndExpectedValues(t *testing.T) {
 		`ailuo_runtime_loads_total{result="success"} 1`,
 		`ailuo_runtime_stops_total{result="failure"} 1`,
 		"ailuo_runtime_calls_active 1",
-		"ailuo_model_input_tokens_total 11",
+		"ailuo_executor_execution_units_total 18",
 	} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("指标缺少 %q：\n%s", expected, body)

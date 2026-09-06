@@ -60,31 +60,63 @@ class RuntimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(_is_loopback_address("192.0.2.10:50051"))
 
     async def test_health_requires_protocol_and_real_model_readiness(self) -> None:
-        runtime = ExecutorRuntime(RuntimeModel())
+        runtime = ExecutorRuntime(RuntimeModel(), model_name="test-model")
         healthy = await runtime.Health(executor_pb2.HealthRequest(
             accepted_protocol_versions=[PROTOCOL_VERSION],
-            model="test-model",
         ), None)
         self.assertTrue(healthy.ready)
         self.assertEqual(healthy.supported_protocol_versions, [PROTOCOL_VERSION])
 
         mismatch = await runtime.Health(executor_pb2.HealthRequest(
-            accepted_protocol_versions=["4.0"],
-            model="test-model",
+            accepted_protocol_versions=["3.0"],
         ), None)
         self.assertFalse(mismatch.ready)
         self.assertEqual(mismatch.status_code, "protocol_version_mismatch")
 
-        missing = await runtime.Health(executor_pb2.HealthRequest(model="test-model"), None)
+        missing = await runtime.Health(executor_pb2.HealthRequest(), None)
         self.assertFalse(missing.ready)
         self.assertEqual(missing.status_code, "protocol_version_mismatch")
 
-        unavailable = await runtime.Health(executor_pb2.HealthRequest(
+        unavailable = await ExecutorRuntime(RuntimeModel(), model_name="missing-model").Health(executor_pb2.HealthRequest(
             accepted_protocol_versions=[PROTOCOL_VERSION],
-            model="missing-model",
         ), None)
         self.assertFalse(unavailable.ready)
         self.assertEqual(unavailable.status_code, "provider_unavailable")
+
+    async def test_run_reports_missing_model_as_configuration_error(self) -> None:
+        runtime = ExecutorRuntime(RuntimeModel(), model_name="test-model")
+        runtime._model_name = ""
+
+        async def request_iterator():
+            yield self._start_frame()
+
+        output = runtime.Run(request_iterator(), None)
+        accepted = await anext(output)
+        failure = await anext(output)
+        self.assertEqual(accepted.sequence, 1)
+        self.assertEqual(failure.sequence, 2)
+        self.assertEqual(failure.run_failure.code, "executor_configuration_unavailable")
+
+    async def test_run_accepts_empty_config_and_clamps_zero_usage(self) -> None:
+        class ZeroUsageModel(ModelProvider):
+            async def stream_turn(self, **kwargs):
+                yield TurnCompleted(
+                    text="完成",
+                    assistant_message={"role": "assistant", "content": "完成"},
+                    usage=ModelUsage(input_tokens=0, output_tokens=0, total_tokens=0),
+                )
+
+        async def request_iterator():
+            frame = self._start_frame()
+            frame.start_run.executor_config.content_type = "application/json"
+            yield frame
+
+        output = ExecutorRuntime(ZeroUsageModel(), model_name="test-model").Run(request_iterator(), None)
+        await anext(output)
+        usage = await anext(output)
+        final = await anext(output)
+        self.assertEqual(usage.resource_usage.execution_units, 1)
+        self.assertEqual(final.final_result.payload.data.decode(), "完成")
 
     async def test_grpc_frames_wrap_real_model_loop(self) -> None:
         requests: asyncio.Queue[executor_pb2.ExecutorFrame] = asyncio.Queue()
@@ -99,18 +131,18 @@ class RuntimeTest(unittest.IsolatedAsyncioTestCase):
             sequence=1,
             start_run=executor_pb2.StartRun(
                 app_id="campus-services",
-                input_message="有哪些线路",
-                timezone="Asia/Shanghai",
-                model="test-model",
-                system_prompt="test",
+                input_payload=executor_pb2.Payload(
+                    content_type="text/plain; charset=utf-8", data="有哪些线路".encode()
+                ),
+                context_payload=executor_pb2.Payload(
+                    content_type="application/ailuo.context+json",
+                    data=b'{"schema_version":"ailuo.context.v1","blocks":[]}',
+                ),
                 max_steps=3,
                 protocol_version=PROTOCOL_VERSION,
                 max_capability_calls=4,
-                max_input_tokens=1000,
-                max_output_tokens=1000,
-                max_total_tokens=2000,
+                max_execution_units=2000,
                 max_output_bytes=4096,
-                provider_timeout_ms=5000,
                 trace_id="11111111111111111111111111111111",
                 parent_span_id="2222222222222222",
                 capabilities=[executor_pb2.Capability(
@@ -122,13 +154,13 @@ class RuntimeTest(unittest.IsolatedAsyncioTestCase):
                 )],
             ),
         ))
-        output = ExecutorRuntime(RuntimeModel()).Run(request_iterator(), None)
+        output = ExecutorRuntime(RuntimeModel(), model_name="test-model").Run(request_iterator(), None)
         accepted = await anext(output)
         self.assertEqual(accepted.sequence, 1)
         self.assertEqual(accepted.run_accepted.protocol_version, PROTOCOL_VERSION)
         first_usage = await anext(output)
         self.assertEqual(first_usage.sequence, 2)
-        self.assertEqual(first_usage.run_usage.total_tokens, 12)
+        self.assertEqual(first_usage.resource_usage.execution_units, 12)
         call_frame = await anext(output)
         self.assertEqual(call_frame.sequence, 3)
         self.assertEqual(call_frame.capability_call.capability_id, "campus.bus.routes.list")
@@ -148,10 +180,10 @@ class RuntimeTest(unittest.IsolatedAsyncioTestCase):
         final = await asyncio.wait_for(anext(output), timeout=1)
         self.assertEqual(delta.sequence, 4)
         self.assertEqual(second_usage.sequence, 5)
-        self.assertEqual(second_usage.run_usage.total_tokens, 35)
+        self.assertEqual(second_usage.resource_usage.execution_units, 35)
         self.assertEqual(final.sequence, 6)
-        self.assertEqual(delta.reply_delta.text, "查到了。")
-        self.assertEqual(final.final_message.text, "查到了。")
+        self.assertEqual(delta.output_delta.payload.data.decode(), "查到了。")
+        self.assertEqual(final.final_result.payload.data.decode(), "查到了。")
 
     async def test_rejects_protocol_mismatch_before_model_execution(self) -> None:
         async def request_iterator():
@@ -159,10 +191,10 @@ class RuntimeTest(unittest.IsolatedAsyncioTestCase):
                 echo_id="echo",
                 run_id="run",
                 sequence=1,
-                start_run=executor_pb2.StartRun(protocol_version="4.0"),
+                start_run=executor_pb2.StartRun(protocol_version="3.0"),
             )
 
-        output = ExecutorRuntime(RuntimeModel()).Run(request_iterator(), None)
+        output = ExecutorRuntime(RuntimeModel(), model_name="test-model").Run(request_iterator(), None)
         failure = await anext(output)
         self.assertEqual(failure.sequence, 1)
         self.assertEqual(failure.run_failure.code, "protocol_version_mismatch")
@@ -176,7 +208,7 @@ class RuntimeTest(unittest.IsolatedAsyncioTestCase):
         async def request_iterator():
             yield frame_with_unknown
 
-        output = ExecutorRuntime(RuntimeModel()).Run(request_iterator(), None)
+        output = ExecutorRuntime(RuntimeModel(), model_name="test-model").Run(request_iterator(), None)
         failure = await anext(output)
         self.assertEqual(failure.sequence, 1)
         self.assertEqual(failure.run_failure.code, "invalid_request")
@@ -188,19 +220,32 @@ class RuntimeTest(unittest.IsolatedAsyncioTestCase):
         async def request_iterator():
             yield frame
 
-        output = ExecutorRuntime(RuntimeModel()).Run(request_iterator(), None)
+        output = ExecutorRuntime(RuntimeModel(), model_name="test-model").Run(request_iterator(), None)
         failure = await anext(output)
         self.assertEqual(failure.sequence, 1)
         self.assertEqual(failure.run_failure.code, "invalid_request")
 
-    async def test_accepts_governed_child_parent_identity(self) -> None:
+    async def test_accepts_absent_trace_context(self) -> None:
+        frame = self._start_frame()
+        frame.start_run.trace_id = ""
+        frame.start_run.parent_span_id = ""
+
+        async def request_iterator():
+            yield frame
+
+        output = ExecutorRuntime(RuntimeModel(), model_name="test-model").Run(request_iterator(), None)
+        accepted = await anext(output)
+        self.assertEqual(accepted.run_accepted.protocol_version, PROTOCOL_VERSION)
+        await output.aclose()
+
+    async def test_accepts_governed_causal_parent_identity(self) -> None:
         frame = self._start_frame()
         frame.start_run.parent_run_id = "parent-run"
 
         async def request_iterator():
             yield frame
 
-        output = ExecutorRuntime(RuntimeModel()).Run(request_iterator(), None)
+        output = ExecutorRuntime(RuntimeModel(), model_name="test-model").Run(request_iterator(), None)
         accepted = await anext(output)
         self.assertEqual(accepted.run_accepted.protocol_version, PROTOCOL_VERSION)
         await output.aclose()
@@ -214,7 +259,7 @@ class RuntimeTest(unittest.IsolatedAsyncioTestCase):
                 async def request_iterator():
                     yield frame
 
-                output = ExecutorRuntime(RuntimeModel()).Run(request_iterator(), None)
+                output = ExecutorRuntime(RuntimeModel(), model_name="test-model").Run(request_iterator(), None)
                 failure = await anext(output)
                 self.assertEqual(failure.run_failure.code, "invalid_request")
 
@@ -226,7 +271,7 @@ class RuntimeTest(unittest.IsolatedAsyncioTestCase):
                 yield await requests.get()
 
         await requests.put(self._start_frame())
-        output = ExecutorRuntime(RuntimeModel()).Run(request_iterator(), None)
+        output = ExecutorRuntime(RuntimeModel(), model_name="test-model").Run(request_iterator(), None)
         await anext(output)
         await anext(output)
         call = await anext(output)
@@ -253,18 +298,18 @@ class RuntimeTest(unittest.IsolatedAsyncioTestCase):
             sequence=1,
             start_run=executor_pb2.StartRun(
                 app_id="campus-services",
-                input_message="有哪些线路",
-                timezone="Asia/Shanghai",
-                model="test-model",
-                system_prompt="test",
+                input_payload=executor_pb2.Payload(
+                    content_type="text/plain; charset=utf-8", data="有哪些线路".encode()
+                ),
+                context_payload=executor_pb2.Payload(
+                    content_type="application/ailuo.context+json",
+                    data=b'{"schema_version":"ailuo.context.v1","blocks":[]}',
+                ),
                 max_steps=3,
                 protocol_version=PROTOCOL_VERSION,
                 max_capability_calls=4,
-                max_input_tokens=1000,
-                max_output_tokens=1000,
-                max_total_tokens=2000,
+                max_execution_units=2000,
                 max_output_bytes=4096,
-                provider_timeout_ms=5000,
                 trace_id="11111111111111111111111111111111",
                 parent_span_id="2222222222222222",
                 capabilities=[executor_pb2.Capability(

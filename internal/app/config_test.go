@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -50,6 +51,16 @@ func TestLoadConfigRejectsRelativeRuntimeInstallRoot(t *testing.T) {
 	t.Setenv("AILUO_RUNTIME_INSTALL_ROOT", "relative/runtime")
 	if _, err := loadConfig(); err == nil || !strings.Contains(err.Error(), "clean absolute path") {
 		t.Fatalf("error=%v", err)
+	}
+}
+
+func TestInitialCapabilityIDsUseInstalledMetadata(t *testing.T) {
+	ids := initialCapabilityIDs(registry.New(), []loader.InstalledRecord{{Runtime: loader.Manifest{Capabilities: []capability.CapabilitySpec{
+		{ID: "z.capability"}, {ID: "a.capability"}, {ID: "z.capability"},
+	}}}})
+	want := []string{"a.capability", "z.capability"}
+	if !slices.Equal(ids, want) {
+		t.Fatalf("initial capabilities=%v, want %v", ids, want)
 	}
 }
 

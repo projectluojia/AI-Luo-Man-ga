@@ -270,7 +270,7 @@ func (d *Dispatcher) childRequest(
 			return contracts.RequestContext{}, "", fmt.Errorf("%w: target=%q", ErrCycleDetected, targetID)
 		}
 	}
-	child := request.Child()
+	child := request.NextCall()
 	child.PermissionScope = narrowedPermissions
 	child.CallChain = append(append([]string(nil), request.CallChain...), fingerprint)
 	return child, fingerprint, nil

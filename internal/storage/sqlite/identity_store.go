@@ -14,64 +14,6 @@ import (
 // 编译期断言：sqlite.Store 必须完整实现 identity.Store 端口。
 var _ identity.Store = (*Store)(nil)
 
-func init() {
-	registerMigration(15, `
-CREATE TABLE users (
-  user_id TEXT PRIMARY KEY CHECK(length(user_id) BETWEEN 1 AND 128),
-  status TEXT NOT NULL CHECK(status IN ('active','disabled')),
-  created_at TEXT NOT NULL,
-  disabled_at TEXT,
-  CHECK((status='active' AND disabled_at IS NULL) OR (status='disabled' AND disabled_at IS NOT NULL))
-);
-CREATE TABLE external_identities (
-  app_id TEXT NOT NULL CHECK(length(app_id) BETWEEN 1 AND 128),
-  platform TEXT NOT NULL CHECK(length(platform) BETWEEN 1 AND 128),
-  platform_space_id TEXT NOT NULL CHECK(length(platform_space_id) BETWEEN 1 AND 128),
-  platform_user_id TEXT NOT NULL CHECK(length(platform_user_id) BETWEEN 1 AND 256),
-  user_id TEXT NOT NULL CHECK(length(user_id) BETWEEN 1 AND 128),
-  bound_at TEXT NOT NULL,
-  PRIMARY KEY (app_id, platform, platform_space_id, platform_user_id),
-  FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE RESTRICT
-);
-CREATE INDEX external_identities_user_idx ON external_identities(app_id, user_id);
-CREATE TABLE app_memberships (
-  app_id TEXT NOT NULL CHECK(length(app_id) BETWEEN 1 AND 128),
-  user_id TEXT NOT NULL CHECK(length(user_id) BETWEEN 1 AND 128),
-  role_ids TEXT NOT NULL CHECK(length(role_ids) <= 8192 AND json_valid(role_ids) AND json_type(role_ids)='array'),
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  PRIMARY KEY (app_id, user_id),
-  FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE RESTRICT
-);
-CREATE INDEX app_memberships_user_idx ON app_memberships(user_id);
-CREATE TABLE roles (
-  app_id TEXT NOT NULL CHECK(length(app_id) BETWEEN 1 AND 128),
-  role_id TEXT NOT NULL CHECK(length(role_id) BETWEEN 1 AND 128),
-  name TEXT NOT NULL CHECK(length(name) BETWEEN 1 AND 256),
-  description TEXT NOT NULL CHECK(length(description) <= 1024),
-  created_at TEXT NOT NULL,
-  PRIMARY KEY (app_id, role_id)
-);
-CREATE TABLE permission_grants (
-  app_id TEXT NOT NULL CHECK(length(app_id) BETWEEN 1 AND 128),
-  user_id TEXT CHECK(length(user_id) BETWEEN 1 AND 128),
-  role_id TEXT CHECK(length(role_id) BETWEEN 1 AND 128),
-  permission TEXT NOT NULL CHECK(length(permission) BETWEEN 1 AND 128),
-  granted_at TEXT NOT NULL,
-  CHECK((user_id IS NULL) <> (role_id IS NULL)),
-  FOREIGN KEY (app_id, user_id) REFERENCES app_memberships(app_id, user_id) ON DELETE CASCADE,
-  FOREIGN KEY (app_id, role_id) REFERENCES roles(app_id, role_id) ON DELETE CASCADE
-);
-CREATE UNIQUE INDEX permission_grants_user_idx ON permission_grants(app_id, user_id, permission) WHERE user_id IS NOT NULL;
-CREATE UNIQUE INDEX permission_grants_role_idx ON permission_grants(app_id, role_id, permission) WHERE role_id IS NOT NULL;
-CREATE TABLE identity_binding_revisions (
-  app_id TEXT PRIMARY KEY CHECK(length(app_id) BETWEEN 1 AND 128),
-  revision INTEGER NOT NULL CHECK(revision > 0),
-  updated_at TEXT NOT NULL
-);
-`)
-}
-
 // bumpIdentityBindingRevision 在同一事务内把 App 的绑定修订号原子加一。
 // 每个 App 级身份/授权变更都必须调用它，保证外部可观察的修订号单调递增。
 func bumpIdentityBindingRevision(ctx context.Context, tx *sql.Tx, appID string, now time.Time) error {

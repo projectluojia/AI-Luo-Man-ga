@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
+	executorv1 "github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/executorv1"
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packagecontract"
-	executorv1 "github.com/projectluojia/AI-Luo-Man-ga/gen/executorv1"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/executor"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
@@ -22,7 +22,7 @@ type executorHealthServer struct {
 
 func (executorHealthServer) Health(context.Context, *executorv1.HealthRequest) (*executorv1.HealthResponse, error) {
 	return &executorv1.HealthResponse{
-		Ready: true, Provider: "test", SupportedProtocolVersions: []string{executor.Version},
+		Ready: true, SupportedProtocolVersions: []string{executor.Version},
 	}, nil
 }
 

@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/capability"
+	contractsexecutor "github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/executor"
 	kernelecho "github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/executor"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/id"
@@ -41,6 +42,9 @@ func (s *Store) CreateEchoRunIdempotentLimited(
 	}
 	if echo.AppID == "" || echo.ID == "" || echo.InputMessage == "" || echo.Status != kernelecho.StatusRunning || echo.CreatedAt.IsZero() {
 		return "", false, kernelecho.ErrInvalidEchoRecord
+	}
+	if run.ParentRunID != "" {
+		return "", false, kernelecho.ErrInvalidRunRecord
 	}
 	if err := validateNewRun(echo, run); err != nil {
 		return "", false, err
@@ -114,90 +118,34 @@ func insertRun(ctx context.Context, tx *sql.Tx, run kernelecho.RunRecord) error 
 	if len(contextSources) == 0 {
 		contextSources = json.RawMessage(`{}`) // 未装配前固化来源版本为空对象
 	}
+	resultPayload := run.Result.Data
+	if resultPayload == nil {
+		resultPayload = []byte{}
+	}
 	if _, err := tx.ExecContext(ctx, `
 INSERT INTO runs(
-  app_id,run_id,run_group_id,echo_id,parent_run_id,origin_call_id,attempt,status,model,model_config_version,protocol_version,
-  max_steps,max_capability_calls,max_input_tokens,max_output_tokens,max_total_tokens,max_output_bytes,
-  max_cost_microusd,provider_timeout_ms,deadline_at,available_at,last_agent_sequence,
-  capability_scope,permission_scope,recoverable_state,result_message,created_at,
-  session_id,user_id,message_id,context_digest,context_sources,channel,task_message
-) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		run.AppID, run.ID, run.RunGroupID, run.EchoID, parentRunID, run.OriginCallID, run.Attempt, run.Status, run.Model, run.ModelConfigVersion, run.ProtocolVersion,
-		run.MaxSteps, run.MaxCapabilityCalls, run.MaxInputTokens, run.MaxOutputTokens, run.MaxTotalTokens, run.MaxOutputBytes,
-		run.MaxCostMicrousd, run.ProviderTimeoutMS, run.Deadline.UTC().Format(time.RFC3339Nano), run.AvailableAt.UTC().Format(time.RFC3339Nano), run.LastAgentSequence,
-		string(capabilityScope), string(permissionScope), string(run.RecoverableState), run.ResultMessage, run.CreatedAt.UTC().Format(time.RFC3339Nano),
-		run.SessionID, run.UserID, run.MessageID, run.ContextDigest, string(contextSources),
-		run.Channel, run.TaskMessage,
+	  app_id,run_id,run_group_id,echo_id,parent_run_id,origin_call_id,attempt,status,executor_id,config_revision,protocol_version,
+  executor_config,input_payload,input_content_type,max_steps,max_capability_calls,max_execution_units,max_output_bytes,
+  max_cost_microusd,execution_timeout_ms,used_execution_units,used_cost_microusd,used_retries,deadline_at,available_at,
+  last_executor_sequence,capability_scope,permission_scope,recoverable_state,result_payload,result_content_type,created_at,
+  session_id,user_id,message_id,context_digest,context_sources,channel
+) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		run.AppID, run.ID, run.RunGroupID, run.EchoID, parentRunID, run.OriginCallID, run.Attempt, run.Status, run.ExecutorID, run.ConfigRevision, run.ProtocolVersion,
+		string(run.ExecutorConfig), run.InputPayload, run.InputContentType, run.MaxSteps, run.MaxCapabilityCalls, run.MaxExecutionUnits, run.MaxOutputBytes,
+		run.MaxCostMicrousd, run.ExecutionTimeoutMS, run.UsedExecutionUnits, run.UsedCostMicrousd, run.UsedRetries,
+		run.Deadline.UTC().Format(time.RFC3339Nano), run.AvailableAt.UTC().Format(time.RFC3339Nano), run.LastExecutorSequence,
+		string(capabilityScope), string(permissionScope), string(run.RecoverableState), resultPayload, run.Result.ContentType,
+		run.CreatedAt.UTC().Format(time.RFC3339Nano), run.SessionID, run.UserID, run.MessageID, run.ContextDigest, string(contextSources), run.Channel,
 	); err != nil {
 		return fmt.Errorf("create run: %w", err)
 	}
 	return nil
 }
 
-func (s *Store) CreateChildRun(ctx context.Context, parent, child kernelecho.RunRecord, maxChildRuns int) (resultErr error) {
-	started := time.Now()
-	defer func() { observeStorageOperation(ctx, "create_child_run", started, resultErr) }()
-	if maxChildRuns < 1 || parent.AppID == "" || parent.ID == "" || parent.EchoID == "" || parent.LeaseToken == "" ||
-		parent.ParentRunID != "" || parent.Status != kernelecho.RunStatusRunning ||
-		child.ParentRunID != parent.ID || child.AppID != parent.AppID || child.EchoID != parent.EchoID {
-		return kernelecho.ErrInvalidRunRecord
-	}
-	if err := validateNewRun(kernelecho.Record{
-		ID: parent.EchoID, AppID: parent.AppID, InputMessage: "persisted",
-		Status: kernelecho.StatusRunning, CreatedAt: child.CreatedAt,
-	}, child); err != nil {
-		return err
-	}
-	tx, err := s.beginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin child Run creation: %w", err)
-	}
-	defer s.finishTx(tx, &resultErr, "create child Run")
-	var parentCount int
-	if err := tx.QueryRowContext(ctx, `
-SELECT count(*)
-FROM runs r JOIN echoes e ON e.app_id=r.app_id AND e.echo_id=r.echo_id
-WHERE r.app_id=? AND r.run_id=? AND r.echo_id=? AND r.parent_run_id IS NULL
-  AND r.status=? AND r.lease_token=? AND e.status=?`,
-		parent.AppID, parent.ID, parent.EchoID, kernelecho.RunStatusRunning, parent.LeaseToken, kernelecho.StatusRunning,
-	).Scan(&parentCount); err != nil {
-		return fmt.Errorf("validate child Run parent: %w", err)
-	}
-	if parentCount != 1 {
-		return kernelecho.ErrInvalidTransition
-	}
-	var childCount int
-	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM runs WHERE app_id=? AND parent_run_id=?`, parent.AppID, parent.ID).Scan(&childCount); err != nil {
-		return fmt.Errorf("count child Runs: %w", err)
-	}
-	if childCount >= maxChildRuns {
-		return kernelecho.ErrChildRunLimit
-	}
-	if err := insertRun(ctx, tx, child); err != nil {
-		if isUniqueConstraint(err) {
-			var existingID string
-			readErr := tx.QueryRowContext(ctx, `SELECT run_id FROM runs WHERE app_id=? AND parent_run_id=? AND origin_call_id=?`,
-				child.AppID, child.ParentRunID, child.OriginCallID,
-			).Scan(&existingID)
-			if readErr == nil && existingID == child.ID {
-				return nil
-			}
-			if readErr == nil {
-				return idempotency.ErrKeyConflict
-			}
-		}
-		return err
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit child Run creation: %w", err)
-	}
-	return nil
-}
-
-func (s *Store) ClaimRun(ctx context.Context, appID, echoID, leaseToken string, startedAt, leaseExpiresAt time.Time) (_ kernelecho.RunRecord, resultErr error) {
+func (s *Store) ClaimRun(ctx context.Context, appID, echoID, runID, leaseToken string, startedAt, leaseExpiresAt time.Time) (_ kernelecho.RunRecord, resultErr error) {
 	metricStarted := time.Now()
 	defer func() { observeStorageOperation(ctx, "claim_run", metricStarted, resultErr) }()
-	if appID == "" || echoID == "" || leaseToken == "" || startedAt.IsZero() || !leaseExpiresAt.After(startedAt) {
+	if appID == "" || echoID == "" || runID == "" || leaseToken == "" || startedAt.IsZero() || !leaseExpiresAt.After(startedAt) {
 		return kernelecho.RunRecord{}, kernelecho.ErrInvalidRunRecord
 	}
 	tx, err := s.beginTx(ctx, nil)
@@ -205,17 +153,17 @@ func (s *Store) ClaimRun(ctx context.Context, appID, echoID, leaseToken string, 
 		return kernelecho.RunRecord{}, fmt.Errorf("begin run claim: %w", err)
 	}
 	defer s.finishTx(tx, &resultErr, "claim Run")
-	run, err := queryRun(tx.QueryRowContext(ctx, runSelect+` WHERE app_id=? AND echo_id=? AND parent_run_id IS NULL AND status=? AND julianday(available_at)<=julianday(?) ORDER BY attempt LIMIT 1`,
-		appID, echoID, kernelecho.RunStatusQueued, startedAt.UTC().Format(time.RFC3339Nano)))
+	run, err := queryRun(tx.QueryRowContext(ctx, runSelect+` WHERE app_id=? AND echo_id=? AND run_id=? AND status=? AND julianday(available_at)<=julianday(?)`,
+		appID, echoID, runID, kernelecho.RunStatusQueued, startedAt.UTC().Format(time.RFC3339Nano)))
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return kernelecho.RunRecord{}, kernelecho.ErrInvalidTransition
 		}
 		return kernelecho.RunRecord{}, fmt.Errorf("select queued run: %w", err)
 	}
-	result, err := tx.ExecContext(ctx, `UPDATE runs SET status=?,lease_token=?,lease_expires_at=?,started_at=? WHERE app_id=? AND run_id=? AND status=?`,
+	result, err := tx.ExecContext(ctx, `UPDATE runs SET status=?,lease_token=?,lease_expires_at=?,started_at=? WHERE app_id=? AND run_id=? AND echo_id=? AND status=?`,
 		kernelecho.RunStatusRunning, leaseToken, leaseExpiresAt.UTC().Format(time.RFC3339Nano), startedAt.UTC().Format(time.RFC3339Nano),
-		appID, run.ID, kernelecho.RunStatusQueued,
+		appID, run.ID, echoID, kernelecho.RunStatusQueued,
 	)
 	if err != nil {
 		return kernelecho.RunRecord{}, fmt.Errorf("claim queued run: %w", err)
@@ -229,67 +177,6 @@ func (s *Store) ClaimRun(ctx context.Context, appID, echoID, leaseToken string, 
 	}
 	if err := tx.Commit(); err != nil {
 		return kernelecho.RunRecord{}, fmt.Errorf("commit run claim: %w", err)
-	}
-	run.Status = kernelecho.RunStatusRunning
-	run.LeaseToken = leaseToken
-	run.StartedAt = timePointer(startedAt.UTC())
-	run.LeaseExpiresAt = timePointer(leaseExpiresAt.UTC())
-	return run, nil
-}
-
-func (s *Store) ClaimChildRun(ctx context.Context, appID, echoID, runID, parentRunID, leaseToken string, startedAt, leaseExpiresAt time.Time) (_ kernelecho.RunRecord, resultErr error) {
-	metricStarted := time.Now()
-	defer func() { observeStorageOperation(ctx, "claim_child_run", metricStarted, resultErr) }()
-	if appID == "" || echoID == "" || runID == "" || parentRunID == "" || leaseToken == "" ||
-		startedAt.IsZero() || !leaseExpiresAt.After(startedAt) {
-		return kernelecho.RunRecord{}, kernelecho.ErrInvalidRunRecord
-	}
-	tx, err := s.beginTx(ctx, nil)
-	if err != nil {
-		return kernelecho.RunRecord{}, fmt.Errorf("begin child Run claim: %w", err)
-	}
-	defer s.finishTx(tx, &resultErr, "claim child Run")
-	run, err := queryRun(tx.QueryRowContext(ctx, runSelect+`
-WHERE app_id=? AND echo_id=? AND run_id=? AND parent_run_id=? AND status=? AND julianday(available_at)<=julianday(?)`,
-		appID, echoID, runID, parentRunID, kernelecho.RunStatusQueued, startedAt.UTC().Format(time.RFC3339Nano)))
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return kernelecho.RunRecord{}, kernelecho.ErrInvalidTransition
-		}
-		return kernelecho.RunRecord{}, fmt.Errorf("select queued child Run: %w", err)
-	}
-	var parentCount int
-	if err := tx.QueryRowContext(ctx, `
-SELECT count(*) FROM runs
-WHERE app_id=? AND echo_id=? AND run_id=? AND parent_run_id IS NULL
-  AND status IN (?,?,?,?,?)`,
-		appID, echoID, parentRunID, kernelecho.RunStatusRunning,
-		kernelecho.RunStatusSucceeded, kernelecho.RunStatusFailed,
-		kernelecho.RunStatusCancelled, kernelecho.RunStatusTimedOut,
-	).Scan(&parentCount); err != nil {
-		return kernelecho.RunRecord{}, fmt.Errorf("validate running child Run parent: %w", err)
-	}
-	if parentCount != 1 {
-		return kernelecho.RunRecord{}, kernelecho.ErrInvalidTransition
-	}
-	result, err := tx.ExecContext(ctx, `
-UPDATE runs SET status=?,lease_token=?,lease_expires_at=?,started_at=?
-WHERE app_id=? AND run_id=? AND echo_id=? AND parent_run_id=? AND status=?`,
-		kernelecho.RunStatusRunning, leaseToken, leaseExpiresAt.UTC().Format(time.RFC3339Nano), startedAt.UTC().Format(time.RFC3339Nano),
-		appID, runID, echoID, parentRunID, kernelecho.RunStatusQueued,
-	)
-	if err != nil {
-		return kernelecho.RunRecord{}, fmt.Errorf("claim queued child Run: %w", err)
-	}
-	affected, err := result.RowsAffected()
-	if err != nil {
-		return kernelecho.RunRecord{}, fmt.Errorf("read claimed child Run row count: %w", err)
-	}
-	if affected != 1 {
-		return kernelecho.RunRecord{}, kernelecho.ErrInvalidTransition
-	}
-	if err := tx.Commit(); err != nil {
-		return kernelecho.RunRecord{}, fmt.Errorf("commit child Run claim: %w", err)
 	}
 	run.Status = kernelecho.RunStatusRunning
 	run.LeaseToken = leaseToken
@@ -325,24 +212,24 @@ WHERE app_id=? AND run_id=? AND echo_id=? AND status=? AND lease_token=? AND jul
 	return nil
 }
 
-func (s *Store) AdvanceRunAgentSequence(ctx context.Context, run kernelecho.RunRecord, sequence uint64) (resultErr error) {
+func (s *Store) AdvanceRunExecutorSequence(ctx context.Context, run kernelecho.RunRecord, sequence uint64) (resultErr error) {
 	started := time.Now()
 	defer func() { observeStorageOperation(ctx, "advance_run_sequence", started, resultErr) }()
 	if run.AppID == "" || run.ID == "" || run.EchoID == "" || run.LeaseToken == "" ||
-		run.Status != kernelecho.RunStatusRunning || sequence == 0 || sequence != run.LastAgentSequence+1 {
+		run.Status != kernelecho.RunStatusRunning || sequence == 0 || sequence != run.LastExecutorSequence+1 {
 		return kernelecho.ErrInvalidRunRecord
 	}
 	result, err := s.db.ExecContext(ctx, `
-UPDATE runs SET last_agent_sequence=?
-WHERE app_id=? AND run_id=? AND echo_id=? AND status=? AND lease_token=? AND last_agent_sequence=?`,
-		sequence, run.AppID, run.ID, run.EchoID, kernelecho.RunStatusRunning, run.LeaseToken, run.LastAgentSequence,
+UPDATE runs SET last_executor_sequence=?
+WHERE app_id=? AND run_id=? AND echo_id=? AND status=? AND lease_token=? AND last_executor_sequence=?`,
+		sequence, run.AppID, run.ID, run.EchoID, kernelecho.RunStatusRunning, run.LeaseToken, run.LastExecutorSequence,
 	)
 	if err != nil {
-		return fmt.Errorf("advance Run Agent sequence: %w", err)
+		return fmt.Errorf("advance Run executor sequence: %w", err)
 	}
 	affected, err := result.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("read Run Agent sequence update count: %w", err)
+		return fmt.Errorf("read Run executor sequence update count: %w", err)
 	}
 	if affected != 1 {
 		return kernelecho.ErrInvalidTransition
@@ -350,43 +237,38 @@ WHERE app_id=? AND run_id=? AND echo_id=? AND status=? AND lease_token=? AND las
 	return nil
 }
 
-func (s *Store) AdvanceRunAgentSequenceWithUsage(
+func (s *Store) AdvanceRunExecutorSequenceWithUsage(
 	ctx context.Context,
 	run kernelecho.RunRecord,
 	sequence uint64,
-	inputTokens uint64,
-	outputTokens uint64,
-	totalTokens uint64,
+	executionUnits uint64,
 	costMicrousd uint64,
-	providerRetries uint32,
+	retries uint32,
 ) (resultErr error) {
 	started := time.Now()
 	defer func() { observeStorageOperation(ctx, "advance_run_usage", started, resultErr) }()
 	if run.AppID == "" || run.ID == "" || run.EchoID == "" || run.LeaseToken == "" ||
-		run.Status != kernelecho.RunStatusRunning || sequence == 0 || sequence != run.LastAgentSequence+1 ||
-		inputTokens < run.UsedInputTokens || outputTokens < run.UsedOutputTokens ||
-		totalTokens < run.UsedTotalTokens || costMicrousd < run.UsedCostMicrousd ||
-		providerRetries < run.UsedProviderRetries || providerRetries > 320 ||
-		totalTokens != inputTokens+outputTokens ||
-		inputTokens > run.MaxInputTokens || outputTokens > run.MaxOutputTokens ||
-		totalTokens > run.MaxTotalTokens || (run.MaxCostMicrousd > 0 && costMicrousd > run.MaxCostMicrousd) {
+		run.Status != kernelecho.RunStatusRunning || sequence == 0 || sequence != run.LastExecutorSequence+1 ||
+		executionUnits < run.UsedExecutionUnits || costMicrousd < run.UsedCostMicrousd ||
+		retries < run.UsedRetries || retries > 320 ||
+		executionUnits > run.MaxExecutionUnits || (run.MaxCostMicrousd > 0 && costMicrousd > run.MaxCostMicrousd) {
 		return kernelecho.ErrInvalidRunRecord
 	}
 	result, err := s.db.ExecContext(ctx, `
 UPDATE runs
-SET last_agent_sequence=?,used_input_tokens=?,used_output_tokens=?,used_total_tokens=?,used_cost_microusd=?,used_provider_retries=?
+SET last_executor_sequence=?,used_execution_units=?,used_cost_microusd=?,used_retries=?
 WHERE app_id=? AND run_id=? AND echo_id=? AND status=? AND lease_token=?
-  AND last_agent_sequence=? AND used_input_tokens=? AND used_output_tokens=? AND used_total_tokens=? AND used_cost_microusd=? AND used_provider_retries=?`,
-		sequence, inputTokens, outputTokens, totalTokens, costMicrousd, providerRetries,
+	  AND last_executor_sequence=? AND used_execution_units=? AND used_cost_microusd=? AND used_retries=?`,
+		sequence, executionUnits, costMicrousd, retries,
 		run.AppID, run.ID, run.EchoID, kernelecho.RunStatusRunning, run.LeaseToken,
-		run.LastAgentSequence, run.UsedInputTokens, run.UsedOutputTokens, run.UsedTotalTokens, run.UsedCostMicrousd, run.UsedProviderRetries,
+		run.LastExecutorSequence, run.UsedExecutionUnits, run.UsedCostMicrousd, run.UsedRetries,
 	)
 	if err != nil {
-		return fmt.Errorf("advance Run Agent sequence and model usage: %w", err)
+		return fmt.Errorf("advance Run executor sequence and usage: %w", err)
 	}
 	affected, err := result.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("read Run model usage update count: %w", err)
+		return fmt.Errorf("read Run executor usage update count: %w", err)
 	}
 	if affected != 1 {
 		return kernelecho.ErrInvalidTransition
@@ -429,7 +311,7 @@ func (s *Store) CancelQueuedRun(ctx context.Context, appID, echoID string, compl
 	}
 	if running > 0 {
 		if err := tx.Commit(); err != nil {
-			return false, fmt.Errorf("commit queued child Run cancellation: %w", err)
+			return false, fmt.Errorf("commit queued Run cancellation: %w", err)
 		}
 		return true, nil
 	}
@@ -494,8 +376,7 @@ func (s *Store) RetryRun(ctx context.Context, current, next kernelecho.RunRecord
 	defer func() { observeStorageOperation(ctx, "retry_run", started, resultErr) }()
 	if current.AppID == "" || current.ID == "" || current.EchoID == "" || current.LeaseToken == "" || completedAt.IsZero() ||
 		next.AppID != current.AppID || next.EchoID != current.EchoID || next.Attempt != current.Attempt+1 ||
-		next.Status != kernelecho.RunStatusQueued || current.ParentRunID != "" || next.ParentRunID != "" ||
-		next.RunGroupID != current.RunGroupID || next.OriginCallID != "" {
+		next.Status != kernelecho.RunStatusQueued || next.RunGroupID != current.RunGroupID {
 		return kernelecho.ErrInvalidRunRecord
 	}
 	if err := validateNewRun(kernelecho.Record{
@@ -531,28 +412,32 @@ func (s *Store) RetryRun(ctx context.Context, current, next kernelecho.RunRecord
 	return nil
 }
 
-func (s *Store) CompleteRun(ctx context.Context, run kernelecho.RunRecord, runStatus, echoStatus, finalMessage string, failure publicerror.Error, completedAt time.Time) (resultErr error) {
+func (s *Store) CompleteRun(ctx context.Context, run kernelecho.RunRecord, runStatus, echoStatus string, output kernelecho.Output, failure publicerror.Error, completedAt time.Time) (resultErr error) {
 	started := time.Now()
 	defer func() { observeStorageOperation(ctx, "complete_run", started, resultErr) }()
 	if err := validateCompletion(run, runStatus, echoStatus, completedAt); err != nil {
 		return err
 	}
-	if run.ParentRunID != "" {
-		return kernelecho.ErrInvalidTransition
-	}
 	if runStatus == kernelecho.RunStatusSucceeded {
 		failure = publicerror.Error{}
 	} else {
 		failure = publicerror.Echo(failure.Code)
-		finalMessage = ""
+		output = kernelecho.Output{}
+	}
+	if output.Data == nil {
+		output.Data = []byte{}
+	}
+	if runStatus == kernelecho.RunStatusSucceeded &&
+		(len(output.Data) == 0 || len(output.Data) > executor.MaxOutputPayloadBytes || output.ContentType == "") {
+		return kernelecho.ErrInvalidRunRecord
 	}
 	tx, err := s.beginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin Run/Echo completion: %w", err)
 	}
 	defer s.finishTx(tx, &resultErr, "complete Run")
-	result, err := tx.ExecContext(ctx, `UPDATE runs SET status=?,lease_token=NULL,lease_expires_at=NULL,result_message=?,error_code=?,error_message=?,completed_at=? WHERE app_id=? AND run_id=? AND echo_id=? AND status=? AND lease_token=?`,
-		runStatus, finalMessage, failure.Code, failure.Message, completedAt.UTC().Format(time.RFC3339Nano),
+	result, err := tx.ExecContext(ctx, `UPDATE runs SET status=?,lease_token=NULL,lease_expires_at=NULL,result_payload=?,result_content_type=?,error_code=?,error_message=?,completed_at=? WHERE app_id=? AND run_id=? AND echo_id=? AND status=? AND lease_token=?`,
+		runStatus, output.Data, output.ContentType, failure.Code, failure.Message, completedAt.UTC().Format(time.RFC3339Nano),
 		run.AppID, run.ID, run.EchoID, kernelecho.RunStatusRunning, run.LeaseToken,
 	)
 	if err != nil {
@@ -563,25 +448,17 @@ func (s *Store) CompleteRun(ctx context.Context, run kernelecho.RunRecord, runSt
 	} else if affected != 1 {
 		return kernelecho.ErrInvalidTransition
 	}
-	var activeChildren int
-	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM runs WHERE app_id=? AND parent_run_id=? AND status IN (?,?)`,
-		run.AppID, run.ID, kernelecho.RunStatusQueued, kernelecho.RunStatusRunning,
-	).Scan(&activeChildren); err != nil {
-		return fmt.Errorf("check active child Runs: %w", err)
+	result, err = tx.ExecContext(ctx, `UPDATE echoes SET status=?,final_message=?,result_payload=?,result_content_type=?,error_code=?,error_message=?,completed_at=? WHERE app_id=? AND echo_id=? AND status=?`,
+		echoStatus, textOutput(output), output.Data, output.ContentType, failure.Code, failure.Message, completedAt.UTC().Format(time.RFC3339Nano),
+		run.AppID, run.EchoID, kernelecho.StatusRunning,
+	)
+	if err != nil {
+		return fmt.Errorf("complete echo: %w", err)
 	}
-	if activeChildren == 0 {
-		result, err = tx.ExecContext(ctx, `UPDATE echoes SET status=?,final_message=?,error_code=?,error_message=?,completed_at=? WHERE app_id=? AND echo_id=? AND status=?`,
-			echoStatus, finalMessage, failure.Code, failure.Message, completedAt.UTC().Format(time.RFC3339Nano),
-			run.AppID, run.EchoID, kernelecho.StatusRunning,
-		)
-		if err != nil {
-			return fmt.Errorf("complete echo: %w", err)
-		}
-		if affected, err := result.RowsAffected(); err != nil {
-			return fmt.Errorf("read completed echo row count: %w", err)
-		} else if affected != 1 {
-			return kernelecho.ErrInvalidTransition
-		}
+	if affected, err := result.RowsAffected(); err != nil {
+		return fmt.Errorf("read completed echo row count: %w", err)
+	} else if affected != 1 {
+		return kernelecho.ErrInvalidTransition
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit Run/Echo completion: %w", err)
@@ -589,42 +466,40 @@ func (s *Store) CompleteRun(ctx context.Context, run kernelecho.RunRecord, runSt
 	return nil
 }
 
-func finalizeEchoFromRoot(ctx context.Context, tx *sql.Tx, appID, echoID string, completedAt time.Time) error {
+func finalizeEchoFromRun(ctx context.Context, tx *sql.Tx, appID, echoID string, completedAt time.Time) error {
+	var primaryRunGroupID string
+	if err := tx.QueryRowContext(ctx, `
+SELECT run_group_id FROM runs
+WHERE app_id=? AND echo_id=? AND parent_run_id IS NULL
+ORDER BY created_at,run_id LIMIT 1`, appID, echoID).Scan(&primaryRunGroupID); err != nil {
+		return fmt.Errorf("read primary Run group: %w", err)
+	}
 	var activeRuns int
-	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM runs WHERE app_id=? AND echo_id=? AND status IN (?,?)`,
-		appID, echoID, kernelecho.RunStatusQueued, kernelecho.RunStatusRunning,
+	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM runs WHERE app_id=? AND echo_id=? AND run_group_id=? AND status IN (?,?)`,
+		appID, echoID, primaryRunGroupID, kernelecho.RunStatusQueued, kernelecho.RunStatusRunning,
 	).Scan(&activeRuns); err != nil {
 		return fmt.Errorf("check active Echo Runs: %w", err)
 	}
 	if activeRuns != 0 {
 		return nil
 	}
-	var rootStatus, resultMessage, errorCode, errorMessage string
+	var rootStatus, resultContentType, errorCode, errorMessage string
+	var resultPayload []byte
 	if err := tx.QueryRowContext(ctx, `
-SELECT status,result_message,coalesce(error_code,''),coalesce(error_message,'')
-FROM runs WHERE app_id=? AND echo_id=? AND parent_run_id IS NULL
-ORDER BY attempt DESC LIMIT 1`, appID, echoID,
-	).Scan(&rootStatus, &resultMessage, &errorCode, &errorMessage); err != nil {
-		return fmt.Errorf("read root Run terminal state: %w", err)
+SELECT status,result_payload,result_content_type,coalesce(error_code,''),coalesce(error_message,'')
+FROM runs WHERE app_id=? AND echo_id=? AND run_group_id=?
+ORDER BY attempt DESC LIMIT 1`, appID, echoID, primaryRunGroupID,
+	).Scan(&rootStatus, &resultPayload, &resultContentType, &errorCode, &errorMessage); err != nil {
+		return fmt.Errorf("read terminal Run state: %w", err)
 	}
 	echoStatus := kernelecho.StatusFailed
-	finalMessage := ""
-	var cancelledChildren int
-	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM runs WHERE app_id=? AND echo_id=? AND parent_run_id IS NOT NULL AND status=?`,
-		appID, echoID, kernelecho.RunStatusCancelled,
-	).Scan(&cancelledChildren); err != nil {
-		return fmt.Errorf("check cancelled child Runs: %w", err)
-	}
-	if cancelledChildren > 0 {
-		echoStatus = kernelecho.StatusCancelled
-		errorCode, errorMessage = publicerror.Echo("cancelled").Code, publicerror.Echo("cancelled").Message
-		rootStatus = ""
+	if resultPayload == nil {
+		resultPayload = []byte{}
 	}
 	switch rootStatus {
 	case "":
 	case kernelecho.RunStatusSucceeded:
 		echoStatus = kernelecho.StatusSucceeded
-		finalMessage = resultMessage
 		errorCode, errorMessage = "", ""
 	case kernelecho.RunStatusCancelled:
 		echoStatus = kernelecho.StatusCancelled
@@ -633,69 +508,18 @@ ORDER BY attempt DESC LIMIT 1`, appID, echoID,
 		return kernelecho.ErrInvalidTransition
 	}
 	result, err := tx.ExecContext(ctx, `
-UPDATE echoes SET status=?,final_message=?,error_code=?,error_message=?,completed_at=?
+UPDATE echoes SET status=?,final_message=?,result_payload=?,result_content_type=?,error_code=?,error_message=?,completed_at=?
 WHERE app_id=? AND echo_id=? AND status=?`,
-		echoStatus, finalMessage, errorCode, errorMessage, completedAt.UTC().Format(time.RFC3339Nano),
+		echoStatus, textOutput(kernelecho.Output{ContentType: resultContentType, Data: resultPayload}), resultPayload, resultContentType, errorCode, errorMessage, completedAt.UTC().Format(time.RFC3339Nano),
 		appID, echoID, kernelecho.StatusRunning,
 	)
 	if err != nil {
-		return fmt.Errorf("finalize Echo from root Run: %w", err)
+		return fmt.Errorf("finalize Echo from Run: %w", err)
 	}
 	if affected, err := result.RowsAffected(); err != nil {
 		return fmt.Errorf("read finalized Echo row count: %w", err)
 	} else if affected != 1 {
 		return kernelecho.ErrInvalidTransition
-	}
-	return nil
-}
-
-func (s *Store) CompleteChildRun(ctx context.Context, run kernelecho.RunRecord, runStatus, resultMessage string, failure publicerror.Error, completedAt time.Time) (resultErr error) {
-	started := time.Now()
-	defer func() { observeStorageOperation(ctx, "complete_child_run", started, resultErr) }()
-	if run.AppID == "" || run.ID == "" || run.EchoID == "" || run.ParentRunID == "" ||
-		run.LeaseToken == "" || run.Status != kernelecho.RunStatusRunning || completedAt.IsZero() {
-		return kernelecho.ErrInvalidRunRecord
-	}
-	if runStatus != kernelecho.RunStatusSucceeded && runStatus != kernelecho.RunStatusFailed &&
-		runStatus != kernelecho.RunStatusTimedOut && runStatus != kernelecho.RunStatusCancelled {
-		return kernelecho.ErrInvalidTransition
-	}
-	if runStatus == kernelecho.RunStatusSucceeded {
-		if resultMessage == "" || len(resultMessage) > executor.MaxFinalMessageBytes {
-			return kernelecho.ErrInvalidRunRecord
-		}
-		failure = publicerror.Error{}
-	} else {
-		resultMessage = ""
-		failure = publicerror.Echo(failure.Code)
-	}
-	tx, err := s.beginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin child Run completion: %w", err)
-	}
-	defer s.finishTx(tx, &resultErr, "complete child Run")
-	result, err := tx.ExecContext(ctx, `
-UPDATE runs
-SET status=?,lease_token=NULL,lease_expires_at=NULL,result_message=?,error_code=?,error_message=?,completed_at=?
-WHERE app_id=? AND run_id=? AND echo_id=? AND parent_run_id=? AND status=? AND lease_token=?`,
-		runStatus, resultMessage, failure.Code, failure.Message, completedAt.UTC().Format(time.RFC3339Nano),
-		run.AppID, run.ID, run.EchoID, run.ParentRunID, kernelecho.RunStatusRunning, run.LeaseToken,
-	)
-	if err != nil {
-		return fmt.Errorf("complete child Run: %w", err)
-	}
-	affected, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("read completed child Run row count: %w", err)
-	}
-	if affected != 1 {
-		return kernelecho.ErrInvalidTransition
-	}
-	if err := finalizeEchoFromRoot(ctx, tx, run.AppID, run.EchoID, completedAt); err != nil {
-		return err
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit child Run completion: %w", err)
 	}
 	return nil
 }
@@ -749,13 +573,16 @@ func (s *Store) GetEcho(ctx context.Context, appID, echoID string) (_ kernelecho
 	var echo kernelecho.Record
 	var createdAt string
 	var completedAt sql.NullString
-	err := s.db.QueryRowContext(ctx, `SELECT echo_id,app_id,input_message,status,coalesce(final_message,''),coalesce(error_code,''),coalesce(error_message,''),created_at,completed_at FROM echoes WHERE app_id=? AND echo_id=?`, appID, echoID).Scan(&echo.ID, &echo.AppID, &echo.InputMessage, &echo.Status, &echo.FinalMessage, &echo.ErrorCode, &echo.ErrorMessage, &createdAt, &completedAt)
+	var resultPayload []byte
+	var resultContentType string
+	err := s.db.QueryRowContext(ctx, `SELECT echo_id,app_id,input_message,status,coalesce(final_message,''),coalesce(result_payload,''),coalesce(result_content_type,''),coalesce(error_code,''),coalesce(error_message,''),created_at,completed_at FROM echoes WHERE app_id=? AND echo_id=?`, appID, echoID).Scan(&echo.ID, &echo.AppID, &echo.InputMessage, &echo.Status, &echo.FinalMessage, &resultPayload, &resultContentType, &echo.ErrorCode, &echo.ErrorMessage, &createdAt, &completedAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return kernelecho.Record{}, nil, kernelecho.ErrEchoNotFound
 		}
 		return kernelecho.Record{}, nil, fmt.Errorf("get echo: %w", err)
 	}
+	echo.Result = kernelecho.Output{ContentType: resultContentType, Data: append([]byte(nil), resultPayload...)}
 	echo.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt)
 	if err != nil {
 		return kernelecho.Record{}, nil, fmt.Errorf("parse echo created_at: %w", err)
@@ -871,21 +698,23 @@ func (s *Store) loadRunWork(ctx context.Context, runs []kernelecho.RunRecord) ([
 	work := make([]kernelecho.RunWork, 0, len(runs))
 	now := time.Now().UTC()
 	for _, run := range runs {
-		var inputMessage string
-		if run.ParentRunID != "" {
-			if run.TaskMessage == "" {
-				return nil, kernelecho.ErrInvalidRunRecord
+		if len(run.InputPayload) == 0 || run.InputContentType == "" {
+			if failErr := s.failQueuedRun(ctx, run, now); failErr != nil {
+				observe.Warn(ctx, "排队 Run 确定性失败",
+					observe.StringAttr("app_id", run.AppID),
+					observe.StringAttr("echo_id", run.EchoID),
+					observe.StringAttr("run_id", run.ID),
+				)
 			}
-			work = append(work, kernelecho.RunWork{Run: run, InputMessage: run.TaskMessage})
 			continue
 		}
-		if err := s.db.QueryRowContext(ctx, `SELECT input_message FROM echoes WHERE app_id=? AND echo_id=? AND status=?`, run.AppID, run.EchoID, kernelecho.StatusRunning).Scan(&inputMessage); err != nil {
+		var status string
+		if err := s.db.QueryRowContext(ctx, `SELECT status FROM echoes WHERE app_id=? AND echo_id=? AND status=?`, run.AppID, run.EchoID, kernelecho.StatusRunning).Scan(&status); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				// Echo 已进入终态而 Run 仍排队（取消/崩溃窗口等边缘路径）：确定性
-				// 失败该 Run，释放 (app_id,echo_id,attempt) 唯一槽位，避免孤儿排队
-				// Run 永久占用槽位并阻塞后续 attempt 排队。
-				if failErr := s.failOrphanQueuedRun(ctx, run, now); failErr != nil {
-					observe.Warn(ctx, "孤儿排队 Run 确定性失败失败",
+				// 失败该 Run，避免孤儿排队 Run 永久占用唯一槽位。
+				if failErr := s.failQueuedRun(ctx, run, now); failErr != nil {
+					observe.Warn(ctx, "孤儿排队 Run 确定性失败",
 						observe.StringAttr("app_id", run.AppID),
 						observe.StringAttr("echo_id", run.EchoID),
 						observe.StringAttr("run_id", run.ID),
@@ -895,17 +724,22 @@ func (s *Store) loadRunWork(ctx context.Context, runs []kernelecho.RunRecord) ([
 			}
 			return nil, fmt.Errorf("read queued Run Echo input: %w", err)
 		}
-		work = append(work, kernelecho.RunWork{Run: run, InputMessage: inputMessage})
+		work = append(work, kernelecho.RunWork{Run: run})
 	}
 	return work, nil
 }
 
-// failOrphanQueuedRun 把 Echo 已进入终态的排队 Run 确定性转移为失败
-// （仅从 queued 转移，幂等；并发已转移时 RowsAffected 为 0）。
-func (s *Store) failOrphanQueuedRun(ctx context.Context, run kernelecho.RunRecord, now time.Time) error {
+// failQueuedRun 把无法安全执行的排队 Run 确定性转移为失败；
+// 若 Echo 仍在运行，则在同一事务中同步收敛 Echo。
+func (s *Store) failQueuedRun(ctx context.Context, run kernelecho.RunRecord, now time.Time) (resultErr error) {
+	tx, err := s.beginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin queued Run recovery: %w", err)
+	}
+	defer s.finishTx(tx, &resultErr, "recover queued Run")
 	public := publicerror.Echo("recovery_failed")
-	result, err := s.db.ExecContext(ctx, `
-UPDATE runs SET status=?,lease_token=NULL,lease_expires_at=NULL,result_message='',error_code=?,error_message=?,completed_at=?
+	result, err := tx.ExecContext(ctx, `
+	UPDATE runs SET status=?,lease_token=NULL,lease_expires_at=NULL,result_payload='',result_content_type='',error_code=?,error_message=?,completed_at=?
 WHERE app_id=? AND run_id=? AND status=?`,
 		kernelecho.RunStatusFailed, public.Code, public.Message, now.Format(time.RFC3339Nano),
 		run.AppID, run.ID, kernelecho.RunStatusQueued,
@@ -918,11 +752,29 @@ WHERE app_id=? AND run_id=? AND status=?`,
 		return fmt.Errorf("read orphan run update count: %w", err)
 	}
 	if affected == 1 {
-		observe.Info(ctx, "孤儿排队 Run 已确定性失败（Echo 已进入终态）",
-			observe.StringAttr("app_id", run.AppID),
-			observe.StringAttr("echo_id", run.EchoID),
-			observe.StringAttr("run_id", run.ID),
-		)
+		var echoStatus string
+		if err := tx.QueryRowContext(ctx, `SELECT status FROM echoes WHERE app_id=? AND echo_id=?`, run.AppID, run.EchoID).Scan(&echoStatus); err != nil {
+			return fmt.Errorf("read recovered Run Echo status: %w", err)
+		}
+		if echoStatus == kernelecho.StatusRunning {
+			if err := finalizeEchoFromRun(ctx, tx, run.AppID, run.EchoID, now); err != nil {
+				return fmt.Errorf("finalize recovered Run Echo: %w", err)
+			}
+			observe.Info(ctx, "排队 Run 和 Echo 已确定性失败",
+				observe.StringAttr("app_id", run.AppID),
+				observe.StringAttr("echo_id", run.EchoID),
+				observe.StringAttr("run_id", run.ID),
+			)
+		} else {
+			observe.Info(ctx, "孤儿排队 Run 已确定性失败（Echo 已进入终态）",
+				observe.StringAttr("app_id", run.AppID),
+				observe.StringAttr("echo_id", run.EchoID),
+				observe.StringAttr("run_id", run.ID),
+			)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit queued Run recovery: %w", err)
 	}
 	return nil
 }
@@ -957,24 +809,23 @@ func (s *Store) FailAbandonedRuns(ctx context.Context, appID string, now time.Ti
 	}
 	defer s.finishTx(tx, &resultErr, "fail abandoned Runs")
 	rows, err := tx.QueryContext(ctx, `
-SELECT run_id,echo_id,coalesce(parent_run_id,''),status
+SELECT run_id,echo_id,status
 FROM runs
 WHERE app_id=? AND status=?
-ORDER BY CASE WHEN parent_run_id IS NULL THEN 1 ELSE 0 END,created_at,run_id`,
+ORDER BY created_at,run_id`,
 		appID, kernelecho.RunStatusRunning)
 	if err != nil {
 		return 0, fmt.Errorf("query abandoned runs: %w", err)
 	}
 	type identity struct {
-		runID       string
-		echoID      string
-		parentRunID string
-		status      string
+		runID  string
+		echoID string
+		status string
 	}
 	identities := make([]identity, 0)
 	for rows.Next() {
 		var item identity
-		if err := rows.Scan(&item.runID, &item.echoID, &item.parentRunID, &item.status); err != nil {
+		if err := rows.Scan(&item.runID, &item.echoID, &item.status); err != nil {
 			rows.Close()
 			return 0, fmt.Errorf("scan abandoned run: %w", err)
 		}
@@ -988,7 +839,7 @@ ORDER BY CASE WHEN parent_run_id IS NULL THEN 1 ELSE 0 END,created_at,run_id`,
 	}
 	public := publicerror.Echo("recovery_failed")
 	for _, item := range identities {
-		if _, err := tx.ExecContext(ctx, `UPDATE runs SET status=?,lease_token=NULL,lease_expires_at=NULL,result_message='',error_code=?,error_message=?,completed_at=? WHERE app_id=? AND run_id=? AND status=?`,
+		if _, err := tx.ExecContext(ctx, `UPDATE runs SET status=?,lease_token=NULL,lease_expires_at=NULL,result_payload='',result_content_type='',error_code=?,error_message=?,completed_at=? WHERE app_id=? AND run_id=? AND status=?`,
 			kernelecho.RunStatusFailed, public.Code, public.Message, now.UTC().Format(time.RFC3339Nano), appID, item.runID, item.status,
 		); err != nil {
 			return 0, fmt.Errorf("fail abandoned run: %w", err)
@@ -1000,7 +851,7 @@ ORDER BY CASE WHEN parent_run_id IS NULL THEN 1 ELSE 0 END,created_at,run_id`,
 			continue
 		}
 		seenEchoes[item.echoID] = struct{}{}
-		if err := finalizeEchoFromRoot(ctx, tx, appID, item.echoID, now); err != nil {
+		if err := finalizeEchoFromRun(ctx, tx, appID, item.echoID, now); err != nil {
 			return 0, fmt.Errorf("reconcile abandoned Run Echo: %w", err)
 		}
 	}
@@ -1094,39 +945,40 @@ func (s *Store) ListCapabilityCalls(ctx context.Context, appID, echoID string) (
 
 const runSelect = `
 SELECT
-  app_id,run_id,run_group_id,echo_id,coalesce(parent_run_id,''),origin_call_id,attempt,status,model,model_config_version,protocol_version,
-  max_steps,max_capability_calls,max_input_tokens,max_output_tokens,max_total_tokens,max_output_bytes,
-  max_cost_microusd,provider_timeout_ms,used_input_tokens,used_output_tokens,used_total_tokens,used_cost_microusd,used_provider_retries,
-  deadline_at,available_at,coalesce(lease_token,''),lease_expires_at,last_agent_sequence,
-  capability_scope,permission_scope,recoverable_state,result_message,
+  app_id,run_id,run_group_id,echo_id,coalesce(parent_run_id,''),origin_call_id,attempt,status,executor_id,config_revision,protocol_version,
+  executor_config,input_payload,input_content_type,max_steps,max_capability_calls,max_execution_units,max_output_bytes,
+  max_cost_microusd,execution_timeout_ms,used_execution_units,used_cost_microusd,used_retries,
+  deadline_at,available_at,coalesce(lease_token,''),lease_expires_at,last_executor_sequence,
+  capability_scope,permission_scope,recoverable_state,result_payload,result_content_type,
   coalesce(error_code,''),coalesce(error_message,''),created_at,started_at,completed_at,
   coalesce(session_id,''),coalesce(user_id,''),coalesce(message_id,''),coalesce(context_digest,''),coalesce(context_sources,'{}'),
-  coalesce(channel,''),coalesce(task_message,'')
+  coalesce(channel,'')
 FROM runs`
 
 func queryRun(scanner rowScanner) (kernelecho.RunRecord, error) {
 	var run kernelecho.RunRecord
 	var attempt int64
 	var maxSteps int64
-	var maxCapabilityCalls int64
-	var maxInputTokens int64
-	var maxOutputTokens int64
-	var maxTotalTokens int64
+	var maxToolCalls int64
+	var maxExecutionUnits int64
 	var maxOutputBytes int64
 	var maxCostMicrousd int64
-	var providerTimeoutMS int64
-	var usedInputTokens int64
-	var usedOutputTokens int64
-	var usedTotalTokens int64
+	var executionTimeoutMS int64
+	var usedExecutionUnits int64
 	var usedCostMicrousd int64
-	var usedProviderRetries int64
-	var lastAgentSequence int64
+	var usedRetries int64
+	var lastExecutorSequence int64
 	var deadlineAt string
 	var availableAt string
 	var leaseExpiresAt sql.NullString
 	var capabilityScope string
 	var permissionScope string
 	var recoverableState string
+	var executorConfig []byte
+	var inputPayload []byte
+	var inputContentType string
+	var resultPayload []byte
+	var resultContentType string
 	var createdAt string
 	var startedAt sql.NullString
 	var completedAt sql.NullString
@@ -1137,46 +989,45 @@ func queryRun(scanner rowScanner) (kernelecho.RunRecord, error) {
 	var contextSources string
 	if err := scanner.Scan(
 		&run.AppID, &run.ID, &run.RunGroupID, &run.EchoID, &run.ParentRunID, &run.OriginCallID, &attempt, &run.Status,
-		&run.Model, &run.ModelConfigVersion, &run.ProtocolVersion,
-		&maxSteps, &maxCapabilityCalls, &maxInputTokens, &maxOutputTokens, &maxTotalTokens, &maxOutputBytes,
-		&maxCostMicrousd, &providerTimeoutMS, &usedInputTokens, &usedOutputTokens, &usedTotalTokens, &usedCostMicrousd, &usedProviderRetries,
+		&run.ExecutorID, &run.ConfigRevision, &run.ProtocolVersion,
+		&executorConfig, &inputPayload, &inputContentType, &maxSteps, &maxToolCalls, &maxExecutionUnits, &maxOutputBytes,
+		&maxCostMicrousd, &executionTimeoutMS, &usedExecutionUnits, &usedCostMicrousd, &usedRetries,
 		&deadlineAt, &availableAt,
-		&run.LeaseToken, &leaseExpiresAt, &lastAgentSequence,
-		&capabilityScope, &permissionScope, &recoverableState, &run.ResultMessage,
+		&run.LeaseToken, &leaseExpiresAt, &lastExecutorSequence,
+		&capabilityScope, &permissionScope, &recoverableState, &resultPayload, &resultContentType,
 		&run.ErrorCode, &run.ErrorMessage, &createdAt, &startedAt, &completedAt,
 		&sessionID, &userID, &messageID, &contextDigest, &contextSources,
-		&run.Channel, &run.TaskMessage,
+		&run.Channel,
 	); err != nil {
 		return kernelecho.RunRecord{}, err
 	}
-	if attempt < 0 || maxSteps < 0 || maxCapabilityCalls < 0 || maxInputTokens < 0 || maxOutputTokens < 0 ||
-		maxTotalTokens < 0 || maxOutputBytes < 0 || maxCostMicrousd < 0 || providerTimeoutMS < 0 ||
-		usedInputTokens < 0 || usedOutputTokens < 0 || usedTotalTokens < 0 || usedCostMicrousd < 0 ||
-		usedProviderRetries < 0 || usedProviderRetries > 320 ||
-		lastAgentSequence < 0 {
+	if attempt < 0 || maxSteps < 0 || maxToolCalls < 0 || maxExecutionUnits < 0 || maxOutputBytes < 0 || maxCostMicrousd < 0 || executionTimeoutMS < 0 ||
+		usedExecutionUnits < 0 || usedCostMicrousd < 0 ||
+		usedRetries < 0 || usedRetries > 320 ||
+		lastExecutorSequence < 0 {
 		return kernelecho.RunRecord{}, kernelecho.ErrInvalidRunRecord
 	}
 	run.Attempt = uint32(attempt)
 	run.MaxSteps = uint32(maxSteps)
-	run.MaxCapabilityCalls = uint32(maxCapabilityCalls)
-	run.MaxInputTokens = uint64(maxInputTokens)
-	run.MaxOutputTokens = uint64(maxOutputTokens)
-	run.MaxTotalTokens = uint64(maxTotalTokens)
+	run.MaxCapabilityCalls = uint32(maxToolCalls)
+	run.MaxExecutionUnits = uint64(maxExecutionUnits)
 	run.MaxOutputBytes = uint64(maxOutputBytes)
 	run.MaxCostMicrousd = uint64(maxCostMicrousd)
-	run.ProviderTimeoutMS = uint32(providerTimeoutMS)
-	run.UsedInputTokens = uint64(usedInputTokens)
-	run.UsedOutputTokens = uint64(usedOutputTokens)
-	run.UsedTotalTokens = uint64(usedTotalTokens)
+	run.ExecutionTimeoutMS = uint32(executionTimeoutMS)
+	run.UsedExecutionUnits = uint64(usedExecutionUnits)
 	run.UsedCostMicrousd = uint64(usedCostMicrousd)
-	run.UsedProviderRetries = uint32(usedProviderRetries)
-	run.LastAgentSequence = uint64(lastAgentSequence)
+	run.UsedRetries = uint32(usedRetries)
+	run.LastExecutorSequence = uint64(lastExecutorSequence)
 	run.RecoverableState = json.RawMessage(recoverableState)
 	run.SessionID = sessionID
 	run.UserID = userID
 	run.MessageID = messageID
 	run.ContextDigest = contextDigest
 	run.ContextSources = json.RawMessage(contextSources)
+	run.ExecutorConfig = json.RawMessage(executorConfig)
+	run.InputPayload = append([]byte(nil), inputPayload...)
+	run.InputContentType = inputContentType
+	run.Result = kernelecho.Output{ContentType: resultContentType, Data: append([]byte(nil), resultPayload...)}
 	if len(capabilityScope) > 65536 || len(permissionScope) > 65536 ||
 		json.Unmarshal([]byte(capabilityScope), &run.CapabilityScope) != nil ||
 		json.Unmarshal([]byte(permissionScope), &run.PermissionScope) != nil ||
@@ -1222,27 +1073,25 @@ func timePointer(value time.Time) *time.Time {
 }
 
 func validateNewRun(echo kernelecho.Record, run kernelecho.RunRecord) error {
-	root := run.ParentRunID == ""
 	if run.AppID == "" || run.ID == "" || run.RunGroupID == "" || run.EchoID == "" ||
 		!runIdentifierPattern.MatchString(run.ID) || !runIdentifierPattern.MatchString(run.RunGroupID) ||
 		run.AppID != echo.AppID || run.EchoID != echo.ID ||
-		run.Attempt == 0 || run.Status != kernelecho.RunStatusQueued || run.Model == "" || run.ModelConfigVersion == "" ||
+		run.Attempt == 0 || run.Status != kernelecho.RunStatusQueued || run.ExecutorID == "" || run.ConfigRevision == "" ||
 		run.ProtocolVersion == "" || run.MaxSteps == 0 || run.MaxSteps > executor.MaxProtocolSteps ||
 		run.MaxCapabilityCalls == 0 || run.MaxCapabilityCalls > executor.MaxCapabilityCalls ||
-		run.MaxInputTokens == 0 || run.MaxInputTokens > executor.MaxTokenBudget ||
-		run.MaxOutputTokens == 0 || run.MaxOutputTokens > executor.MaxTokenBudget ||
-		run.MaxTotalTokens == 0 || run.MaxTotalTokens > executor.MaxTokenBudget ||
-		run.MaxOutputBytes == 0 || run.MaxOutputBytes > executor.MaxFinalMessageBytes ||
+		run.MaxExecutionUnits == 0 || run.MaxExecutionUnits > executor.MaxExecutionUnits ||
+		run.MaxOutputBytes == 0 || run.MaxOutputBytes > executor.MaxOutputPayloadBytes ||
 		run.MaxCostMicrousd > executor.MaxCostMicrousd ||
-		run.MaxInputTokens > math.MaxInt64 || run.MaxOutputTokens > math.MaxInt64 ||
-		run.MaxTotalTokens > math.MaxInt64 || run.MaxOutputBytes > math.MaxInt64 ||
+		run.MaxExecutionUnits > math.MaxInt64 || run.MaxOutputBytes > math.MaxInt64 ||
 		run.MaxCostMicrousd > math.MaxInt64 ||
-		run.ProviderTimeoutMS < 100 || run.ProviderTimeoutMS > executor.MaxProviderTimeoutMS ||
-		run.UsedInputTokens != 0 || run.UsedOutputTokens != 0 || run.UsedTotalTokens != 0 || run.UsedCostMicrousd != 0 ||
-		run.UsedProviderRetries != 0 ||
+		run.ExecutionTimeoutMS < 100 || run.ExecutionTimeoutMS > uint32((5*time.Minute).Milliseconds()) ||
+		run.UsedExecutionUnits != 0 || run.UsedCostMicrousd != 0 ||
+		run.UsedRetries != 0 ||
 		run.CreatedAt.IsZero() || run.AvailableAt.IsZero() || run.AvailableAt.Before(run.CreatedAt) || !run.Deadline.After(run.AvailableAt) ||
-		run.LastAgentSequence != 0 || run.LeaseToken != "" || run.LeaseExpiresAt != nil || run.StartedAt != nil ||
-		run.CompletedAt != nil || run.ResultMessage != "" || run.ErrorCode != "" || run.ErrorMessage != "" ||
+		run.LastExecutorSequence != 0 || run.LeaseToken != "" || run.LeaseExpiresAt != nil || run.StartedAt != nil ||
+		run.CompletedAt != nil || len(run.Result.Data) != 0 || run.Result.ContentType != "" || run.ErrorCode != "" || run.ErrorMessage != "" ||
+		len(run.ExecutorConfig) == 0 || len(run.ExecutorConfig) > executor.MaxExecutorConfigBytes || !json.Valid(run.ExecutorConfig) ||
+		len(run.InputPayload) == 0 || len(run.InputPayload) > executor.MaxInputPayloadBytes || !contractsexecutor.ValidContentType(run.InputContentType) ||
 		!json.Valid(run.RecoverableState) ||
 		(run.SessionID != "" && !session.ValidStableID(run.SessionID)) ||
 		(run.UserID != "" && !session.ValidStableID(run.UserID)) ||
@@ -1253,18 +1102,18 @@ func validateNewRun(echo kernelecho.Record, run kernelecho.RunRecord) error {
 		!validCanonicalScope(run.PermissionScope, 256, id.IsPermission) {
 		return kernelecho.ErrInvalidRunRecord
 	}
-	if root {
-		if run.OriginCallID != "" || run.TaskMessage != "" || (run.Attempt == 1 && run.RunGroupID != run.ID) {
-			return kernelecho.ErrInvalidRunRecord
-		}
-	} else if !runIdentifierPattern.MatchString(run.ParentRunID) ||
-		(run.TaskMessage != "" && (!utf8.ValidString(run.TaskMessage) || strings.ContainsRune(run.TaskMessage, '\x00') ||
-			utf8.RuneCountInString(run.TaskMessage) > 4000)) ||
-		!runIdentifierPattern.MatchString(run.OriginCallID) || run.ParentRunID == run.ID ||
-		run.Attempt != 1 || run.RunGroupID != run.ID {
+	if (run.ParentRunID != "" && !runIdentifierPattern.MatchString(run.ParentRunID)) ||
+		(run.OriginCallID != "" && !runIdentifierPattern.MatchString(run.OriginCallID)) {
 		return kernelecho.ErrInvalidRunRecord
 	}
 	return nil
+}
+
+func textOutput(output kernelecho.Output) string {
+	if !strings.HasPrefix(strings.ToLower(output.ContentType), "text/plain") || !utf8.Valid(output.Data) {
+		return ""
+	}
+	return string(output.Data)
 }
 
 func nonNilStrings(values []string) []string {

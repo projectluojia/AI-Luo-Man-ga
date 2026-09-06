@@ -6,8 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -40,7 +38,11 @@ func NewService(root string) (*Service, error) {
 		changes: make(chan struct{}, 1),
 	}
 	if err := service.load(); err != nil {
-		return nil, err
+		if !errors.Is(err, ErrInvalid) {
+			return nil, err
+		}
+		service.refreshSecrets()
+		service.runtime = RuntimeState{State: "setup_required", Message: "本地配置已失效，请重新配置"}
 	}
 	return service, nil
 }
@@ -52,14 +54,24 @@ func (m *Service) Snapshot() Snapshot {
 }
 
 func (m *Service) Save(input SaveInput) (Snapshot, error) {
-	settings, err := normalize(input)
-	if err != nil || len(input.QQWSToken) > MaxQQTokenBytes {
+	if len(input.QQWSToken) > MaxQQTokenBytes {
 		return Snapshot{}, ErrInvalid
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if input.Revision != m.settings.Revision {
 		return Snapshot{}, ErrConflict
+	}
+	if config := bytes.TrimSpace(input.ExecutorConfig); len(config) == 0 || bytes.Equal(config, []byte("null")) {
+		if m.settings.Revision > 0 {
+			input.ExecutorConfig = append(json.RawMessage(nil), m.settings.ExecutorConfig...)
+		} else {
+			input.ExecutorConfig = json.RawMessage(`{}`)
+		}
+	}
+	settings, err := normalize(input)
+	if err != nil {
+		return Snapshot{}, ErrInvalid
 	}
 	if input.ClearQQWSToken {
 		if err := os.Remove(m.qqSecretPath); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -122,22 +134,6 @@ func (m *Service) WaitReady(ctx context.Context) (Resolved, error) {
 		case <-m.changes:
 		}
 	}
-}
-
-func decodeStoredSettings(data []byte) (Settings, error) {
-	var settings Settings
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&settings); err != nil {
-		return Settings{}, err
-	}
-	var extra any
-	if err := decoder.Decode(&extra); err == nil {
-		return Settings{}, errors.New("settings file contains multiple JSON values")
-	} else if !errors.Is(err, io.EOF) {
-		return Settings{}, err
-	}
-	return settings, nil
 }
 
 func (m *Service) load() error {
@@ -212,7 +208,6 @@ func cloneSettings(settings Settings) Settings {
 	settings.QQAllowedPrivateUserIDs = slices.Clone(settings.QQAllowedPrivateUserIDs)
 	settings.QQQuickReplies = slices.Clone(settings.QQQuickReplies)
 	settings.QQPokeReplies = slices.Clone(settings.QQPokeReplies)
-	settings.PromptCatalog = settings.PromptCatalog.Clone()
-	settings.ChannelPrompts = maps.Clone(settings.ChannelPrompts)
+	settings.ExecutorConfig = append(json.RawMessage(nil), settings.ExecutorConfig...)
 	return settings
 }

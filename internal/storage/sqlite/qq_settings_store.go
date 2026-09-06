@@ -14,21 +14,6 @@ import (
 
 var _ qqsettings.Store = (*Store)(nil)
 
-func init() {
-	registerMigration(22, `
-CREATE TABLE qq_access_settings (
-  app_id TEXT PRIMARY KEY CHECK(length(app_id) BETWEEN 1 AND 128),
-  enabled INTEGER NOT NULL CHECK(enabled IN (0,1)),
-  ws_url TEXT NOT NULL CHECK(length(ws_url) <= 2048),
-  bot_qq_id TEXT NOT NULL CHECK(length(bot_qq_id) <= 32),
-  allowed_group_ids TEXT NOT NULL CHECK(length(allowed_group_ids) <= 32768 AND json_valid(allowed_group_ids) AND json_type(allowed_group_ids)='array'),
-  allowed_private_user_ids TEXT NOT NULL CHECK(length(allowed_private_user_ids) <= 32768 AND json_valid(allowed_private_user_ids) AND json_type(allowed_private_user_ids)='array'),
-  generation INTEGER NOT NULL CHECK(generation > 0),
-  updated_at TEXT NOT NULL
-);
-`)
-}
-
 func (s *Store) EnsureQQSettings(ctx context.Context, seed qqsettings.Settings) (_ qqsettings.Settings, created bool, resultErr error) {
 	started := time.Now()
 	defer func() { observeStorageOperation(ctx, "qq_settings_ensure", started, resultErr) }()

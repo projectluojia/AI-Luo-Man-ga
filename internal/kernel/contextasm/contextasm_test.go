@@ -92,10 +92,9 @@ func input(sessionID, currentMessageID, message string) contextasm.Input {
 		SessionID:        sessionID,
 		CurrentMessageID: currentMessageID,
 		ConfigRevision:   "config-revision-1",
-		SystemPrompt:     "你是校园综合服务智能体。",
-		Timezone:         "Asia/Shanghai",
+		InputContentType: "text/plain; charset=utf-8",
+		InputPayload:     []byte(message),
 		Capabilities:     []string{"campus.bus.routes.list@1.0.0", "campus.bus.journeys.search@1.0.0"},
-		InputMessage:     message,
 		Now:              time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC),
 	}
 }
@@ -112,8 +111,8 @@ func TestAssembleDeterministicDigest(t *testing.T) {
 	if first.Digest != second.Digest {
 		t.Fatalf("相同配置修订与数据版本摘要不一致: %s != %s", first.Digest, second.Digest)
 	}
-	if first.SystemPrompt != second.SystemPrompt {
-		t.Fatalf("相同输入渲染不一致: %q != %q", first.SystemPrompt, second.SystemPrompt)
+	if string(first.ContextPayload) != string(second.ContextPayload) {
+		t.Fatalf("相同输入上下文不一致: %q != %q", first.ContextPayload, second.ContextPayload)
 	}
 	changed := assemble(t, assembler, input("session-1", "message-1", "查询到站时间"))
 	if changed.Digest == first.Digest {
@@ -129,11 +128,11 @@ func TestAssembleExcludesCurrentMessage(t *testing.T) {
 	if len(snapshot.History.Entries) != 1 || snapshot.History.Entries[0].MessageID != "message-0" {
 		t.Fatalf("当前消息必须从历史排除: %#v", snapshot.History.Entries)
 	}
-	if strings.Contains(snapshot.SystemPrompt, "当前的问题") {
-		t.Fatalf("当前消息不得重复进入历史块: %q", snapshot.SystemPrompt)
+	if strings.Contains(string(snapshot.ContextPayload), "当前的问题") {
+		t.Fatalf("当前消息不得重复进入历史块: %q", snapshot.ContextPayload)
 	}
-	if !strings.Contains(snapshot.SystemPrompt, "之前的问题") {
-		t.Fatalf("历史正文必须进入系统提示: %q", snapshot.SystemPrompt)
+	if !strings.Contains(string(snapshot.ContextPayload), "之前的问题") {
+		t.Fatalf("历史正文必须进入中性上下文: %q", snapshot.ContextPayload)
 	}
 }
 
@@ -151,8 +150,8 @@ func TestAssembleAppIsolation(t *testing.T) {
 	if len(snapshot.History.Entries) != 1 || snapshot.History.Entries[0].MessageID != "message-0" {
 		t.Fatalf("跨 App 消息混入历史: %#v", snapshot.History.Entries)
 	}
-	if strings.Contains(snapshot.SystemPrompt, "别的历史") {
-		t.Fatalf("跨 App 正文进入提示: %q", snapshot.SystemPrompt)
+	if strings.Contains(string(snapshot.ContextPayload), "别的历史") {
+		t.Fatalf("跨 App 正文进入上下文: %q", snapshot.ContextPayload)
 	}
 }
 
@@ -292,22 +291,22 @@ func TestAssembleNonTextMessagesUsePlaceholder(t *testing.T) {
 	}
 }
 
-func TestAssemblePromptBudgetDropsHistoryThenFails(t *testing.T) {
+func TestAssembleContextBudgetDropsHistoryThenFails(t *testing.T) {
 	store, service, _ := newHarness(t)
 	seedSession(t, store, "session-1", "历史一", "历史二")
-	// 提示总预算仅容纳基础提示：历史必须被全部丢弃，不静默超过预算。
-	assembler, _ := contextasm.New(service, contextasm.Budget{MaxPromptBytes: 128})
+	// 上下文总预算不足以携带历史时，历史必须被全部丢弃，不静默超过预算。
+	assembler, _ := contextasm.New(service, contextasm.Budget{MaxContextBytes: 128})
 	snapshot := assemble(t, assembler, input("session-1", "", "请查询"))
 	if len(snapshot.History.Entries) != 0 || snapshot.History.Trimmed != 2 {
 		t.Fatalf("提示预算应丢弃全部历史: %#v", snapshot.History)
 	}
-	// 基础提示本身超出预算：显式失败，不静默裁剪配置。
-	oversized, err := contextasm.New(service, contextasm.Budget{MaxPromptBytes: 64})
+	// 固定上下文信封本身超出预算：显式失败，不静默裁剪宿主结构。
+	oversized, err := contextasm.New(service, contextasm.Budget{MaxContextBytes: 64})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := oversized.Assemble(context.Background(), input("session-1", "", "请查询")); err != contextasm.ErrPromptBudgetExceeded {
-		t.Fatalf("基础提示超预算错误=%v，期望 ErrPromptBudgetExceeded", err)
+	if _, err := oversized.Assemble(context.Background(), input("session-1", "", "请查询")); err != contextasm.ErrContextBudgetExceeded {
+		t.Fatalf("上下文超预算错误=%v，期望 ErrContextBudgetExceeded", err)
 	}
 }
 
@@ -325,9 +324,9 @@ func TestNewRejectsNilSourceAndInvalidBudget(t *testing.T) {
 	if _, err := contextasm.New(nil, contextasm.DefaultBudget()); err == nil {
 		t.Fatal("nil 历史来源必须被拒绝")
 	}
-	oversizedPrompt := contextasm.Budget{MaxPromptBytes: 33 << 10}
-	if _, err := contextasm.New(validSource{}, oversizedPrompt); err == nil {
-		t.Fatal("超过协议上限的提示预算必须被拒绝")
+	oversizedContext := contextasm.Budget{MaxContextBytes: 65 << 10}
+	if _, err := contextasm.New(validSource{}, oversizedContext); err == nil {
+		t.Fatal("超过协议上限的上下文预算必须被拒绝")
 	}
 }
 

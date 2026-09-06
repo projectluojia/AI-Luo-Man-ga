@@ -10,38 +10,6 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/confirmation"
 )
 
-// 迁移 17：确认与副作用治理表。所有读写按 (app_id, confirmation_id) 作用域执行，
-// 并通过外键把确认绑定到已存在的 Echo 与 Run。
-func init() {
-	registerMigration(17, `
-CREATE TABLE confirmations (
-  app_id TEXT NOT NULL,
-  confirmation_id TEXT NOT NULL,
-  echo_id TEXT NOT NULL,
-  run_id TEXT NOT NULL,
-  call_id TEXT NOT NULL,
-  capability_id TEXT NOT NULL DEFAULT '',
-  target_type TEXT NOT NULL CHECK(target_type IN ('capability','tool')),
-  target_id TEXT NOT NULL,
-  side_effect TEXT NOT NULL CHECK(side_effect IN ('write','external')),
-  idempotency_key TEXT NOT NULL CHECK(length(idempotency_key) BETWEEN 1 AND 128),
-  argument_digest TEXT NOT NULL CHECK(length(argument_digest)=64),
-  status TEXT NOT NULL CHECK(status IN ('waiting','approved','rejected','expired','revoked')),
-  expires_at TEXT NOT NULL,
-  confirmed_by TEXT NOT NULL DEFAULT '',
-  decided_at TEXT,
-  created_at TEXT NOT NULL,
-  PRIMARY KEY (app_id, confirmation_id),
-  CHECK(julianday(expires_at) > julianday(created_at)),
-  CHECK((status='waiting' AND decided_at IS NULL) OR (status<>'waiting' AND decided_at IS NOT NULL)),
-  FOREIGN KEY (app_id, echo_id) REFERENCES echoes(app_id, echo_id) ON DELETE CASCADE,
-  FOREIGN KEY (app_id, run_id) REFERENCES runs(app_id, run_id) ON DELETE CASCADE
-);
-CREATE INDEX confirmations_run_idx ON confirmations(app_id, run_id);
-CREATE INDEX confirmations_status_expiry_idx ON confirmations(app_id, status, expires_at);
-`)
-}
-
 func (s *Store) Create(ctx context.Context, record confirmation.Confirmation) (resultErr error) {
 	started := time.Now()
 	defer func() { observeStorageOperation(ctx, "create_confirmation", started, resultErr) }()
