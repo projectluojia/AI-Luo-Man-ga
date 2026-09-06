@@ -121,6 +121,7 @@ func (d *Dispatcher) route(
 	decision, err := authorization.Authorize(ctx, spec, authorization.Request{
 		AppID: request.AppID, Principal: principal(request.UserID), RunID: request.RunID,
 		CapabilityID: spec.ID, Payload: payload, Now: time.Now().UTC(),
+		CallsUsed: request.CapabilityCallsUsed, CostUsed: request.CapabilityCostUsed,
 	}, policy.CapabilityGrants, d.relationships)
 	if err != nil {
 		observe.Warn(ctx, "Capability 授权拒绝本次调用",
@@ -253,9 +254,12 @@ func (d *Dispatcher) childRequest(
 	return child, fingerprint, nil
 }
 
+// callFingerprint 派生能力调用的幂等指纹：绑定目标、版本、App、用户、Run
+// 与规范化 payload。RunID 参与哈希使不同 Run 的同名 CallId 互不命中幂等
+// 缓存；调用链环检测在同一 Run 的进程内调用树上进行，不受此影响。
 func callFingerprint(request contracts.RequestContext, targetID, version string, payload json.RawMessage) (string, error) {
 	digest := sha256.New()
-	fmt.Fprintf(digest, "%s\x00%s\x00%s\x00%s\x00", targetID, version, request.AppID, request.UserID)
+	fmt.Fprintf(digest, "%s\x00%s\x00%s\x00%s\x00%s\x00", targetID, version, request.AppID, request.UserID, request.RunID)
 	canonicalPayload, err := jsonutil.CanonicalJSON(payload)
 	if err != nil {
 		return "", fmt.Errorf("canonicalize call payload: %w", err)

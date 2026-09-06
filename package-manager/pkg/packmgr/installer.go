@@ -511,31 +511,32 @@ func sameInstalledPackage(ctx context.Context, existing InstalledRecord, manifes
 }
 
 // unpackSource 解析安装源：目录直接使用；.tgz 发布物严格解压到临时目录。
-// 相对路径依赖调用方 CWD，无法纳入安全边界校验，一律 fail-closed 拒绝，
-// 要求调用方先解析为绝对路径。
+// 源路径在入口统一解析为绝对路径（与 projectmgr 的项目清单解析一致），
+// 使后续 os.Stat、解包与安全边界校验（ValidateSecureTree 的属主/DACL 检查）
+// 都作用在确定的目标节点上，不依赖调用方各自归一化。
 func unpackSource(source string) (string, func(), bool, error) {
-	if !filepath.IsAbs(source) {
-		return "", nil, false, fmt.Errorf("安装源必须是绝对路径，收到相对路径 %q", source)
+	if source == "" {
+		return "", nil, false, fmt.Errorf("安装源不能为空")
 	}
-	info, err := os.Stat(source)
+	absolute, err := filepath.Abs(source)
+	if err != nil {
+		return "", nil, false, fmt.Errorf("解析安装源路径失败: %w", err)
+	}
+	info, err := os.Stat(absolute)
 	if err != nil {
 		return "", nil, false, err
 	}
 	if info.IsDir() {
-		absolute, err := filepath.Abs(source)
-		if err != nil {
-			return "", nil, false, err
-		}
 		return absolute, nil, false, nil
 	}
-	if !strings.HasSuffix(strings.ToLower(source), ".tgz") {
+	if !strings.HasSuffix(strings.ToLower(absolute), ".tgz") {
 		return "", nil, false, fmt.Errorf("安装源必须是包目录或 .tgz 发布物")
 	}
 	temp, err := os.MkdirTemp("", "ailuo-unpack-")
 	if err != nil {
 		return "", nil, false, err
 	}
-	if err := unpackTarball(source, temp); err != nil {
+	if err := unpackTarball(absolute, temp); err != nil {
 		_ = os.RemoveAll(temp)
 		return "", nil, false, err
 	}
