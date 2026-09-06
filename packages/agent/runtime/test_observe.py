@@ -60,6 +60,24 @@ class ObserveTest(unittest.TestCase):
         logging.getLogger("httpx").critical("https://provider.example/private?token=secret")
         self.assertEqual(output.getvalue(), "")
 
+    def test_invalid_logging_configuration_fails_closed(self) -> None:
+        for name, value in (
+            ("AILUO_LOG_MAX_VALUE_LENGTH", "invalid"),
+            ("AILUO_LOG_MAX_VALUE_LENGTH", "0"),
+            ("AILUO_LOG_LEVEL", "verbose"),
+            ("AILUO_LOG_FORMAT", "xml"),
+        ):
+            with self.subTest(name=name, value=value):
+                env = {
+                    "AILUO_LOG_MAX_VALUE_LENGTH": "4096",
+                    "AILUO_LOG_LEVEL": "INFO",
+                    "AILUO_LOG_FORMAT": "console",
+                }
+                env[name] = value
+                with patch.dict(os.environ, env):
+                    with self.assertRaises(ValueError):
+                        configure(io.StringIO())
+
     def tearDown(self) -> None:
         logging.getLogger().handlers.clear()
 
