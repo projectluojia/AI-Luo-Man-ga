@@ -389,7 +389,6 @@ func validateSecureArtifact(ctx context.Context, path string) error {
 
 func cloneProcessSpec(spec packagecontract.ProcessSpec) packagecontract.ProcessSpec {
 	spec.Args = slices.Clone(spec.Args)
-	spec.Env = slices.Clone(spec.Env)
 	return spec
 }
 
