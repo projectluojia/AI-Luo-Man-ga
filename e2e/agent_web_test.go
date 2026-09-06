@@ -278,7 +278,7 @@ func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 	}
 	orchestrator := kernelecho.NewOrchestrator(executorClient, reg, dispatcher, policy, kernelecho.StorePorts{
 		Idempotency: store, Creation: store, Execution: store, Recovery: store,
-		Cancellation: store, Events: store, Audit: store,
+		Children: store, Cancellation: store, Events: store, Audit: store,
 	}, kernelecho.Config{
 		AppID:           campus.AppID,
 		AppConfigSource: store,

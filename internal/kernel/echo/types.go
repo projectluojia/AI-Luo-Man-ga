@@ -37,6 +37,7 @@ var (
 	ErrInvalidRunRecord   = errors.New("invalid run record")
 	ErrInvalidEchoEvent   = errors.New("invalid echo event")
 	ErrInvalidAuditRecord = errors.New("invalid capability audit record")
+	ErrChildRunLimit      = errors.New("child run limit exceeded")
 )
 
 type Record struct {
@@ -178,6 +179,11 @@ type RunExecutionStore interface {
 	CompleteRun(ctx context.Context, run RunRecord, runStatus, echoStatus string, output Output, failure publicerror.Error, completedAt time.Time) error
 }
 
+// ChildRunCreationStore 以父 Run 租约为条件原子创建 queued child Run。
+type ChildRunCreationStore interface {
+	CreateChildRun(ctx context.Context, parent RunRecord, child RunRecord, maxChildren int) error
+}
+
 // RunRecoveryStore 是启动恢复和持久队列读取的端口。
 type RunRecoveryStore interface {
 	ListQueuedRuns(ctx context.Context, appID string, limit int) ([]RunWork, error)
@@ -207,6 +213,7 @@ type CapabilityAuditStore interface {
 type StorePorts struct {
 	Idempotency  idempotency.Store
 	Creation     EchoCreationStore
+	Children     ChildRunCreationStore
 	Execution    RunExecutionStore
 	Recovery     RunRecoveryStore
 	Cancellation RunCancellationStore

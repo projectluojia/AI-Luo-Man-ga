@@ -141,6 +141,116 @@ INSERT INTO runs(
 	return nil
 }
 
+// insertChildRunGuarded 条件化插入 child Run：INSERT 仅当父 Run 仍处于
+// running 且持有匹配的未过期租约时生效。租约检查与插入在同一语句内原子
+// 完成，不依赖 check-then-insert 的读取窗口；租约已失效或父状态不匹配时
+// 插入零行，返回 ErrInvalidTransition 且不创建 child。
+func insertChildRunGuarded(ctx context.Context, tx *sql.Tx, parent, child kernelecho.RunRecord) error {
+	var parentRunID any
+	if child.ParentRunID != "" {
+		parentRunID = child.ParentRunID
+	}
+	grants := child.CapabilityGrants
+	if grants == nil {
+		grants = []capability.Grant{}
+	}
+	capabilityGrants, err := json.Marshal(grants)
+	if err != nil {
+		return errors.Join(kernelecho.ErrInvalidRunRecord, err)
+	}
+	contextSources := child.ContextSources
+	if len(contextSources) == 0 {
+		contextSources = json.RawMessage(`{}`) // 未装配前固化来源版本为空对象
+	}
+	resultPayload := child.Result.Data
+	if resultPayload == nil {
+		resultPayload = []byte{}
+	}
+	result, err := tx.ExecContext(ctx, `
+INSERT INTO runs(
+	  app_id,run_id,run_group_id,echo_id,parent_run_id,origin_call_id,attempt,status,executor_id,config_revision,protocol_version,
+  executor_config,input_payload,input_content_type,max_steps,max_capability_calls,max_execution_units,max_output_bytes,
+  max_cost_microusd,execution_timeout_ms,used_execution_units,used_cost_microusd,used_retries,deadline_at,available_at,
+  last_executor_sequence,capability_grants,recoverable_state,result_payload,result_content_type,created_at,
+  session_id,user_id,message_id,context_digest,context_sources,channel
+)
+SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?
+FROM runs
+WHERE app_id=? AND run_id=? AND echo_id=? AND parent_run_id IS NULL
+  AND status=? AND lease_token=?
+  AND lease_expires_at IS NOT NULL AND julianday(lease_expires_at)>julianday(?)`,
+		child.AppID, child.ID, child.RunGroupID, child.EchoID, parentRunID, child.OriginCallID, child.Attempt, child.Status, child.ExecutorID, child.ConfigRevision, child.ProtocolVersion,
+		string(child.ExecutorConfig), child.InputPayload, child.InputContentType, child.MaxSteps, child.MaxCapabilityCalls, child.MaxExecutionUnits, child.MaxOutputBytes,
+		child.MaxCostMicrousd, child.ExecutionTimeoutMS, child.UsedExecutionUnits, child.UsedCostMicrousd, child.UsedRetries,
+		child.Deadline.UTC().Format(time.RFC3339Nano), child.AvailableAt.UTC().Format(time.RFC3339Nano), child.LastExecutorSequence,
+		string(capabilityGrants), string(child.RecoverableState), resultPayload, child.Result.ContentType,
+		child.CreatedAt.UTC().Format(time.RFC3339Nano), child.SessionID, child.UserID, child.MessageID, child.ContextDigest, string(contextSources), child.Channel,
+		parent.AppID, parent.ID, parent.EchoID, kernelecho.RunStatusRunning, parent.LeaseToken,
+		time.Now().UTC().Format(time.RFC3339Nano),
+	)
+	if err != nil {
+		return fmt.Errorf("create run: %w", err)
+	}
+	if affected, err := result.RowsAffected(); err != nil {
+		return fmt.Errorf("read guarded child insert count: %w", err)
+	} else if affected == 0 {
+		return kernelecho.ErrInvalidTransition
+	}
+	return nil
+}
+
+// CreateChildRun 在父 Run 仍持有有效租约时原子写入 queued child Run。
+// child 不直接完成 Echo；它只共享 Echo 的事件与审计作用域。
+func (s *Store) CreateChildRun(ctx context.Context, parent, child kernelecho.RunRecord, maxChildren int) (resultErr error) {
+	started := time.Now()
+	defer func() { observeStorageOperation(ctx, "create_child_run", started, resultErr) }()
+	if parent.AppID == "" || parent.ID == "" || parent.EchoID == "" || parent.ParentRunID != "" ||
+		parent.LeaseToken == "" || maxChildren < 1 || maxChildren > 64 ||
+		child.ParentRunID != parent.ID || child.OriginCallID == "" {
+		return kernelecho.ErrInvalidRunRecord
+	}
+	tx, err := s.beginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin child Run creation: %w", err)
+	}
+	defer s.finishTx(tx, &resultErr, "create child Run")
+	var echoInput, echoStatus string
+	if err := tx.QueryRowContext(ctx, `SELECT input_message,status FROM echoes WHERE app_id=? AND echo_id=?`,
+		child.AppID, child.EchoID).Scan(&echoInput, &echoStatus); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return kernelecho.ErrEchoNotFound
+		}
+		return fmt.Errorf("read child Run Echo: %w", err)
+	}
+	if child.AppID != parent.AppID || child.EchoID != parent.EchoID || echoStatus != kernelecho.StatusRunning {
+		return kernelecho.ErrInvalidTransition
+	}
+	if err := validateNewRun(kernelecho.Record{
+		ID: child.EchoID, AppID: child.AppID, InputMessage: echoInput,
+		Status: echoStatus, CreatedAt: child.CreatedAt,
+	}, child); err != nil {
+		return err
+	}
+	// MaxChildren 约束同一父 Run 的并发 child 数：终态 child 不再占用治理
+	// 容量，父 Run 可为失败或已结束的子任务创建后续 child。child 的累计
+	// 数量仍受父 Run 的余额类预算和 deadline 约束，不会无限派生。
+	var childCount int
+	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM runs WHERE app_id=? AND parent_run_id=? AND status IN (?,?)`, parent.AppID, parent.ID, kernelecho.RunStatusQueued, kernelecho.RunStatusRunning).Scan(&childCount); err != nil {
+		return fmt.Errorf("count child Runs: %w", err)
+	}
+	if childCount >= maxChildren {
+		return kernelecho.ErrChildRunLimit
+	}
+	// 父租约检查内嵌在 INSERT 条件里原子完成（见 insertChildRunGuarded）。
+	if err := insertChildRunGuarded(ctx, tx, parent, child); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit child Run creation: %w", err)
+	}
+	return nil
+}
+
 func (s *Store) ClaimRun(ctx context.Context, appID, echoID, runID, leaseToken string, startedAt, leaseExpiresAt time.Time) (_ kernelecho.RunRecord, resultErr error) {
 	metricStarted := time.Now()
 	defer func() { observeStorageOperation(ctx, "claim_run", metricStarted, resultErr) }()
@@ -446,6 +556,12 @@ func (s *Store) CompleteRun(ctx context.Context, run kernelecho.RunRecord, runSt
 		return fmt.Errorf("read completed run row count: %w", err)
 	} else if affected != 1 {
 		return kernelecho.ErrInvalidTransition
+	}
+	if run.ParentRunID != "" {
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit child Run completion: %w", err)
+		}
+		return nil
 	}
 	result, err = tx.ExecContext(ctx, `UPDATE echoes SET status=?,final_message=?,result_payload=?,result_content_type=?,error_code=?,error_message=?,completed_at=? WHERE app_id=? AND echo_id=? AND status=?`,
 		echoStatus, textOutput(output), output.Data, output.ContentType, failure.Code, failure.Message, completedAt.UTC().Format(time.RFC3339Nano),
@@ -958,7 +1074,7 @@ func queryRun(scanner rowScanner) (kernelecho.RunRecord, error) {
 	var run kernelecho.RunRecord
 	var attempt int64
 	var maxSteps int64
-	var maxToolCalls int64
+	var maxCapabilityCalls int64
 	var maxExecutionUnits int64
 	var maxOutputBytes int64
 	var maxCostMicrousd int64
@@ -988,7 +1104,7 @@ func queryRun(scanner rowScanner) (kernelecho.RunRecord, error) {
 	if err := scanner.Scan(
 		&run.AppID, &run.ID, &run.RunGroupID, &run.EchoID, &run.ParentRunID, &run.OriginCallID, &attempt, &run.Status,
 		&run.ExecutorID, &run.ConfigRevision, &run.ProtocolVersion,
-		&executorConfig, &inputPayload, &inputContentType, &maxSteps, &maxToolCalls, &maxExecutionUnits, &maxOutputBytes,
+		&executorConfig, &inputPayload, &inputContentType, &maxSteps, &maxCapabilityCalls, &maxExecutionUnits, &maxOutputBytes,
 		&maxCostMicrousd, &executionTimeoutMS, &usedExecutionUnits, &usedCostMicrousd, &usedRetries,
 		&deadlineAt, &availableAt,
 		&run.LeaseToken, &leaseExpiresAt, &lastExecutorSequence,
@@ -999,7 +1115,7 @@ func queryRun(scanner rowScanner) (kernelecho.RunRecord, error) {
 	); err != nil {
 		return kernelecho.RunRecord{}, err
 	}
-	if attempt < 0 || maxSteps < 0 || maxToolCalls < 0 || maxExecutionUnits < 0 || maxOutputBytes < 0 || maxCostMicrousd < 0 || executionTimeoutMS < 0 ||
+	if attempt < 0 || maxSteps < 0 || maxCapabilityCalls < 0 || maxExecutionUnits < 0 || maxOutputBytes < 0 || maxCostMicrousd < 0 || executionTimeoutMS < 0 ||
 		usedExecutionUnits < 0 || usedCostMicrousd < 0 ||
 		usedRetries < 0 || usedRetries > 320 ||
 		lastExecutorSequence < 0 {
@@ -1007,7 +1123,7 @@ func queryRun(scanner rowScanner) (kernelecho.RunRecord, error) {
 	}
 	run.Attempt = uint32(attempt)
 	run.MaxSteps = uint32(maxSteps)
-	run.MaxCapabilityCalls = uint32(maxToolCalls)
+	run.MaxCapabilityCalls = uint32(maxCapabilityCalls)
 	run.MaxExecutionUnits = uint64(maxExecutionUnits)
 	run.MaxOutputBytes = uint64(maxOutputBytes)
 	run.MaxCostMicrousd = uint64(maxCostMicrousd)

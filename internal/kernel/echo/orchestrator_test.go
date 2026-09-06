@@ -15,6 +15,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/capability"
 	executorv1 "github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/executorv1"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/appconfig"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/childrun"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	kernelecho "github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/executor"
@@ -1135,6 +1136,7 @@ func seedOrchestratorConfig(t *testing.T, store *sqlite.Store, seed appconfig.Co
 type allStorePorts interface {
 	idempotency.Store
 	kernelecho.EchoCreationStore
+	kernelecho.ChildRunCreationStore
 	kernelecho.RunExecutionStore
 	kernelecho.RunRecoveryStore
 	kernelecho.RunCancellationStore
@@ -1144,7 +1146,7 @@ type allStorePorts interface {
 
 func storePorts(store allStorePorts) kernelecho.StorePorts {
 	return kernelecho.StorePorts{
-		Idempotency: store, Creation: store, Execution: store, Recovery: store,
+		Idempotency: store, Creation: store, Children: store, Execution: store, Recovery: store,
 		Cancellation: store, Events: store, Audit: store,
 	}
 }
@@ -1722,4 +1724,241 @@ func TestNewOrchestratorRejectsNegativeLeaseDuration(t *testing.T) {
 		LeaseDuration: -time.Second,
 	})
 	t.Fatal("negative lease duration was accepted")
+}
+
+// childRunExecutor 模拟 root Run 通过 run.create_child 委派子任务、再用
+// run.get_child_status 轮询结果的 Executor：root 流收到创建结果后轮询，
+// child Run 由测试侧并发驱动（与生产调度器同一条持久队列），root 流等到
+// child 终态后输出最终结果。child 自己的流直接输出终态。
+type childRunExecutor struct {
+	executorv1.UnimplementedExecutorRuntimeServer
+	testing  *testing.T
+	created  chan string
+	childRun bool
+}
+
+func (f *childRunExecutor) Run(stream executorv1.ExecutorRuntime_RunServer) error {
+	start, err := stream.Recv()
+	if err != nil {
+		return err
+	}
+	if err := stream.Send(&executorv1.ExecutorFrame{
+		EchoId: start.EchoId, RunId: start.RunId, Sequence: 1,
+		Body: &executorv1.ExecutorFrame_RunAccepted{RunAccepted: &executorv1.RunAccepted{ProtocolVersion: executor.Version}},
+	}); err != nil {
+		return err
+	}
+	if start.GetStartRun().GetParentRunId() != "" {
+		f.childRun = true
+		if err := stream.Send(&executorv1.ExecutorFrame{
+			EchoId: start.EchoId, RunId: start.RunId, Sequence: 2,
+			Body: &executorv1.ExecutorFrame_ResourceUsage{ResourceUsage: &executorv1.ResourceUsage{ExecutionUnits: 5}},
+		}); err != nil {
+			return err
+		}
+		return stream.Send(&executorv1.ExecutorFrame{
+			EchoId: start.EchoId, RunId: start.RunId, Sequence: 3,
+			Body: &executorv1.ExecutorFrame_FinalResult{FinalResult: finalResult("child 完成")},
+		})
+	}
+	if err := stream.Send(&executorv1.ExecutorFrame{
+		EchoId: start.EchoId, RunId: start.RunId, Sequence: 2,
+		Body: &executorv1.ExecutorFrame_ResourceUsage{ResourceUsage: &executorv1.ResourceUsage{ExecutionUnits: 5}},
+	}); err != nil {
+		return err
+	}
+	requested := orchestratorChildGrant("requested-grant", routeCapabilityID, nil)
+	requested.ExpiresAt = time.Now().Add(time.Hour)
+	childPayload, err := json.Marshal(map[string]any{
+		"task": "child task", "capability_grants": []capability.Grant{requested},
+		"max_steps": 2, "max_capability_calls": 2, "max_execution_units": 100,
+		"max_output_bytes": 1024, "max_cost_microusd": 0, "timeout_ms": 5000,
+	})
+	if err != nil {
+		return err
+	}
+	if err := stream.Send(&executorv1.ExecutorFrame{
+		EchoId: start.EchoId, RunId: start.RunId, Sequence: 3,
+		Body: &executorv1.ExecutorFrame_CapabilityCall{CapabilityCall: &executorv1.CapabilityCall{
+			CallId: "call-create-child", CapabilityId: "run.create_child", PayloadJson: childPayload,
+		}},
+	}); err != nil {
+		return err
+	}
+	result, err := stream.Recv()
+	if err != nil {
+		return err
+	}
+	if !result.GetCapabilityResult().GetSuccess() {
+		f.testing.Fatalf("run.create_child failed: %s", result.GetCapabilityResult().GetErrorMessage())
+	}
+	var created struct {
+		RunID string `json:"run_id"`
+	}
+	if err := json.Unmarshal(result.GetCapabilityResult().GetPayloadJson(), &created); err != nil || created.RunID == "" {
+		f.testing.Fatalf("create_child result=%s", result.GetCapabilityResult().GetPayloadJson())
+	}
+	f.created <- created.RunID
+	sequence := uint64(3)
+	for {
+		sequence++
+		if err := stream.Send(&executorv1.ExecutorFrame{
+			EchoId: start.EchoId, RunId: start.RunId, Sequence: sequence,
+			Body: &executorv1.ExecutorFrame_CapabilityCall{CapabilityCall: &executorv1.CapabilityCall{
+				CallId: "call-child-status-" + strconv.FormatUint(sequence, 10), CapabilityId: "run.get_child_status",
+				PayloadJson: []byte(`{"child_run_id":"` + created.RunID + `"}`),
+			}},
+		}); err != nil {
+			return err
+		}
+		status, err := stream.Recv()
+		if err != nil {
+			return err
+		}
+		if !status.GetCapabilityResult().GetSuccess() {
+			f.testing.Fatalf("run.get_child_status failed: %s", status.GetCapabilityResult().GetErrorMessage())
+		}
+		var state struct {
+			Status string `json:"status"`
+			Result *struct {
+				DataBase64 string `json:"data_base64"`
+			} `json:"result"`
+		}
+		if err := json.Unmarshal(status.GetCapabilityResult().GetPayloadJson(), &state); err != nil {
+			f.testing.Fatalf("child status payload=%s", status.GetCapabilityResult().GetPayloadJson())
+		}
+		if state.Status == "succeeded" && state.Result != nil {
+			break
+		}
+		if state.Status != "queued" && state.Status != "running" {
+			f.testing.Fatalf("child ended unexpectedly: %s", status.GetCapabilityResult().GetPayloadJson())
+		}
+	}
+	if err := stream.Send(&executorv1.ExecutorFrame{
+		EchoId: start.EchoId, RunId: start.RunId, Sequence: sequence + 1,
+		Body: &executorv1.ExecutorFrame_ResourceUsage{ResourceUsage: &executorv1.ResourceUsage{ExecutionUnits: 40}},
+	}); err != nil {
+		return err
+	}
+	return stream.Send(&executorv1.ExecutorFrame{
+		EchoId: start.EchoId, RunId: start.RunId, Sequence: sequence + 2,
+		Body: &executorv1.ExecutorFrame_FinalResult{FinalResult: finalResult("root 汇总完成")},
+	})
+}
+
+// orchestratorChildGrant 构造 attenuation 校验需要的规范 Grant 形状。
+func orchestratorChildGrant(id, capabilityID string, resourceIDs []string) capability.Grant {
+	return capability.Grant{
+		ID: id, AppID: testAppID, Principal: capability.PrincipalAny, CapabilityID: capabilityID,
+		Resource:  capability.ResourceScope{Type: "any", IDs: resourceIDs},
+		ExpiresAt: time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC), MaxCalls: 4, PolicyRevision: "policy",
+	}
+}
+
+// TestOrchestratorExecutesGovernedChildRun 走完整编排链路：root Run 调用
+// run.create_child 创建收窄预算的 child Run，child 经同一条持久队列被认领
+// 并执行（预算 ≤ 配置上限，不再触发 recovery_failed），root 通过
+// run.get_child_status 读到 child 结果，child 的执行不向 Echo 事件流发布
+// 任何叙事事件。
+func TestOrchestratorExecutesGovernedChildRun(t *testing.T) {
+	listener := bufconn.Listen(1 << 20)
+	grpcServer := grpc.NewServer()
+	executorServer := &childRunExecutor{testing: t, created: make(chan string, 1)}
+	executorv1.RegisterExecutorRuntimeServer(grpcServer, executorServer)
+	go grpcServer.Serve(listener)
+	defer grpcServer.Stop()
+	ctx := context.Background()
+	connection, err := grpc.DialContext(ctx, "bufnet",
+		grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) { return listener.Dial() }),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.Close()
+
+	store, err := sqlite.Open(filepath.Join(t.TempDir(), "child-orchestrator.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	reg := registry.New()
+	policy := runtimetest.NewStaticAppPolicy()
+	policy.EnableResource(testAppID, "run.create_child", "any", nil)
+	policy.EnableResource(testAppID, "run.get_child_status", "any", nil)
+	policy.EnableResource(testAppID, routeCapabilityID, "any", nil)
+	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{IdempotencyStore: store})
+	seed := orchestratorSeed("executor.test")
+	seed.CapabilityGrants = []capability.Grant{
+		orchestratorChildGrant("policy-create-child", "run.create_child", nil),
+		orchestratorChildGrant("policy-child-status", "run.get_child_status", nil),
+		orchestratorChildGrant("policy-routes", routeCapabilityID, nil),
+	}
+	seedOrchestratorConfig(t, store, seed)
+	childService, err := childrun.NewService(store, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := childrun.Register(reg, childService); err != nil {
+		t.Fatal(err)
+	}
+	orchestrator := kernelecho.NewOrchestrator(
+		executorv1.NewExecutorRuntimeClient(connection), reg, dispatcher, policy, storePorts(store),
+		kernelecho.Config{AppID: testAppID, AppConfigSource: store, RunTimeout: 10 * time.Second, Context: newSessionSource(t, store)},
+	)
+	echoID, created, err := orchestrator.CreateIdempotent(ctx, kernelecho.RunRequest{Message: "委派子任务", IdempotencyKey: "child-orchestrator"})
+	if err != nil || !created {
+		t.Fatalf("echo=%q created=%t err=%v", echoID, created, err)
+	}
+	work, err := orchestrator.Runnable(ctx, 1)
+	if err != nil || len(work) != 1 {
+		t.Fatalf("root run not queued: work=%#v err=%v", work, err)
+	}
+	events := make(chan kernelecho.Event, 32)
+	rootDone := make(chan error, 1)
+	go func() {
+		rootDone <- orchestrator.RunQueued(ctx, work[0], func(event kernelecho.Event) error { events <- event; return nil })
+	}()
+	childID := <-executorServer.created
+	// child Run 由测试侧按生产语义并发驱动：同一条持久队列、同一 Orchestrator。
+	for {
+		queued, err := orchestrator.Runnable(ctx, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(queued) == 0 {
+			if err := <-rootDone; err != nil {
+				t.Fatalf("root run failed: %v", err)
+			}
+			break
+		}
+		if err := orchestrator.RunQueued(ctx, queued[0], nil); err != nil {
+			t.Fatalf("child run failed: %v", err)
+		}
+	}
+	rootRuns, err := store.ListRuns(ctx, testAppID, echoID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, run := range rootRuns {
+		if run.ParentRunID == "" && run.Status != kernelecho.RunStatusSucceeded {
+			t.Fatalf("root run not succeeded: %#v", run)
+		}
+	}
+	child, err := store.GetRun(ctx, testAppID, childID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if child.Status != kernelecho.RunStatusSucceeded || string(child.Result.Data) != "child 完成" {
+		t.Fatalf("child=%#v", child)
+	}
+	if child.MaxSteps != 2 || child.MaxCapabilityCalls != 2 || child.MaxExecutionUnits != 100 || child.MaxOutputBytes != 1024 {
+		t.Fatalf("child budgets not attenuated: %#v", child)
+	}
+	close(events)
+	for event := range events {
+		if event.RunID == childID {
+			t.Fatalf("child run published narrative event: %#v", event)
+		}
+	}
 }
