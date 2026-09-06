@@ -2,6 +2,7 @@ package packagefmt
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -90,22 +91,81 @@ func convertProjectDependency(manifestPath, id string, source projectSourceDepen
 			return projectcontract.Dependency{}, fmt.Errorf("%w: 依赖 %q 的 path 非法", ErrSourceInvalid, id)
 		}
 		projectDir := filepath.Dir(manifestPath)
-		absolute, err := filepath.Abs(filepath.Join(projectDir, filepath.FromSlash(source.Path)))
-		if err != nil {
-			return projectcontract.Dependency{}, fmt.Errorf("%w: 依赖 %q 的 path 无法解析: %v", ErrSourceInvalid, id, err)
+		if _, err := ResolveLocalDependencyPath(projectDir, projectDir, source.Path); err != nil {
+			return projectcontract.Dependency{}, fmt.Errorf("%w: 依赖 %q 的 path 无法安全解析: %v", ErrSourceInvalid, id, err)
 		}
-		cleanProjectDir, err := filepath.Abs(projectDir)
-		if err != nil {
-			return projectcontract.Dependency{}, fmt.Errorf("%w: 项目清单目录无法解析: %v", ErrSourceInvalid, err)
-		}
-		relative, err := filepath.Rel(cleanProjectDir, absolute)
-		if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-			return projectcontract.Dependency{}, fmt.Errorf("%w: 依赖 %q 的 path 逃逸项目目录", ErrSourceInvalid, id)
-		}
-		resolvedSource = "path:" + filepath.ToSlash(relative)
+		resolvedSource = "path:" + source.Path
 	}
 	if err := packagecontract.ValidateSource(resolvedSource); err != nil {
 		return projectcontract.Dependency{}, fmt.Errorf("%w: 依赖 %q 的来源非法", ErrSourceInvalid, id)
 	}
 	return projectcontract.Dependency{ID: id, Constraint: source.Version, Source: resolvedSource}, nil
+}
+
+// ResolveLocalDependencyPath 解析项目内的本地依赖，并同时检查词法路径与
+// 已存在符号链接的物理路径，防止依赖通过链接逃逸项目边界。末尾路径尚不存在
+// 时保留其路径，允许后续构建阶段创建工件。
+func ResolveLocalDependencyPath(projectRoot, baseDir, relative string) (string, error) {
+	if relative == "" || relative == "." || !packagecontract.IsPackagePath(relative) {
+		return "", ErrSourceInvalid
+	}
+	root, err := filepath.Abs(projectRoot)
+	if err != nil {
+		return "", err
+	}
+	base, err := filepath.Abs(baseDir)
+	if err != nil {
+		return "", err
+	}
+	candidate, err := filepath.Abs(filepath.Join(base, filepath.FromSlash(relative)))
+	if err != nil {
+		return "", err
+	}
+	root, err = resolveExistingPath(root)
+	if err != nil {
+		return "", err
+	}
+	base, err = resolveExistingPath(base)
+	if err != nil {
+		return "", err
+	}
+	candidate, err = resolveExistingPath(candidate)
+	if err != nil {
+		return "", err
+	}
+	if !pathWithin(root, base) || !pathWithin(root, candidate) {
+		return "", fmt.Errorf("%w: 本地依赖路径逃逸项目目录", ErrSourceInvalid)
+	}
+	return candidate, nil
+}
+
+func resolveExistingPath(path string) (string, error) {
+	original := path
+	var suffix []string
+	for {
+		resolved, err := filepath.EvalSymlinks(path)
+		if err == nil {
+			for index := len(suffix) - 1; index >= 0; index-- {
+				resolved = filepath.Join(resolved, suffix[index])
+			}
+			return resolved, nil
+		}
+		if info, lstatErr := os.Lstat(path); lstatErr == nil && info.Mode()&os.ModeSymlink != 0 {
+			return "", err
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return "", err
+		}
+		parent := filepath.Dir(path)
+		if parent == path {
+			return original, nil
+		}
+		suffix = append(suffix, filepath.Base(path))
+		path = parent
+	}
+}
+
+func pathWithin(root, candidate string) bool {
+	relative, err := filepath.Rel(root, candidate)
+	return err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
 }
