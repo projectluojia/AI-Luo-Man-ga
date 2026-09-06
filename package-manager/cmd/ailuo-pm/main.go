@@ -303,7 +303,7 @@ func splitRegistryRef(source string) (owner, repo, constraint string, ok bool) {
 }
 
 // resolveSource 解析源包目录：优先 ailuo.toml（显式声明，含宿主函数/存储），
-// 无则从源码自动提取清单并构建（作者零声明，纯计算包）。清单声明 [build] 时
+// 无则从源码自动提取清单并构建（作者零声明，纯计算包）。组件声明 [component.build] 时
 // 先执行构建再返回（pack/publish 共用，构建失败即报错，不打包残缺工件）。
 func resolveSource(ctx context.Context, sourceDir, version string) (manifest packagecontract.Manifest, manifestBytes []byte, err error) {
 	return packagefmt.Resolve(ctx, sourceDir, version)
