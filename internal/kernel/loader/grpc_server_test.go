@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -94,10 +95,10 @@ func invokeRequest(id string) *runtimev1.InvokeRequest {
 	return &runtimev1.InvokeRequest{
 		Identity: backendIdentity(id),
 		Context: &runtimev1.GovernedRequestContext{
-			AppId: "campus-services", EchoId: "echo-1", RequestId: "request-1", TraceId: "trace-1",
+			AppId: "app.test", EchoId: "echo-1", RequestId: "request-1", TraceId: "trace-1",
 			RunId: "run-1", CallId: "call-1", ProtocolVersion: "1.0",
-			TargetType: "capability", CapabilityId: "campus.bus.routes.list", ServiceId: "campus",
-			PermissionScope: []string{"bus.read"},
+			TargetType: "capability", CapabilityId: "test.capability", ServiceId: "test.service",
+			PermissionScope: []string{"test.read"},
 		},
 		PayloadJson: []byte(`{}`),
 	}
@@ -137,9 +138,9 @@ func TestRuntimeHostProtocolServerRoundTrip(t *testing.T) {
 	backend.mu.Lock()
 	contexts := append([]contracts.RequestContext(nil), backend.contexts...)
 	backend.mu.Unlock()
-	if len(contexts) != 1 || contexts[0].AppID != "campus-services" || contexts[0].CallID != "call-1" ||
-		contexts[0].TargetType != "capability" || contexts[0].CapabilityID != "campus.bus.routes.list" ||
-		contexts[0].ServiceID != "campus" || contexts[0].ToolID != "" {
+	if len(contexts) != 1 || contexts[0].AppID != "app.test" || contexts[0].CallID != "call-1" ||
+		contexts[0].TargetType != "capability" || contexts[0].CapabilityID != "test.capability" ||
+		contexts[0].ServiceID != "test.service" || contexts[0].ToolID != "" {
 		t.Fatalf("contexts=%#v", contexts)
 	}
 	if err := manager.Shutdown(context.Background()); err != nil {
@@ -211,7 +212,7 @@ func TestRuntimeHostProtocolServerRejectsInvalidContextAndMalformedBackendResult
 	}
 	mismatchedTarget := invokeRequest("hosted.invalid")
 	mismatchedTarget.Context.TargetType = "tool"
-	mismatchedTarget.Context.ToolId = "campus.bus.routes.list"
+	mismatchedTarget.Context.ToolId = "test.capability"
 	if _, err := server.Invoke(context.Background(), mismatchedTarget); status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("mismatched target identity error=%v", err)
 	}
@@ -264,22 +265,21 @@ func TestRuntimeHostProtocolServerDrainsAndReturnsOnlyStableErrors(t *testing.T)
 // toolRuntimeRequest 构造 tool 目标类型的受治理请求（hosted guest 按 ToolID 分发）。
 func toolRuntimeRequest() contracts.RequestContext {
 	return contracts.RequestContext{
-		AppID: "campus-services", EchoID: "echo-1", RequestID: "request-1", TraceID: "trace-1",
+		AppID: "app.test", EchoID: "echo-1", RequestID: "request-1", TraceID: "trace-1",
 		RunID: "run-1", CallID: "call-1", CallDepth: 1,
 		IdempotencyKey: "operation-1", ProtocolVersion: "1.0",
-		TargetType: "tool", ServiceID: "strings.tool", ToolID: "strings.len",
-		PermissionScope: []string{"strings.read"},
+		TargetType: "tool", ServiceID: testPackageID, ToolID: testToolID,
+		PermissionScope: []string{testInvokeScope},
 	}
 }
 
-// TestRuntimeHostServesHostedPackageOverProtocol 验证外部 Runtime Host 产品接线：
+// TestRuntimeHostServesHostedArtifactOverProtocol 验证外部 Runtime Host 产品接线：
 // 真实 hosted Backend（wazero 执行）经完整 RuntimeHost 协议被内核 GRPCHost 调用。
-// 这不是 fake——strings.tool 工件在宿主侧真实编译并以沙箱执行。
-func TestRuntimeHostServesHostedPackageOverProtocol(t *testing.T) {
-	artifact := stringToolArtifact(t)
+func TestRuntimeHostServesHostedArtifactOverProtocol(t *testing.T) {
+	artifact := hostedArtifact(t, filepath.Join("success", "success.wasm"))
 	backend, err := loader.NewHostedRuntimeBackend(loader.WasmHostConfig{
 		ReadArtifact: func(_ context.Context, manifest loader.Manifest) ([]byte, error) {
-			if manifest.ID != "strings.tool" {
+			if manifest.ID != testPackageID {
 				return nil, loader.ErrNotFound
 			}
 			return artifact, nil
@@ -306,10 +306,10 @@ func TestRuntimeHostServesHostedPackageOverProtocol(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := manager.Register(context.Background(), runtimeManifest("strings.tool", loader.ModeHosted)); err != nil {
+	if err := manager.Register(context.Background(), runtimeManifest(testPackageID, loader.ModeHosted)); err != nil {
 		t.Fatal(err)
 	}
-	result, err := manager.Handler("strings.tool")(
+	result, err := manager.Handler(testPackageID)(
 		context.Background(), toolRuntimeRequest(), json.RawMessage(`{"value":"hello"}`),
 	)
 	if err != nil {
@@ -319,15 +319,15 @@ func TestRuntimeHostServesHostedPackageOverProtocol(t *testing.T) {
 	if err := json.Unmarshal(result, &decoded); err != nil {
 		t.Fatalf("unmarshal result %q: %v", result, err)
 	}
-	if decoded["length"] != float64(5) {
-		t.Fatalf("result = %v, want length 5", decoded)
+	if decoded["value"] != "hello" {
+		t.Fatalf("result = %v, want original payload", decoded)
 	}
 }
 
 // TestRuntimeHostEnforcesExecutionBudgetOverProtocol 验证外部宿主同样强制执行时间预算：
 // 死循环工件经协议调用在预算内被终止，归类为稳定超时。
 func TestRuntimeHostEnforcesExecutionBudgetOverProtocol(t *testing.T) {
-	artifact := hostedArtifact(t, "busy.wasm")
+	artifact := hostedArtifact(t, filepath.Join("busy", "busy.wasm"))
 	backend, err := loader.NewHostedRuntimeBackend(loader.WasmHostConfig{
 		ReadArtifact: func(_ context.Context, manifest loader.Manifest) ([]byte, error) {
 			if manifest.ID != "busy.host" {

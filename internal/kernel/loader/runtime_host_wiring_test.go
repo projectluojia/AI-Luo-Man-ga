@@ -11,9 +11,10 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/adapters/packagesource"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
-	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/capability"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packagecontract"
 )
 
 // TestRuntimeHostProductionWiring 验证外部 Runtime Host 产品接线：真实安装目录
@@ -23,41 +24,41 @@ import (
 // 而必然失败，既有协议测试以 stub ReadArtifact 掩盖了该问题。
 func TestRuntimeHostProductionWiring(t *testing.T) {
 	root := t.TempDir()
-	directory := filepath.Join(root, "strings.tool")
+	directory := filepath.Join(root, testPackageID)
 	if err := os.Mkdir(directory, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	artifactBytes := stringToolArtifact(t)
-	artifactPath := filepath.Join(directory, "strings.tool.wasm")
+	artifactBytes := hostedArtifact(t, filepath.Join("success", "success.wasm"))
+	artifactPath := filepath.Join(directory, "success.wasm")
 	if err := os.WriteFile(artifactPath, artifactBytes, 0o640); err != nil {
 		t.Fatal(err)
 	}
 	extensions, err := json.Marshal(map[string]any{
-		"tools": []registry.ToolSpec{{
-			ID: "strings.len", Version: "1.0.0", Description: "字符串长度",
+		"tools": []capability.ToolSpec{{
+			ID: testToolID, Version: "1.0.0", Description: "测试回显",
 			InputSchemaJSON: `{"type":"object","properties":{"value":{"type":"string"}},"required":["value"],"additionalProperties":false}`,
-			SideEffect:      registry.SideEffectRead,
+			SideEffect:      capability.SideEffectRead,
 		}},
-		"service": registry.ServiceSpec{
-			ID: "strings.tool", Version: "1.0.0", Description: "字符串工具",
-			ToolDependencies: []string{"strings.len"},
+		"service": capability.ServiceSpec{
+			ID: testPackageID, Version: "1.0.0", Description: "通用运行时测试",
+			ToolDependencies: []string{testToolID},
 		},
-		"capabilities": []registry.CapabilitySpec{{
-			ID: "strings.len.cap", Version: "1.0.0", Name: "字符串长度",
-			Description: "字符串长度", ServiceID: "strings.tool",
+		"capabilities": []capability.CapabilitySpec{{
+			ID: testCapabilityID, Version: "1.0.0", Name: "测试回显",
+			Description: "测试回显", ServiceID: testPackageID,
 			InputSchemaJSON: `{"type":"object","properties":{"value":{"type":"string"}},"required":["value"],"additionalProperties":false}`,
-			SideEffect:      registry.SideEffectRead,
+			SideEffect:      capability.SideEffectRead,
 		}},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	installed := packmgr.Manifest{
-		SchemaVersion: packmgr.SchemaVersion, ID: "strings.tool", Version: "1.0.0",
+	installed := packagecontract.Manifest{
+		SchemaVersion: packagecontract.SchemaVersion, ID: testPackageID, Version: "1.0.0",
 		Pin: true, Extensions: extensions,
-		Components: []packmgr.Component{{
-			ID: "core", Mode: loader.ModeHosted, Entrypoint: "strings.tool.wasm",
-			Exports: []string{"strings.len.cap"},
+		Components: []packagecontract.Component{{
+			ID: "runtime", Mode: loader.ModeHosted, Entrypoint: "success.wasm",
+			Exports: []string{testCapabilityID},
 		}},
 	}
 	manifest, err := json.Marshal(installed)
@@ -69,12 +70,12 @@ func TestRuntimeHostProductionWiring(t *testing.T) {
 	}
 	manifestDigest := sha256.Sum256(manifest)
 	artifactDigest := sha256.Sum256(artifactBytes)
-	lock := packmgr.Lock{
-		SchemaVersion: packmgr.SchemaVersion, PackageID: "strings.tool",
+	lock := packagecontract.Lock{
+		SchemaVersion: packagecontract.SchemaVersion, PackageID: testPackageID,
 		PackageVersion: "1.0.0",
 		ManifestSHA256: hex.EncodeToString(manifestDigest[:]),
-		Artifacts: []packmgr.LockedArtifact{{
-			ComponentID: "core", Path: artifactPath, SHA256: hex.EncodeToString(artifactDigest[:]),
+		Artifacts: []packagecontract.LockedArtifact{{
+			ComponentID: "runtime", Path: artifactPath, SHA256: hex.EncodeToString(artifactDigest[:]),
 		}},
 	}
 	lockBytes, err := json.Marshal(lock)
@@ -85,12 +86,12 @@ func TestRuntimeHostProductionWiring(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	catalog, err := loader.NewCatalog(root)
+	catalog, err := packagesource.NewCatalog(root)
 	if err != nil {
 		t.Fatal(err)
 	}
 	records, err := catalog.Discover(t.Context())
-	if err != nil || len(records) != 1 || records[0].Runtime.ID != "strings.tool.core" {
+	if err != nil || len(records) != 1 || records[0].Runtime.ID != testRuntimeID {
 		t.Fatalf("discover records=%#v err=%v", records, err)
 	}
 	backend, err := loader.NewHostedRuntimeBackend(loader.WasmHostConfig{ReadArtifact: catalog.ReadArtifact})
@@ -119,10 +120,10 @@ func TestRuntimeHostProductionWiring(t *testing.T) {
 		t.Fatal(err)
 	}
 	// 预热触发完整装载（验证 → 协议 Describe/Start/Health），编译失败内核拒绝就绪。
-	if err := manager.Warmup(context.Background(), []string{"strings.tool.core"}, 1); err != nil {
+	if err := manager.Warmup(context.Background(), []string{testRuntimeID}, 1); err != nil {
 		t.Fatal(err)
 	}
-	result, err := manager.Handler("strings.tool.core")(
+	result, err := manager.Handler(testRuntimeID)(
 		context.Background(), toolRuntimeRequest(), json.RawMessage(`{"value":"hello"}`),
 	)
 	if err != nil {
@@ -132,8 +133,9 @@ func TestRuntimeHostProductionWiring(t *testing.T) {
 	if err := json.Unmarshal(result, &decoded); err != nil {
 		t.Fatalf("unmarshal result %q: %v", result, err)
 	}
-	if decoded["length"] != float64(5) {
-		t.Fatalf("result = %v, want length 5", decoded)
+	// 固件是通用信封回显：原样返回 payload，不做任何业务计算。
+	if decoded["value"] != "hello" {
+		t.Fatalf("result = %v, want original payload", decoded)
 	}
 	if err := manager.Shutdown(context.Background()); err != nil {
 		t.Fatal(err)

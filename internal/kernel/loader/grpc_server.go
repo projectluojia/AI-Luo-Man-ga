@@ -9,7 +9,7 @@ import (
 
 	runtimev1 "github.com/projectluojia/AI-Luo-Man-ga/gen/runtimev1"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
-	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packagecontract"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -325,7 +325,7 @@ func decodeRuntimeIdentity(identity *runtimev1.RuntimeIdentity) (BackendIdentity
 		identity.ProtocolVersion != RuntimeHostProtocolVersion {
 		return BackendIdentity{}, ErrRuntimeProtocol
 	}
-	if _, err := packmgr.ParseVersion(identity.Version); err != nil {
+	if _, err := packagecontract.ParseVersion(identity.Version); err != nil {
 		return BackendIdentity{}, ErrRuntimeProtocol
 	}
 	return BackendIdentity{ID: identity.RuntimeId, Version: identity.Version}, nil

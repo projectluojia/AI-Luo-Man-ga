@@ -184,7 +184,7 @@ func validatePackageSpec(spec PackageSpec) error {
 		return ErrInvalidManifest
 	}
 	for _, component := range spec.Components {
-		if err := validateManifest(component.Runtime); err != nil {
+		if err := ValidateManifest(component.Runtime); err != nil {
 			return err
 		}
 	}

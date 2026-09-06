@@ -12,54 +12,38 @@ import (
 
 	kernelecho "github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/idempotency"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/packstore"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/publicerror"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite"
-	"github.com/projectluojia/AI-Luo-Man-ga/pkg/bus"
 )
 
-func TestStorePersistsBusSnapshotAndEchoAudit(t *testing.T) {
+func TestStorePersistsPackageDocumentsAndEchoAudit(t *testing.T) {
 	store, err := sqlite.Open(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer store.Close()
 	ctx := context.Background()
-	departure := time.Date(2026, time.July, 25, 9, 30, 0, 0, time.FixedZone("CST", 8*60*60))
+	docs := store.PackageDocuments()
+	scope := packstore.Scope{AppID: "campus-services", Namespace: "campus/bus"}
 	importedAt := time.Now().UTC()
-	err = store.ReplaceBusSnapshot(ctx, sqlite.BusSnapshot{
-		AppID: "campus-services", Revision: "rev-1", Source: "test", Authoritative: true,
+	meta := packstore.SnapshotMeta{
+		Revision: "rev-1", Source: "test", Authoritative: true,
 		Complete: true, ImportedAt: importedAt, ValidUntil: importedAt.Add(24 * time.Hour),
-		Stops: []bus.Stop{
-			{ID: "a", Name: "文理学部", Aliases: []string{"本部"}},
-			{ID: "b", Name: "信息学部"},
-		},
-		Routes: []bus.Route{{ID: "r", Name: "文理—信息", Direction: "去程", OriginStopID: "a", DestinationID: "b"}},
-		Journeys: []bus.Journey{{
-			TripID: "t", RouteID: "r", RouteName: "文理—信息", Direction: "去程",
-			OriginStopID: "a", OriginStopName: "文理学部", DestinationStopID: "b", DestinationName: "信息学部",
-			DepartureAt: departure, ArrivalAt: departure.Add(25 * time.Minute),
-		}},
-	})
-	if err != nil {
+	}
+	collections := map[string][]packstore.Document{
+		"routes": {{ID: "r", Payload: []byte(`{"id":"r","name":"文理—信息","direction":"去程","source_revision":"rev-1"}`)}},
+	}
+	if err := docs.ReplaceSnapshot(ctx, scope, meta, collections); err != nil {
 		t.Fatal(err)
 	}
-	stops, err := store.SearchStops(ctx, "campus-services", bus.StopSearchRequest{Query: "本部", Limit: 10})
-	if err != nil || len(stops.Stops) != 1 || stops.Stops[0].ID != "a" || stops.Metadata.Revision != "rev-1" {
-		t.Fatalf("stops=%#v err=%v", stops, err)
+	documents, err := docs.List(ctx, scope, "routes", 10, "")
+	if err != nil || !documents.MetaFound || len(documents.Documents) != 1 || documents.Documents[0].ID != "r" {
+		t.Fatalf("documents=%#v err=%v", documents, err)
 	}
-	journeys, err := store.SearchJourneys(ctx, "campus-services", bus.SearchRequest{
-		OriginStopID: "a", DestinationStopID: "b", DepartAfter: departure.Add(-time.Minute), Limit: 5,
-	})
-	if err != nil || len(journeys.Journeys) != 1 || !journeys.Journeys[0].DepartureAt.Equal(departure) {
-		t.Fatalf("journeys=%#v err=%v", journeys, err)
+	if missing, err := docs.Get(ctx, packstore.Scope{AppID: "another-app", Namespace: "campus/bus"}, "routes", "r"); err != nil || missing.Found {
+		t.Fatalf("cross-app read=%#v err=%v, want not found", missing, err)
 	}
-	other, err := store.SearchJourneys(ctx, "another-app", bus.SearchRequest{
-		OriginStopID: "a", DestinationStopID: "b", DepartAfter: departure.Add(-time.Minute), Limit: 5,
-	})
-	if !errors.Is(err, bus.ErrDataUnavailable) || len(other.Journeys) != 0 {
-		t.Fatalf("cross-app data status=%#v err=%v", other, err)
-	}
-
 	now := time.Now().UTC()
 	createTestEchoRun(t, store, "campus-services", "echo-1", "test", now)
 	run, err := store.ClaimRun(ctx, "campus-services", "echo-1", "lease-1", now, now.Add(time.Minute))
@@ -750,43 +734,6 @@ func TestMigrationV7AddsRunBudgetDatabaseGuards(t *testing.T) {
 	}
 }
 
-func TestMigrationV9AddsBusCompletenessAndReferenceGuards(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "bus-guards.db")
-	store, err := sqlite.Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	now := time.Now().UTC()
-	if err := store.ReplaceBusSnapshot(context.Background(), sqlite.BusSnapshot{
-		AppID: "app", Revision: "revision", Source: "zhihui-luojia",
-		Authoritative: true, Complete: true, ImportedAt: now, ValidUntil: now.Add(time.Hour),
-		Stops: []bus.Stop{{ID: "stop-a", Name: "A"}},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	db, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	var applied, complete int
-	if err := db.QueryRow(`SELECT count(*) FROM schema_migrations WHERE version=9`).Scan(&applied); err != nil || applied != 1 {
-		t.Fatalf("migration 9 applied=%d err=%v", applied, err)
-	}
-	if err := db.QueryRow(`SELECT complete FROM bus_source_revisions WHERE app_id='app' AND revision='revision'`).Scan(&complete); err != nil || complete != 1 {
-		t.Fatalf("complete=%d err=%v", complete, err)
-	}
-	if _, err := db.Exec(`
-INSERT INTO bus_routes(app_id,id,name,direction,origin_stop_id,destination_stop_id,source_revision)
-VALUES('app','invalid','invalid','outbound','stop-a','missing','revision')`); err == nil {
-		t.Fatal("database accepted a route with an unknown stop")
-	}
-}
-
 func TestMigrationV10PersistsBoundedProviderRetryUsage(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "provider-retries.db")
 	store, err := sqlite.Open(path)
@@ -808,182 +755,6 @@ func TestMigrationV10PersistsBoundedProviderRetryUsage(t *testing.T) {
 	}
 	if _, err := db.Exec(`UPDATE runs SET used_provider_retries=321 WHERE app_id='app' AND echo_id='echo'`); err == nil {
 		t.Fatal("database accepted an unbounded Provider retry count")
-	}
-}
-
-func TestReplaceBusSnapshotIsAtomic(t *testing.T) {
-	store, err := sqlite.Open(filepath.Join(t.TempDir(), "test.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	ctx := context.Background()
-	original := sqlite.BusSnapshot{
-		AppID: "app", Revision: "one", Source: "test", Authoritative: true,
-		Complete: true, ImportedAt: time.Now().UTC(), ValidUntil: time.Now().UTC().Add(24 * time.Hour),
-		Stops: []bus.Stop{{ID: "a", Name: "A"}},
-	}
-	if err := store.ReplaceBusSnapshot(ctx, original); err != nil {
-		t.Fatal(err)
-	}
-	broken := original
-	broken.Revision = "two"
-	broken.Stops = []bus.Stop{{ID: "duplicate", Name: "A"}, {ID: "duplicate", Name: "B"}}
-	if err := store.ReplaceBusSnapshot(ctx, broken); err == nil {
-		t.Fatal("expected duplicate primary key failure")
-	}
-	stops, err := store.SearchStops(ctx, "app", bus.StopSearchRequest{Query: "A", Limit: 10})
-	if err != nil || len(stops.Stops) != 1 || stops.Stops[0].ID != "a" {
-		t.Fatalf("original snapshot was not preserved: %#v err=%v", stops, err)
-	}
-}
-
-func TestBusSnapshotValidationPreservesLastCompleteRevision(t *testing.T) {
-	store, err := sqlite.Open(filepath.Join(t.TempDir(), "validated-snapshot.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	ctx := context.Background()
-	importedAt := time.Now().UTC().Add(-time.Hour)
-	departure := importedAt.Add(30 * time.Minute)
-	valid := sqlite.BusSnapshot{
-		AppID: "app", Revision: "revision-1", Source: "zhihui-luojia", Authoritative: true,
-		Complete: true, ImportedAt: importedAt, ValidUntil: importedAt.Add(2 * time.Hour),
-		Stops: []bus.Stop{
-			{ID: "stop-a", Name: "A", SourceRevision: "revision-1"},
-			{ID: "stop-b", Name: "B", SourceRevision: "revision-1"},
-		},
-		Routes: []bus.Route{{
-			ID: "route", Name: "A-B", Direction: "outbound",
-			OriginStopID: "stop-a", DestinationID: "stop-b", SourceRevision: "revision-1",
-		}},
-		Journeys: []bus.Journey{{
-			TripID: "trip", RouteID: "route", RouteName: "A-B", Direction: "outbound",
-			OriginStopID: "stop-a", OriginStopName: "A",
-			DestinationStopID: "stop-b", DestinationName: "B",
-			DepartureAt: departure, ArrivalAt: departure.Add(20 * time.Minute),
-			SourceRevision: "revision-1",
-		}},
-	}
-	if err := store.ReplaceBusSnapshot(ctx, valid); err != nil {
-		t.Fatalf("replace valid snapshot: %v", err)
-	}
-
-	nextInvalid := func() sqlite.BusSnapshot {
-		snapshot := valid
-		snapshot.Revision = "revision-2"
-		snapshot.Stops = append([]bus.Stop(nil), valid.Stops...)
-		snapshot.Routes = append([]bus.Route(nil), valid.Routes...)
-		snapshot.Journeys = append([]bus.Journey(nil), valid.Journeys...)
-		for index := range snapshot.Stops {
-			snapshot.Stops[index].SourceRevision = ""
-		}
-		for index := range snapshot.Routes {
-			snapshot.Routes[index].SourceRevision = ""
-		}
-		for index := range snapshot.Journeys {
-			snapshot.Journeys[index].SourceRevision = ""
-		}
-		return snapshot
-	}
-
-	invalid := nextInvalid()
-	invalid.ValidUntil = time.Time{}
-	if err := store.ReplaceBusSnapshot(ctx, invalid); err == nil {
-		t.Fatal("snapshot without validity unexpectedly succeeded")
-	}
-	invalid = nextInvalid()
-	invalid.Stops[1].ID = "stop-a"
-	if err := store.ReplaceBusSnapshot(ctx, invalid); err == nil {
-		t.Fatal("snapshot with duplicate stops unexpectedly succeeded")
-	}
-	invalid = nextInvalid()
-	invalid.Routes[0].DestinationID = "missing"
-	if err := store.ReplaceBusSnapshot(ctx, invalid); err == nil {
-		t.Fatal("snapshot with invalid reference unexpectedly succeeded")
-	}
-	invalid = nextInvalid()
-	invalid.Journeys[0].ArrivalAt = invalid.Journeys[0].DepartureAt
-	if err := store.ReplaceBusSnapshot(ctx, invalid); err == nil {
-		t.Fatal("snapshot with invalid times unexpectedly succeeded")
-	}
-
-	routes, err := store.ListRoutes(ctx, "app", bus.RouteListRequest{Limit: 10})
-	if err != nil || routes.Metadata.Revision != "revision-1" || len(routes.Routes) != 1 {
-		t.Fatalf("last complete revision was not preserved: snapshot=%#v err=%v", routes, err)
-	}
-}
-
-func TestBusSnapshotQueriesRequireAnActiveRevision(t *testing.T) {
-	store, err := sqlite.Open(filepath.Join(t.TempDir(), "missing-snapshot.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	if _, err := store.ListRoutes(context.Background(), "app", bus.RouteListRequest{Limit: 10}); !errors.Is(err, bus.ErrDataUnavailable) {
-		t.Fatalf("missing snapshot error=%v, want ErrDataUnavailable", err)
-	}
-}
-
-func TestConcurrentBusSnapshotReadersNeverObserveMixedRevision(t *testing.T) {
-	store, err := sqlite.Open(filepath.Join(t.TempDir(), "concurrent-snapshot.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	makeSnapshot := func(revision string) sqlite.BusSnapshot {
-		now := time.Now().UTC()
-		return sqlite.BusSnapshot{
-			AppID: "app", Revision: revision, Source: "zhihui-luojia",
-			Authoritative: true, Complete: true, ImportedAt: now, ValidUntil: now.Add(time.Hour),
-			Stops: []bus.Stop{{ID: "a", Name: "A"}, {ID: "b", Name: "B"}},
-			Routes: []bus.Route{{
-				ID: "route", Name: "A-B", Direction: revision,
-				OriginStopID: "a", DestinationID: "b",
-			}},
-		}
-	}
-	if err := store.ReplaceBusSnapshot(ctx, makeSnapshot("revision-a")); err != nil {
-		t.Fatal(err)
-	}
-
-	failures := make(chan error, 8)
-	var readers sync.WaitGroup
-	for reader := 0; reader < 4; reader++ {
-		readers.Add(1)
-		go func() {
-			defer readers.Done()
-			for attempt := 0; attempt < 30; attempt++ {
-				snapshot, err := store.ListRoutes(ctx, "app", bus.RouteListRequest{Limit: 10})
-				if err != nil {
-					failures <- err
-					return
-				}
-				if len(snapshot.Routes) != 1 ||
-					snapshot.Routes[0].SourceRevision != snapshot.Metadata.Revision ||
-					snapshot.Routes[0].Direction != snapshot.Metadata.Revision {
-					failures <- fmt.Errorf("mixed snapshot: %#v", snapshot)
-					return
-				}
-			}
-		}()
-	}
-	for attempt := 0; attempt < 20; attempt++ {
-		revision := "revision-a"
-		if attempt%2 == 1 {
-			revision = "revision-b"
-		}
-		if err := store.ReplaceBusSnapshot(ctx, makeSnapshot(revision)); err != nil {
-			t.Fatal(err)
-		}
-	}
-	readers.Wait()
-	close(failures)
-	for err := range failures {
-		t.Fatal(err)
 	}
 }
 

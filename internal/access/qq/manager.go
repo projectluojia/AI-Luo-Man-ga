@@ -108,7 +108,10 @@ func (m *Manager) Update(ctx context.Context, expectedGeneration uint64, replace
 	if err := m.replaceLocked(updated); err != nil {
 		return updated, RuntimeStatus{}, err
 	}
-	_, status, _ := m.Snapshot(ctx)
+	_, status, err := m.Snapshot(ctx)
+	if err != nil {
+		return updated, RuntimeStatus{}, err
+	}
 	return updated, status, nil
 }
 

@@ -14,6 +14,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	kernelruntime "github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime/runtimetest"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/capability"
 )
 
 const digest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
@@ -416,17 +417,17 @@ func TestLoaderHandlerRemainsBehindRegistryDispatcherGovernance(t *testing.T) {
 	policy := runtimetest.NewStaticAppPolicy()
 	policy.Enable("app", "lazy.capability")
 	if err := reg.RegisterService(registry.ServiceRegistration{
-		Spec: registry.ServiceSpec{ID: "lazy", Version: "1.0.0"},
+		Spec: capability.ServiceSpec{ID: "lazy", Version: "1.0.0"},
 		Capabilities: map[string]struct {
-			Spec    registry.CapabilitySpec
+			Spec    capability.CapabilitySpec
 			Handler registry.Handler
 		}{
 			"lazy.capability": {
-				Spec: registry.CapabilitySpec{
+				Spec: capability.CapabilitySpec{
 					ID: "lazy.capability", Version: "1.0.0", Name: "懒加载测试",
 					Description: "验证统一 Dispatcher 治理", ServiceID: "lazy",
 					InputSchemaJSON: `{"type":"object","properties":{"value":{"type":"integer"}},"required":["value"],"additionalProperties":false}`,
-					SideEffect:      registry.SideEffectRead,
+					SideEffect:      capability.SideEffectRead,
 				},
 				Handler: manager.Handler("runtime.capability"),
 			},
@@ -538,7 +539,7 @@ func TestLoaderMarksFatalRuntimeFailureAndRecoversExplicitly(t *testing.T) {
 }
 
 // TestManagerPinnedDerivesFromManifests 验证 Pinned() 由各清单的 Pin 声明推导：
-// 内置包与 installed 包统一，装配不再硬编码预热清单。
+// 不同包统一，装配不再硬编码预热清单。
 func TestManagerPinnedDerivesFromManifests(t *testing.T) {
 	host := &fakeHost{mode: loader.ModeHosted, runtime: &fakeRuntime{description: loader.Description{ID: "pinned.test", Version: "1.0.0", Mode: loader.ModeHosted}}}
 	manager, err := loader.New(host)

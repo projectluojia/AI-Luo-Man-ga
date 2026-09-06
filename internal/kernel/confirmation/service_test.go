@@ -20,6 +20,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime/runtimetest"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/capability"
 )
 
 // fakeClock 是测试用的确定性时钟。
@@ -626,7 +627,7 @@ func TestServiceRequestRejectsInvalidInputs(t *testing.T) {
 	// 只读副作用不需要确认，必须在请求边界拒绝（确认仅治理 write/external）。
 	if _, err := service.Request(ctx, "app", "echo", "run", "call-1", confirmation.RequestSpec{
 		CapabilityID: "campus.bus.notify", TargetType: confirmation.TargetTypeCapability,
-		TargetID: "campus.bus.notify", SideEffect: registry.SideEffectRead, IdempotencyKey: "operation-1",
+		TargetID: "campus.bus.notify", SideEffect: capability.SideEffectRead, IdempotencyKey: "operation-1",
 	}, nil, clock.current().Add(time.Hour)); !errors.Is(err, confirmation.ErrInvalidRequest) {
 		t.Fatalf("read side effect got %v, want ErrInvalidRequest", err)
 	}
@@ -646,16 +647,16 @@ func TestServiceRequestRejectsInvalidInputs(t *testing.T) {
 	}
 }
 
-func registerCapability(t *testing.T, reg *registry.Registry, spec registry.CapabilitySpec, handler registry.Handler) {
+func registerCapability(t *testing.T, reg *registry.Registry, spec capability.CapabilitySpec, handler registry.Handler) {
 	t.Helper()
 	if err := reg.RegisterService(registry.ServiceRegistration{
-		Spec: registry.ServiceSpec{
+		Spec: capability.ServiceSpec{
 			ID:                   spec.ServiceID,
 			Version:              "1.0.0",
 			RequestedPermissions: append([]string(nil), spec.RequiredPermissions...),
 		},
 		Capabilities: map[string]struct {
-			Spec    registry.CapabilitySpec
+			Spec    capability.CapabilitySpec
 			Handler registry.Handler
 		}{
 			spec.ID: {Spec: spec, Handler: handler},
@@ -693,12 +694,12 @@ func TestDispatcherExecutesApprovedSideEffectExactlyOnce(t *testing.T) {
 	policy := runtimetest.NewStaticAppPolicy()
 	policy.Enable("app", "external-capability")
 	executions := 0
-	registerCapability(t, reg, registry.CapabilitySpec{
+	registerCapability(t, reg, capability.CapabilitySpec{
 		ID:                   "external-capability",
 		Version:              "1.0.0",
 		ServiceID:            "service",
 		InputSchemaJSON:      `{"type":"object","properties":{"value":{"type":"integer"}},"additionalProperties":false}`,
-		SideEffect:           registry.SideEffectExternal,
+		SideEffect:           capability.SideEffectExternal,
 		RequiresConfirmation: true,
 	}, func(context.Context, contracts.RequestContext, json.RawMessage) (json.RawMessage, error) {
 		executions++
@@ -753,12 +754,12 @@ func TestDispatcherRejectsUnapprovedConfirmation(t *testing.T) {
 	reg := registry.New()
 	policy := runtimetest.NewStaticAppPolicy()
 	policy.Enable("app", "external-capability")
-	registerCapability(t, reg, registry.CapabilitySpec{
+	registerCapability(t, reg, capability.CapabilitySpec{
 		ID:                   "external-capability",
 		Version:              "1.0.0",
 		ServiceID:            "service",
 		InputSchemaJSON:      `{"type":"object","additionalProperties":false}`,
-		SideEffect:           registry.SideEffectExternal,
+		SideEffect:           capability.SideEffectExternal,
 		RequiresConfirmation: true,
 	}, func(context.Context, contracts.RequestContext, json.RawMessage) (json.RawMessage, error) {
 		t.Error("unapproved capability must never execute")

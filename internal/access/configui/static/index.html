@@ -25,28 +25,12 @@
       <section class="config-section model-section" aria-labelledby="model-title">
         <div class="section-heading">
           <div><span class="section-mark">MODEL</span><h2 id="model-title">模型连接</h2></div>
-          <p>AI珞通过兼容 OpenAI 的接口调用模型。API Key 只写入本机秘密文件，不会回显。</p>
+          <p>Core 只保存执行请求使用的模型标识；具体执行者及 Provider 配置由其包的 Deployment 管理。</p>
         </div>
         <div class="field-grid">
+          <label class="field"><span>App 标识</span><input id="app-id" required maxlength="128" pattern="[a-z0-9][a-z0-9._-]{0,127}" placeholder="例如 my-app" autocomplete="off"><small>当前 Deployment 使用的业务与权限边界。</small></label>
           <label class="field"><span>模型名称</span><input id="model" required maxlength="256" placeholder="例如 gpt-5.2" autocomplete="off"></label>
-          <label class="field"><span>API Base URL</span><input id="model-base-url" type="url" placeholder="留空使用提供方默认地址" autocomplete="off"></label>
-          <label class="field secret-field"><span>模型 API Key <i id="model-key-state">未配置</i></span><input id="model-api-key" type="password" maxlength="16384" placeholder="留空保留已有密钥" autocomplete="new-password"></label>
-          <label class="field"><span>单次请求超时（秒）</span><input id="request-timeout" type="number" min="0.1" max="120" step="0.1" required></label>
-        </div>
-      </section>
-
-      <section class="config-section provider-section" aria-labelledby="provider-title">
-        <div class="section-heading">
-          <div><span class="section-mark">GUARD</span><h2 id="provider-title">调用保护</h2></div>
-          <p>限制重试、请求频率和并发，避免故障时持续压垮模型提供方。</p>
-        </div>
-        <div class="metric-grid">
-          <label class="field"><span>就绪检查超时</span><input id="readiness-timeout" type="number" min="0.1" max="30" step="0.1" required><small>秒</small></label>
-          <label class="field"><span>最多重试</span><input id="max-retries" type="number" min="0" max="5" step="1" required><small>次</small></label>
-          <label class="field"><span>首次退避</span><input id="retry-base" type="number" min="0.01" max="30" step="0.01" required><small>秒</small></label>
-          <label class="field"><span>最大退避</span><input id="retry-max" type="number" min="0.01" max="30" step="0.01" required><small>秒</small></label>
-          <label class="field"><span>每分钟请求</span><input id="requests-per-minute" type="number" min="1" max="10000" step="1" required><small>次</small></label>
-          <label class="field"><span>最大并发</span><input id="max-concurrency" type="number" min="1" max="64" step="1" required><small>路</small></label>
+          <label class="field"><span>Executor 单次调用超时（秒）</span><input id="executor-timeout" type="number" min="0.1" max="120" step="0.1" required></label>
         </div>
       </section>
 
@@ -124,16 +108,16 @@
       <section class="config-section runtime-section" aria-labelledby="connections-title">
         <div class="section-heading">
           <div><span class="section-mark">CONNECTIONS</span><h2 id="connections-title">连接与进程监督</h2></div>
-          <p>QQ OneBot 连接参数，以及 Python Agent 进程的拨号与停止宽限。</p>
+          <p>QQ OneBot 连接参数，以及 isolated Runtime 进程的拨号与停止宽限。</p>
         </div>
         <div class="metric-grid">
           <label class="field"><span>QQ 拨号超时（秒）</span><input id="qq-dial-timeout" type="number" min="0.1" max="120" step="0.1" required></label>
           <label class="field"><span>QQ 重连延迟（秒）</span><input id="qq-reconnect-delay" type="number" min="0.1" max="600" step="0.1" required></label>
           <label class="field"><span>QQ Run 超时（秒）</span><input id="qq-run-timeout" type="number" min="1" max="3600" step="1" required></label>
           <label class="field"><span>QQ 管理器停止超时（秒）</span><input id="qq-manager-stop-timeout" type="number" min="1" max="120" step="1" required></label>
-          <label class="field"><span>Agent 拨号超时（秒）</span><input id="agent-dial-timeout" type="number" min="1" max="120" step="1" required></label>
-          <label class="field"><span>Agent 停止宽限（秒）</span><input id="agent-stop-grace" type="number" min="1" max="120" step="1" required></label>
-          <label class="field"><span>Agent 强杀宽限（秒）</span><input id="agent-terminate-grace" type="number" min="1" max="60" step="1" required></label>
+          <label class="field"><span>运行时拨号超时（秒）</span><input id="runtime-dial-timeout" type="number" min="1" max="120" step="1" required></label>
+          <label class="field"><span>运行时停止宽限（秒）</span><input id="runtime-stop-grace" type="number" min="1" max="120" step="1" required></label>
+          <label class="field"><span>运行时强杀宽限（秒）</span><input id="runtime-terminate-grace" type="number" min="1" max="60" step="1" required></label>
         </div>
       </section>
 

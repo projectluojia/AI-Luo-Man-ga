@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-// campusExtensions 是独立包仓库 ailuo-packages/campus-bus 三个 capability 的
+// campusExtensions 是 packages/campus-bus 三个 capability 的
 // 契约快照（packagefmt 输出的 extensions 段形状），用于驱动生成测试。
 // sdkgen 是中立包（不依赖内核 internal），故以静态快照而非实时契约驱动。
 const campusExtensions = `{

@@ -12,9 +12,9 @@ import (
 	"time"
 
 	kernelecho "github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/packstore"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/publicerror"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite"
-	"github.com/projectluojia/AI-Luo-Man-ga/pkg/bus"
 )
 
 func TestBackupAndRestorePreserveCompleteSnapshot(t *testing.T) {
@@ -27,22 +27,15 @@ func TestBackupAndRestorePreserveCompleteSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()
-	if err := store.ReplaceBusSnapshot(t.Context(), sqlite.BusSnapshot{
-		AppID: "campus-services", Revision: "backup-revision", Source: "authorized-adapter",
-		Authoritative: true, Complete: true, ImportedAt: now, ValidUntil: now.Add(time.Hour),
-		Stops: []bus.Stop{
-			{ID: "a", Name: "A"},
-			{ID: "b", Name: "B"},
-		},
-		Routes: []bus.Route{{
-			ID: "route", Name: "A-B", Direction: "outbound", OriginStopID: "a", DestinationID: "b",
-		}},
-		Journeys: []bus.Journey{{
-			TripID: "trip", RouteID: "route", RouteName: "A-B", Direction: "outbound",
-			OriginStopID: "a", OriginStopName: "A", DestinationStopID: "b", DestinationName: "B",
-			DepartureAt: now.Add(time.Minute), ArrivalAt: now.Add(2 * time.Minute),
-		}},
-	}); err != nil {
+	docs := store.PackageDocuments()
+	scope := packstore.Scope{AppID: "campus-services", Namespace: "campus/bus"}
+	snapshot := map[string][]packstore.Document{
+		"routes": {{ID: "route", Payload: []byte(`{"id":"route","name":"A-B","direction":"outbound","source_revision":"backup-revision"}`)}},
+	}
+	if err := docs.ReplaceSnapshot(t.Context(), scope, packstore.SnapshotMeta{
+		Revision: "backup-revision", Source: "authorized-adapter", Authoritative: true,
+		Complete: true, ImportedAt: now, ValidUntil: now.Add(time.Hour),
+	}, snapshot); err != nil {
 		t.Fatal(err)
 	}
 	historicalConfig, _, err := store.Ensure(t.Context(), validAppConfig("campus-services"))
@@ -99,9 +92,13 @@ func TestBackupAndRestorePreserveCompleteSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer restored.Close()
-	routes, err := restored.ListRoutes(t.Context(), "campus-services", bus.RouteListRequest{Limit: 10})
-	if err != nil || routes.Metadata.Revision != "backup-revision" || len(routes.Routes) != 1 {
-		t.Fatalf("恢复后的数据=%#v err=%v", routes, err)
+	restoredDocs := restored.PackageDocuments()
+	restoredListed, err := restoredDocs.List(t.Context(), scope, "routes", 10, "")
+	if err != nil || !restoredListed.MetaFound || restoredListed.Meta.Revision != "backup-revision" {
+		t.Fatalf("恢复后的快照元数据=%#v err=%v", restoredListed, err)
+	}
+	if len(restoredListed.Documents) != 1 || restoredListed.Documents[0].ID != "route" {
+		t.Fatalf("恢复后的数据=%#v", restoredListed.Documents)
 	}
 	restoredCurrent, err := restored.Current(t.Context(), "campus-services")
 	if err != nil || restoredCurrent.Revision != currentConfig.Revision {

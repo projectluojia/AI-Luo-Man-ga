@@ -24,6 +24,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/id"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/capability"
 )
 
 // 用户状态。
@@ -47,8 +48,6 @@ var (
 var (
 	appIDPattern    = id.AppID
 	stableIDPattern = id.StableMixed
-	platformPattern = id.StableLower
-	roleIDPattern   = id.StableLower
 )
 
 // User 是 Deployment 级内部用户。user_id 与任何外部平台标识都是不同的命名空间。
@@ -129,7 +128,7 @@ func ValidateUserID(userID string) error {
 }
 
 func ValidatePlatform(platform string) error {
-	if !platformPattern.MatchString(platform) || len(platform) > 128 {
+	if !capability.IsStableID(platform) {
 		return ErrInvalid
 	}
 	return nil
@@ -157,7 +156,7 @@ func ValidatePlatformUserID(value string) error {
 }
 
 func ValidateRoleID(roleID string) error {
-	if !roleIDPattern.MatchString(roleID) || len(roleID) > 128 {
+	if !capability.IsStableID(roleID) {
 		return ErrInvalid
 	}
 	return nil

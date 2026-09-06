@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packagecontract"
 )
 
 func TestProcessWatchContextCancelsWhenProcessExits(t *testing.T) {
@@ -52,39 +52,51 @@ func TestValidateProcessSpecRejectsUnsafeExecutionInputs(t *testing.T) {
 		t.Fatal(err)
 	}
 	workDir := t.TempDir()
-	base := packmgr.ProcessSpec{
+	base := packagecontract.ProcessSpec{
 		Path: executable, WorkDir: workDir, Address: "unix:" + filepath.Join(workDir, "runtime.sock"),
 	}
-	tests := []packmgr.ProcessSpec{
-		func() packmgr.ProcessSpec { value := base; value.Path = "relative"; return value }(),
-		func() packmgr.ProcessSpec { value := base; value.WorkDir = "relative"; return value }(),
-		func() packmgr.ProcessSpec { value := base; value.Address = "192.0.2.1:9000"; return value }(),
-		func() packmgr.ProcessSpec { value := base; value.Env = []string{"API_TOKEN=private"}; return value }(),
-		func() packmgr.ProcessSpec {
+	tests := []packagecontract.ProcessSpec{
+		func() packagecontract.ProcessSpec { value := base; value.Path = "relative"; return value }(),
+		func() packagecontract.ProcessSpec { value := base; value.WorkDir = "relative"; return value }(),
+		func() packagecontract.ProcessSpec { value := base; value.Address = "192.0.2.1:9000"; return value }(),
+		func() packagecontract.ProcessSpec {
+			value := base
+			value.Env = []string{"API_TOKEN=private"}
+			return value
+		}(),
+		func() packagecontract.ProcessSpec {
 			value := base
 			value.Env = []string{"LD_PRELOAD=/tmp/inject.so"}
 			return value
 		}(),
-		func() packmgr.ProcessSpec { value := base; value.Env = []string{"SAFE=1", "SAFE=2"}; return value }(),
-		func() packmgr.ProcessSpec { value := base; value.Args = []string{"bad\x00argument"}; return value }(),
-		func() packmgr.ProcessSpec {
+		func() packagecontract.ProcessSpec {
 			value := base
-			value.Limits = packmgr.ProcessLimits{MaxAddressBytes: 1 << 50}
+			value.Env = []string{"SAFE=1", "SAFE=2"}
 			return value
 		}(),
-		func() packmgr.ProcessSpec {
+		func() packagecontract.ProcessSpec {
 			value := base
-			value.Limits = packmgr.ProcessLimits{MaxCPUSeconds: 1 << 40}
+			value.Args = []string{"bad\x00argument"}
 			return value
 		}(),
-		func() packmgr.ProcessSpec {
+		func() packagecontract.ProcessSpec {
 			value := base
-			value.Limits = packmgr.ProcessLimits{MaxOpenFiles: 1 << 30}
+			value.Limits = packagecontract.ProcessLimits{MaxAddressBytes: 1 << 50}
 			return value
 		}(),
-		func() packmgr.ProcessSpec {
+		func() packagecontract.ProcessSpec {
 			value := base
-			value.Limits = packmgr.ProcessLimits{MaxFileBytes: 1 << 50}
+			value.Limits = packagecontract.ProcessLimits{MaxCPUSeconds: 1 << 40}
+			return value
+		}(),
+		func() packagecontract.ProcessSpec {
+			value := base
+			value.Limits = packagecontract.ProcessLimits{MaxOpenFiles: 1 << 30}
+			return value
+		}(),
+		func() packagecontract.ProcessSpec {
+			value := base
+			value.Limits = packagecontract.ProcessLimits{MaxFileBytes: 1 << 50}
 			return value
 		}(),
 	}
@@ -98,45 +110,42 @@ func TestValidateProcessSpecRejectsUnsafeExecutionInputs(t *testing.T) {
 func TestValidProcessLimits(t *testing.T) {
 	cases := []struct {
 		name   string
-		limits packmgr.ProcessLimits
+		limits packagecontract.ProcessLimits
 		want   bool
 	}{
-		{name: "zero means unlimited", limits: packmgr.ProcessLimits{}, want: true},
-		{name: "reasonable address", limits: packmgr.ProcessLimits{MaxAddressBytes: 1 << 30}, want: true},
-		{name: "excessive address", limits: packmgr.ProcessLimits{MaxAddressBytes: 1 << 50}, want: false},
-		{name: "reasonable cpu", limits: packmgr.ProcessLimits{MaxCPUSeconds: 3600}, want: true},
-		{name: "excessive cpu", limits: packmgr.ProcessLimits{MaxCPUSeconds: 1 << 40}, want: false},
-		{name: "reasonable files", limits: packmgr.ProcessLimits{MaxOpenFiles: 1024}, want: true},
-		{name: "excessive files", limits: packmgr.ProcessLimits{MaxOpenFiles: 1 << 30}, want: false},
-		{name: "reasonable file size", limits: packmgr.ProcessLimits{MaxFileBytes: 1 << 20}, want: true},
-		{name: "excessive file size", limits: packmgr.ProcessLimits{MaxFileBytes: 1 << 50}, want: false},
+		{name: "zero means unlimited", limits: packagecontract.ProcessLimits{}, want: true},
+		{name: "reasonable address", limits: packagecontract.ProcessLimits{MaxAddressBytes: 1 << 30}, want: true},
+		{name: "excessive address", limits: packagecontract.ProcessLimits{MaxAddressBytes: 1 << 50}, want: false},
+		{name: "reasonable cpu", limits: packagecontract.ProcessLimits{MaxCPUSeconds: 3600}, want: true},
+		{name: "excessive cpu", limits: packagecontract.ProcessLimits{MaxCPUSeconds: 1 << 40}, want: false},
+		{name: "reasonable files", limits: packagecontract.ProcessLimits{MaxOpenFiles: 1024}, want: true},
+		{name: "excessive files", limits: packagecontract.ProcessLimits{MaxOpenFiles: 1 << 30}, want: false},
+		{name: "reasonable file size", limits: packagecontract.ProcessLimits{MaxFileBytes: 1 << 20}, want: true},
+		{name: "excessive file size", limits: packagecontract.ProcessLimits{MaxFileBytes: 1 << 50}, want: false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := packmgr.ValidProcessLimits(tc.limits); got != tc.want {
-				t.Fatalf("packmgr.ValidProcessLimits(%+v) = %v, want %v", tc.limits, got, tc.want)
+			if got := packagecontract.ValidProcessLimits(tc.limits); got != tc.want {
+				t.Fatalf("packagecontract.ValidProcessLimits(%+v) = %v, want %v", tc.limits, got, tc.want)
 			}
 		})
 	}
 }
 
-func TestIsolatedProcessHostValidatesConfigurationAndMode(t *testing.T) {
+func TestProcessHostValidatesConfigurationAndMode(t *testing.T) {
 	t.Parallel()
-	resolve := func(context.Context, Manifest) (packmgr.ProcessSpec, error) { return packmgr.ProcessSpec{}, nil }
-	verify := func(context.Context, Manifest, packmgr.ProcessSpec) error { return nil }
-	for _, config := range []IsolatedProcessHostConfig{
+	resolve := func(context.Context, Manifest) (packagecontract.ProcessSpec, error) {
+		return packagecontract.ProcessSpec{}, nil
+	}
+	for _, config := range []ProcessHostConfig{
 		{},
-		{ResolveInstalled: resolve},
-		{VerifyInstalled: verify},
-		{ResolveInstalled: resolve, VerifyInstalled: verify, StopGrace: time.Millisecond},
+		{Resolve: resolve, StopGrace: time.Millisecond},
 	} {
-		if _, err := NewIsolatedProcessHost(config); err == nil {
+		if _, err := NewProcessHost(config); err == nil {
 			t.Fatalf("invalid config accepted: %#v", config)
 		}
 	}
-	host, err := NewIsolatedProcessHost(IsolatedProcessHostConfig{
-		ResolveInstalled: resolve, VerifyInstalled: verify,
-	})
+	host, err := NewProcessHost(ProcessHostConfig{Resolve: resolve})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +162,7 @@ func TestProcessReapStopsStubbornChild(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	process, err := StartProcess(context.Background(), packmgr.ProcessSpec{
+	process, err := StartProcess(context.Background(), packagecontract.ProcessSpec{
 		Path:    executable,
 		Args:    []string{"-test.run=TestReapHelperChild"},
 		Env:     append(os.Environ(), "AILUO_REAP_HELPER=1"),
@@ -175,6 +184,37 @@ func TestProcessReapStopsStubbornChild(t *testing.T) {
 	}
 	// Reap 已释放限额：重复释放安全。
 	process.Release()
+}
+
+func TestStartProcessDoesNotInheritCoreEnvironment(t *testing.T) {
+	t.Setenv("AILUO_PROCESS_HOST_INHERIT_SENTINEL", "must-not-reach-child")
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	process, err := StartProcess(context.Background(), packagecontract.ProcessSpec{
+		Path: executable, Args: []string{"-test.run=^TestProcessEnvironmentHelper$"}, WorkDir: t.TempDir(),
+	}, io.Discard, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-process.Done():
+	case <-time.After(3 * time.Second):
+		_ = process.Kill()
+		t.Fatal("environment helper did not exit")
+	}
+	if err := process.Err(); err != nil {
+		t.Fatalf("environment helper exited with error: %v", err)
+	}
+}
+
+// TestProcessEnvironmentHelper 由父测试进程启动，确认 Core 环境不会隐式进入
+// isolated 子进程。
+func TestProcessEnvironmentHelper(t *testing.T) {
+	if os.Getenv("AILUO_PROCESS_HOST_INHERIT_SENTINEL") != "" {
+		t.Fatal("Core environment was inherited")
+	}
 }
 
 // TestReapHelperChild 是 Reap 测试的辅助子进程：忽略中断信号并长时间驻留，

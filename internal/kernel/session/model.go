@@ -19,6 +19,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/id"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/capability"
 )
 
 const (
@@ -91,7 +92,6 @@ var (
 
 var (
 	stableIDPattern = id.StableMixed
-	platformPattern = id.StableLower
 	blobIDPattern   = id.StableMixedUncapped
 	mimeTypePattern = regexp.MustCompile(`^[A-Za-z0-9.+-]+/[A-Za-z0-9.+-]+$`)
 )
@@ -242,7 +242,7 @@ func ValidateSession(session Session) error {
 	}
 	bindings := make(map[string]struct{}, len(session.PlatformBindings))
 	for _, binding := range session.PlatformBindings {
-		if len(binding.Platform) > 64 || !utf8.ValidString(binding.Platform) || !platformPattern.MatchString(binding.Platform) ||
+		if len(binding.Platform) > 64 || !capability.IsStableID(binding.Platform) ||
 			!ValidPlatformMessageID(binding.PlatformID) || binding.PlatformID == "" || binding.BoundAt.IsZero() {
 			return ErrInvalidSession
 		}

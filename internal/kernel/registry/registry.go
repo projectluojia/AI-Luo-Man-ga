@@ -10,11 +10,12 @@ import (
 	"sync"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
-	"golang.org/x/mod/semver"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/id"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/capability"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packagecontract"
 )
 
 var (
@@ -27,13 +28,6 @@ var (
 	ErrPermissionDenied   = errors.New("required permission is not granted")
 )
 
-const (
-	SideEffectNone     = "none"
-	SideEffectRead     = "read"
-	SideEffectWrite    = "write"
-	SideEffectExternal = "external"
-)
-
 // 治理目标类型：Dispatcher 子请求与 Runtime Host 协议共用的闭式取值。
 const (
 	TargetTypeCapability = "capability"
@@ -42,60 +36,27 @@ const (
 
 type Handler func(context.Context, contracts.RequestContext, json.RawMessage) (json.RawMessage, error)
 
-type ToolSpec struct {
-	ID                   string   `json:"id"`
-	Version              string   `json:"version"`
-	Description          string   `json:"description"`
-	InputSchemaJSON      string   `json:"input_schema_json"`
-	SideEffect           string   `json:"side_effect"`
-	RequiresConfirmation bool     `json:"requires_confirmation"`
-	RequiredPermissions  []string `json:"required_permissions,omitempty"`
-}
-
-type CapabilitySpec struct {
-	ID                   string   `json:"id"`
-	Version              string   `json:"version"`
-	Name                 string   `json:"name"`
-	Description          string   `json:"description"`
-	ServiceID            string   `json:"service_id"`
-	InputSchemaJSON      string   `json:"input_schema_json"`
-	SideEffect           string   `json:"side_effect"`
-	RequiresConfirmation bool     `json:"requires_confirmation"`
-	RequiredPermissions  []string `json:"required_permissions,omitempty"`
-	// ToolID 声明该 Capability 直接执行的工具；Dispatcher 将其注入治理上下文的 ToolID，
-	// hosted 等运行时级 Handler 据此分发。空表示 Capability 自行处理分发。
-	ToolID string `json:"tool_id,omitempty"`
-}
-
-type ServiceSpec struct {
-	ID                   string   `json:"id"`
-	Version              string   `json:"version"`
-	Description          string   `json:"description"`
-	ToolDependencies     []string `json:"tool_dependencies,omitempty"`
-	RequestedPermissions []string `json:"requested_permissions,omitempty"`
-}
-
 type ToolRegistration struct {
-	Spec    ToolSpec
+	Spec    capability.ToolSpec
 	Handler Handler
 }
 
 type ServiceRegistration struct {
-	Spec         ServiceSpec
+	Spec         capability.ServiceSpec
 	Capabilities map[string]struct {
-		Spec    CapabilitySpec
+		Spec    capability.CapabilitySpec
 		Handler Handler
 	}
 }
 
 type registeredTool struct {
-	spec    ToolSpec
+	spec    capability.ToolSpec
 	handler Handler
 	schema  *jsonschema.Schema
 }
 
 type registeredCapability struct {
-	spec    CapabilitySpec
+	spec    capability.CapabilitySpec
 	handler Handler
 	schema  *jsonschema.Schema
 }
@@ -104,14 +65,14 @@ type registeredCapability struct {
 type Registry struct {
 	mu           sync.RWMutex
 	tools        map[string]registeredTool
-	services     map[string]ServiceSpec
+	services     map[string]capability.ServiceSpec
 	capabilities map[string]registeredCapability
 }
 
 func New() *Registry {
 	return &Registry{
 		tools:        make(map[string]registeredTool),
-		services:     make(map[string]ServiceSpec),
+		services:     make(map[string]capability.ServiceSpec),
 		capabilities: make(map[string]registeredCapability),
 	}
 }
@@ -139,7 +100,7 @@ func (r *Registry) RegisterBatch(tools []ToolRegistration, services []ServiceReg
 	}
 	preparedTools := make([]preparedTool, 0, len(tools))
 	toolIDs := make(map[string]struct{}, len(tools))
-	batchToolSpecs := make(map[string]ToolSpec, len(tools))
+	batchToolSpecs := make(map[string]capability.ToolSpec, len(tools))
 	for _, registration := range tools {
 		if err := validateToolSpec(registration.Spec, registration.Handler); err != nil {
 			return err
@@ -251,12 +212,7 @@ func (r *Registry) RegisterBatch(tools []ToolRegistration, services []ServiceReg
 	return nil
 }
 
-var (
-	stableIDPattern   = id.StableLower
-	permissionPattern = id.Permission
-)
-
-func validateToolSpec(spec ToolSpec, handler Handler) error {
+func validateToolSpec(spec capability.ToolSpec, handler Handler) error {
 	switch {
 	case !validStableID(spec.ID):
 		return fmt.Errorf("%w: invalid tool id %q", ErrInvalidSpec, spec.ID)
@@ -266,7 +222,7 @@ func validateToolSpec(spec ToolSpec, handler Handler) error {
 		return fmt.Errorf("%w: tool %q has no handler", ErrInvalidSpec, spec.ID)
 	case !validSideEffect(spec.SideEffect):
 		return fmt.Errorf("%w: tool %q has invalid side effect %q", ErrInvalidSpec, spec.ID, spec.SideEffect)
-	case spec.RequiresConfirmation && spec.SideEffect != SideEffectWrite && spec.SideEffect != SideEffectExternal:
+	case spec.RequiresConfirmation && spec.SideEffect != capability.SideEffectWrite && spec.SideEffect != capability.SideEffectExternal:
 		return fmt.Errorf("%w: tool %q requires confirmation without a write or external side effect", ErrInvalidSpec, spec.ID)
 	case !validPermissionList(spec.RequiredPermissions):
 		return fmt.Errorf("%w: tool %q has invalid required permissions", ErrInvalidSpec, spec.ID)
@@ -275,7 +231,7 @@ func validateToolSpec(spec ToolSpec, handler Handler) error {
 	}
 }
 
-func validateServiceSpec(spec ServiceSpec, capabilityCount int) error {
+func validateServiceSpec(spec capability.ServiceSpec, capabilityCount int) error {
 	switch {
 	case !validStableID(spec.ID):
 		return fmt.Errorf("%w: invalid service id %q", ErrInvalidSpec, spec.ID)
@@ -292,7 +248,7 @@ func validateServiceSpec(spec ServiceSpec, capabilityCount int) error {
 	}
 }
 
-func validateCapabilitySpec(service ServiceSpec, mapID string, spec CapabilitySpec, handler Handler) error {
+func validateCapabilitySpec(service capability.ServiceSpec, mapID string, spec capability.CapabilitySpec, handler Handler) error {
 	switch {
 	case mapID != spec.ID:
 		return fmt.Errorf("%w: capability map id %q does not match spec id %q", ErrInvalidSpec, mapID, spec.ID)
@@ -306,7 +262,7 @@ func validateCapabilitySpec(service ServiceSpec, mapID string, spec CapabilitySp
 		return fmt.Errorf("%w: capability %q has no handler", ErrInvalidSpec, spec.ID)
 	case !validSideEffect(spec.SideEffect):
 		return fmt.Errorf("%w: capability %q has invalid side effect %q", ErrInvalidSpec, spec.ID, spec.SideEffect)
-	case spec.RequiresConfirmation && spec.SideEffect != SideEffectWrite && spec.SideEffect != SideEffectExternal:
+	case spec.RequiresConfirmation && spec.SideEffect != capability.SideEffectWrite && spec.SideEffect != capability.SideEffectExternal:
 		return fmt.Errorf("%w: capability %q requires confirmation without a write or external side effect", ErrInvalidSpec, spec.ID)
 	case !validPermissionList(spec.RequiredPermissions):
 		return fmt.Errorf("%w: capability %q has invalid required permissions", ErrInvalidSpec, spec.ID)
@@ -320,16 +276,17 @@ func validateCapabilitySpec(service ServiceSpec, mapID string, spec CapabilitySp
 }
 
 func validStableID(value string) bool {
-	return stableIDPattern.MatchString(value)
+	return capability.IsStableID(value)
 }
 
 func validVersion(value string) bool {
-	return semver.IsValid("v" + value)
+	_, err := packagecontract.ParseVersion(value)
+	return err == nil
 }
 
 func validSideEffect(value string) bool {
 	switch value {
-	case SideEffectNone, SideEffectRead, SideEffectWrite, SideEffectExternal:
+	case capability.SideEffectNone, capability.SideEffectRead, capability.SideEffectWrite, capability.SideEffectExternal:
 		return true
 	default:
 		return false
@@ -353,7 +310,7 @@ func validIDList(values []string) bool {
 func validPermissionList(values []string) bool {
 	seen := make(map[string]struct{}, len(values))
 	for _, value := range values {
-		if !permissionPattern.MatchString(value) {
+		if !id.IsPermission(value) {
 			return false
 		}
 		if _, exists := seen[value]; exists {
@@ -393,29 +350,29 @@ func NarrowPermissions(granted, required []string) ([]string, error) {
 	return canonicalStrings(required), nil
 }
 
-func (r *Registry) ResolveCapability(id string) (CapabilitySpec, Handler, error) {
+func (r *Registry) ResolveCapability(id string) (capability.CapabilitySpec, Handler, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	capability, exists := r.capabilities[id]
+	registered, exists := r.capabilities[id]
 	if !exists {
-		return CapabilitySpec{}, nil, fmt.Errorf("%w: %q", ErrCapabilityNotFound, id)
+		return capability.CapabilitySpec{}, nil, fmt.Errorf("%w: %q", ErrCapabilityNotFound, id)
 	}
-	return cloneCapabilitySpec(capability.spec), capability.handler, nil
+	return cloneCapabilitySpec(registered.spec), registered.handler, nil
 }
 
-func (r *Registry) ResolveTool(serviceID, toolID string) (ToolSpec, Handler, error) {
+func (r *Registry) ResolveTool(serviceID, toolID string) (capability.ToolSpec, Handler, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	service, exists := r.services[serviceID]
 	if !exists {
-		return ToolSpec{}, nil, fmt.Errorf("%w: %q", ErrServiceNotFound, serviceID)
+		return capability.ToolSpec{}, nil, fmt.Errorf("%w: %q", ErrServiceNotFound, serviceID)
 	}
 	if !slices.Contains(service.ToolDependencies, toolID) {
-		return ToolSpec{}, nil, fmt.Errorf("%w: service %q does not declare tool %q", ErrToolNotFound, serviceID, toolID)
+		return capability.ToolSpec{}, nil, fmt.Errorf("%w: service %q does not declare tool %q", ErrToolNotFound, serviceID, toolID)
 	}
 	tool, exists := r.tools[toolID]
 	if !exists {
-		return ToolSpec{}, nil, fmt.Errorf("%w: %q", ErrToolNotFound, toolID)
+		return capability.ToolSpec{}, nil, fmt.Errorf("%w: %q", ErrToolNotFound, toolID)
 	}
 	return cloneToolSpec(tool.spec), tool.handler, nil
 }
@@ -444,10 +401,10 @@ func (r *Registry) ValidateToolInput(serviceID, toolID string, payload json.RawM
 	return validatePayload(tool.schema, payload)
 }
 
-func (r *Registry) Services() []ServiceSpec {
+func (r *Registry) Services() []capability.ServiceSpec {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	items := make([]ServiceSpec, 0, len(r.services))
+	items := make([]capability.ServiceSpec, 0, len(r.services))
 	for _, spec := range r.services {
 		items = append(items, cloneServiceSpec(spec))
 	}
@@ -455,10 +412,10 @@ func (r *Registry) Services() []ServiceSpec {
 	return items
 }
 
-func (r *Registry) Tools() []ToolSpec {
+func (r *Registry) Tools() []capability.ToolSpec {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	items := make([]ToolSpec, 0, len(r.tools))
+	items := make([]capability.ToolSpec, 0, len(r.tools))
 	for _, tool := range r.tools {
 		items = append(items, cloneToolSpec(tool.spec))
 	}
@@ -466,10 +423,10 @@ func (r *Registry) Tools() []ToolSpec {
 	return items
 }
 
-func (r *Registry) Capabilities() []CapabilitySpec {
+func (r *Registry) Capabilities() []capability.CapabilitySpec {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	items := make([]CapabilitySpec, 0, len(r.capabilities))
+	items := make([]capability.CapabilitySpec, 0, len(r.capabilities))
 	for _, capability := range r.capabilities {
 		items = append(items, cloneCapabilitySpec(capability.spec))
 	}
@@ -477,18 +434,18 @@ func (r *Registry) Capabilities() []CapabilitySpec {
 	return items
 }
 
-func cloneServiceSpec(spec ServiceSpec) ServiceSpec {
+func cloneServiceSpec(spec capability.ServiceSpec) capability.ServiceSpec {
 	spec.ToolDependencies = append([]string(nil), spec.ToolDependencies...)
 	spec.RequestedPermissions = append([]string(nil), spec.RequestedPermissions...)
 	return spec
 }
 
-func cloneToolSpec(spec ToolSpec) ToolSpec {
+func cloneToolSpec(spec capability.ToolSpec) capability.ToolSpec {
 	spec.RequiredPermissions = append([]string(nil), spec.RequiredPermissions...)
 	return spec
 }
 
-func cloneCapabilitySpec(spec CapabilitySpec) CapabilitySpec {
+func cloneCapabilitySpec(spec capability.CapabilitySpec) capability.CapabilitySpec {
 	spec.RequiredPermissions = append([]string(nil), spec.RequiredPermissions...)
 	return spec
 }

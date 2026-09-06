@@ -8,52 +8,26 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"log/slog"
-	"maps"
 	"net"
-	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"regexp"
-	"slices"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
 	runtimev1 "github.com/projectluojia/AI-Luo-Man-ga/gen/runtimev1"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/access"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/access/configui"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/access/ingress"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/access/qq"
-	qqsettings "github.com/projectluojia/AI-Luo-Man-ga/internal/access/qq/settings"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/access/web"
-	controlconfig "github.com/projectluojia/AI-Luo-Man-ga/internal/controlplane/config"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/appconfig"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/confirmation"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contextasm"
-	kernelecho "github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/executor"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/health"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/adapters/packagesource"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/app"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/identity"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/session"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/task"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/packagefmt"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/promptcatalog"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/agent"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus/demo"
-	promptservice "github.com/projectluojia/AI-Luo-Man-ga/internal/services/prompt"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/blob"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packagecontract"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packagefmt"
 	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
 	"github.com/projectluojia/AI-Luo-Man-ga/pkg/sdkgen"
-
 	"google.golang.org/grpc"
 )
 
@@ -132,12 +106,12 @@ func runMaintenanceCommand(arguments []string, output io.Writer) (bool, error) {
 		flags.SetOutput(io.Discard)
 		database := flags.String("database", "", "SQLite 数据库绝对路径")
 		userID := flags.String("user", "", "Deployment 级内部用户 user_id")
-		appID := flags.String("app", campus.AppID, "App 标识")
+		appID := flags.String("app", "", "App 标识（必填）")
 		platform := flags.String("platform", "", "外部平台标识")
 		space := flags.String("space", "", "外部平台空间标识")
 		platformUser := flags.String("platform-user", "", "外部平台用户标识")
-		if err := flags.Parse(arguments[1:]); err != nil || flags.NArg() != 0 || *database == "" || *userID == "" {
-			return true, fmt.Errorf("configuration error: identity-bind requires --database and --user")
+		if err := flags.Parse(arguments[1:]); err != nil || flags.NArg() != 0 || *database == "" || *userID == "" || *appID == "" {
+			return true, fmt.Errorf("configuration error: identity-bind requires --database, --user and --app")
 		}
 		if !filepath.IsAbs(*database) {
 			return true, fmt.Errorf("configuration error: identity-bind requires an absolute --database path")
@@ -164,11 +138,11 @@ func runMaintenanceCommand(arguments []string, output io.Writer) (bool, error) {
 		flags := flag.NewFlagSet("identity-unbind", flag.ContinueOnError)
 		flags.SetOutput(io.Discard)
 		database := flags.String("database", "", "SQLite 数据库绝对路径")
-		appID := flags.String("app", campus.AppID, "App 标识")
+		appID := flags.String("app", "", "App 标识（必填）")
 		platform := flags.String("platform", "", "外部平台标识")
 		space := flags.String("space", "", "外部平台空间标识")
 		platformUser := flags.String("platform-user", "", "外部平台用户标识")
-		if err := flags.Parse(arguments[1:]); err != nil || flags.NArg() != 0 || *database == "" || *platform == "" || *space == "" || *platformUser == "" {
+		if err := flags.Parse(arguments[1:]); err != nil || flags.NArg() != 0 || *database == "" || *appID == "" || *platform == "" || *space == "" || *platformUser == "" {
 			return true, fmt.Errorf("configuration error: identity-unbind requires --database, --platform, --space and --platform-user")
 		}
 		if !filepath.IsAbs(*database) {
@@ -192,17 +166,6 @@ func runMaintenanceCommand(arguments []string, output io.Writer) (bool, error) {
 	}
 }
 
-// defaultRuntimeRoot 返回用户级默认安装根目录（用户配置目录下 ailuo/runtime）。
-// 与 npm 的 node_modules、cargo 的 registry 同理：ailuo install 与内核启动共享
-// 同一默认位置，无需显式 --root；UserConfigDir 不可用（无 HOME 等）时返回空。
-func defaultRuntimeRoot() string {
-	base, err := os.UserConfigDir()
-	if err != nil {
-		return ""
-	}
-	return filepath.Join(base, "ailuo", "runtime")
-}
-
 // runPackageCommand 执行包管理 CLI：install 支持本地目录/tarball/GitHub
 // Release 源（owner/repo[@约束]），upgrade/uninstall/list/pack/publish 见各分支。
 func runPackageCommand(parent context.Context, arguments []string, output io.Writer) (bool, error) {
@@ -219,7 +182,7 @@ func runPackageCommand(parent context.Context, arguments []string, output io.Wri
 		*root = os.Getenv("AILUO_RUNTIME_INSTALL_ROOT")
 	}
 	if *root == "" {
-		*root = defaultRuntimeRoot()
+		*root = packmgr.DefaultInstallRoot()
 	}
 	if *root == "" && command != "pack" && command != "publish" && command != "sdk-go" && command != "sdk-py" && command != "sdk-ts" {
 		return true, fmt.Errorf("configuration error: %s requires --root 或 AILUO_RUNTIME_INSTALL_ROOT", command)
@@ -386,7 +349,7 @@ func runPackageCommand(parent context.Context, arguments []string, output io.Wri
 // componentModes 汇总包内组件的运行形态：单组件直接给出 mode，多组件按形态计数。
 // 包不是"一种模式"（每个组件各有 mode），打印 Components[0].Mode 会把混合包说成
 // 单一形态。
-func componentModes(manifest packmgr.Manifest) string {
+func componentModes(manifest packagecontract.Manifest) string {
 	if len(manifest.Components) == 1 {
 		return manifest.Components[0].Mode
 	}
@@ -395,7 +358,7 @@ func componentModes(manifest packmgr.Manifest) string {
 		counts[component.Mode]++
 	}
 	parts := make([]string, 0, len(counts))
-	for _, mode := range []string{packmgr.ModeHosted, packmgr.ModeIsolated} {
+	for _, mode := range []string{packagecontract.ModeHosted, packagecontract.ModeIsolated} {
 		if counts[mode] > 0 {
 			parts = append(parts, fmt.Sprintf("%s×%d", mode, counts[mode]))
 		}
@@ -419,44 +382,44 @@ func splitRegistryRef(source string) (owner, repo, constraint string, ok bool) {
 // resolveSource 解析源包目录：优先 ailuo.toml（显式声明，含宿主函数/存储），
 // 无则从源码自动提取清单并构建（作者零声明，纯计算包）。清单声明 [build] 时
 // 先执行构建再返回（pack/publish 共用，构建失败即报错，不打包残缺工件）。
-func resolveSource(ctx context.Context, sourceDir, version string) (manifest packmgr.Manifest, manifestBytes []byte, err error) {
+func resolveSource(ctx context.Context, sourceDir, version string) (manifest packagecontract.Manifest, manifestBytes []byte, err error) {
 	path := packagefmt.SourcePath(sourceDir)
 	_, statErr := os.Stat(path)
 	if errors.Is(statErr, fs.ErrNotExist) {
 		if version == "" {
-			return packmgr.Manifest{}, nil, fmt.Errorf("配置错误：零声明包必须通过 --version 提供版本")
+			return packagecontract.Manifest{}, nil, fmt.Errorf("配置错误：零声明包必须通过 --version 提供版本")
 		}
 		// 无 ailuo.toml：从源码自动提取并构建（作者零声明）。
 		capabilities, buildTool, extractErr := packagefmt.AutoExtract(ctx, sourceDir)
 		if extractErr != nil {
-			return packmgr.Manifest{}, nil, extractErr
+			return packagecontract.Manifest{}, nil, extractErr
 		}
 		absolute, absErr := filepath.Abs(sourceDir)
 		if absErr != nil {
-			return packmgr.Manifest{}, nil, absErr
+			return packagecontract.Manifest{}, nil, absErr
 		}
 		manifest, manifestBytes, err = packagefmt.ManifestFromCapabilities(filepath.Base(absolute), version, capabilities)
 		if err != nil {
-			return packmgr.Manifest{}, nil, err
+			return packagecontract.Manifest{}, nil, err
 		}
 		if err := packagefmt.Build(ctx, sourceDir, manifest, packagefmt.BuildSpec{Tool: buildTool}); err != nil {
-			return packmgr.Manifest{}, nil, err
+			return packagecontract.Manifest{}, nil, err
 		}
-		if err := packagefmt.VerifyHostedProtocol(ctx, sourceDir, manifest); err != nil {
-			return packmgr.Manifest{}, nil, err
+		if err := packagesource.VerifyHostedProtocol(ctx, sourceDir, manifest); err != nil {
+			return packagecontract.Manifest{}, nil, err
 		}
 		return manifest, manifestBytes, nil
 	}
 	if statErr != nil {
-		return packmgr.Manifest{}, nil, fmt.Errorf("读取源清单失败: %w", statErr)
+		return packagecontract.Manifest{}, nil, fmt.Errorf("读取源清单失败: %w", statErr)
 	}
 	manifest, manifestBytes, build, err := packagefmt.Parse(path)
 	if err != nil {
-		return packmgr.Manifest{}, nil, err
+		return packagecontract.Manifest{}, nil, err
 	}
 	if build != nil {
 		if err := packagefmt.Build(ctx, sourceDir, manifest, *build); err != nil {
-			return packmgr.Manifest{}, nil, err
+			return packagecontract.Manifest{}, nil, err
 		}
 	}
 	return manifest, manifestBytes, nil
@@ -537,7 +500,7 @@ func runRuntimeHostCommand(arguments []string, output io.Writer) (bool, error) {
 	if !filepath.IsAbs(*installRoot) || filepath.Clean(*installRoot) != *installRoot {
 		return true, fmt.Errorf("configuration error: --install-root must be a clean absolute path")
 	}
-	if !packmgr.IsLocalRuntimeAddress(*address) {
+	if !packagecontract.IsLocalRuntimeAddress(*address) {
 		return true, fmt.Errorf("configuration error: --address must be loopback or an absolute unix socket")
 	}
 	return true, serveRuntimeHost(*installRoot, *address, output)
@@ -552,7 +515,7 @@ func serveRuntimeHost(installRoot, address string, output io.Writer) error {
 		observe.StringAttr("install_root", installRoot),
 		observe.StringAttr("address", address),
 	)
-	catalog, err := loader.NewCatalog(installRoot)
+	catalog, err := packagesource.NewCatalog(installRoot)
 	if err != nil {
 		return err
 	}
@@ -618,816 +581,5 @@ func listenRuntimeHost(address string) (net.Listener, error) {
 }
 
 func run() error {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-	baseConfig, err := loadConfig()
-	if err != nil {
-		return err
-	}
-	if _, err := observe.Configure(observe.Config{
-		Service:        "ailuo-kernel",
-		Environment:    baseConfig.environment,
-		Level:          baseConfig.logLevel,
-		Format:         baseConfig.logFormat,
-		AddSource:      baseConfig.logSource,
-		MaxValueLength: baseConfig.logMaxValueLength,
-		Writer:         os.Stdout,
-	}); err != nil {
-		return err
-	}
-	ctx = observe.With(ctx, observe.Component("kernel"))
-	manager, err := controlconfig.NewService(baseConfig.localConfigRoot)
-	if err != nil {
-		return fmt.Errorf("open deployment configuration: %w", err)
-	}
-	select {
-	case <-manager.Changes():
-	default:
-	}
-	configServer, err := configui.NewServer(manager)
-	if err != nil {
-		return err
-	}
-	configServerErrors := make(chan error, 1)
-	go func() {
-		observe.Info(ctx, "本机配置控制台开始监听", observe.StringAttr("address", baseConfig.configUIAddress))
-		configServerErrors <- configServer.Run(ctx, baseConfig.configUIAddress)
-	}()
-	for {
-		resolved, err := manager.WaitReady(ctx)
-		if err != nil {
-			return nil
-		}
-		current, err := applyLocalConfig(baseConfig, resolved)
-		if err != nil {
-			manager.SetRuntime("failed", "配置文件无法安全读取，请重新保存", resolved.Settings.Revision)
-			if err := waitForConfigurationChange(ctx, manager, configServerErrors); err != nil {
-				return err
-			}
-			continue
-		}
-		manager.SetRuntime("starting", "正在启动内核与接入服务", resolved.Settings.Revision)
-		coreContext, cancelCore := context.WithCancel(ctx)
-		coreErrors := make(chan error, 1)
-		go func() { coreErrors <- runCore(coreContext, cancelCore, current, manager) }()
-		select {
-		case <-ctx.Done():
-			cancelCore()
-			return <-coreErrors
-		case err := <-configServerErrors:
-			cancelCore()
-			<-coreErrors
-			return err
-		case <-manager.Changes():
-			manager.SetRuntime("restarting", "正在重启内核以应用新配置", manager.Snapshot().Settings.Revision)
-			cancelCore()
-			if err := <-coreErrors; err != nil && !errors.Is(err, context.Canceled) {
-				observe.Error(ctx, "上一配置内核关闭时发生错误", err)
-			}
-		case err := <-coreErrors:
-			if ctx.Err() != nil {
-				return nil
-			}
-			observe.Error(ctx, "内核启动或运行失败，配置控制台继续可用", err)
-			manager.SetRuntime("failed", "启动失败，请检查配置后重新保存", resolved.Settings.Revision)
-			if err := waitForConfigurationChange(ctx, manager, configServerErrors); err != nil {
-				return err
-			}
-		}
-	}
-}
-
-func waitForConfigurationChange(ctx context.Context, manager *controlconfig.Service, serverErrors <-chan error) error {
-	select {
-	case <-ctx.Done():
-		return nil
-	case err := <-serverErrors:
-		return err
-	case <-manager.Changes():
-		return nil
-	}
-}
-
-func runCore(ctx context.Context, stop context.CancelFunc, config config, localConfig *controlconfig.Service) (resultErr error) {
-	observe.Info(ctx, "正在启动AI珞（爱珞）内核",
-		observe.StringAttr("http_address", config.httpAddress),
-		observe.StringAttr("agent_address", config.agentAddress),
-		observe.StringAttr("model", config.model),
-	)
-	if config.databasePath != ":memory:" {
-		if err := os.MkdirAll(filepath.Dir(config.databasePath), 0o750); err != nil {
-			return fmt.Errorf("create database directory: %w", err)
-		}
-	}
-	store, err := sqlite.Open(config.databasePath)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		resultErr = errors.Join(resultErr, store.Close())
-	}()
-	observe.Info(ctx, "统一数据库已经就绪")
-	// 会话正文与附件 Blob 存储：与数据库同目录的 blobs 子目录。
-	// 上下文装配经 session.Service 统一读取内联与 Blob 模式的消息正文。
-	blobStore, err := blob.Open(filepath.Join(filepath.Dir(config.databasePath), "blobs"), session.MaxMessageContentBytes)
-	if err != nil {
-		return fmt.Errorf("open blob storage: %w", err)
-	}
-	defer func() {
-		resultErr = errors.Join(resultErr, blobStore.Close())
-	}()
-	sessionService, err := session.NewService(store, blobStore)
-	if err != nil {
-		return fmt.Errorf("create session service: %w", err)
-	}
-	if config.loadDemoData {
-		if err := demo.LoadBusData(ctx, store, time.Now()); err != nil {
-			return fmt.Errorf("load demo bus data: %w", err)
-		}
-		observe.Warn(ctx, "已载入非权威校巴演示数据",
-			observe.BoolAttr("authoritative", false),
-			observe.StringAttr("source", "demo-fixture-not-zhihui-luojia"),
-		)
-	}
-
-	reg := registry.New()
-	app, created, err := store.Ensure(ctx, appconfig.Config{
-		AppID: campus.AppID, Enabled: true, Model: config.model,
-		SystemPrompt:    config.baseSystemPrompt,
-		ChannelPrompts:  config.channelPrompts,
-		Timezone:        config.agentRun.Timezone,
-		MaxSteps:        config.agentRun.MaxSteps,
-		MaxToolCalls:    config.agentRun.MaxToolCalls,
-		MaxInputTokens:  config.agentRun.MaxInputTokens,
-		MaxOutputTokens: config.agentRun.MaxOutputTokens,
-		MaxTotalTokens:  config.agentRun.MaxTotalTokens,
-		MaxOutputBytes:  config.agentRun.MaxOutputBytes,
-		ProviderTimeout: config.modelRequestTimeout,
-		EnabledCapabilities: []string{
-			campus.BusStopSearchCapabilityID,
-			campus.BusRouteListCapabilityID,
-			campus.BusJourneySearchCapabilityID,
-			agent.CapabilityID,
-			agent.StatusCapabilityID,
-			promptservice.PreferenceGetID,
-			promptservice.PreferenceSetID,
-			promptservice.PreferenceResetID,
-		},
-	})
-	if err != nil {
-		return fmt.Errorf("ensure campus App config: %w", err)
-	}
-	if !created {
-		// 既有部署升级：把 V2 人格/渠道提示与 prompt 偏好 Capability 补齐到当前配置。
-		// CompareAndSwap 在内容未变化时直接返回原修订，不会反复增加 generation。
-		replacement := app
-		replacement.Model = config.model
-		replacement.ProviderTimeout = config.modelRequestTimeout
-		replacement.Timezone = config.agentRun.Timezone
-		replacement.MaxSteps = config.agentRun.MaxSteps
-		replacement.MaxToolCalls = config.agentRun.MaxToolCalls
-		replacement.MaxInputTokens = config.agentRun.MaxInputTokens
-		replacement.MaxOutputTokens = config.agentRun.MaxOutputTokens
-		replacement.MaxTotalTokens = config.agentRun.MaxTotalTokens
-		replacement.MaxOutputBytes = config.agentRun.MaxOutputBytes
-		replacement.SystemPrompt = config.baseSystemPrompt
-		replacement.ChannelPrompts = config.channelPrompts
-		replacement.EnabledCapabilities = ensurePromptCapabilities(app.EnabledCapabilities)
-		app, err = store.CompareAndSwap(ctx, app.Generation, replacement)
-		if err != nil {
-			return fmt.Errorf("migrate campus App prompt configuration: %w", err)
-		}
-	}
-	observe.Info(ctx, "校园 App 持久配置已经就绪",
-		observe.StringAttr("app_id", app.AppID),
-		observe.StringAttr("config_revision", app.Revision),
-		observe.Int64Attr("config_generation", int64(app.Generation)),
-		observe.BoolAttr("created", created),
-	)
-	policy, err := appconfig.NewPersistentPolicy(store)
-	if err != nil {
-		return err
-	}
-	promptService := promptservice.NewService(config.promptCatalog, store)
-	if err := promptservice.Register(reg, promptService); err != nil {
-		return fmt.Errorf("register prompt Service: %w", err)
-	}
-	// 确认与副作用治理：持久确认服务注入 Dispatcher，凡声明 write/external 副作用
-	// 的 Capability 在未获批准前 fail-closed（缺确认标识或验证失败一律拒绝执行）。
-	confirmations := confirmation.NewService(store, confirmation.Config{})
-	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{
-		MaxCallDepth:         config.orchestration.MaxCallDepth,
-		IdempotencyStore:     store,
-		ConfirmationVerifier: confirmations,
-	})
-	// 统一 Loader：所有运行模式共享一个 Manager，清单在注册时按 Verify 精确绑定
-	// 到唯一宿主。内置 agent（isolated 进程）与 installed 包（hosted/isolated）
-	// 同池管理；campus.bus 是安装目录包（声明宿主函数 → 进程内 WasmHost 装载）。
-	workDir, err := filepath.Abs(".")
-	if err != nil {
-		return fmt.Errorf("resolve agent working directory: %w", err)
-	}
-	agentHost, err := agent.NewHost(agent.Config{
-		Resolve: func(context.Context) (agent.Spec, error) {
-			return agent.Spec{
-				PythonPath: config.pythonPath,
-				WorkDir:    workDir,
-				Address:    config.agentAddress,
-				Env:        agentEnvironment(config),
-				Limits:     packmgr.ProcessLimits{},
-			}, nil
-		},
-		Spawn:          config.manageAgent,
-		Model:          app.Model,
-		Stdout:         os.Stdout,
-		Stderr:         os.Stderr,
-		DialTimeout:    secondsDuration(config.agentProcess.DialTimeoutSeconds),
-		StopGrace:      secondsDuration(config.agentProcess.StopGraceSeconds),
-		TerminateGrace: secondsDuration(config.agentProcess.TerminateGraceSeconds),
-	})
-	if err != nil {
-		return fmt.Errorf("create built-in agent runtime: %w", err)
-	}
-	// 宿主函数集：当前只有 campus 的存储投影（内核特权，供安装目录 hosted 包声明）。
-	hostFunctions := campus.HostedFunctions(store)
-	installedHosts, installedRecords, _, err := configureInstalledRuntimes(ctx, config, hostFunctions)
-	if err != nil {
-		return err
-	}
-	hosts := make([]loader.Host, 0, 1+len(installedHosts))
-	hosts = append(hosts, agentHost)
-	hosts = append(hosts, installedHosts...)
-	runtimeLoader, err := loader.New(hosts...)
-	if err != nil {
-		return fmt.Errorf("create runtime loader: %w", err)
-	}
-	defer func() {
-		shutdownContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		resultErr = errors.Join(resultErr, runtimeLoader.Shutdown(shutdownContext))
-	}()
-	// 内置 agent 以安装清单形式经统一 RegisterInstalled 路径注册（agent 记录只
-	// 携带运行时清单，其 Service agent.run 依赖 Orchestrator，在内核装配完成后
-	// 单独注册）；campus.bus 与其余 installed 包随后注册。
-	if err := loader.RegisterInstalled(ctx, runtimeLoader, reg, []loader.InstalledRecord{agent.Record(agentHost)}); err != nil {
-		return fmt.Errorf("register built-in packages: %w", err)
-	}
-	if len(installedRecords) > 0 {
-		if err := loader.RegisterInstalled(ctx, runtimeLoader, reg, installedRecords); err != nil {
-			return fmt.Errorf("register installed runtimes: %w", err)
-		}
-	}
-	// campus.bus 是核心业务包（App 配置启用的 Capability 均由其导出）：安装目录
-	// 缺失 bus 组件即拒绝就绪（fail-closed），给出可行动错误。只比包 ID 不够——
-	// 包内可能只装上了别的组件，那时 Capability 一个也没注册，却会判定为就绪。
-	campusInstalled := false
-	for _, record := range installedRecords {
-		if record.PackageID == campus.ServiceID && record.ComponentID == campus.BusComponentID {
-			campusInstalled = true
-			break
-		}
-	}
-	if !campusInstalled {
-		return fmt.Errorf("campus.bus 未安装：请先安装其 .tgz 发布物或 owner/repo[@version] 发布包")
-	}
-	// 预热全部声明 pin 的运行时（内置 agent 与 installed pin）：编译/启动
-	// 失败则内核拒绝就绪（fail-closed）。预热清单由各清单声明推导，不再硬编码。
-	pinnedRuntimes := runtimeLoader.Pinned()
-	if err := runtimeLoader.Warmup(ctx, pinnedRuntimes, min(len(pinnedRuntimes), 4)); err != nil {
-		return fmt.Errorf("warm pinned runtimes: %w", err)
-	}
-	// 内核按执行者契约使用 AI 执行者：Manager 按清单角色解析本 Deployment
-	// 唯一执行者运行时并返回租约。任何实现 executor 契约的运行时（LLM 智能体、
-	// 规划器、其他语言实现）都可充当该角色，内核不依赖具体实现或语言。
-	executorLease, err := runtimeLoader.Executor(ctx)
-	if err != nil {
-		return fmt.Errorf("resolve AI executor runtime: %w", err)
-	}
-	// 租约在函数返回时先于 runtimeLoader.Shutdown 释放（defer 逆序）。
-	defer executorLease.Release()
-	executorRuntime := executorLease.Runtime()
-	clientProvider, ok := executorRuntime.(executor.ClientProvider)
-	if !ok {
-		return fmt.Errorf("executor runtime does not expose an executor client")
-	}
-	executorClient := clientProvider.Client()
-	if config.manageAgent {
-		// 受监督进程异常退出 → 内核 fail-closed 停止（连接模式不拥有进程）。
-		if lifecycle, ok := executorRuntime.(executor.ProcessLifecycle); ok {
-			go func() {
-				<-lifecycle.Done()
-				if processErr := lifecycle.Err(); processErr != nil && ctx.Err() == nil {
-					observe.Error(ctx, "AI 执行者进程异常退出", processErr)
-					stop()
-				}
-			}()
-		}
-	}
-	observe.Info(ctx, "内置 AI 执行者已经就绪",
-		observe.StringAttr("runtime_id", executorLease.ID()),
-		observe.StringAttr("address", config.agentAddress),
-		observe.BoolAttr("managed_process", config.manageAgent),
-	)
-
-	orchestrator := kernelecho.NewOrchestrator(executorClient, reg, dispatcher, policy, store, kernelecho.Config{
-		AppID:           campus.AppID,
-		AppConfigSource: store,
-		Context:         sessionService,
-		ContextBudget: contextasm.Budget{
-			MaxMessages:    config.contextAssembly.MaxMessages,
-			MaxCharsPerMsg: config.contextAssembly.MaxCharsPerMsg,
-			MaxTotalChars:  config.contextAssembly.MaxTotalChars,
-			MaxPromptBytes: config.contextAssembly.MaxPromptBytes,
-		},
-		Prompts:        promptServiceRenderer{promptService},
-		RunTimeout:     secondsDuration(config.orchestration.RunTimeoutSeconds),
-		MaxRunAttempts: config.orchestration.MaxRunAttempts,
-		QueueCapacity:  config.orchestration.QueueCapacity,
-		MaxChildRuns:   int(config.agentRun.MaxChildRuns),
-	})
-	if err := agent.Register(reg, orchestrator); err != nil {
-		return fmt.Errorf("register governed Subagent service: %w", err)
-	}
-	observe.Info(ctx, "校园服务与受治理子 Run Capability 注册完成",
-		observe.IntAttr("service_count", len(reg.Services())),
-		observe.IntAttr("tool_count", len(reg.Tools())),
-		observe.IntAttr("capability_count", len(reg.Capabilities())),
-	)
-	// 后台任务调度器：持久任务状态机以 SQLite 为唯一事实源；首个消费者是
-	// 确认过期清扫（governance.confirmation.expiry），清扫链由任务自续，启动播种一轮。
-	taskTypes := task.NewTypeRegistry()
-	taskScheduler := task.NewScheduler(store, taskTypes, task.Config{})
-	confirmationSweepInterval := secondsDuration(config.governance.ConfirmationSweepSeconds)
-	if err := registerGovernanceTaskTypes(taskTypes, confirmations, taskScheduler, confirmationSweepInterval); err != nil {
-		return fmt.Errorf("register governance task types: %w", err)
-	}
-	if err := taskScheduler.Start(ctx); err != nil {
-		return fmt.Errorf("start background task scheduler: %w", err)
-	}
-	defer func() {
-		shutdownContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		resultErr = errors.Join(resultErr, taskScheduler.Shutdown(shutdownContext))
-	}()
-	if err := seedConfirmationSweep(ctx, taskScheduler, campus.AppID, confirmationSweepInterval); err != nil {
-		return fmt.Errorf("seed confirmation sweep: %w", err)
-	}
-	observe.Info(ctx, "后台任务调度器与确认过期清扫已就绪",
-		observe.StringAttr("app_id", campus.AppID),
-		observe.StringAttr("sweep_type", confirmationSweepType),
-		observe.Int64Attr("sweep_interval_ms", confirmationSweepInterval.Milliseconds()),
-	)
-	echoEvents := access.NewEventHub()
-	runScheduler := kernelecho.NewScheduler(ctx, orchestrator, store, echoEvents, campus.AppID,
-		kernelecho.WithScheduler(config.scheduler.Workers, time.Duration(config.scheduler.PollMs)*time.Millisecond, config.scheduler.BatchSize))
-	defer func() {
-		shutdownContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		resultErr = errors.Join(resultErr, runScheduler.Shutdown(shutdownContext))
-	}()
-	if _, err := runScheduler.Recover(ctx); err != nil {
-		return fmt.Errorf("recover durable runs: %w", err)
-	}
-	readiness := health.Combined{store, health.ExecutorAppChecker{Client: executorClient, Source: store, AppID: campus.AppID}}
-	// 平台接入统一入口：标准消息 → 身份解析 → 会话/消息入库 → Echo。
-	// Web 登录边界尚未接入时聊天创建入口返回 401，不降级为匿名用户。
-	identities := identity.NewService(store)
-	platformHub, err := access.NewHub(campus.AppID, store, identities)
-	if err != nil {
-		return fmt.Errorf("configure platform access hub: %w", err)
-	}
-	qqProvisioner, err := qq.NewProvisioner(identities)
-	if err != nil {
-		return fmt.Errorf("configure QQ identity provisioner: %w", err)
-	}
-	qqManager, err := qq.NewManager(store, func(settings qqsettings.Settings, connectionChange func(bool)) (qq.Runner, error) {
-		return qq.New(qq.Config{
-			AppID: settings.AppID, WSURL: settings.WSURL, Token: config.qqToken, BotQQID: settings.BotQQID,
-			AllowedGroupIDs: settings.AllowedGroupIDs, AllowedPrivateUserIDs: settings.AllowedPrivateUserIDs,
-			QuickReplies: config.qqQuickReplies, PokeReplies: config.qqPokeReplies,
-			Provisioner: qqProvisioner, Scheduler: runScheduler, OnConnectionChange: connectionChange,
-			DialTimeout:    secondsDuration(config.qqConnection.DialTimeoutSeconds),
-			ReconnectDelay: secondsDuration(config.qqConnection.ReconnectDelaySeconds),
-			RunTimeout:     secondsDuration(config.qqConnection.RunTimeoutSeconds),
-		}, platformHub, echoEvents, orchestrator, store)
-	}, secondsDuration(config.qqConnection.ManagerStopTimeoutSeconds))
-	if err != nil {
-		return fmt.Errorf("configure QQ access manager: %w", err)
-	}
-	webAccess := web.NewServer(orchestrator, store, readiness, reg, policy, campus.AppID, platformHub, runScheduler, echoEvents,
-		web.WithDispatcher(dispatcher))
-	// 平台事件入口独立挂载：/api/v1/ingress/{platform} 由平台适配器规范化事件驱动，
-	// 其余路径全部交给 Web Access（健康检查、Echo/SSE、演示页面）。
-	ingressServer := ingress.NewServer(campus.AppID, platformHub, orchestrator, runScheduler)
-	if err := qqManager.Start(ctx, qqsettings.Settings{
-		AppID: campus.AppID, Enabled: config.qqEnabled, WSURL: config.qqWSURL, BotQQID: config.qqBotID,
-		AllowedGroupIDs: config.qqAllowedGroupIDs, AllowedPrivateUserIDs: config.qqAllowedPrivateIDs,
-	}); err != nil {
-		return fmt.Errorf("start QQ access manager: %w", err)
-	}
-	qqDesired := qqsettings.Settings{
-		AppID: campus.AppID, Enabled: config.qqEnabled, WSURL: config.qqWSURL, BotQQID: config.qqBotID,
-		AllowedGroupIDs: config.qqAllowedGroupIDs, AllowedPrivateUserIDs: config.qqAllowedPrivateIDs,
-	}
-	qqCurrent, _, err := qqManager.Snapshot(ctx)
-	if err != nil {
-		return fmt.Errorf("read QQ access configuration: %w", err)
-	}
-	if !qqsettings.EqualContent(qqCurrent, qqDesired) {
-		if _, _, err := qqManager.Update(ctx, qqCurrent.Generation, qqDesired); err != nil {
-			return fmt.Errorf("apply QQ access configuration: %w", err)
-		}
-	}
-	defer func() {
-		shutdownContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		resultErr = errors.Join(resultErr, qqManager.Shutdown(shutdownContext))
-	}()
-	qqCurrent, qqStatus, _ := qqManager.Snapshot(ctx)
-	observe.Info(ctx, "QQ Access 管理器已就绪",
-		observe.BoolAttr("enabled", qqCurrent.Enabled),
-		observe.BoolAttr("running", qqStatus.Running),
-		observe.IntAttr("allowed_group_count", len(qqCurrent.AllowedGroupIDs)),
-		observe.IntAttr("allowed_private_user_count", len(qqCurrent.AllowedPrivateUserIDs)),
-	)
-	outer := http.NewServeMux()
-	outer.Handle("/api/v1/ingress/", ingressServer.Handler())
-	outer.Handle("/", webAccess.Handler())
-	server := &http.Server{
-		Addr:              config.httpAddress,
-		Handler:           outer,
-		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       15 * time.Second,
-		IdleTimeout:       60 * time.Second,
-		MaxHeaderBytes:    1 << 20,
-	}
-	serverErrors := make(chan error, 1)
-	go func() {
-		observe.Info(ctx, "Web Access 开始监听",
-			observe.StringAttr("address", config.httpAddress),
-		)
-		serverErrors <- server.ListenAndServe()
-	}()
-	localConfig.SetRuntime("ready", "内核与接入服务正在运行", localConfig.Snapshot().Settings.Revision)
-	select {
-	case <-ctx.Done():
-		observe.Info(ctx, "收到停止信号，正在关闭服务")
-		shutdownContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		webAccess.StopAccepting()
-		ingressServer.StopAccepting()
-		admissionDone := make(chan error, 2)
-		go func() { admissionDone <- webAccess.WaitAdmissions(shutdownContext) }()
-		go func() { admissionDone <- ingressServer.WaitAdmissions(shutdownContext) }()
-		admissionErr := errors.Join(<-admissionDone, <-admissionDone)
-		httpErr := server.Shutdown(shutdownContext)
-		if err := errors.Join(admissionErr, httpErr); err != nil {
-			return fmt.Errorf("graceful shutdown: %w", err)
-		}
-		observe.Info(context.Background(), "AI珞（爱珞）服务已经安全关闭")
-		return nil
-	case err := <-serverErrors:
-		if err == http.ErrServerClosed {
-			return nil
-		}
-		return err
-	}
-}
-
-type config struct {
-	httpAddress         string
-	configUIAddress     string
-	localConfigRoot     string
-	agentAddress        string
-	pythonPath          string
-	databasePath        string
-	model               string
-	modelBaseURL        string
-	modelAPIKeyFile     string
-	modelRequestTimeout time.Duration
-	modelReadyTimeout   time.Duration
-	modelMaxRetries     int
-	modelRetryBase      time.Duration
-	modelRetryMax       time.Duration
-	modelRequestsMinute int
-	modelMaxConcurrency int
-	manageAgent         bool
-	loadDemoData        bool
-	environment         string
-	logLevel            slog.Level
-	logFormat           string
-	logSource           bool
-	logMaxValueLength   int
-	runtimeInstallRoot  string
-	runtimeHostAddress  string
-	qqWSURL             string
-	qqEnabled           bool
-	qqToken             string
-	qqBotID             string
-	qqAllowedGroupIDs   []string
-	qqAllowedPrivateIDs []string
-	qqQuickReplies      []qq.QuickReply
-	qqPokeReplies       []string
-	promptCatalog       promptcatalog.Catalog
-	baseSystemPrompt    string
-	channelPrompts      map[string]string
-	agentRun            controlconfig.AgentRunSettings
-	orchestration       controlconfig.OrchestrationSettings
-	contextAssembly     controlconfig.ContextAssemblySettings
-	scheduler           controlconfig.SchedulerSettings
-	qqConnection        controlconfig.QQConnectionSettings
-	agentProcess        controlconfig.AgentProcessSettings
-	governance          controlconfig.GovernanceSettings
-}
-
-func loadConfig() (config, error) {
-	manageAgent, err := envBool("AILUO_MANAGE_AGENT", true)
-	if err != nil {
-		return config{}, err
-	}
-	loadDemoData, err := envBool("AILUO_LOAD_DEMO_DATA", false)
-	if err != nil {
-		return config{}, err
-	}
-	logSource, err := envBool("AILUO_LOG_SOURCE", false)
-	if err != nil {
-		return config{}, err
-	}
-	if logSource {
-		return config{}, fmt.Errorf("configuration error: AILUO_LOG_SOURCE must be false because filesystem paths are not allowed in logs")
-	}
-	logLevel, err := observe.ParseLevel(envOr("AILUO_LOG_LEVEL", "info"))
-	if err != nil {
-		return config{}, err
-	}
-	logMaxValueLength, err := envInt("AILUO_LOG_MAX_VALUE_LENGTH", 4096)
-	if err != nil {
-		return config{}, err
-	}
-	// 安装根目录：显式 AILUO_RUNTIME_INSTALL_ROOT 优先；未设置时回退用户级
-	// 默认目录（ailuo install 与内核共享同一默认位置）。默认目录尚未创建
-	// （未安装任何包）时视为未配置：内核跳过安装目录装载，由 campus 核心
-	// 包缺失的 fail-closed 检查给出可行动安装指引。
-	runtimeInstallRoot := os.Getenv("AILUO_RUNTIME_INSTALL_ROOT")
-	if runtimeInstallRoot == "" {
-		if def := defaultRuntimeRoot(); def != "" {
-			if _, err := os.Stat(def); err == nil {
-				runtimeInstallRoot = def
-			}
-		}
-	}
-	result := config{
-		httpAddress:        envOr("AILUO_HTTP_ADDRESS", "127.0.0.1:8080"),
-		configUIAddress:    envOr("AILUO_CONFIG_UI_ADDRESS", configui.DefaultAddress),
-		localConfigRoot:    envOr("AILUO_CONFIG_DIR", "var"),
-		agentAddress:       envOr("AILUO_AGENT_ADDRESS", "127.0.0.1:50051"),
-		pythonPath:         envOr("AILUO_PYTHON", agent.DefaultPythonPath(".")),
-		databasePath:       envOr("AILUO_DATABASE_PATH", "var/ailuo.db"),
-		manageAgent:        manageAgent,
-		loadDemoData:       loadDemoData,
-		environment:        envOr("AILUO_ENVIRONMENT", "development"),
-		logLevel:           logLevel,
-		logFormat:          envOr("AILUO_LOG_FORMAT", "console"),
-		logSource:          logSource,
-		logMaxValueLength:  logMaxValueLength,
-		runtimeInstallRoot: runtimeInstallRoot,
-		runtimeHostAddress: os.Getenv("AILUO_RUNTIME_HOST_ADDRESS"),
-	}
-	// Agent 进程规格要求绝对 Python 路径（Spawn 模式校验）；默认值与用户配置
-	// 都可能为相对路径，统一在装配前解析为绝对路径。
-	absolutePython, err := filepath.Abs(result.pythonPath)
-	if err != nil {
-		return config{}, fmt.Errorf("configuration error: resolve python path: %w", err)
-	}
-	result.pythonPath = absolutePython
-	if !packmgr.IsLocalRuntimeAddress(result.configUIAddress) {
-		return config{}, fmt.Errorf("configuration error: AILUO_CONFIG_UI_ADDRESS must be loopback")
-	}
-	if result.loadDemoData && (strings.EqualFold(result.environment, "production") || strings.EqualFold(result.environment, "prod")) {
-		return config{}, fmt.Errorf("configuration error: AILUO_LOAD_DEMO_DATA must be false in production")
-	}
-	if result.runtimeInstallRoot != "" &&
-		(!filepath.IsAbs(result.runtimeInstallRoot) || filepath.Clean(result.runtimeInstallRoot) != result.runtimeInstallRoot) {
-		return config{}, fmt.Errorf("configuration error: AILUO_RUNTIME_INSTALL_ROOT must be a clean absolute path")
-	}
-	return result, nil
-}
-
-func applyLocalConfig(base config, resolved controlconfig.Resolved) (config, error) {
-	settings := resolved.Settings
-	base.model = settings.Model
-	base.modelBaseURL = settings.ModelBaseURL
-	base.modelAPIKeyFile = resolved.ModelAPIKeyFile
-	base.modelRequestTimeout = time.Duration(settings.ModelRequestTimeoutSeconds * float64(time.Second))
-	base.modelReadyTimeout = time.Duration(settings.ModelReadinessTimeoutSeconds * float64(time.Second))
-	base.modelMaxRetries = settings.ModelMaxRetries
-	base.modelRetryBase = time.Duration(settings.ModelRetryBaseSeconds * float64(time.Second))
-	base.modelRetryMax = time.Duration(settings.ModelRetryMaxSeconds * float64(time.Second))
-	base.modelRequestsMinute = settings.ModelRequestsPerMinute
-	base.modelMaxConcurrency = settings.ModelMaxConcurrency
-	base.qqWSURL = settings.QQWSURL
-	base.qqEnabled = settings.QQEnabled
-	base.qqBotID = settings.QQBotID
-	base.qqAllowedGroupIDs = slices.Clone(settings.QQAllowedGroupIDs)
-	base.qqAllowedPrivateIDs = slices.Clone(settings.QQAllowedPrivateUserIDs)
-	base.qqQuickReplies = make([]qq.QuickReply, 0, len(settings.QQQuickReplies))
-	for _, rule := range settings.QQQuickReplies {
-		base.qqQuickReplies = append(base.qqQuickReplies, qq.QuickReply{Trigger: rule.Trigger, Reply: rule.Reply})
-	}
-	base.qqPokeReplies = append([]string{}, settings.QQPokeReplies...)
-	base.promptCatalog = settings.PromptCatalog.Clone()
-	base.baseSystemPrompt = settings.BaseSystemPrompt
-	base.channelPrompts = maps.Clone(settings.ChannelPrompts)
-	base.agentRun = settings.AgentRun
-	base.orchestration = settings.Orchestration
-	base.contextAssembly = settings.ContextAssembly
-	base.scheduler = settings.Scheduler
-	base.qqConnection = settings.QQConnection
-	base.agentProcess = settings.AgentProcess
-	base.governance = settings.Governance
-	base.qqToken = ""
-	if resolved.QQWSTokenFile != "" {
-		content, err := os.ReadFile(resolved.QQWSTokenFile)
-		if err != nil || len(content) > controlconfig.MaxQQTokenBytes {
-			return config{}, errors.New("QQ secret file is unavailable")
-		}
-		base.qqToken = strings.TrimSpace(string(content))
-	}
-	return base, nil
-}
-
-func agentEnvironment(config config) []string {
-	return []string{
-		"AILUO_ENVIRONMENT=" + config.environment,
-		"AILUO_MODEL_API_KEY_FILE=" + config.modelAPIKeyFile,
-		"AILUO_MODEL_BASE_URL=" + config.modelBaseURL,
-		"AILUO_MODEL_TIMEOUT_SECONDS=" + strconv.FormatFloat(config.modelRequestTimeout.Seconds(), 'f', -1, 64),
-		"AILUO_MODEL_READINESS_TIMEOUT_SECONDS=" + strconv.FormatFloat(config.modelReadyTimeout.Seconds(), 'f', -1, 64),
-		"AILUO_MODEL_MAX_RETRIES=" + strconv.Itoa(config.modelMaxRetries),
-		"AILUO_MODEL_RETRY_BASE_SECONDS=" + strconv.FormatFloat(config.modelRetryBase.Seconds(), 'f', -1, 64),
-		"AILUO_MODEL_RETRY_MAX_SECONDS=" + strconv.FormatFloat(config.modelRetryMax.Seconds(), 'f', -1, 64),
-		"AILUO_MODEL_REQUESTS_PER_MINUTE=" + strconv.Itoa(config.modelRequestsMinute),
-		"AILUO_MODEL_MAX_CONCURRENCY=" + strconv.Itoa(config.modelMaxConcurrency),
-	}
-}
-
-// configureInstalledRuntimes 发现安装目录中的 installed 包，返回加入统一 Loader
-// 的宿主、待注册记录与安装目录 catalog。安装目录未配置时返回空切片（统一
-// Loader 只装配内置 agent）；配置了安装目录但没有 hosted 宿主地址时 fail-closed。
-// hosted 包按是否声明 host_functions 分流：有声明 → 进程内 WasmHost（宿主函数
-// 是内核特权，跨进程无法投影），无声明 → 外部 GRPCHost。pin 运行时由各清单
-// 声明，预热清单由 runtimeLoader.Pinned() 统一推导。
-func configureInstalledRuntimes(ctx context.Context, cfg config, hostFunctions []loader.HostedFunction) (hosts []loader.Host, records []loader.InstalledRecord, catalog *loader.Catalog, err error) {
-	if cfg.runtimeInstallRoot == "" {
-		return nil, nil, nil, nil
-	}
-	catalog, err = loader.NewCatalog(cfg.runtimeInstallRoot)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("create installed runtime catalog: %w", err)
-	}
-	records, err = catalog.Discover(ctx)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("discover installed runtimes: %w", err)
-	}
-	if len(records) == 0 {
-		observe.Info(ctx, "运行时安装目录校验完成",
-			observe.IntAttr("runtime_count", 0),
-		)
-		return nil, nil, catalog, nil
-	}
-	hostedWithFunctions := 0
-	hostedWithoutFunctions := 0
-	isolatedCount := 0
-	pinnedCount := 0
-	for _, record := range records {
-		switch record.Runtime.Mode {
-		case loader.ModeHosted:
-			if len(record.Runtime.HostFunctions) > 0 {
-				hostedWithFunctions++
-			} else {
-				hostedWithoutFunctions++
-			}
-		case loader.ModeIsolated:
-			isolatedCount++
-		default:
-			return nil, nil, nil, loader.ErrUnsupportedMode
-		}
-		if record.Runtime.Pin {
-			pinnedCount++
-		}
-	}
-	hosts = make([]loader.Host, 0, 3)
-	if hostedWithFunctions > 0 {
-		// 声明宿主函数的 hosted 包只能在内核进程内执行（宿主函数是内核特权）。
-		host, hostErr := loader.NewWasmHost(loader.WasmHostConfig{
-			ReadArtifact:         catalog.ReadArtifact,
-			HostFunctions:        hostFunctions,
-			RequireHostFunctions: true,
-		})
-		if hostErr != nil {
-			return nil, nil, nil, fmt.Errorf("configure in-kernel hosted runtime boundary: %w", hostErr)
-		}
-		hosts = append(hosts, host)
-	}
-	if hostedWithoutFunctions > 0 {
-		if cfg.runtimeHostAddress == "" {
-			return nil, nil, nil, fmt.Errorf("configuration error: AILUO_RUNTIME_HOST_ADDRESS is required for installed hosted runtimes without host functions")
-		}
-		host, hostErr := loader.NewGRPCHost(loader.GRPCHostConfig{
-			Mode: loader.ModeHosted, Address: cfg.runtimeHostAddress,
-			VerifyInstalled: catalog.VerifyRuntime,
-			DialTimeout:     10 * time.Second,
-			MaxRuntimes:     hostedWithoutFunctions,
-			MaxConcurrent:   64,
-		})
-		if hostErr != nil {
-			return nil, nil, nil, fmt.Errorf("configure hosted runtime boundary: %w", hostErr)
-		}
-		hosts = append(hosts, host)
-	}
-	if isolatedCount > 0 {
-		host, hostErr := loader.NewIsolatedProcessHost(loader.IsolatedProcessHostConfig{
-			ResolveInstalled: catalog.ResolveProcess,
-			VerifyInstalled:  catalog.VerifyProcess,
-			DialTimeout:      10 * time.Second,
-			StopGrace:        5 * time.Second,
-			TerminateGrace:   2 * time.Second,
-		})
-		if hostErr != nil {
-			return nil, nil, nil, fmt.Errorf("configure isolated runtime boundary: %w", hostErr)
-		}
-		hosts = append(hosts, host)
-	}
-	observe.Info(ctx, "已安装运行时发现完成",
-		observe.IntAttr("runtime_count", len(records)),
-		observe.IntAttr("hosted_with_host_functions", hostedWithFunctions),
-		observe.IntAttr("hosted_without_host_functions", hostedWithoutFunctions),
-		observe.IntAttr("isolated_count", isolatedCount),
-		observe.IntAttr("pinned_count", pinnedCount),
-	)
-	return hosts, records, catalog, nil
-}
-
-func envOr(name, fallback string) string {
-	if value := os.Getenv(name); value != "" {
-		return value
-	}
-	return fallback
-}
-
-func envBool(name string, fallback bool) (bool, error) {
-	value := os.Getenv(name)
-	if value == "" {
-		return fallback, nil
-	}
-	parsed, err := strconv.ParseBool(value)
-	if err != nil {
-		return false, fmt.Errorf("configuration error: %s must be a boolean: %w", name, err)
-	}
-	return parsed, nil
-}
-
-func envInt(name string, fallback int) (int, error) {
-	value := os.Getenv(name)
-	if value == "" {
-		return fallback, nil
-	}
-	parsed, err := strconv.Atoi(value)
-	if err != nil || parsed <= 0 {
-		return 0, fmt.Errorf("配置错误：%s 必须是正整数", name)
-	}
-	return parsed, nil
-}
-
-type promptServiceRenderer struct {
-	service *promptservice.Service
-}
-
-func (r promptServiceRenderer) RenderSystemPrompt(ctx context.Context, request kernelecho.PromptRenderRequest) (string, error) {
-	return r.service.RenderSystemPrompt(ctx, promptservice.RenderRequest{
-		AppID:            request.AppID,
-		UserID:           request.UserID,
-		BaseSystemPrompt: request.BaseSystemPrompt,
-		Channel:          request.Channel,
-		ChannelPrompts:   request.ChannelPrompts,
-	})
-}
-
-func ensurePromptCapabilities(existing []string) []string {
-	result := slices.Clone(existing)
-	for _, capabilityID := range []string{
-		agent.StatusCapabilityID,
-		promptservice.PreferenceGetID,
-		promptservice.PreferenceSetID,
-		promptservice.PreferenceResetID,
-	} {
-		if !slices.Contains(result, capabilityID) {
-			result = append(result, capabilityID)
-		}
-	}
-	return result
-}
-
-func secondsDuration(value float64) time.Duration {
-	return time.Duration(value * float64(time.Second))
+	return app.Run()
 }

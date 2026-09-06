@@ -15,7 +15,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/id"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
-	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packagecontract"
 )
 
 const (
@@ -23,7 +23,7 @@ const (
 	ModeIsolated = "isolated"
 
 	// RoleCapability 是能力提供者角色：经 Dispatcher 被内核调用（Invoke），
-	// 实现 Invoker 接口。installed 包与内置 campus 均属此类。
+	// 实现 Invoker 接口；具体包不属于 Loader 的固定知识。
 	RoleCapability = "capability"
 	// RoleExecutor 是 AI 执行者角色：驱动受治理 Run 会话、反向消费内核投影的
 	// 能力，实现 internal/kernel/executor 契约，不注册任何被调能力。
@@ -64,7 +64,23 @@ type Manifest struct {
 	IdleTTL      time.Duration
 	// HostFunctions 是包声明的宿主函数依赖（仅 hosted 有意义）：guest 只可
 	// 调用清单声明且宿主提供的宿主函数，未声明调用在加载期被拒绝。
-	HostFunctions []packmgr.HostedFunctionDecl
+	HostFunctions []packagecontract.HostedFunctionDecl
+	// Storage 是包声明的持久化契约（namespace 等）。声明了存储宿主函数的包
+	// 必须同时声明该段；存储函数的 namespace 绑定取自此处，guest 不可选择。
+	Storage *packagecontract.Storage
+}
+
+// Equal 比较运行时清单的完整身份与装载声明。
+func (m Manifest) Equal(other Manifest) bool {
+	return m.ID == other.ID && m.Version == other.Version && m.Mode == other.Mode &&
+		m.Role == other.Role && m.LockedDigest == other.LockedDigest && m.Pin == other.Pin &&
+		m.IdleTTL == other.IdleTTL && packagecontract.EqualHostedFunctions(m.HostFunctions, other.HostFunctions) &&
+		packagecontract.EqualStorage(m.Storage, other.Storage)
+}
+
+// SameIdentity 只比较装载工件所需的运行时身份字段。
+func (m Manifest) SameIdentity(other Manifest) bool {
+	return m.ID == other.ID && m.Version == other.Version && m.Mode == other.Mode
 }
 
 type Description struct {
@@ -91,7 +107,7 @@ type Invoker interface {
 
 // Host 只从已经安装并锁定的本地单元加载实现；校验失败时不得执行 Load。
 // Mode 声明宿主服务的运行模式；一个宿主只服务一种模式，同一模式允许多个宿主
-// （如内置 campus 的进程内 WasmHost 与 installed hosted 的 GRPCHost），
+// （如进程内 WasmHost 与外部 hosted 的 GRPCHost），
 // 清单在注册时按 Verify 精确绑定到唯一宿主。
 type Host interface {
 	Mode() string
@@ -149,7 +165,7 @@ type packageGroup struct {
 }
 
 // New 构造统一 Loader：一个 Manager 持有全部运行模式的宿主，模式内部允许
-// 多个宿主（内置包与 installed 包共享同一 Loader，不再按包分叉多个 Manager）。
+// 多个宿主（不同包共享同一 Loader，不按包分叉 Manager）。
 func New(hosts ...Host) (*Manager, error) {
 	if len(hosts) == 0 {
 		return nil, ErrUnavailable
@@ -226,7 +242,7 @@ func (m *Manager) selectHost(ctx context.Context, manifest Manifest) (Host, erro
 }
 
 // Pinned 返回全部已注册且清单声明 Pin=true 的运行时标识（排序），供启动预热
-// 使用。pin 由各清单声明（内置包与 installed 包统一），内核装配不再按包
+// 使用。pin 由各清单声明，内核装配不再按包
 // 硬编码预热清单。
 func (m *Manager) Pinned() []string {
 	m.mu.RLock()
@@ -254,7 +270,7 @@ func (m *Manager) RegisterBatch(ctx context.Context, manifests []Manifest) error
 	bound := make(map[string]Host, len(manifests))
 	seen := make(map[string]struct{}, len(manifests))
 	for _, manifest := range manifests {
-		if err := validateManifest(manifest); err != nil {
+		if err := ValidateManifest(manifest); err != nil {
 			return err
 		}
 		host, err := m.selectHost(ctx, manifest)
@@ -310,7 +326,7 @@ func (m *Manager) rollbackRegistered(manifests []Manifest) error {
 		}
 		item.mu.Lock()
 		safe := item.state == StateRegistered && item.runtime == nil && item.inFlight == 0 &&
-			sameRuntimeManifest(item.manifest, manifest)
+			item.manifest.Equal(manifest)
 		item.mu.Unlock()
 		if !safe {
 			return ErrUnavailable
@@ -845,18 +861,23 @@ func (m *Manager) resolve(id string) (*entry, error) {
 	return item, nil
 }
 
-func validateManifest(manifest Manifest) error {
+func ValidateManifest(manifest Manifest) error {
 	if !stableIDPattern.MatchString(manifest.ID) ||
 		(manifest.Mode != ModeHosted && manifest.Mode != ModeIsolated) ||
 		(manifest.Role != RoleCapability && manifest.Role != RoleExecutor) ||
 		manifest.IdleTTL < 0 || len(manifest.LockedDigest) != 64 {
 		return ErrInvalidManifest
 	}
-	if _, err := packmgr.ParseVersion(manifest.Version); err != nil {
+	if _, err := packagecontract.ParseVersion(manifest.Version); err != nil {
 		return ErrInvalidManifest
 	}
-	if err := packmgr.ValidateHostedFunctions(manifest.HostFunctions); err != nil {
+	if err := packagecontract.ValidateHostedFunctions(manifest.HostFunctions); err != nil {
 		return ErrInvalidManifest
+	}
+	if manifest.Storage != nil {
+		if err := packagecontract.ValidateStorage(*manifest.Storage); err != nil {
+			return ErrInvalidManifest
+		}
 	}
 	digest, err := hex.DecodeString(manifest.LockedDigest)
 	if err != nil || len(digest) != 32 {

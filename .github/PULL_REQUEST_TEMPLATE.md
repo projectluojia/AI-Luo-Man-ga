@@ -16,9 +16,9 @@
 - [ ] `go test ./...` 通过
 - [ ] `go test -race ./...` 通过
 - [ ] `go vet ./...` 通过
-- [ ] Python 单元测试通过（`uv run --project agent --locked python -m unittest discover -s agent -p "test_*.py" -v`）
+- [ ] Agent 包仓库已通过其 Python 单元测试（由包仓库 CI 提供证据）
 - [ ] Runtime Host 集成测试通过（`go test -tags=integration ./internal/kernel/loader -v -timeout=30s`）
-- [ ] e2e 集成测试通过（`go test -tags=integration ./e2e -v -timeout=30s`）
+- [ ] executor 包 e2e 集成测试通过（`AILUO_EXECUTOR_PACKAGE_DIR="$PWD/packages/agent" go test -tags=integration ./e2e -v -timeout=30s`）
 
 ## 安全与治理
 

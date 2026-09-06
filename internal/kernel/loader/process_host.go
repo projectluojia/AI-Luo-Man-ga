@@ -14,8 +14,12 @@ import (
 	"time"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/executor"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
-	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packagecontract"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 var (
@@ -25,27 +29,45 @@ var (
 
 var environmentNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,127}$`)
 
-type IsolatedProcessHostConfig struct {
-	ResolveInstalled func(context.Context, Manifest) (packmgr.ProcessSpec, error)
-	VerifyInstalled  func(context.Context, Manifest, packmgr.ProcessSpec) error
-	DialTimeout      time.Duration
-	StopGrace        time.Duration
-	TerminateGrace   time.Duration
+// ProcessHostConfig 是统一进程宿主的配置：服务 mode=isolated 的全部组件，
+// role 决定装载后的协议面——capability 走 runtime_host 协议（Invoker），
+// executor 走 executor.v1 协议（ClientProvider + ProcessLifecycle）。内核不
+// 感知任何具体运行时的名字：进程规格由组合根聚合的包源按清单解析。
+type ProcessHostConfig struct {
+	// Resolve 按清单返回锁定的进程规格；解析失败的清单即该宿主不服务的
+	// 清单（Verify fail-closed）。
+	Resolve func(context.Context, Manifest) (packagecontract.ProcessSpec, error)
+	// Verify 对解析出的规格做来源侧二次校验（例如安装锁），可空。
+	Verify func(context.Context, Manifest, packagecontract.ProcessSpec) error
+	// Spawn 是没有 SpawnFor 时的默认进程管理策略。
+	Spawn bool
+	// SpawnFor 按运行角色决定是否由本宿主启动进程；未设置时使用 Spawn。
+	// capability 角色若返回 false 会在加载期 fail-closed。
+	SpawnFor func(Manifest) bool
+	// Stdout/Stderr 决定子进程输出去向；nil 默认丢弃。
+	Stdout io.Writer
+	Stderr io.Writer
+
+	DialTimeout    time.Duration
+	StopGrace      time.Duration
+	TerminateGrace time.Duration
 }
 
-// IsolatedProcessHost 只启动安装解析器返回且再次通过锁校验的本机进程。
-type IsolatedProcessHost struct {
-	config IsolatedProcessHostConfig
+// ProcessHost 是统一进程宿主：按清单解析并监督本机子进程，role 决定协议面。
+type ProcessHost struct {
+	config ProcessHostConfig
 
 	mu       sync.Mutex
-	runtimes map[*processRuntime]struct{}
+	runtimes map[hostManagedRuntime]struct{}
 	closed   bool
 }
 
-func NewIsolatedProcessHost(config IsolatedProcessHostConfig) (*IsolatedProcessHost, error) {
-	if config.ResolveInstalled == nil || config.VerifyInstalled == nil {
+func NewProcessHost(config ProcessHostConfig) (*ProcessHost, error) {
+	if config.Resolve == nil {
 		return nil, ErrInvalidManifest
 	}
+	// capability 组件必须由本宿主启动（Load 期校验）；executor 组件允许连接
+	// 外部已启动进程（Spawn=false）。
 	if config.DialTimeout == 0 {
 		config.DialTimeout = 10 * time.Second
 	}
@@ -59,29 +81,29 @@ func NewIsolatedProcessHost(config IsolatedProcessHostConfig) (*IsolatedProcessH
 		!ValidProcessDuration(config.TerminateGrace) {
 		return nil, ErrInvalidManifest
 	}
-	return &IsolatedProcessHost{
-		config: config, runtimes: make(map[*processRuntime]struct{}),
+	if config.Stdout == nil {
+		config.Stdout = io.Discard
+	}
+	if config.Stderr == nil {
+		config.Stderr = io.Discard
+	}
+	return &ProcessHost{
+		config: config, runtimes: make(map[hostManagedRuntime]struct{}),
 	}, nil
 }
 
 // Mode 返回宿主服务的运行模式：isolated 本机进程。
-func (h *IsolatedProcessHost) Mode() string { return ModeIsolated }
+func (h *ProcessHost) Mode() string { return ModeIsolated }
 
-func (h *IsolatedProcessHost) Verify(ctx context.Context, manifest Manifest) error {
+func (h *ProcessHost) Verify(ctx context.Context, manifest Manifest) error {
 	if manifest.Mode != ModeIsolated {
 		return ErrUnsupportedMode
 	}
-	spec, err := h.config.ResolveInstalled(ctx, manifest)
-	if err != nil {
-		return errors.Join(ErrUnavailable, err)
-	}
-	if err := validateProcessSpec(spec); err != nil {
-		return err
-	}
-	return h.config.VerifyInstalled(ctx, manifest, spec)
+	_, err := h.resolveVerifiedSpec(ctx, manifest)
+	return err
 }
 
-func (h *IsolatedProcessHost) Load(ctx context.Context, manifest Manifest) (Runtime, error) {
+func (h *ProcessHost) Load(ctx context.Context, manifest Manifest) (Runtime, error) {
 	if manifest.Mode != ModeIsolated {
 		return nil, ErrUnsupportedMode
 	}
@@ -93,17 +115,52 @@ func (h *IsolatedProcessHost) Load(ctx context.Context, manifest Manifest) (Runt
 	}
 
 	// Load 再次解析并校验，避免 Verify 与真正执行之间替换安装单元。
-	spec, err := h.config.ResolveInstalled(ctx, manifest)
+	spec, err := h.resolveVerifiedSpec(ctx, manifest)
 	if err != nil {
+		return nil, err
+	}
+	switch manifest.Role {
+	case RoleExecutor:
+		return h.loadExecutor(ctx, manifest, spec)
+	case RoleCapability:
+		return h.loadCapability(ctx, manifest, spec)
+	default:
+		return nil, ErrInvalidManifest
+	}
+}
+
+// loadExecutor 启动（或连接）executor.v1 运行时进程。
+func (h *ProcessHost) loadExecutor(ctx context.Context, manifest Manifest, spec packagecontract.ProcessSpec) (Runtime, error) {
+	var process *Process
+	if h.shouldSpawn(manifest) {
+		var err error
+		process, err = StartProcess(ctx, spec, h.config.Stdout, h.config.Stderr)
+		if err != nil {
+			return nil, ErrUnavailable
+		}
+	}
+	connection, client, err := dialExecutor(ctx, spec.Address, process, h.config.DialTimeout)
+	if err != nil {
+		if process != nil {
+			err = errors.Join(err, process.Reap(context.Background(), h.config.StopGrace, h.config.TerminateGrace))
+		}
 		return nil, errors.Join(ErrUnavailable, err)
 	}
-	if err := validateProcessSpec(spec); err != nil {
-		return nil, err
+	runtime := &executorRuntime{
+		id: manifest.ID, version: manifest.Version, mode: manifest.Mode,
+		process: process, connection: connection, client: client, host: h,
+		stopGrace: h.config.StopGrace, terminateGrace: h.config.TerminateGrace,
 	}
-	if err := h.config.VerifyInstalled(ctx, manifest, spec); err != nil {
-		return nil, err
+	h.track(runtime)
+	return runtime, nil
+}
+
+// loadCapability 启动 capability 进程并经 runtime_host 协议装载。
+func (h *ProcessHost) loadCapability(ctx context.Context, manifest Manifest, spec packagecontract.ProcessSpec) (Runtime, error) {
+	if !h.shouldSpawn(manifest) {
+		return nil, ErrInvalidProcessSpec
 	}
-	process, err := StartProcess(ctx, spec, io.Discard, io.Discard)
+	process, err := StartProcess(ctx, spec, h.config.Stdout, h.config.Stderr)
 	if err != nil {
 		return nil, ErrUnavailable
 	}
@@ -111,14 +168,7 @@ func (h *IsolatedProcessHost) Load(ctx context.Context, manifest Manifest) (Runt
 		process: process, host: h, socketPath: strings.TrimPrefix(spec.Address, "unix:"),
 		stopGrace: h.config.StopGrace, terminateGrace: h.config.TerminateGrace,
 	}
-	h.mu.Lock()
-	if h.closed {
-		h.mu.Unlock()
-		cleanupErr := wrapped.cleanupAfterLoad(ctx)
-		return nil, errors.Join(ErrShuttingDown, cleanupErr)
-	}
-	h.runtimes[wrapped] = struct{}{}
-	h.mu.Unlock()
+	h.track(wrapped)
 
 	grpcHost, err := NewGRPCHost(GRPCHostConfig{
 		Mode: ModeIsolated, Address: spec.Address, DialTimeout: h.config.DialTimeout,
@@ -151,17 +201,30 @@ func (h *IsolatedProcessHost) Load(ctx context.Context, manifest Manifest) (Runt
 	return wrapped, nil
 }
 
-func (h *IsolatedProcessHost) Close(ctx context.Context) error {
+func (h *ProcessHost) track(runtime hostManagedRuntime) {
+	h.mu.Lock()
+	h.runtimes[runtime] = struct{}{}
+	h.mu.Unlock()
+}
+
+func (h *ProcessHost) remove(runtime hostManagedRuntime) {
+	h.mu.Lock()
+	delete(h.runtimes, runtime)
+	h.mu.Unlock()
+}
+
+// Close 强制清理本宿主监督的全部运行时（进程回收 + 连接关闭 + socket 清理）。
+func (h *ProcessHost) Close(ctx context.Context) error {
 	h.mu.Lock()
 	h.closed = true
-	runtimes := make([]*processRuntime, 0, len(h.runtimes))
+	runtimes := make([]hostManagedRuntime, 0, len(h.runtimes))
 	for runtime := range h.runtimes {
 		runtimes = append(runtimes, runtime)
 	}
 	h.mu.Unlock()
 	var result []error
 	for _, runtime := range runtimes {
-		if err := runtime.forceCleanup(ctx); err != nil {
+		if err := runtime.hostClose(ctx); err != nil {
 			result = append(result, err)
 		} else {
 			h.remove(runtime)
@@ -170,10 +233,48 @@ func (h *IsolatedProcessHost) Close(ctx context.Context) error {
 	return errors.Join(result...)
 }
 
-func (h *IsolatedProcessHost) remove(runtime *processRuntime) {
-	h.mu.Lock()
-	delete(h.runtimes, runtime)
-	h.mu.Unlock()
+// validateSpec 校验解析出的进程规格：连接模式的 executor 只校验地址与限额，
+// 由本宿主启动的进程叠加文件系统与内容安全校验。
+func (h *ProcessHost) validateSpec(manifest Manifest, spec packagecontract.ProcessSpec) error {
+	if manifest.Role == RoleExecutor && !h.shouldSpawn(manifest) {
+		if !packagecontract.IsLocalRuntimeAddress(spec.Address) || !packagecontract.ValidProcessLimits(spec.Limits) {
+			return ErrInvalidProcessSpec
+		}
+		return nil
+	}
+	return validateProcessSpec(spec)
+}
+
+// shouldSpawn 返回当前清单的进程管理策略。
+func (h *ProcessHost) shouldSpawn(manifest Manifest) bool {
+	if h.config.SpawnFor != nil {
+		return h.config.SpawnFor(manifest)
+	}
+	return h.config.Spawn
+}
+
+// resolveVerifiedSpec 读取并校验来源锁定的规格。
+func (h *ProcessHost) resolveVerifiedSpec(ctx context.Context, manifest Manifest) (packagecontract.ProcessSpec, error) {
+	spec, err := h.config.Resolve(ctx, manifest)
+	if err != nil {
+		return packagecontract.ProcessSpec{}, errors.Join(ErrUnavailable, err)
+	}
+	if err := h.validateSpec(manifest, spec); err != nil {
+		return packagecontract.ProcessSpec{}, err
+	}
+	if h.config.Verify != nil {
+		if err := h.config.Verify(ctx, manifest, spec); err != nil {
+			return packagecontract.ProcessSpec{}, err
+		}
+	}
+	return spec, nil
+}
+
+// hostManagedRuntime 是进程宿主可强制清理的运行时统一面。
+type hostManagedRuntime interface {
+	Runtime
+	// hostClose 强制回收进程与连接（宿主 Close 与装载失败清理用）。
+	hostClose(ctx context.Context) error
 }
 
 // ProcessWatchContext 派生一个在受监督进程退出时自动取消的上下文，供 Spawn
@@ -204,7 +305,7 @@ func ProcessWatchContext(ctx context.Context, process *Process) (derived context
 
 // Process 是受监督子进程：启动时应用资源限额，退出经 done channel 通知，
 // 清理（优雅终止 → 强制终止）与限额释放封装为原语，供 isolated 形态的
-// 内置 Agent 与 installed 扩展 Runtime 共用。
+// 所有 isolated Runtime 共用。
 type Process struct {
 	command *exec.Cmd
 	done    chan struct{}
@@ -216,13 +317,14 @@ type Process struct {
 }
 
 // StartProcess 启动受监督子进程并应用资源限额。stdout/stderr 决定子进程
-// 输出去向：installed 扩展默认丢弃，内置 agent 直接透传内核输出。
-func StartProcess(ctx context.Context, spec packmgr.ProcessSpec, stdout, stderr io.Writer) (*Process, error) {
+// 输出去向：默认丢弃，只有组合根显式选择时才透传。
+func StartProcess(ctx context.Context, spec packagecontract.ProcessSpec, stdout, stderr io.Writer) (*Process, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	command := exec.Command(spec.Path, spec.Args...)
-	command.Env = append([]string(nil), spec.Env...)
+	// 空环境必须使用非 nil 切片；nil 会让 os/exec 继承 Core 的全部环境。
+	command.Env = append([]string{}, spec.Env...)
 	command.Dir = spec.WorkDir
 	command.Stdin = nil
 	command.Stdout = stdout
@@ -328,7 +430,7 @@ func (p *Process) Release() {
 type processRuntime struct {
 	runtime        *grpcRuntime
 	process        *Process
-	host           *IsolatedProcessHost
+	host           *ProcessHost
 	socketPath     string
 	stopGrace      time.Duration
 	terminateGrace time.Duration
@@ -389,7 +491,7 @@ func (r *processRuntime) Stop(ctx context.Context) error {
 	return r.finish()
 }
 
-func (r *processRuntime) forceCleanup(ctx context.Context) error {
+func (r *processRuntime) hostClose(ctx context.Context) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.stopped {
@@ -441,7 +543,15 @@ func (r *processRuntime) cleanupAfterLoad(ctx context.Context) error {
 		context.WithoutCancel(ctx), r.stopGrace+r.terminateGrace+time.Second,
 	)
 	defer cancel()
-	return r.forceCleanup(cleanupContext)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.stopped {
+		return nil
+	}
+	if err := r.forceCleanupLocked(cleanupContext); err != nil {
+		return err
+	}
+	return r.finish()
 }
 
 func (r *processRuntime) finish() error {
@@ -471,27 +581,133 @@ func (r *processRuntime) releaseProcessLimits() {
 	r.process.Release()
 }
 
-func validateProcessSpec(spec packmgr.ProcessSpec) error {
-	// 形状校验（绝对路径/本地地址/上限闭式）由中立格式层负责；此处只做
-	// 装载时刻的文件系统与内容安全校验。
-	if err := packmgr.ValidateProcessSpec(spec); err != nil {
+// executorRuntime 是 executor.v1 协议面的运行时：进程监督 + 会话客户端。
+type executorRuntime struct {
+	id, version, mode string
+	process           *Process
+	connection        *grpc.ClientConn
+	client            executor.Client
+	host              *ProcessHost
+	stopGrace         time.Duration
+	terminateGrace    time.Duration
+
+	stopOnce sync.Once
+	stopErr  error
+}
+
+func (r *executorRuntime) Describe(context.Context) (Description, error) {
+	return Description{ID: r.id, Version: r.version, Mode: r.mode}, nil
+}
+
+func (r *executorRuntime) Start(context.Context) error { return nil }
+
+func (r *executorRuntime) Health(ctx context.Context) error {
+	if r.process != nil && r.process.Exited() {
+		return ErrUnavailable
+	}
+	// Executor 的模型/Provider 就绪取决于当前 App 配置，由内核 health
+	// checker 在接单前用真实模型探测；Loader 这里只报告进程存活。
+	return nil
+}
+
+func (r *executorRuntime) Stop(ctx context.Context) error {
+	r.stopOnce.Do(func() {
+		r.stopErr = r.close(ctx)
+	})
+	return r.stopErr
+}
+
+// hostClose 强制回收：与 Stop 同语义（优雅终止 + 连接关闭），幂等。
+func (r *executorRuntime) hostClose(ctx context.Context) error {
+	r.stopOnce.Do(func() {
+		r.stopErr = r.close(ctx)
+	})
+	return r.stopErr
+}
+
+func (r *executorRuntime) close(ctx context.Context) error {
+	var processErr error
+	if r.process != nil {
+		processErr = r.process.Reap(ctx, r.stopGrace, r.terminateGrace)
+	}
+	var connectionErr error
+	if r.connection != nil {
+		connectionErr = r.connection.Close()
+		r.connection = nil
+	}
+	if r.host != nil {
+		r.host.remove(r)
+	}
+	return errors.Join(processErr, connectionErr)
+}
+
+func (r *executorRuntime) Client() executor.Client { return r.client }
+
+func (r *executorRuntime) Done() <-chan struct{} {
+	if r.process == nil {
+		return nil
+	}
+	return r.process.Done()
+}
+
+func (r *executorRuntime) Err() error {
+	if r.process == nil {
+		return nil
+	}
+	return r.process.Err()
+}
+
+func dialExecutor(ctx context.Context, address string, process *Process, dialTimeout time.Duration) (*grpc.ClientConn, executor.Client, error) {
+	watchContext, stopWatch := ProcessWatchContext(ctx, process)
+	defer stopWatch()
+	dialContext, cancel := context.WithTimeout(watchContext, dialTimeout)
+	defer cancel()
+	connection, err := grpc.DialContext(
+		dialContext,
+		address,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithBlock(),
+		grpc.WithDefaultCallOptions(
+			grpc.MaxCallRecvMsgSize(executor.MaxGRPCMessageBytes),
+			grpc.MaxCallSendMsgSize(executor.MaxGRPCMessageBytes),
+		),
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+	return connection, executor.NewClient(connection), nil
+}
+
+var (
+	_ Runtime                   = (*executorRuntime)(nil)
+	_ executor.ClientProvider   = (*executorRuntime)(nil)
+	_ executor.ProcessLifecycle = (*executorRuntime)(nil)
+	_ hostManagedRuntime        = (*executorRuntime)(nil)
+	_ hostManagedRuntime        = (*processRuntime)(nil)
+)
+
+func validateProcessSpec(spec packagecontract.ProcessSpec) error {
+	// 运行时重新校验形状，再叠加装载时刻的文件系统与内容安全校验。
+	if err := packagecontract.ValidateProcessSpec(spec); err != nil {
 		return ErrInvalidProcessSpec
 	}
 	info, err := os.Lstat(spec.Path)
-	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 || info.Mode().Perm()&0o022 != 0 {
+	if err != nil || !info.Mode().IsRegular() || !executableFile(info) || unsafePermissions(info) {
 		return ErrInvalidProcessSpec
 	}
-	if info, err = os.Lstat(spec.WorkDir); err != nil || !info.IsDir() || info.Mode().Perm()&0o022 != 0 {
+	if info, err = os.Lstat(spec.WorkDir); err != nil || !info.IsDir() || unsafePermissions(info) {
 		return ErrInvalidProcessSpec
 	}
-	socketPath := strings.TrimPrefix(spec.Address, "unix:")
-	relativeSocket, err := filepath.Rel(spec.WorkDir, socketPath)
-	if err != nil || relativeSocket == "." || relativeSocket == ".." ||
-		strings.HasPrefix(relativeSocket, ".."+string(filepath.Separator)) {
-		return ErrInvalidProcessSpec
-	}
-	if _, err := os.Lstat(socketPath); err == nil || !errors.Is(err, os.ErrNotExist) {
-		return ErrInvalidProcessSpec
+	if strings.HasPrefix(spec.Address, "unix:") {
+		socketPath := strings.TrimPrefix(spec.Address, "unix:")
+		relativeSocket, err := filepath.Rel(spec.WorkDir, socketPath)
+		if err != nil || relativeSocket == "." || relativeSocket == ".." ||
+			strings.HasPrefix(relativeSocket, ".."+string(filepath.Separator)) {
+			return ErrInvalidProcessSpec
+		}
+		if _, err := os.Lstat(socketPath); err == nil || !errors.Is(err, os.ErrNotExist) {
+			return ErrInvalidProcessSpec
+		}
 	}
 	for _, argument := range spec.Args {
 		if len(argument) > 4096 || strings.ContainsRune(argument, '\x00') {

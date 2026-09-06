@@ -12,9 +12,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	goruntime "runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -27,18 +29,36 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/health"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/identity"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/packstore"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime/runtimetest"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/session"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/agent"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/services/campus/campustest"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/blob"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/memory"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite"
-	"github.com/projectluojia/AI-Luo-Man-ga/pkg/bus"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packagecontract"
+	"github.com/projectluojia/AI-Luo-Man-ga/testsupport/campus"
+	"github.com/projectluojia/AI-Luo-Man-ga/testsupport/campus/campustest"
 )
+
+// syncBuffer 保护 os/exec 输出协程与测试断言之间的并发读写。
+type syncBuffer struct {
+	mu      sync.Mutex
+	builder strings.Builder
+}
+
+func (b *syncBuffer) Write(data []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.builder.Write(data)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.builder.String()
+}
 
 type integrationWebAuthenticator struct{}
 
@@ -56,7 +76,7 @@ func (integrationWebAuthenticator) Authenticate(*http.Request) (web.Authenticate
 
 func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 	if goruntime.GOOS != "linux" && goruntime.GOOS != "darwin" {
-		t.Skip("Python Agent 的受限模型密钥文件校验仅支持 Unix")
+		t.Skip("Executor 包的受限模型密钥文件校验仅支持 Unix")
 	}
 	var modelTurns atomic.Int32
 	modelHandler := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -92,24 +112,24 @@ func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 		hasToolResult := strings.Contains(bodyText, `"role":"tool"`)
 		switch {
 		case !isChild && !hasToolResult:
-			if !strings.Contains(bodyText, "cap_agent_run") || !strings.Contains(bodyText, "cap_campus_bus_routes_list") {
+			if !strings.Contains(bodyText, "cap_run_create_child") || !strings.Contains(bodyText, "cap_campus_bus_routes_list") {
 				t.Errorf("root model request missing projected tools: %s", body)
 			}
-			writeTurn("one", `{"role":"assistant","tool_calls":[{"index":0,"id":"delegate-call","type":"function","function":{"name":"cap_agent_run","arguments":"{\"task\":\"查询校巴线路\",\"capability_ids\":[\"campus.bus.routes.list\"]}"}}]}`, "tool_calls", `{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12}`)
+			writeTurn("one", `{"role":"assistant","tool_calls":[{"index":0,"id":"delegate-call","type":"function","function":{"name":"cap_run_create_child","arguments":"{\"task\":\"查询校巴线路\",\"capability_ids\":[\"campus.bus.routes.list\"]}"}}]}`, "tool_calls", `{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12}`)
 		case !isChild && hasToolResult:
-			if !strings.Contains(bodyText, "cap_agent_run") || !strings.Contains(bodyText, `"role":"tool"`) {
+			if !strings.Contains(bodyText, "cap_run_create_child") || !strings.Contains(bodyText, `"role":"tool"`) {
 				t.Errorf("root follow-up request is invalid: %s", body)
 			}
 			writeTurn("two", `{"role":"assistant","content":"当前有一条测试线路。"}`, "stop", `{"prompt_tokens":20,"completion_tokens":3,"total_tokens":23}`)
 		case isChild && !hasToolResult:
-			if strings.Contains(bodyText, "cap_agent_run") ||
+			if strings.Contains(bodyText, "cap_run_create_child") ||
 				!strings.Contains(bodyText, "cap_campus_bus_routes_list") ||
 				!strings.Contains(bodyText, "查询校巴线路") {
 				t.Errorf("child model request has wrong projection or task: %s", body)
 			}
 			writeTurn("three", `{"role":"assistant","tool_calls":[{"index":0,"id":"child-route-call","type":"function","function":{"name":"cap_campus_bus_routes_list","arguments":"{\"limit\":10}"}}]}`, "tool_calls", `{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12}`)
 		case isChild && hasToolResult:
-			if strings.Contains(bodyText, "cap_agent_run") || !strings.Contains(bodyText, `"role":"tool"`) {
+			if strings.Contains(bodyText, "cap_run_create_child") || !strings.Contains(bodyText, `"role":"tool"`) {
 				t.Errorf("child follow-up request is invalid: %s", body)
 			}
 			writeTurn("four", `{"role":"assistant","content":"子任务确认一条测试线路。"}`, "stop", `{"prompt_tokens":20,"completion_tokens":3,"total_tokens":23}`)
@@ -130,9 +150,24 @@ func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 	defer modelServer.Close()
 
 	address := freeAddress(t)
-	root, err := filepath.Abs("..")
+	coreRoot, err := filepath.Abs("..")
 	if err != nil {
 		t.Fatal(err)
+	}
+	executorPackageRoot := os.Getenv("AILUO_EXECUTOR_PACKAGE_DIR")
+	if executorPackageRoot == "" {
+		executorPackageRoot, err = filepath.Abs(filepath.Join(coreRoot, "packages", "agent"))
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	executorRuntimeRoot := filepath.Join(executorPackageRoot, "runtime")
+	pythonPath := filepath.Join(executorRuntimeRoot, ".venv", "bin", "python")
+	if goruntime.GOOS == "windows" {
+		pythonPath = filepath.Join(executorRuntimeRoot, ".venv", "Scripts", "python.exe")
+	}
+	if _, err := os.Stat(pythonPath); err != nil {
+		t.Fatalf("executor 包未构建：%v（可用 AILUO_EXECUTOR_PACKAGE_DIR 指定包目录）", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -140,7 +175,7 @@ func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 关闭顺序（defer 逆序）：取消调度 → 租约归还 → 关闭 agent → 取消上下文 → 关闭存储。
+	// 关闭顺序（defer 逆序）：取消调度 → 租约归还 → 关闭执行者 → 取消上下文 → 关闭存储。
 	// 调度必须先于关库，避免活动 Run 或轮询打到已关闭的存储。
 	defer store.Close()
 	defer cancel()
@@ -148,71 +183,87 @@ func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 	if err := os.WriteFile(secretPath, []byte("test-key\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	// 内置 AI 执行者经 agent 包以 isolated Runtime 纳管：进程启动、健康、停止与内核同构。
-	logs := &strings.Builder{}
-	agentHost, err := agent.NewHost(agent.Config{
-		Resolve: func(context.Context) (agent.Spec, error) {
-			return agent.Spec{
-				PythonPath: agent.DefaultPythonPath(root),
-				WorkDir:    root,
-				Address:    address,
-				Env: append(os.Environ(),
-					"AILUO_MODEL_API_KEY_FILE="+secretPath,
-					"AILUO_MODEL_BASE_URL="+modelServer.URL+"/v1",
-				),
-			}, nil
+	logs := &syncBuffer{}
+	// Executor 是独立包，由测试 Deployment 负责启动并提供 Provider 配置；Core
+	// 的通用 ProcessHost 只连接已运行的 executor.v1，不接收包专属环境变量。
+	executorProcess := exec.CommandContext(ctx, pythonPath, "-m", "agent.runtime", "--listen", address)
+	executorProcess.Dir = executorRuntimeRoot
+	executorProcess.Env = append(os.Environ(),
+		"AILUO_MODEL_API_KEY_FILE="+secretPath,
+		"AILUO_MODEL_BASE_URL="+modelServer.URL+"/v1",
+	)
+	executorProcess.Stdout = logs
+	executorProcess.Stderr = logs
+	if err := executorProcess.Start(); err != nil {
+		t.Fatalf("启动 Executor 包: %v", err)
+	}
+	defer func() {
+		cancel()
+		_ = executorProcess.Wait()
+	}()
+
+	executorManifest := loader.Manifest{
+		ID: "test.executor", Version: "1.0.0", Mode: loader.ModeIsolated,
+		Role:         loader.RoleExecutor,
+		LockedDigest: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+	}
+	executorHost, err := loader.NewProcessHost(loader.ProcessHostConfig{
+		Resolve: func(context.Context, loader.Manifest) (packagecontract.ProcessSpec, error) {
+			return packagecontract.ProcessSpec{Address: address}, nil
 		},
-		Spawn:          true,
-		Model:          "test-model",
-		Stdout:         logs,
-		Stderr:         logs,
+		Spawn:          false,
 		DialTimeout:    10 * time.Second,
 		StopGrace:      3 * time.Second,
 		TerminateGrace: 2 * time.Second,
 	})
 	if err != nil {
-		t.Fatalf("NewAgentHost: %v", err)
+		t.Fatalf("NewProcessHost: %v", err)
 	}
-	agentManager, err := loader.New(agentHost)
+	executorManager, err := loader.New(executorHost)
 	if err != nil {
-		t.Fatalf("new agent manager: %v", err)
+		t.Fatalf("new executor manager: %v", err)
 	}
 	reg := registry.New()
-	// 内置 agent 经与内核 main 相同的插件路径注册：agent.Record(host) 携带运行时
-	// 清单，RegisterInstalled 统一注册；预热清单由 Pinned() 从各清单声明推导。
-	if err := loader.RegisterInstalled(ctx, agentManager, reg, []loader.InstalledRecord{agent.Record(agentHost)}); err != nil {
-		t.Fatalf("register agent: %v", err)
+	if err := executorManager.Register(ctx, executorManifest); err != nil {
+		t.Fatalf("register executor: %v", err)
 	}
-	if err := agentManager.Warmup(ctx, agentManager.Pinned(), 1); err != nil {
-		t.Fatalf("warm agent: %v\n%s", err, logs.String())
+	if err := executorManager.Warmup(ctx, executorManager.Pinned(), 1); err != nil {
+		t.Fatalf("warm executor: %v\n%s", err, logs.String())
 	}
-	agentLease, err := agentManager.Executor(ctx)
+	executorLease, err := executorManager.Executor(ctx)
 	if err != nil {
 		t.Fatalf("resolve executor: %v", err)
 	}
-	agentRuntime := agentLease.Runtime()
-	clientProvider, ok := agentRuntime.(executor.ClientProvider)
+	executorRuntime := executorLease.Runtime()
+	clientProvider, ok := executorRuntime.(executor.ClientProvider)
 	if !ok {
 		t.Fatal("executor runtime does not expose an executor client")
 	}
-	agentClient := clientProvider.Client()
+	executorClient := clientProvider.Client()
 	// 关闭顺序（defer 逆序）：Shutdown 需等待租约排空，故租约归还最后注册、最先执行。
 	defer func() {
 		shutdownContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if err := agentManager.Shutdown(shutdownContext); err != nil {
-			t.Errorf("shutdown agent manager: %v", err)
+		if err := executorManager.Shutdown(shutdownContext); err != nil {
+			t.Errorf("shutdown executor manager: %v", err)
 		}
 	}()
-	defer agentLease.Release()
+	defer executorLease.Release()
 
-	busStore := memory.NewBusStore()
-	busStore.ReplaceCatalog(campus.AppID, nil, []bus.Route{{ID: "r1", Name: "测试线路", Direction: "去程"}})
+	docs := memory.NewDocuments()
+	scope := packstore.Scope{AppID: campus.AppID, Namespace: campus.StorageNamespace}
+	routes := []packstore.Document{{ID: "r", Payload: []byte(`{"id":"r","name":"测试线路","direction":"去程","source_revision":"e2e-revision"}`)}}
+	if err := docs.ReplaceSnapshot(context.Background(), scope, packstore.SnapshotMeta{
+		Revision: "e2e-revision", Source: "zhihui-luojia", Authoritative: true, Complete: true,
+		ImportedAt: time.Now().UTC().Add(-time.Hour), ValidUntil: time.Now().UTC().Add(time.Hour),
+	}, map[string][]packstore.Document{"routes": routes}); err != nil {
+		t.Fatal(err)
+	}
 	policy := runtimetest.NewStaticAppPolicy()
 	policy.Enable(campus.AppID, campus.BusRouteListCapabilityID)
-	policy.Enable(campus.AppID, agent.CapabilityID)
+	policy.Enable(campus.AppID, kernelecho.CreateChildRunCapabilityID)
 	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{IdempotencyStore: store})
-	campustest.RegisterHosted(t, reg, busStore)
+	campustest.RegisterHosted(t, reg, docs)
 	// 上下文装配使用真实会话来源（SQLite 消息存储 + 安全 Blob 存储）。
 	blobStore, err := blob.Open(filepath.Join(t.TempDir(), "blobs"), session.MaxMessageContentBytes)
 	if err != nil {
@@ -231,13 +282,16 @@ func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("seed app config: %v", err)
 	}
-	orchestrator := kernelecho.NewOrchestrator(agentClient, reg, dispatcher, policy, store, kernelecho.Config{
+	orchestrator := kernelecho.NewOrchestrator(executorClient, reg, dispatcher, policy, kernelecho.StorePorts{
+		Idempotency: store, Creation: store, Execution: store, Recovery: store,
+		Cancellation: store, Events: store, Audit: store,
+	}, kernelecho.Config{
 		AppID:           campus.AppID,
 		AppConfigSource: store,
 		Context:         sessionService,
 		Prompts:         integrationPromptRenderer{},
 	})
-	if err := agent.Register(reg, orchestrator); err != nil {
+	if err := kernelecho.RegisterChildCapabilities(reg, orchestrator); err != nil {
 		t.Fatal(err)
 	}
 	echoEvents := access.NewEventHub()
@@ -269,9 +323,10 @@ func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	echoAdmission := kernelecho.NewAdmission(orchestrator, runScheduler)
 	handler := web.NewServer(
-		orchestrator, store,
-		health.Combined{store, health.ExecutorChecker{Client: agentClient, Model: "test-model"}},
+		echoAdmission, store,
+		health.Combined{store, health.ExecutorChecker{Client: executorClient, Model: "test-model"}},
 		reg, policy, campus.AppID, platformHub, runScheduler, echoEvents,
 		web.WithWebAuthenticator(integrationWebAuthenticator{}),
 	).Handler()
@@ -345,7 +400,7 @@ func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 		t.Fatalf("audits=%#v err=%v logs=%s", audits, err, logs.String())
 	}
 	for _, audit := range audits {
-		if audit.CapabilityID == agent.CapabilityID &&
+		if audit.CapabilityID == kernelecho.CreateChildRunCapabilityID &&
 			(bytes.Contains(audit.Payload, []byte("查询校巴线路")) ||
 				!bytes.Contains(audit.Payload, []byte(`"task":"[已脱敏]"`))) {
 			t.Fatalf("Subagent task leaked into audit: %s", audit.Payload)

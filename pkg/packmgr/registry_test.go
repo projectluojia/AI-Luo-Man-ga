@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packagecontract"
 	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
 )
 
@@ -27,14 +28,14 @@ func newGitHubTestClient(t *testing.T, apiHandler, uploadsHandler http.HandlerFu
 	return client, api, uploads
 }
 
-func readSourceManifest(t *testing.T, source string) (packmgr.Manifest, []byte) {
+func readSourceManifest(t *testing.T, source string) (packagecontract.Manifest, []byte) {
 	t.Helper()
 	manifestBytes, err := os.ReadFile(filepath.Join(source, "manifest.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	var manifest packmgr.Manifest
-	if err := packmgr.DecodeStrictJSON(manifestBytes, &manifest); err != nil {
+	var manifest packagecontract.Manifest
+	if err := packagecontract.DecodeStrictJSON(manifestBytes, &manifest); err != nil {
 		t.Fatal(err)
 	}
 	return manifest, manifestBytes
@@ -174,10 +175,10 @@ func TestResolveReleaseBoundsPagination(t *testing.T) {
 func TestInstallFromReleaseEndToEnd(t *testing.T) {
 	// 先打一个真实 tarball，让 mock 服务器直接喂给客户端。
 	source := filepath.Join(t.TempDir(), "pkg")
-	writeSourcePackage(t, source, "demo.pkg", "1.0.0", packmgr.ModeHosted, "app.wasm", nil)
-	manifest := packmgr.Manifest{
-		SchemaVersion: packmgr.SchemaVersion, ID: "demo.pkg", Version: "1.0.0",
-		Components: []packmgr.Component{{ID: "core", Mode: packmgr.ModeHosted, Entrypoint: "app.wasm"}},
+	writeSourcePackage(t, source, "demo.pkg", "1.0.0", packagecontract.ModeHosted, "app.wasm", nil)
+	manifest := packagecontract.Manifest{
+		SchemaVersion: packagecontract.SchemaVersion, ID: "demo.pkg", Version: "1.0.0",
+		Components: []packagecontract.Component{{ID: "core", Mode: packagecontract.ModeHosted, Entrypoint: "app.wasm"}},
 	}
 	manifestBytes, err := json.Marshal(manifest)
 	if err != nil {
@@ -221,13 +222,13 @@ func TestInstallFromReleaseEndToEnd(t *testing.T) {
 
 func TestInstallFromReleaseRejectsManifestVersionBeforeInstall(t *testing.T) {
 	source := filepath.Join(t.TempDir(), "pkg")
-	writeSourcePackage(t, source, "demo.pkg", "2.0.0", packmgr.ModeHosted, "app.wasm", nil)
+	writeSourcePackage(t, source, "demo.pkg", "2.0.0", packagecontract.ModeHosted, "app.wasm", nil)
 	manifestBytes, err := os.ReadFile(filepath.Join(source, "manifest.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	var manifest packmgr.Manifest
-	if err := packmgr.DecodeStrictJSON(manifestBytes, &manifest); err != nil {
+	var manifest packagecontract.Manifest
+	if err := packagecontract.DecodeStrictJSON(manifestBytes, &manifest); err != nil {
 		t.Fatal(err)
 	}
 	tarballPath, err := packmgr.PackFromSource(context.Background(), source, t.TempDir(), manifest, manifestBytes)
@@ -264,7 +265,7 @@ func TestInstallFromReleaseRejectsManifestVersionBeforeInstall(t *testing.T) {
 
 func TestPublishCreatesReleaseAndUploadsAsset(t *testing.T) {
 	source := filepath.Join(t.TempDir(), "pkg")
-	writeSourcePackage(t, source, "demo.pkg", "1.0.0", packmgr.ModeHosted, "app.wasm", nil)
+	writeSourcePackage(t, source, "demo.pkg", "1.0.0", packagecontract.ModeHosted, "app.wasm", nil)
 	manifest, manifestBytes := readSourceManifest(t, source)
 
 	var uploadPath string
@@ -294,7 +295,7 @@ func TestPublishCreatesReleaseAndUploadsAsset(t *testing.T) {
 
 func TestPublishTarballCreatesReleaseAndUploadsAsset(t *testing.T) {
 	source := filepath.Join(t.TempDir(), "pkg")
-	writeSourcePackage(t, source, "demo.pkg", "1.0.0", packmgr.ModeHosted, "app.wasm", []packmgr.Dependency{{ID: "dependency.pkg", Constraint: "^1.0.0"}})
+	writeSourcePackage(t, source, "demo.pkg", "1.0.0", packagecontract.ModeHosted, "app.wasm", []packagecontract.Dependency{{ID: "dependency.pkg", Constraint: "^1.0.0"}})
 	manifest, manifestBytes := readSourceManifest(t, source)
 	var err error
 	tarball, err := packmgr.PackFromSource(context.Background(), source, t.TempDir(), manifest, manifestBytes)
@@ -323,7 +324,7 @@ func TestPublishTarballCreatesReleaseAndUploadsAsset(t *testing.T) {
 
 func TestPublishRemovesReleaseAfterUploadFailure(t *testing.T) {
 	source := filepath.Join(t.TempDir(), "pkg")
-	writeSourcePackage(t, source, "demo.pkg", "1.0.0", packmgr.ModeHosted, "app.wasm", nil)
+	writeSourcePackage(t, source, "demo.pkg", "1.0.0", packagecontract.ModeHosted, "app.wasm", nil)
 	manifest, manifestBytes := readSourceManifest(t, source)
 	var deleted atomic.Bool
 	client, _, _ := newGitHubTestClient(t, func(writer http.ResponseWriter, request *http.Request) {
@@ -351,7 +352,7 @@ func TestPublishRemovesReleaseAfterUploadFailure(t *testing.T) {
 
 func TestPublishRejectsImmutableVersion(t *testing.T) {
 	source := filepath.Join(t.TempDir(), "pkg")
-	writeSourcePackage(t, source, "demo.pkg", "1.0.0", packmgr.ModeHosted, "app.wasm", nil)
+	writeSourcePackage(t, source, "demo.pkg", "1.0.0", packagecontract.ModeHosted, "app.wasm", nil)
 	manifest, manifestBytes := readSourceManifest(t, source)
 	client, _, _ := newGitHubTestClient(t, func(writer http.ResponseWriter, _ *http.Request) {
 		writer.WriteHeader(http.StatusUnprocessableEntity)
@@ -364,7 +365,7 @@ func TestPublishRejectsImmutableVersion(t *testing.T) {
 
 func TestPublishRequiresToken(t *testing.T) {
 	source := filepath.Join(t.TempDir(), "pkg")
-	writeSourcePackage(t, source, "demo.pkg", "1.0.0", packmgr.ModeHosted, "app.wasm", nil)
+	writeSourcePackage(t, source, "demo.pkg", "1.0.0", packagecontract.ModeHosted, "app.wasm", nil)
 	manifest, manifestBytes := readSourceManifest(t, source)
 	client := packmgr.NewGitHubClient()
 	client.Token = ""

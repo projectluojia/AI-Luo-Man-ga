@@ -12,11 +12,12 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packagecontract"
 	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
 )
 
 // writeSourcePackage 在临时目录构造单组件源包（manifest.json + entrypoint 工件）。
-func writeSourcePackage(t *testing.T, dir, id, version, mode, artifactName string, deps []packmgr.Dependency) {
+func writeSourcePackage(t *testing.T, dir, id, version, mode, artifactName string, deps []packagecontract.Dependency) {
 	t.Helper()
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		t.Fatal(err)
@@ -25,10 +26,10 @@ func writeSourcePackage(t *testing.T, dir, id, version, mode, artifactName strin
 	if err := os.WriteFile(filepath.Join(dir, artifactName), artifact, 0o640); err != nil {
 		t.Fatal(err)
 	}
-	manifest, err := json.Marshal(packmgr.Manifest{
-		SchemaVersion: packmgr.SchemaVersion, ID: id, Version: version,
+	manifest, err := json.Marshal(packagecontract.Manifest{
+		SchemaVersion: packagecontract.SchemaVersion, ID: id, Version: version,
 		Dependencies: deps,
-		Components: []packmgr.Component{{
+		Components: []packagecontract.Component{{
 			ID: "core", Mode: mode, Entrypoint: artifactName,
 		}},
 	})
@@ -44,7 +45,7 @@ func TestInstallReplacesVersionsAndVerifiesIntegrity(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
 	sourceV1 := filepath.Join(t.TempDir(), "pkg")
-	writeSourcePackage(t, sourceV1, "demo.pkg", "1.0.0", packmgr.ModeHosted, "app.wasm", nil)
+	writeSourcePackage(t, sourceV1, "demo.pkg", "1.0.0", packagecontract.ModeHosted, "app.wasm", nil)
 
 	record, err := packmgr.Install(ctx, root, sourceV1)
 	if err != nil {
@@ -67,7 +68,7 @@ func TestInstallReplacesVersionsAndVerifiesIntegrity(t *testing.T) {
 	}
 	// 新版本替换。
 	sourceV2 := filepath.Join(t.TempDir(), "pkg")
-	writeSourcePackage(t, sourceV2, "demo.pkg", "2.0.0", packmgr.ModeHosted, "app.wasm", nil)
+	writeSourcePackage(t, sourceV2, "demo.pkg", "2.0.0", packagecontract.ModeHosted, "app.wasm", nil)
 	record, err = packmgr.Install(ctx, root, sourceV2)
 	if err != nil {
 		t.Fatalf("Install v2: %v", err)
@@ -89,20 +90,20 @@ func TestInstallResolvesDependenciesAgainstInstalled(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
 	depSource := filepath.Join(t.TempDir(), "dep")
-	writeSourcePackage(t, depSource, "demo.dep", "1.2.0", packmgr.ModeHosted, "dep.wasm", nil)
+	writeSourcePackage(t, depSource, "demo.dep", "1.2.0", packagecontract.ModeHosted, "dep.wasm", nil)
 	if _, err := packmgr.Install(ctx, root, depSource); err != nil {
 		t.Fatal(err)
 	}
 	// 缺依赖安装失败。
 	appSource := filepath.Join(t.TempDir(), "app")
-	writeSourcePackage(t, appSource, "demo.app", "1.0.0", packmgr.ModeHosted, "app.wasm",
-		[]packmgr.Dependency{{ID: "demo.dep", Constraint: "^2.0.0"}})
+	writeSourcePackage(t, appSource, "demo.app", "1.0.0", packagecontract.ModeHosted, "app.wasm",
+		[]packagecontract.Dependency{{ID: "demo.dep", Constraint: "^2.0.0"}})
 	if _, err := packmgr.Install(ctx, root, appSource); err == nil || !strings.Contains(err.Error(), "缺少依赖") {
 		t.Fatalf("Install with unsatisfied dependency error = %v, want missing dependency", err)
 	}
 	// 依赖满足后安装成功。
-	writeSourcePackage(t, appSource, "demo.app", "1.0.0", packmgr.ModeHosted, "app.wasm",
-		[]packmgr.Dependency{{ID: "demo.dep", Constraint: "^1.0.0"}})
+	writeSourcePackage(t, appSource, "demo.app", "1.0.0", packagecontract.ModeHosted, "app.wasm",
+		[]packagecontract.Dependency{{ID: "demo.dep", Constraint: "^1.0.0"}})
 	if _, err := packmgr.Install(ctx, root, appSource); err != nil {
 		t.Fatalf("Install with satisfied dependency: %v", err)
 	}
@@ -111,7 +112,7 @@ func TestInstallResolvesDependenciesAgainstInstalled(t *testing.T) {
 func TestInstallIsolatedWritesProcessSpec(t *testing.T) {
 	root := t.TempDir()
 	source := filepath.Join(t.TempDir(), "isolated")
-	writeSourcePackage(t, source, "demo.isolated", "1.0.0", packmgr.ModeIsolated, "app", nil)
+	writeSourcePackage(t, source, "demo.isolated", "1.0.0", packagecontract.ModeIsolated, "app", nil)
 	record, err := packmgr.Install(context.Background(), root, source)
 	if err != nil {
 		t.Fatalf("Install isolated: %v", err)
@@ -122,22 +123,80 @@ func TestInstallIsolatedWritesProcessSpec(t *testing.T) {
 	}
 }
 
+// 目录工件用于携带解释器、源码和依赖环境；安装必须保留树结构并把进程
+// 模板解析到目录工件内部，而不是把目录当作可执行文件。
+func TestInstallAndPackDirectoryArtifact(t *testing.T) {
+	ctx := context.Background()
+	source := filepath.Join(t.TempDir(), "agent-source")
+	runtimeDir := filepath.Join(source, "runtime")
+	if err := os.MkdirAll(filepath.Join(runtimeDir, "bin"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(runtimeDir, "bin", "runner"), []byte("runner"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(runtimeDir, "module.py"), []byte("print('ok')"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	manifest := packagecontract.Manifest{
+		SchemaVersion: packagecontract.SchemaVersion, ID: "agent", Version: "1.0.0",
+		Components: []packagecontract.Component{{
+			ID: "executor", Mode: packagecontract.ModeIsolated, Role: packagecontract.RoleExecutor,
+			Entrypoint: "runtime", Process: &packagecontract.ProcessTemplate{
+				Path: "bin/runner", WorkDir: ".", Address: "127.0.0.1:50051",
+			},
+		}},
+	}
+	manifestBytes, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "manifest.json"), manifestBytes, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	install := func(root, installSource string) packmgr.InstalledRecord {
+		t.Helper()
+		record, err := packmgr.Install(ctx, root, installSource)
+		if err != nil {
+			t.Fatal(err)
+		}
+		artifact := record.Lock.Artifacts[0]
+		targetDir := filepath.Join(root, "agent")
+		if artifact.Path != filepath.Join(targetDir, "runtime") || artifact.Process == nil ||
+			artifact.Process.Path != filepath.Join(targetDir, "runtime", "bin", "runner") ||
+			artifact.Process.WorkDir != filepath.Join(targetDir, "runtime") {
+			t.Fatalf("directory artifact process = %+v, want resolved template", artifact)
+		}
+		if _, err := os.Stat(filepath.Join(targetDir, "runtime", "module.py")); err != nil {
+			t.Fatalf("directory artifact file missing: %v", err)
+		}
+		return record
+	}
+	install(t.TempDir(), source)
+
+	tarball, err := packmgr.PackFromSource(ctx, source, t.TempDir(), manifest, manifestBytes)
+	if err != nil {
+		t.Fatalf("PackFromSource: %v", err)
+	}
+	install(t.TempDir(), tarball)
+}
+
 func TestInstallRejectsBreakingReverseDependency(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
 	depV1 := filepath.Join(t.TempDir(), "dep-v1")
-	writeSourcePackage(t, depV1, "demo.dep", "1.0.0", packmgr.ModeHosted, "dep.wasm", nil)
+	writeSourcePackage(t, depV1, "demo.dep", "1.0.0", packagecontract.ModeHosted, "dep.wasm", nil)
 	if _, err := packmgr.Install(ctx, root, depV1); err != nil {
 		t.Fatal(err)
 	}
 	app := filepath.Join(t.TempDir(), "app")
-	writeSourcePackage(t, app, "demo.app", "1.0.0", packmgr.ModeHosted, "app.wasm",
-		[]packmgr.Dependency{{ID: "demo.dep", Constraint: "^1.0.0"}})
+	writeSourcePackage(t, app, "demo.app", "1.0.0", packagecontract.ModeHosted, "app.wasm",
+		[]packagecontract.Dependency{{ID: "demo.dep", Constraint: "^1.0.0"}})
 	if _, err := packmgr.Install(ctx, root, app); err != nil {
 		t.Fatal(err)
 	}
 	depV2 := filepath.Join(t.TempDir(), "dep-v2")
-	writeSourcePackage(t, depV2, "demo.dep", "2.0.0", packmgr.ModeHosted, "dep.wasm", nil)
+	writeSourcePackage(t, depV2, "demo.dep", "2.0.0", packagecontract.ModeHosted, "dep.wasm", nil)
 	if _, err := packmgr.Install(ctx, root, depV2); err == nil {
 		t.Fatal("Install breaking dependency = nil")
 	}
@@ -158,7 +217,7 @@ func TestInstallRejectsInvalidSource(t *testing.T) {
 			os.WriteFile(filepath.Join(dir, "manifest.json"), []byte("{"), 0o640)
 		}},
 		{name: "missing artifact", mutate: func(dir string) {
-			writeSourcePackage(t, dir, "demo.pkg", "1.0.0", packmgr.ModeHosted, "app.wasm", nil)
+			writeSourcePackage(t, dir, "demo.pkg", "1.0.0", packagecontract.ModeHosted, "app.wasm", nil)
 			os.Remove(filepath.Join(dir, "app.wasm"))
 		}},
 		{name: "entrypoint escapes source dir", mutate: func(dir string) {
@@ -183,11 +242,27 @@ func TestInstallRejectsInvalidSource(t *testing.T) {
 	}
 }
 
+func TestInstallRejectsCorruptExistingPackage(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "demo.pkg")
+	if err := os.Mkdir(target, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "manifest.json"), []byte("broken"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	source := t.TempDir()
+	writeSourcePackage(t, source, "demo.pkg", "1.0.0", packagecontract.ModeHosted, "app.wasm", nil)
+	if _, err := packmgr.Install(context.Background(), root, source); err == nil || !strings.Contains(err.Error(), "校验失败") {
+		t.Fatalf("Install corrupt existing package error = %v, want validation failure", err)
+	}
+}
+
 func TestReadInstalledRejectsArtifactOutsidePackage(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
 	source := filepath.Join(t.TempDir(), "pkg")
-	writeSourcePackage(t, source, "demo.pkg", "1.0.0", packmgr.ModeHosted, "app.wasm", nil)
+	writeSourcePackage(t, source, "demo.pkg", "1.0.0", packagecontract.ModeHosted, "app.wasm", nil)
 	if _, err := packmgr.Install(ctx, root, source); err != nil {
 		t.Fatal(err)
 	}
@@ -202,7 +277,7 @@ func TestReadInstalledRejectsArtifactOutsidePackage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var lock packmgr.Lock
+	var lock packagecontract.Lock
 	if err := json.Unmarshal(lockBytes, &lock); err != nil {
 		t.Fatal(err)
 	}
@@ -225,7 +300,7 @@ func TestUpgradeAndUninstall(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
 	source := filepath.Join(t.TempDir(), "pkg")
-	writeSourcePackage(t, source, "demo.pkg", "1.0.0", packmgr.ModeHosted, "app.wasm", nil)
+	writeSourcePackage(t, source, "demo.pkg", "1.0.0", packagecontract.ModeHosted, "app.wasm", nil)
 	if _, err := packmgr.Install(ctx, root, source); err != nil {
 		t.Fatal(err)
 	}
@@ -239,7 +314,7 @@ func TestUpgradeAndUninstall(t *testing.T) {
 	}
 	// 版本变化。
 	sourceV2 := filepath.Join(t.TempDir(), "pkg")
-	writeSourcePackage(t, sourceV2, "demo.pkg", "1.1.0", packmgr.ModeHosted, "app.wasm", nil)
+	writeSourcePackage(t, sourceV2, "demo.pkg", "1.1.0", packagecontract.ModeHosted, "app.wasm", nil)
 	record, err := packmgr.Upgrade(ctx, root, "demo.pkg", sourceV2)
 	if err != nil {
 		t.Fatalf("Upgrade: %v", err)
@@ -276,11 +351,11 @@ func TestInstallRejectsEntrypointBasenameCollision(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(source, "mod.wasm"), []byte("bytes"), 0o640); err != nil {
 		t.Fatal(err)
 	}
-	manifest, err := json.Marshal(packmgr.Manifest{
-		SchemaVersion: packmgr.SchemaVersion, ID: "demo.pkg", Version: "1.0.0",
-		Components: []packmgr.Component{
-			{ID: "one", Mode: packmgr.ModeHosted, Entrypoint: "mod.wasm"},
-			{ID: "two", Mode: packmgr.ModeHosted, Entrypoint: "mod.wasm"},
+	manifest, err := json.Marshal(packagecontract.Manifest{
+		SchemaVersion: packagecontract.SchemaVersion, ID: "demo.pkg", Version: "1.0.0",
+		Components: []packagecontract.Component{
+			{ID: "one", Mode: packagecontract.ModeHosted, Entrypoint: "mod.wasm"},
+			{ID: "two", Mode: packagecontract.ModeHosted, Entrypoint: "mod.wasm"},
 		},
 	})
 	if err != nil {
@@ -290,7 +365,7 @@ func TestInstallRejectsEntrypointBasenameCollision(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = packmgr.Install(context.Background(), t.TempDir(), source)
-	if !errors.Is(err, packmgr.ErrInvalidFormat) || !strings.Contains(err.Error(), "同名") {
+	if !errors.Is(err, packagecontract.ErrInvalidFormat) || !strings.Contains(err.Error(), "同名") {
 		t.Fatalf("Install error = %v, want basename collision ErrInvalidFormat", err)
 	}
 }
@@ -301,7 +376,7 @@ func TestInstallLocksProcessSpecForIsolatedComponent(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
 	source := filepath.Join(t.TempDir(), "pkg")
-	writeSourcePackage(t, source, "demo.svc", "1.0.0", packmgr.ModeIsolated, "svc-bin", nil)
+	writeSourcePackage(t, source, "demo.svc", "1.0.0", packagecontract.ModeIsolated, "svc-bin", nil)
 	record, err := packmgr.Install(ctx, root, source)
 	if err != nil {
 		t.Fatalf("Install: %v", err)
@@ -318,7 +393,7 @@ func TestInstallLocksProcessSpecForIsolatedComponent(t *testing.T) {
 		artifact.Process.WorkDir != targetDir {
 		t.Fatalf("process spec = %+v, want path/workdir 位于 %s", artifact.Process, targetDir)
 	}
-	if !packmgr.IsLocalRuntimeAddress(artifact.Process.Address) {
+	if !packagecontract.IsLocalRuntimeAddress(artifact.Process.Address) {
 		t.Fatalf("process address = %q, want 本机地址", artifact.Process.Address)
 	}
 }
@@ -328,7 +403,7 @@ func TestInstallSerializesSamePackagePublication(t *testing.T) {
 	sources := make([]string, 2)
 	for i, version := range []string{"1.0.0", "2.0.0"} {
 		sources[i] = filepath.Join(t.TempDir(), "pkg")
-		writeSourcePackage(t, sources[i], "demo.concurrent", version, packmgr.ModeHosted, "app.wasm", nil)
+		writeSourcePackage(t, sources[i], "demo.concurrent", version, packagecontract.ModeHosted, "app.wasm", nil)
 	}
 	start := make(chan struct{})
 	errorsSeen := make(chan error, len(sources))
@@ -366,7 +441,7 @@ func TestListInstalledSkipsInternalWorkDirs(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
 	source := filepath.Join(t.TempDir(), "pkg")
-	writeSourcePackage(t, source, "demo.pkg", "1.0.0", packmgr.ModeHosted, "app.wasm", nil)
+	writeSourcePackage(t, source, "demo.pkg", "1.0.0", packagecontract.ModeHosted, "app.wasm", nil)
 	if _, err := packmgr.Install(ctx, root, source); err != nil {
 		t.Fatal(err)
 	}
@@ -383,7 +458,7 @@ func TestListInstalledSkipsInternalWorkDirs(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(root, ".sneaky"), 0o750); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := packmgr.ListInstalled(ctx, root); !errors.Is(err, packmgr.ErrInvalidFormat) {
+	if _, err := packmgr.ListInstalled(ctx, root); !errors.Is(err, packagecontract.ErrInvalidFormat) {
 		t.Fatalf("ListInstalled with unknown hidden entry error = %v, want ErrInvalidFormat", err)
 	}
 }

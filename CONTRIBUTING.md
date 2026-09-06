@@ -7,11 +7,11 @@
 要求：Go（版本见 `go.mod`）、[uv](https://docs.astral.sh/uv/)、Python 3.11–3.14。
 
 ```bash
-make setup-agent   # 按 agent/uv.lock 锁定安装 Python 环境
-make test          # Go 单元测试 + Python 单元测试
+make test-agent    # 按 packages/agent/runtime/uv.lock 运行 Executor 包测试
+make test          # Core Go 单元测试
 make test-race     # Go race 检测
 make vet           # go vet
-make test-integration  # Runtime Host 与 e2e 跨进程集成测试（Unix 平台）
+make test-integration  # Runtime Host 跨进程集成测试（Unix 平台）
 ```
 
 ## 分支与提交
@@ -34,13 +34,13 @@ make test-integration  # Runtime Host 与 e2e 跨进程集成测试（Unix 平�
 ```bash
 gofmt -w .
 GOCACHE=/tmp/github.com/projectluojia/AI-Luo-Man-ga-gocache go test ./...
-uv sync --project agent --locked
-uv run --project agent --locked python -m compileall -q agent
-uv run --project agent --locked python -m unittest discover -s agent -p 'test_*.py' -v
+uv sync --project packages/agent/runtime --locked
+uv run --project packages/agent/runtime --locked python -m compileall -q packages/agent/runtime
+uv run --project packages/agent/runtime --locked python -m unittest discover -s packages/agent/runtime -p 'test_*.py' -v
 GOCACHE=/tmp/github.com/projectluojia/AI-Luo-Man-ga-gocache go test -race ./...
 GOCACHE=/tmp/github.com/projectluojia/AI-Luo-Man-ga-gocache go vet ./...
 GOCACHE=/tmp/github.com/projectluojia/AI-Luo-Man-ga-gocache go test -tags=integration ./internal/kernel/loader -v -timeout=30s
-GOCACHE=/tmp/github.com/projectluojia/AI-Luo-Man-ga-gocache go test -tags=integration ./e2e -v -timeout=30s
+AILUO_EXECUTOR_PACKAGE_DIR="$PWD/packages/agent" GOCACHE=/tmp/github.com/projectluojia/AI-Luo-Man-ga-gocache go test -tags=integration ./e2e -v -timeout=30s
 ```
 
 ## 代码规范
