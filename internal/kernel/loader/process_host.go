@@ -706,7 +706,7 @@ func validateProcessSpec(spec packagecontract.ProcessSpec) error {
 		return ErrInvalidProcessSpec
 	}
 	info, err := os.Lstat(spec.Path)
-	if err != nil || !executableFile(info) {
+	if err != nil || !info.Mode().IsRegular() || !executableFile(info) {
 		return ErrInvalidProcessSpec
 	}
 	if err := packageio.ValidateSecureDirectory(spec.WorkDir); err != nil {
