@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -170,6 +171,57 @@ func TestInstallRejectsFileProcessPathOutsideArtifact(t *testing.T) {
 	}
 }
 
+func TestInstallRejectsIsolatedWithoutProcessTemplate(t *testing.T) {
+	root := packageiotest.TempDir(t)
+	source := t.TempDir()
+	if err := os.WriteFile(filepath.Join(source, "app"), []byte("executable"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := json.Marshal(packagecontract.Manifest{
+		SchemaVersion: packagecontract.SchemaVersion, ID: "demo.isolated", Version: "1.0.0",
+		Components: []packagecontract.Component{{ID: "core", Mode: packagecontract.ModeIsolated, Entrypoint: "app"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "manifest.json"), manifest, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := packmgr.Install(context.Background(), root, source); err == nil {
+		t.Fatal("isolated package without process template was accepted")
+	}
+}
+
+func TestInstallRejectsImplicitUnixAddressOnWindows(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("仅 Windows 需要拒绝隐式 Unix Socket")
+	}
+	for _, address := range []string{"", "unix:/runtime.sock"} {
+		t.Run(address, func(t *testing.T) {
+			source := t.TempDir()
+			if err := os.WriteFile(filepath.Join(source, "app"), []byte("executable"), 0o750); err != nil {
+				t.Fatal(err)
+			}
+			manifest, err := json.Marshal(packagecontract.Manifest{
+				SchemaVersion: packagecontract.SchemaVersion, ID: "demo.windows", Version: "1.0.0",
+				Components: []packagecontract.Component{{
+					ID: "core", Mode: packagecontract.ModeIsolated, Entrypoint: "app",
+					Process: &packagecontract.ProcessTemplate{Path: "app", Address: address},
+				}},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(source, "manifest.json"), manifest, 0o640); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := packmgr.Install(context.Background(), packageiotest.TempDir(t), source); err == nil {
+				t.Fatalf("Install accepted Windows address %q", address)
+			}
+		})
+	}
+}
+
 // 目录工件用于携带解释器、源码和依赖环境；安装必须保留树结构并把进程
 // 模板解析到目录工件内部，而不是把目录当作可执行文件。
 func TestInstallAndPackDirectoryArtifact(t *testing.T) {
@@ -254,7 +306,7 @@ func TestInstallRejectsBreakingReverseDependency(t *testing.T) {
 
 func TestInstallRejectsInvalidSource(t *testing.T) {
 	ctx := context.Background()
-	root := t.TempDir()
+	root := packageiotest.TempDir(t)
 	cases := []struct {
 		name   string
 		mutate func(string)
@@ -418,6 +470,26 @@ func TestInstallAcceptsRelativeSourceDirectory(t *testing.T) {
 	}
 }
 
+func TestUpgradeAcceptsPackagedTarball(t *testing.T) {
+	ctx := context.Background()
+	root := packageiotest.TempDir(t)
+	v1 := filepath.Join(t.TempDir(), "v1")
+	writeSourcePackage(t, v1, "demo.upgrade", "1.0.0", packagecontract.ModeHosted, "app.wasm", nil)
+	if _, err := packmgr.Install(ctx, root, v1); err != nil {
+		t.Fatal(err)
+	}
+	v2 := filepath.Join(t.TempDir(), "v2")
+	writeSourcePackage(t, v2, "demo.upgrade", "2.0.0", packagecontract.ModeHosted, "app.wasm", nil)
+	manifest, manifestBytes := readSourceManifest(t, v2)
+	tarball, err := packmgr.PackFromSource(ctx, v2, t.TempDir(), manifest, manifestBytes)
+	if err != nil {
+		t.Fatalf("PackFromSource: %v", err)
+	}
+	if record, err := packmgr.Upgrade(ctx, root, "demo.upgrade", tarball); err != nil || record.Manifest.Version != "2.0.0" {
+		t.Fatalf("Upgrade tarball = %+v err=%v, want 2.0.0", record.Manifest, err)
+	}
+}
+
 // 工件按 basename 平铺，两个组件的 entrypoint 同名会互相覆盖并让 lock 的两条
 // 记录指向同一个文件，必须在读源阶段拒绝。
 func TestInstallRejectsEntrypointBasenameCollision(t *testing.T) {
@@ -441,7 +513,7 @@ func TestInstallRejectsEntrypointBasenameCollision(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(source, "manifest.json"), manifest, 0o640); err != nil {
 		t.Fatal(err)
 	}
-	_, err = packmgr.Install(context.Background(), t.TempDir(), source)
+	_, err = packmgr.Install(context.Background(), packageiotest.TempDir(t), source)
 	if !errors.Is(err, packagecontract.ErrInvalidFormat) || !strings.Contains(err.Error(), "同名") {
 		t.Fatalf("Install error = %v, want basename collision ErrInvalidFormat", err)
 	}
@@ -553,5 +625,29 @@ func TestListInstalledSkipsInternalWorkDirs(t *testing.T) {
 	}
 	if _, err := packageio.ListInstalled(ctx, root); !errors.Is(err, packagecontract.ErrInvalidFormat) {
 		t.Fatalf("ListInstalled with unknown hidden entry error = %v, want ErrInvalidFormat", err)
+	}
+}
+
+func TestListInstalledDoesNotPromoteInvalidBackup(t *testing.T) {
+	root := packageiotest.TempDir(t)
+	backup := filepath.Join(root, ".backup-invalid")
+	if err := os.MkdirAll(backup, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := json.Marshal(packagecontract.Manifest{
+		SchemaVersion: packagecontract.SchemaVersion, ID: "demo.pkg", Version: "1.0.0",
+		Components: []packagecontract.Component{{ID: "core", Mode: packagecontract.ModeHosted, Entrypoint: "app.wasm"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(backup, "manifest.json"), manifest, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := packageio.ListInstalled(context.Background(), root); err == nil {
+		t.Fatal("ListInstalled accepted an invalid backup")
+	}
+	if _, err := os.Stat(filepath.Join(root, "demo.pkg")); !os.IsNotExist(err) {
+		t.Fatalf("invalid backup was promoted to target: %v", err)
 	}
 }
