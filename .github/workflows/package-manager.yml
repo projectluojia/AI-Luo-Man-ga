@@ -1,0 +1,50 @@
+name: Package Manager
+
+# package-manager module 里的 pkg/contract 子包是 Core 唯一允许消费的公共边界；
+# 作者工具和分发实现也在该 module 内，但不进入 Core 启动路径。
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - package-manager/**
+      - .github/workflows/package-manager.yml
+  pull_request:
+    paths:
+      - package-manager/**
+      - .github/workflows/package-manager.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: package-manager-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  modules:
+    name: Package Manager module
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: package-manager/go.mod
+          cache: true
+          cache-dependency-path: package-manager/go.sum
+      - name: 检查 Package Manager module
+        working-directory: package-manager
+        shell: bash
+        run: |
+          set -euo pipefail
+          go mod verify
+          go mod tidy -diff
+          files="$(gofmt -l .)"
+          test -z "$files" || { echo "$files"; exit 1; }
+          go test ./...
+          go vet ./...
+          go build -o "$RUNNER_TEMP/ailuo-pm" ./cmd/ailuo-pm

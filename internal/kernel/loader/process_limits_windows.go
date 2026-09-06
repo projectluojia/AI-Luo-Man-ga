@@ -9,7 +9,7 @@ import (
 
 	"golang.org/x/sys/windows"
 
-	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packagecontract"
+	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/packagecontract"
 )
 
 // jobObjectEndOfJobTimeInformation 设置 Job 累计 CPU 时间耗尽时的动作

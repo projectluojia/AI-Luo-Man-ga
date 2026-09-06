@@ -24,7 +24,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/idempotency"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime"
-	"github.com/projectluojia/AI-Luo-Man-ga/pkg/capability"
+	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/capability"
 )
 
 // 确认状态机。waiting 是唯一可决策状态；approved 是唯一可执行副作用的授权态；

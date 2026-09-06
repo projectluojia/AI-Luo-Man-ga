@@ -34,8 +34,9 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - name: 构建 Core CLI
-        run: go build -o ailuo .
+      - name: 构建 Package Manager CLI
+        working-directory: package-manager
+        run: go build -o ../ailuo ./cmd/ailuo-pm
       - name: 打包 Agent Executor
         run: ./ailuo pack packages/agent "$RUNNER_TEMP/agent-package-dist"
       - name: 同步 Executor 包测试环境

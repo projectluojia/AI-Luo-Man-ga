@@ -25,8 +25,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/promptcatalog"
 	promptservice "github.com/projectluojia/AI-Luo-Man-ga/internal/services/prompt"
-	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packagecontract"
-	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
+	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/packagecontract"
 )
 
 type config struct {
@@ -87,7 +86,7 @@ func loadConfig() (config, error) {
 	}
 	runtimeInstallRoot := os.Getenv("AILUO_RUNTIME_INSTALL_ROOT")
 	if runtimeInstallRoot == "" {
-		if def := packmgr.DefaultInstallRoot(); def != "" {
+		if def := defaultRuntimeInstallRoot(); def != "" {
 			if _, err := os.Stat(def); err == nil {
 				runtimeInstallRoot = def
 			}
@@ -115,6 +114,16 @@ func loadConfig() (config, error) {
 		return config{}, fmt.Errorf("configuration error: AILUO_RUNTIME_INSTALL_ROOT must be a clean absolute path")
 	}
 	return result, nil
+}
+
+// defaultRuntimeInstallRoot 是 Core 的部署配置默认值。包管理器 CLI 独立维护
+// 自己的默认安装根，Core 不依赖其安装实现。
+func defaultRuntimeInstallRoot() string {
+	base, err := os.UserConfigDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(base, "ailuo", "runtime")
 }
 
 func applyLocalConfig(base config, resolved controlconfig.Resolved) (config, error) {

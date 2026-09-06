@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packagecontract"
+	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/packagecontract"
 )
 
 // applyProcessLimits 在既无 prlimit 也无 Job Object 的平台（macOS/BSD、Plan 9、
