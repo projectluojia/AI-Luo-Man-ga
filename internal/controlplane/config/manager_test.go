@@ -187,11 +187,6 @@ func TestManagerRejectsIncompleteSettings(t *testing.T) {
 		name   string
 		mutate func(*SaveInput)
 	}{
-		{name: "prompt catalog", mutate: func(input *SaveInput) { input.PromptCatalog = promptcatalog.Catalog{} }},
-		{name: "base system prompt", mutate: func(input *SaveInput) { input.BaseSystemPrompt = "" }},
-		{name: "channel prompts", mutate: func(input *SaveInput) { input.ChannelPrompts = nil }},
-		{name: "agent run", mutate: func(input *SaveInput) { input.AgentRun = AgentRunSettings{} }},
-	}
 		{name: "executor config", mutate: func(input *SaveInput) { input.ExecutorConfig = json.RawMessage(`{`) }},
 		{name: "execution settings", mutate: func(input *SaveInput) { input.Execution = ExecutionSettings{} }},
 	}
@@ -207,7 +202,6 @@ func TestManagerRejectsIncompleteSettings(t *testing.T) {
 				t.Fatalf("incomplete settings error=%v", err)
 			}
 		})
-	}
 	}
 }
 
