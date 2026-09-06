@@ -9,11 +9,17 @@ on:
     paths:
       - contracts/**
       - package-manager/**
+      - ailuo.toml
+      - go.work
+      - go.work.sum
       - .github/workflows/package-manager.yml
   pull_request:
     paths:
       - contracts/**
       - package-manager/**
+      - ailuo.toml
+      - go.work
+      - go.work.sum
       - .github/workflows/package-manager.yml
   workflow_dispatch:
 
@@ -25,8 +31,35 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  modules:
-    name: Package Manager module
+  contracts:
+    name: contracts module
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: contracts/go.mod
+          cache: true
+          cache-dependency-path: |
+            contracts/go.sum
+            go.work.sum
+      - name: 检查 contracts module
+        working-directory: contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          go mod verify
+          go mod tidy -diff
+          files="$(gofmt -l .)"
+          test -z "$files" || { echo "$files"; exit 1; }
+          go test ./...
+          go vet ./...
+
+  package-manager:
+    name: package-manager module
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -40,17 +73,7 @@ jobs:
           cache-dependency-path: |
             contracts/go.sum
             package-manager/go.sum
-      - name: 检查 contracts module
-        working-directory: contracts
-        shell: bash
-        run: |
-          set -euo pipefail
-          go mod verify
-          go mod tidy -diff
-          files="$(gofmt -l .)"
-          test -z "$files" || { echo "$files"; exit 1; }
-          go test ./...
-          go vet ./...
+            go.work.sum
       - name: 检查 Package Manager module
         working-directory: package-manager
         shell: bash
