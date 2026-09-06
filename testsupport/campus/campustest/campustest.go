@@ -23,8 +23,8 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/packstore"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
-	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packagecontract"
-	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packagefmt"
+	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/packagecontract"
+	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/packagefmt"
 	"github.com/projectluojia/AI-Luo-Man-ga/testsupport/campus"
 )
 

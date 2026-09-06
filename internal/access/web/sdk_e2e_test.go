@@ -20,7 +20,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime/runtimetest"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/memory"
-	"github.com/projectluojia/AI-Luo-Man-ga/pkg/sdkgen"
+	"github.com/projectluojia/AI-Luo-Man-ga/package-manager/pkg/sdkgen"
 	"github.com/projectluojia/AI-Luo-Man-ga/testsupport/campus"
 	"github.com/projectluojia/AI-Luo-Man-ga/testsupport/campus/campustest"
 )
