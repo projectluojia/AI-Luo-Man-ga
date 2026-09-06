@@ -7,11 +7,11 @@
 //     (app_id, platform, platform_space_id, platform_user_id)，同一外部身份
 //     在同一 App 内只能绑定一个内部用户；
 //   - AppMembership 是用户在 App 内的成员关系，全部按 app_id 隔离，跨 App
-//     读取统一按不存在处理；roles/permission_grants 表保留为 Schema 契约，
+//     读取统一按不存在处理；RoleIDs 只表达组织关系，不参与 Capability 授权；
 //     SetMembership 内联校验角色存在性；
-//   - IdentityBindingRevision 是 App 级单调递增的身份/授权变更修订号；
-//   - 生效权限在查询时实时计算，不缓存；禁用与解绑立即反映到下一次
-//     身份快照（IdentityContext / EffectivePermissions）；
+//   - IdentityBindingRevision 是 App 级单调递增的身份绑定变更修订号；
+//   - 禁用与解绑立即反映到下一次身份快照；Capability 授权统一由 App/Run
+//     的 Capability Grant 与 Core Dispatcher 决定；
 //   - 身份不存在时返回明确的 ErrNotFound，绝不自动创建匿名权威用户。
 package identity
 
@@ -80,13 +80,13 @@ type AppMembership struct {
 }
 
 // IdentityContext 是接入事件解析后的受治理身份快照，供 Dispatcher 与知识库
-// 在查询时读取。权限与修订号来自查询时刻的持久化状态，不缓存。
+// 在查询时读取。身份绑定与成员关系来自查询时刻的持久化状态，不缓存；
+// Capability 授权不从 IdentityContext 读取，统一由 App/Run Grant 决定。
 type IdentityContext struct {
 	AppID           string
 	UserID          string
 	Membership      *AppMembership // 用户在 App 无成员关系时为 nil
 	RoleIDs         []string
-	Permissions     []string // 生效权限（直接授予与角色授予的并集，规范排序）
 	BindingRevision int64
 }
 
@@ -107,7 +107,6 @@ type Store interface {
 	SetMembership(context.Context, AppMembership) error
 	GetMembership(context.Context, string, string) (AppMembership, error)
 
-	EffectivePermissions(context.Context, string, string) ([]string, error)
 	BindingRevision(context.Context, string) (int64, error)
 }
 

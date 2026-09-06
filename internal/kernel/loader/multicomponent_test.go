@@ -70,10 +70,12 @@ func writeMultiComponentFixture(t *testing.T, root, version string) string {
 		Capabilities: []capability.CapabilitySpec{
 			{ID: "test.multi.query", Version: version, Name: "基础查询", Description: "多组件基础查询",
 				InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
-				SideEffect:      capability.SideEffectRead},
+				Authorization:   capability.AuthorizationSpec{ResourceType: "capability.resource"},
+				Execution:       capability.ExecutionSpec{EffectTarget: capability.EffectNone, Replay: capability.ReplaySafe, ConfirmationFloor: capability.ConfirmationPolicy}},
 			{ID: "test.multi.transport", Version: version, Name: "传输", Description: "多组件传输",
 				InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
-				SideEffect:      capability.SideEffectRead},
+				Authorization:   capability.AuthorizationSpec{ResourceType: "capability.resource"},
+				Execution:       capability.ExecutionSpec{EffectTarget: capability.EffectNone, Replay: capability.ReplaySafe, ConfirmationFloor: capability.ConfirmationPolicy}},
 		},
 		Components: []packagecontract.Component{
 			{ID: "multi.adapter", Mode: loader.ModeIsolated, Role: packagecontract.RoleProvider, Entrypoint: "multi-adapter",

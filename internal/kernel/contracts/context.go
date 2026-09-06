@@ -30,7 +30,6 @@ type RequestContext struct {
 	ConfirmationID  string
 	ProtocolVersion string
 	CapabilityID    string
-	PermissionScope []string
 	CallChain       []string
 }
 

@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/capability"
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packagecontract"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access/configui"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access/qq"
@@ -157,24 +158,34 @@ func applyLocalConfig(base config, resolved controlconfig.Resolved) (config, err
 	return base, nil
 }
 
-// initialCapabilityIDs 为新 App 生成首次能力集合：已注册的内核服务能力和
-// 安装包清单声明的能力。已有 App 的集合由持久化配置保留，不在启动时扩张。
-func initialCapabilityIDs(reg *registry.Registry, records []loader.InstalledRecord) []string {
-	ids := make(map[string]struct{})
+// initialCapabilityGrants 为新 App 生成首次能力授权。授权主体为 any，具体
+// 资源范围仍由 Capability 的授权声明和后续 App 策略收窄。
+func initialCapabilityGrants(appID string, reg *registry.Registry, records []loader.InstalledRecord) []capability.Grant {
+	specs := make(map[string]capability.CapabilitySpec)
 	for _, spec := range reg.Capabilities() {
-		ids[spec.ID] = struct{}{}
+		specs[spec.ID] = spec
 	}
 	for _, record := range records {
 		for _, spec := range record.Runtime.Capabilities {
-			ids[spec.ID] = struct{}{}
+			specs[spec.ID] = spec
 		}
 	}
-	result := make([]string, 0, len(ids))
-	for id := range ids {
-		result = append(result, id)
+	ids := make([]string, 0, len(specs))
+	for id := range specs {
+		ids = append(ids, id)
 	}
-	sort.Strings(result)
-	return result
+	sort.Strings(ids)
+	grants := make([]capability.Grant, 0, len(ids))
+	for _, id := range ids {
+		spec := specs[id]
+		grants = append(grants, capability.Grant{
+			ID: "initial-" + id, AppID: appID, Principal: capability.PrincipalAny, CapabilityID: id,
+			Resource:  capability.ResourceScope{Type: spec.Authorization.ResourceType},
+			ExpiresAt: time.Now().UTC().Add(365 * 24 * time.Hour), MaxCalls: 1_000_000,
+			PolicyRevision: "initial",
+		})
+	}
+	return grants
 }
 
 // configureInstalledRuntimes 发现安装目录中的 Runtime 包，按声明的运行模式

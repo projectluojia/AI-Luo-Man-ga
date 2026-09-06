@@ -200,16 +200,16 @@ func authorizeStoreOperation(request contracts.RequestContext, operation string,
 	if !ok {
 		return ErrAccessDenied
 	}
-	switch spec.SideEffect {
-	case capability.SideEffectNone, capability.SideEffectRead, capability.SideEffectWrite, capability.SideEffectExternal:
+	switch spec.Execution.EffectTarget {
+	case capability.EffectNone, capability.EffectState, capability.EffectExternal:
 	default:
 		return ErrAccessDenied
 	}
 	if operation != OpPut && operation != OpDelete {
 		return nil
 	}
-	if (spec.SideEffect != capability.SideEffectWrite && spec.SideEffect != capability.SideEffectExternal) ||
-		request.IdempotencyKey == "" || (spec.RequiresConfirmation && request.ConfirmationID == "") {
+	if spec.Execution.Replay != capability.ReplayIdempotencyKey || request.IdempotencyKey == "" ||
+		(spec.Execution.ConfirmationFloor == capability.ConfirmationRequired && request.ConfirmationID == "") {
 		return ErrAccessDenied
 	}
 	return nil

@@ -7,12 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"sort"
 	"time"
 
-	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/capability"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/jsonutil"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/appconfig"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/authorization"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/idempotency"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
@@ -21,6 +20,7 @@ import (
 
 var (
 	ErrCapabilityDisabled     = errors.New("capability is not enabled for app")
+	ErrAuthorizationDenied    = authorization.ErrDenied
 	ErrCallDepthExceeded      = errors.New("maximum call depth exceeded")
 	ErrCycleDetected          = errors.New("non-progressing call cycle detected")
 	ErrIdempotencyKeyRequired = errors.New("idempotency key is required for side effects")
@@ -39,7 +39,7 @@ type ConfirmationRequest struct {
 	RunID          string
 	ConfirmationID string
 	CapabilityID   string
-	SideEffect     string
+	EffectTarget   string
 	IdempotencyKey string
 }
 
@@ -55,6 +55,8 @@ type DispatcherConfig struct {
 	ConfirmationVerifier ConfirmationVerifier
 	// IdempotencyStore 是写/外部副作用调用的持久幂等存储；为 nil 时副作用调用 fail-closed。
 	IdempotencyStore idempotency.Store
+	// Relationships 提供资源关系判断；缺失时关系型 Grant fail-closed。
+	Relationships authorization.RelationshipChecker
 }
 
 type Dispatcher struct {
@@ -62,6 +64,7 @@ type Dispatcher struct {
 	policy        AppPolicy
 	confirmations ConfirmationVerifier
 	idempotency   *idempotency.Manager
+	relationships authorization.RelationshipChecker
 	maxCallDepth  uint16
 }
 
@@ -69,7 +72,7 @@ func NewDispatcher(reg *registry.Registry, policy AppPolicy, config DispatcherCo
 	if config.MaxCallDepth == 0 {
 		config.MaxCallDepth = 16
 	}
-	d := &Dispatcher{registry: reg, policy: policy, maxCallDepth: config.MaxCallDepth}
+	d := &Dispatcher{registry: reg, policy: policy, maxCallDepth: config.MaxCallDepth, relationships: config.Relationships}
 	if config.ConfirmationVerifier != nil {
 		d.confirmations = config.ConfirmationVerifier
 	}
@@ -110,23 +113,35 @@ func (d *Dispatcher) route(
 	if err != nil {
 		return nil, err
 	}
-	if !policy.CapabilityEnabled(capabilityID) {
-		err := fmt.Errorf("%w: app=%q capability=%q", ErrCapabilityDisabled, request.AppID, capabilityID)
-		observe.Warn(ctx, "App 未启用请求的 Capability")
-		return nil, err
-	}
 	spec, handler, err := d.registry.ResolveCapability(capabilityID)
 	if err != nil {
 		observe.Warn(ctx, "Registry 中未找到 Capability 路由", observe.StringAttr("error", err.Error()))
 		return nil, err
 	}
-	narrowedPermissions, err := d.authorize(ctx, request, spec.ID, spec.SideEffect,
-		spec.RequiresConfirmation, spec.RequiredPermissions)
+	decision, err := authorization.Authorize(ctx, spec, authorization.Request{
+		AppID: request.AppID, Principal: principal(request.UserID), RunID: request.RunID,
+		CapabilityID: spec.ID, Payload: payload, Now: time.Now().UTC(),
+	}, policy.CapabilityGrants, d.relationships)
 	if err != nil {
-		observe.Warn(ctx, "权限或副作用治理拒绝本次调用",
+		observe.Warn(ctx, "Capability 授权拒绝本次调用",
 			observe.StringAttr("error_class", "governance"),
 		)
 		return nil, err
+	}
+	if decision.RequireIdempotency && request.IdempotencyKey == "" {
+		return nil, fmt.Errorf("%w: target=%q", ErrIdempotencyKeyRequired, spec.ID)
+	}
+	if decision.RequireConfirmation {
+		if request.ConfirmationID == "" || d.confirmations == nil {
+			return nil, fmt.Errorf("%w: target=%q", ErrConfirmationRequired, spec.ID)
+		}
+		if err := d.confirmations.VerifyConfirmation(ctx, ConfirmationRequest{
+			AppID: request.AppID, EchoID: request.EchoID, RunID: request.RunID,
+			ConfirmationID: request.ConfirmationID, CapabilityID: spec.ID,
+			EffectTarget: spec.Execution.EffectTarget, IdempotencyKey: request.IdempotencyKey,
+		}); err != nil {
+			return nil, fmt.Errorf("%w: target=%q", ErrConfirmationRequired, spec.ID)
+		}
 	}
 	if err := d.registry.ValidateCapabilityInput(spec.ID, payload); err != nil {
 		observe.Warn(ctx, "输入未通过 Capability Schema 校验",
@@ -134,14 +149,14 @@ func (d *Dispatcher) route(
 		)
 		return nil, err
 	}
-	child, fingerprint, err := d.childRequest(request, spec.ID, spec.Version, narrowedPermissions, payload)
+	child, fingerprint, err := d.childRequest(request, spec.ID, spec.Version, payload)
 	if err != nil {
 		observe.Warn(ctx, "调用图治理拒绝本次调用", observe.StringAttr("error", err.Error()))
 		return nil, err
 	}
 	child.CapabilityID = spec.ID
 	result, replayed, err := d.invokeHandler(ctx, request, spec.ID, spec.Version,
-		spec.SideEffect, fingerprint, func(executionContext context.Context) (json.RawMessage, error) {
+		decision.RequireIdempotency, fingerprint, func(executionContext context.Context) (json.RawMessage, error) {
 			return handler(executionContext, child, payload)
 		})
 	if err != nil {
@@ -172,9 +187,6 @@ func (d *Dispatcher) policySnapshot(ctx context.Context, request contracts.Reque
 	if !snapshot.Enabled {
 		return appconfig.PolicySnapshot{}, ErrCapabilityDisabled
 	}
-	if _, err := registry.NarrowPermissions(snapshot.PermissionScope, request.PermissionScope); err != nil {
-		return appconfig.PolicySnapshot{}, fmt.Errorf("%w: app=%q", registry.ErrPermissionDenied, request.AppID)
-	}
 	return snapshot, nil
 }
 
@@ -196,49 +208,16 @@ func requestDeadlineContext(ctx context.Context, deadline time.Time) (context.Co
 	return context.WithDeadline(ctx, deadline)
 }
 
-func (d *Dispatcher) authorize(
-	ctx context.Context,
-	request contracts.RequestContext,
-	targetID string,
-	sideEffect string,
-	requiresConfirmation bool,
-	requiredPermissions []string,
-) ([]string, error) {
-	narrowedPermissions, err := registry.NarrowPermissions(request.PermissionScope, requiredPermissions)
-	if err != nil {
-		return nil, fmt.Errorf("%w: target=%q", registry.ErrPermissionDenied, targetID)
-	}
-	if sideEffect == capability.SideEffectWrite || sideEffect == capability.SideEffectExternal {
-		if request.IdempotencyKey == "" {
-			return nil, fmt.Errorf("%w: target=%q", ErrIdempotencyKeyRequired, targetID)
-		}
-	}
-	if requiresConfirmation {
-		if request.ConfirmationID == "" || d.confirmations == nil {
-			return nil, fmt.Errorf("%w: target=%q", ErrConfirmationRequired, targetID)
-		}
-		confirmation := ConfirmationRequest{
-			AppID: request.AppID, EchoID: request.EchoID, RunID: request.RunID,
-			ConfirmationID: request.ConfirmationID, CapabilityID: targetID,
-			SideEffect: sideEffect, IdempotencyKey: request.IdempotencyKey,
-		}
-		if err := d.confirmations.VerifyConfirmation(ctx, confirmation); err != nil {
-			return nil, fmt.Errorf("%w: target=%q", ErrConfirmationRequired, targetID)
-		}
-	}
-	return narrowedPermissions, nil
-}
-
 func (d *Dispatcher) invokeHandler(
 	ctx context.Context,
 	request contracts.RequestContext,
 	targetID string,
 	version string,
-	sideEffect string,
+	requireIdempotency bool,
 	fingerprint string,
 	handler func(context.Context) (json.RawMessage, error),
 ) (json.RawMessage, bool, error) {
-	if sideEffect != capability.SideEffectWrite && sideEffect != capability.SideEffectExternal {
+	if !requireIdempotency {
 		result, err := handler(ctx)
 		return result, false, err
 	}
@@ -258,7 +237,6 @@ func (d *Dispatcher) childRequest(
 	request contracts.RequestContext,
 	targetID string,
 	version string,
-	narrowedPermissions []string,
 	payload json.RawMessage,
 ) (contracts.RequestContext, string, error) {
 	fingerprint, err := callFingerprint(request, targetID, version, payload)
@@ -271,26 +249,26 @@ func (d *Dispatcher) childRequest(
 		}
 	}
 	child := request.NextCall()
-	child.PermissionScope = narrowedPermissions
 	child.CallChain = append(append([]string(nil), request.CallChain...), fingerprint)
 	return child, fingerprint, nil
 }
 
 func callFingerprint(request contracts.RequestContext, targetID, version string, payload json.RawMessage) (string, error) {
 	digest := sha256.New()
-	permissions := append([]string(nil), request.PermissionScope...)
-	sort.Strings(permissions)
 	fmt.Fprintf(digest, "%s\x00%s\x00%s\x00%s\x00", targetID, version, request.AppID, request.UserID)
 	canonicalPayload, err := jsonutil.CanonicalJSON(payload)
 	if err != nil {
 		return "", fmt.Errorf("canonicalize call payload: %w", err)
 	}
 	_, _ = digest.Write(canonicalPayload)
-	for _, permission := range permissions {
-		_, _ = digest.Write([]byte{0})
-		_, _ = digest.Write([]byte(permission))
-	}
 	return fmt.Sprintf("%x", digest.Sum(nil)), nil
+}
+
+func principal(userID string) string {
+	if userID == "" {
+		return "public"
+	}
+	return userID
 }
 
 func (d *Dispatcher) validate(ctx context.Context, request contracts.RequestContext) error {

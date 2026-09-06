@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/capability"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/appconfig"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite"
 )
@@ -143,7 +144,10 @@ func TestAppConfigRejectsMalformedBoundariesBeforePersistence(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 	config := validAppConfig("app")
-	config.PermissionScope = []string{"private.read", "private.read"}
+	config.CapabilityGrants = []capability.Grant{
+		{ID: "grant-duplicate", AppID: "app", Principal: capability.PrincipalAny, CapabilityID: "private.read", Resource: capability.ResourceScope{Type: "private.resource"}, ExpiresAt: time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC), MaxCalls: 1},
+		{ID: "grant-duplicate", AppID: "app", Principal: capability.PrincipalAny, CapabilityID: "private.read", Resource: capability.ResourceScope{Type: "private.resource"}, ExpiresAt: time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC), MaxCalls: 1},
+	}
 	if _, _, err := store.Ensure(t.Context(), config); !errors.Is(err, appconfig.ErrInvalid) {
 		t.Fatalf("invalid config error=%v", err)
 	}
@@ -160,7 +164,12 @@ func validAppConfig(appID string) appconfig.Config {
 		AppID: appID, Enabled: true, ExecutorID: "executor.test",
 		ExecutorConfig: json.RawMessage(`{"strategy":"test"}`), MaxSteps: 8, MaxCapabilityCalls: 8,
 		MaxExecutionUnits: 40960, MaxOutputBytes: 65536, MaxCostMicrousd: 0,
-		ExecutionTimeout: 30 * time.Second, EnabledCapabilities: []string{"campus.bus.routes.list"},
-		PermissionScope: []string{"bus.read"},
+		ExecutionTimeout: 30 * time.Second,
+		CapabilityGrants: []capability.Grant{{
+			ID: "grant-routes", AppID: appID, Principal: capability.PrincipalAny,
+			CapabilityID: "campus.bus.routes.list", Resource: capability.ResourceScope{Type: "campus.bus.catalog"},
+			ExpiresAt: time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC), MaxCalls: 100,
+			PolicyRevision: "test",
+		}},
 	}
 }

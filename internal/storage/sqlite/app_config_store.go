@@ -75,7 +75,7 @@ func (s *Store) Revision(ctx context.Context, appID, revision string) (result ap
 	row := s.db.QueryRowContext(ctx, `
 SELECT r.app_id,r.revision,0,r.enabled,r.executor_id,r.executor_config,
        r.max_steps,r.max_capability_calls,r.max_execution_units,r.max_output_bytes,
-       r.max_cost_microusd,r.execution_timeout_ms,r.enabled_capabilities,r.permission_scope,
+		r.max_cost_microusd,r.execution_timeout_ms,r.capability_grants,
        r.created_at,r.created_at
 FROM app_config_revisions r
 WHERE r.app_id=? AND r.revision=?`, appID, revision)
@@ -148,7 +148,7 @@ func readCurrentAppConfig(ctx context.Context, queryer rowQueryer, appID string)
 	row := queryer.QueryRowContext(ctx, `
 SELECT r.app_id,r.revision,h.generation,r.enabled,r.executor_id,r.executor_config,
        r.max_steps,r.max_capability_calls,r.max_execution_units,r.max_output_bytes,
-       r.max_cost_microusd,r.execution_timeout_ms,r.enabled_capabilities,r.permission_scope,
+		r.max_cost_microusd,r.execution_timeout_ms,r.capability_grants,
        h.created_at,h.updated_at
 FROM app_config_heads h
 JOIN app_config_revisions r ON r.app_id=h.app_id AND r.revision=h.revision
@@ -161,11 +161,7 @@ WHERE h.app_id=?`, appID)
 }
 
 func insertAppConfigRevision(ctx context.Context, tx *sql.Tx, config appconfig.Config) error {
-	capabilities, err := json.Marshal(config.EnabledCapabilities)
-	if err != nil {
-		return errors.Join(appconfig.ErrInvalid, err)
-	}
-	permissions, err := json.Marshal(config.PermissionScope)
+	grants, err := json.Marshal(config.CapabilityGrants)
 	if err != nil {
 		return errors.Join(appconfig.ErrInvalid, err)
 	}
@@ -173,12 +169,12 @@ func insertAppConfigRevision(ctx context.Context, tx *sql.Tx, config appconfig.C
 INSERT INTO app_config_revisions(
   app_id,revision,enabled,executor_id,executor_config,max_steps,max_capability_calls,
   max_execution_units,max_output_bytes,max_cost_microusd,execution_timeout_ms,
-  enabled_capabilities,permission_scope,created_at
-) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+  capability_grants,created_at
+) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(app_id,revision) DO NOTHING`,
 		config.AppID, config.Revision, config.Enabled, config.ExecutorID, string(config.ExecutorConfig),
 		config.MaxSteps, config.MaxCapabilityCalls, config.MaxExecutionUnits, config.MaxOutputBytes,
-		config.MaxCostMicrousd, config.ExecutionTimeout.Milliseconds(), string(capabilities), string(permissions),
+		config.MaxCostMicrousd, config.ExecutionTimeout.Milliseconds(), string(grants),
 		config.CreatedAt.UTC().Format(time.RFC3339Nano)); err != nil {
 		return fmt.Errorf("insert app config revision: %w", err)
 	}
@@ -190,25 +186,22 @@ func scanAppConfig(scanner rowScanner) (appconfig.Config, error) {
 	var enabled bool
 	var executorConfig []byte
 	var executionTimeoutMS int64
-	var capabilitiesJSON, permissionsJSON, createdAt, updatedAt string
+	var grantsJSON, createdAt, updatedAt string
 	if err := scanner.Scan(
 		&config.AppID, &config.Revision, &config.Generation, &enabled, &config.ExecutorID,
 		&executorConfig, &config.MaxSteps, &config.MaxCapabilityCalls, &config.MaxExecutionUnits,
 		&config.MaxOutputBytes, &config.MaxCostMicrousd, &executionTimeoutMS,
-		&capabilitiesJSON, &permissionsJSON, &createdAt, &updatedAt,
+		&grantsJSON, &createdAt, &updatedAt,
 	); err != nil {
 		return appconfig.Config{}, err
 	}
 	config.Enabled = enabled
 	config.ExecutorConfig = append(json.RawMessage(nil), executorConfig...)
 	config.ExecutionTimeout = time.Duration(executionTimeoutMS) * time.Millisecond
-	if len(config.ExecutorConfig) > executor.MaxExecutorConfigBytes || len(capabilitiesJSON) > 65536 || len(permissionsJSON) > 65536 {
+	if len(config.ExecutorConfig) > executor.MaxExecutorConfigBytes || len(grantsJSON) > 65536 {
 		return appconfig.Config{}, appconfig.ErrInvalid
 	}
-	if err := json.Unmarshal([]byte(capabilitiesJSON), &config.EnabledCapabilities); err != nil {
-		return appconfig.Config{}, errors.Join(appconfig.ErrInvalid, err)
-	}
-	if err := json.Unmarshal([]byte(permissionsJSON), &config.PermissionScope); err != nil {
+	if err := json.Unmarshal([]byte(grantsJSON), &config.CapabilityGrants); err != nil {
 		return appconfig.Config{}, errors.Join(appconfig.ErrInvalid, err)
 	}
 	var err error

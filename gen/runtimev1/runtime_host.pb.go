@@ -312,7 +312,6 @@ type GovernedRequestContext struct {
 	IdempotencyKey  string                 `protobuf:"bytes,11,opt,name=idempotency_key,json=idempotencyKey,proto3" json:"idempotency_key,omitempty"`
 	ConfirmationId  string                 `protobuf:"bytes,12,opt,name=confirmation_id,json=confirmationId,proto3" json:"confirmation_id,omitempty"`
 	ProtocolVersion string                 `protobuf:"bytes,13,opt,name=protocol_version,json=protocolVersion,proto3" json:"protocol_version,omitempty"`
-	PermissionScope []string               `protobuf:"bytes,14,rep,name=permission_scope,json=permissionScope,proto3" json:"permission_scope,omitempty"`
 	CallChain       []string               `protobuf:"bytes,15,rep,name=call_chain,json=callChain,proto3" json:"call_chain,omitempty"`
 	CallId          string                 `protobuf:"bytes,16,opt,name=call_id,json=callId,proto3" json:"call_id,omitempty"`
 	CapabilityId    string                 `protobuf:"bytes,18,opt,name=capability_id,json=capabilityId,proto3" json:"capability_id,omitempty"`
@@ -439,13 +438,6 @@ func (x *GovernedRequestContext) GetProtocolVersion() string {
 		return x.ProtocolVersion
 	}
 	return ""
-}
-
-func (x *GovernedRequestContext) GetPermissionScope() []string {
-	if x != nil {
-		return x.PermissionScope
-	}
-	return nil
 }
 
 func (x *GovernedRequestContext) GetCallChain() []string {
@@ -629,7 +621,7 @@ const file_runtime_host_proto_rawDesc = "" +
 	"\bidentity\x18\x01 \x01(\v2!.ailuo.runtime.v1.RuntimeIdentityR\bidentity\x12\x14\n" +
 	"\x05ready\x18\x02 \x01(\bR\x05ready\x12\x1f\n" +
 	"\vstatus_code\x18\x03 \x01(\tR\n" +
-	"statusCode\"\xf7\x04\n" +
+	"statusCode\"\xe4\x04\n" +
 	"\x16GovernedRequestContext\x12\x15\n" +
 	"\x06app_id\x18\x01 \x01(\tR\x05appId\x12\x17\n" +
 	"\aecho_id\x18\x02 \x01(\tR\x06echoId\x12\x1d\n" +
@@ -647,12 +639,11 @@ const file_runtime_host_proto_rawDesc = "" +
 	" \x01(\x03R\x0edeadlineUnixMs\x12'\n" +
 	"\x0fidempotency_key\x18\v \x01(\tR\x0eidempotencyKey\x12'\n" +
 	"\x0fconfirmation_id\x18\f \x01(\tR\x0econfirmationId\x12)\n" +
-	"\x10protocol_version\x18\r \x01(\tR\x0fprotocolVersion\x12)\n" +
-	"\x10permission_scope\x18\x0e \x03(\tR\x0fpermissionScope\x12\x1d\n" +
+	"\x10protocol_version\x18\r \x01(\tR\x0fprotocolVersion\x12\x1d\n" +
 	"\n" +
 	"call_chain\x18\x0f \x03(\tR\tcallChain\x12\x17\n" +
 	"\acall_id\x18\x10 \x01(\tR\x06callId\x12#\n" +
-	"\rcapability_id\x18\x12 \x01(\tR\fcapabilityIdJ\x04\b\x11\x10\x12J\x04\b\x13\x10\x14J\x04\b\x14\x10\x15R\vtarget_typeR\n" +
+	"\rcapability_id\x18\x12 \x01(\tR\fcapabilityIdJ\x04\b\x0e\x10\x0fJ\x04\b\x11\x10\x12J\x04\b\x13\x10\x14J\x04\b\x14\x10\x15R\x10permission_scopeR\vtarget_typeR\n" +
 	"service_idR\atool_id\"\xb5\x01\n" +
 	"\rInvokeRequest\x12=\n" +
 	"\bidentity\x18\x01 \x01(\v2!.ailuo.runtime.v1.RuntimeIdentityR\bidentity\x12B\n" +

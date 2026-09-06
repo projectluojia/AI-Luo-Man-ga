@@ -179,8 +179,8 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 		ExecutorConfig: config.executorConfig, MaxSteps: config.execution.MaxSteps,
 		MaxCapabilityCalls: config.execution.MaxCapabilityCalls, MaxExecutionUnits: config.execution.MaxExecutionUnits,
 		MaxOutputBytes: config.execution.MaxOutputBytes, MaxCostMicrousd: config.execution.MaxCostMicrousd,
-		ExecutionTimeout:    config.executorTimeout,
-		EnabledCapabilities: initialCapabilityIDs(reg, installedRecords),
+		ExecutionTimeout: config.executorTimeout,
+		CapabilityGrants: initialCapabilityGrants(config.appID, reg, installedRecords),
 	})
 	if err != nil {
 		return fmt.Errorf("ensure App config: %w", err)

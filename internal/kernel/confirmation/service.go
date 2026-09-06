@@ -48,6 +48,7 @@ func (s *Service) Request(
 	if err != nil {
 		return Confirmation{}, err
 	}
+	effectTarget := spec.Execution.EffectTarget
 	expiry, err := effectiveExpiry(expiresAt, now)
 	if err != nil {
 		return Confirmation{}, err
@@ -59,7 +60,7 @@ func (s *Service) Request(
 		RunID:          runID,
 		CallID:         callID,
 		CapabilityID:   spec.CapabilityID,
-		SideEffect:     spec.SideEffect,
+		EffectTarget:   effectTarget,
 		IdempotencyKey: spec.IdempotencyKey,
 		ArgumentDigest: digest,
 		Status:         StatusWaiting,
@@ -80,7 +81,7 @@ func (s *Service) Request(
 		observe.StringAttr("call_id", callID),
 		observe.StringAttr("confirmation_id", record.ConfirmationID),
 		observe.StringAttr("capability_id", spec.CapabilityID),
-		observe.StringAttr("side_effect", spec.SideEffect),
+		observe.StringAttr("effect_target", spec.Execution.EffectTarget),
 		observe.StringAttr("status", record.Status),
 		observe.StringAttr("expires_at", record.ExpiresAt.Format(time.RFC3339)),
 	)
@@ -290,9 +291,9 @@ func (s *Service) verify(ctx context.Context, request runtime.ConfirmationReques
 
 // verifyRecord 执行确认记录的完整匹配规则。
 func verifyRecord(record Confirmation, request runtime.ConfirmationRequest, now time.Time) error {
-	// 范围绑定：跨 App、Capability、Echo、Run、副作用或幂等键一律拒绝。
+	// 范围绑定：跨 App、Capability、Echo、Run、执行边界或幂等键一律拒绝。
 	if record.AppID != request.AppID || record.CapabilityID != request.CapabilityID || record.EchoID != request.EchoID ||
-		record.RunID != request.RunID || record.SideEffect != request.SideEffect ||
+		record.RunID != request.RunID || record.EffectTarget != request.EffectTarget ||
 		record.IdempotencyKey != request.IdempotencyKey {
 		return ErrScopeMismatch
 	}

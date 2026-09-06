@@ -90,8 +90,41 @@ path = "packages/demo"
 	}
 }
 
+func TestSyncRollsBackInstallRootWhenProjectLockPublishFails(t *testing.T) {
+	projectDir := packageiotest.TempDir(t)
+	packageDir := filepath.Join(projectDir, "packages", "demo")
+	writePackage(t, packageDir, "demo.pkg", "1.0.0", "demo.wasm", "")
+	projectFile := filepath.Join(projectDir, "ailuo.toml")
+	writeProject(t, projectDir, `
+[project]
+id = "ailuo"
+
+[dependencies."demo.pkg"]
+version = ">=1.0.0"
+path = "packages/demo"
+`)
+	installRoot := filepath.Join(projectDir, "runtime")
+	if _, err := projectmgr.Sync(t.Context(), projectFile, installRoot, nil); err != nil {
+		t.Fatal(err)
+	}
+	writePackage(t, packageDir, "demo.pkg", "2.0.0", "demo.wasm", "")
+	if err := os.WriteFile(filepath.Join(projectDir, "ailuo.lock.backup"), []byte("stale"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := projectmgr.Sync(t.Context(), projectFile, installRoot, nil); err == nil {
+		t.Fatal("Sync unexpectedly succeeded with a stale lock backup")
+	}
+	record, err := packageio.ReadInstalled(context.Background(), filepath.Join(installRoot, "demo.pkg"))
+	if err != nil {
+		t.Fatalf("ReadInstalled after rollback: %v", err)
+	}
+	if record.Manifest.Version != "1.0.0" {
+		t.Fatalf("installed version after rollback=%s, want 1.0.0", record.Manifest.Version)
+	}
+}
+
 func TestSyncRejectsMalformedExistingProjectLock(t *testing.T) {
-	projectDir := t.TempDir()
+	projectDir := packageiotest.TempDir(t)
 	packageDir := filepath.Join(projectDir, "packages", "demo")
 	writePackage(t, packageDir, "demo.pkg", "1.0.0", "demo.wasm", "")
 	writeProject(t, projectDir, `
@@ -146,7 +179,7 @@ path = "packages/demo"
 }
 
 func TestSyncRejectsUnsatisfiedTransitiveConstraint(t *testing.T) {
-	projectDir := t.TempDir()
+	projectDir := packageiotest.TempDir(t)
 	appDir := filepath.Join(projectDir, "packages", "app")
 	writePackage(t, filepath.Join(appDir, "dep"), "demo.dep", "2.0.0", "dep.wasm", "")
 	writePackage(t, appDir, "demo.app", "1.0.0", "app.wasm", `
@@ -172,6 +205,7 @@ func writeProject(t *testing.T, dir, body string) {
 	if err := os.WriteFile(filepath.Join(dir, "ailuo.toml"), []byte(body), 0o640); err != nil {
 		t.Fatal(err)
 	}
+	packageiotest.SecureTree(t, dir)
 }
 
 func writePackage(t *testing.T, dir, id, version, artifact, dependency string) {
@@ -182,8 +216,9 @@ func writePackage(t *testing.T, dir, id, version, artifact, dependency string) {
 	if err := os.WriteFile(filepath.Join(dir, artifact), []byte(id+"-"+version), 0o640); err != nil {
 		t.Fatal(err)
 	}
-	body := "[package]\nid = \"" + id + "\"\nversion = \"" + version + "\"\n\n[[component]]\nid = \"main\"\nmode = \"hosted\"\nrole = \"provider\"\nentrypoint = \"" + artifact + "\"\nexports = [\"" + id + ".capability\"]\n\n[[capability]]\nid = \"" + id + ".capability\"\nname = \"测试能力\"\ndescription = \"测试能力\"\nschema = \"\"\"" + `{"type":"object","additionalProperties":false}` + "\"\"\"\nside_effect = \"read\"\n" + dependency
+	body := "[package]\nid = \"" + id + "\"\nversion = \"" + version + "\"\n\n[[component]]\nid = \"main\"\nmode = \"hosted\"\nrole = \"provider\"\nentrypoint = \"" + artifact + "\"\nexports = [\"" + id + ".capability\"]\n\n[[capability]]\nid = \"" + id + ".capability\"\nname = \"测试能力\"\ndescription = \"测试能力\"\nschema = \"\"\"" + `{"type":"object","additionalProperties":false}` + "\"\"\"\n[capability.authorization]\nresource_type = \"test.resource\"\n[capability.execution]\neffect_target = \"none\"\nreplay = \"safe\"\nconfirmation_floor = \"policy\"\n" + dependency
 	if err := os.WriteFile(filepath.Join(dir, "ailuo.toml"), []byte(body), 0o640); err != nil {
 		t.Fatal(err)
 	}
+	packageiotest.SecureTree(t, dir)
 }

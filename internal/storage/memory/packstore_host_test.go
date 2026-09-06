@@ -28,7 +28,8 @@ func testCapabilities() []capability.CapabilitySpec {
 	return []capability.CapabilitySpec{{
 		ID: "test.capability", Version: "1.0.0", Name: "测试能力",
 		InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
-		SideEffect:      capability.SideEffectRead,
+		Authorization:   capability.AuthorizationSpec{ResourceType: "capability.resource"},
+		Execution:       capability.ExecutionSpec{EffectTarget: capability.EffectNone, Replay: capability.ReplaySafe, ConfirmationFloor: capability.ConfirmationPolicy},
 	}}
 }
 
@@ -108,7 +109,8 @@ func TestHostWriteRequiresWriteCapabilityAndIdempotency(t *testing.T) {
 	write := capability.CapabilitySpec{
 		ID: "test.write", Version: "1.0.0", Name: "写入能力",
 		InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
-		SideEffect:      capability.SideEffectWrite,
+		Authorization:   capability.AuthorizationSpec{ResourceType: "capability.resource"},
+		Execution:       capability.ExecutionSpec{EffectTarget: capability.EffectState, Replay: capability.ReplayIdempotencyKey, ConfirmationFloor: capability.ConfirmationPolicy},
 	}
 	functions := packstore.HostFunctions(docs, "test", "test/pkg", append(read, write))
 	putFn := hostFunctionByName(functions, packstore.OpPut)

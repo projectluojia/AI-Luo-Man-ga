@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -106,11 +105,11 @@ func insertRun(ctx context.Context, tx *sql.Tx, run kernelecho.RunRecord) error 
 	if run.ParentRunID != "" {
 		parentRunID = run.ParentRunID
 	}
-	capabilityScope, err := json.Marshal(nonNilStrings(run.CapabilityScope))
-	if err != nil {
-		return errors.Join(kernelecho.ErrInvalidRunRecord, err)
+	grants := run.CapabilityGrants
+	if grants == nil {
+		grants = []capability.Grant{}
 	}
-	permissionScope, err := json.Marshal(nonNilStrings(run.PermissionScope))
+	capabilityGrants, err := json.Marshal(grants)
 	if err != nil {
 		return errors.Join(kernelecho.ErrInvalidRunRecord, err)
 	}
@@ -127,14 +126,14 @@ INSERT INTO runs(
 	  app_id,run_id,run_group_id,echo_id,parent_run_id,origin_call_id,attempt,status,executor_id,config_revision,protocol_version,
   executor_config,input_payload,input_content_type,max_steps,max_capability_calls,max_execution_units,max_output_bytes,
   max_cost_microusd,execution_timeout_ms,used_execution_units,used_cost_microusd,used_retries,deadline_at,available_at,
-  last_executor_sequence,capability_scope,permission_scope,recoverable_state,result_payload,result_content_type,created_at,
+  last_executor_sequence,capability_grants,recoverable_state,result_payload,result_content_type,created_at,
   session_id,user_id,message_id,context_digest,context_sources,channel
-) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		run.AppID, run.ID, run.RunGroupID, run.EchoID, parentRunID, run.OriginCallID, run.Attempt, run.Status, run.ExecutorID, run.ConfigRevision, run.ProtocolVersion,
 		string(run.ExecutorConfig), run.InputPayload, run.InputContentType, run.MaxSteps, run.MaxCapabilityCalls, run.MaxExecutionUnits, run.MaxOutputBytes,
 		run.MaxCostMicrousd, run.ExecutionTimeoutMS, run.UsedExecutionUnits, run.UsedCostMicrousd, run.UsedRetries,
 		run.Deadline.UTC().Format(time.RFC3339Nano), run.AvailableAt.UTC().Format(time.RFC3339Nano), run.LastExecutorSequence,
-		string(capabilityScope), string(permissionScope), string(run.RecoverableState), resultPayload, run.Result.ContentType,
+		string(capabilityGrants), string(run.RecoverableState), resultPayload, run.Result.ContentType,
 		run.CreatedAt.UTC().Format(time.RFC3339Nano), run.SessionID, run.UserID, run.MessageID, run.ContextDigest, string(contextSources), run.Channel,
 	); err != nil {
 		return fmt.Errorf("create run: %w", err)
@@ -949,7 +948,7 @@ SELECT
   executor_config,input_payload,input_content_type,max_steps,max_capability_calls,max_execution_units,max_output_bytes,
   max_cost_microusd,execution_timeout_ms,used_execution_units,used_cost_microusd,used_retries,
   deadline_at,available_at,coalesce(lease_token,''),lease_expires_at,last_executor_sequence,
-  capability_scope,permission_scope,recoverable_state,result_payload,result_content_type,
+  capability_grants,recoverable_state,result_payload,result_content_type,
   coalesce(error_code,''),coalesce(error_message,''),created_at,started_at,completed_at,
   coalesce(session_id,''),coalesce(user_id,''),coalesce(message_id,''),coalesce(context_digest,''),coalesce(context_sources,'{}'),
   coalesce(channel,'')
@@ -971,8 +970,7 @@ func queryRun(scanner rowScanner) (kernelecho.RunRecord, error) {
 	var deadlineAt string
 	var availableAt string
 	var leaseExpiresAt sql.NullString
-	var capabilityScope string
-	var permissionScope string
+	var capabilityGrants string
 	var recoverableState string
 	var executorConfig []byte
 	var inputPayload []byte
@@ -994,7 +992,7 @@ func queryRun(scanner rowScanner) (kernelecho.RunRecord, error) {
 		&maxCostMicrousd, &executionTimeoutMS, &usedExecutionUnits, &usedCostMicrousd, &usedRetries,
 		&deadlineAt, &availableAt,
 		&run.LeaseToken, &leaseExpiresAt, &lastExecutorSequence,
-		&capabilityScope, &permissionScope, &recoverableState, &resultPayload, &resultContentType,
+		&capabilityGrants, &recoverableState, &resultPayload, &resultContentType,
 		&run.ErrorCode, &run.ErrorMessage, &createdAt, &startedAt, &completedAt,
 		&sessionID, &userID, &messageID, &contextDigest, &contextSources,
 		&run.Channel,
@@ -1028,11 +1026,8 @@ func queryRun(scanner rowScanner) (kernelecho.RunRecord, error) {
 	run.InputPayload = append([]byte(nil), inputPayload...)
 	run.InputContentType = inputContentType
 	run.Result = kernelecho.Output{ContentType: resultContentType, Data: append([]byte(nil), resultPayload...)}
-	if len(capabilityScope) > 65536 || len(permissionScope) > 65536 ||
-		json.Unmarshal([]byte(capabilityScope), &run.CapabilityScope) != nil ||
-		json.Unmarshal([]byte(permissionScope), &run.PermissionScope) != nil ||
-		!validCanonicalScope(run.CapabilityScope, executor.MaxCapabilities, capability.IsStableID) ||
-		!validCanonicalScope(run.PermissionScope, 256, id.IsPermission) {
+	if len(capabilityGrants) > 65536 || json.Unmarshal([]byte(capabilityGrants), &run.CapabilityGrants) != nil ||
+		!validCanonicalGrants(run.CapabilityGrants, executor.MaxCapabilities) {
 		return kernelecho.RunRecord{}, kernelecho.ErrInvalidRunRecord
 	}
 	var err error
@@ -1098,8 +1093,7 @@ func validateNewRun(echo kernelecho.Record, run kernelecho.RunRecord) error {
 		(run.MessageID != "" && !session.ValidStableID(run.MessageID)) ||
 		run.ContextDigest != "" || // 上下文在执行开始时由 SetRunContext 一次性固化
 		(len(run.ContextSources) != 0 && !json.Valid(run.ContextSources)) ||
-		!validCanonicalScope(run.CapabilityScope, executor.MaxCapabilities, capability.IsStableID) ||
-		!validCanonicalScope(run.PermissionScope, 256, id.IsPermission) {
+		!validCanonicalGrants(run.CapabilityGrants, executor.MaxCapabilities) {
 		return kernelecho.ErrInvalidRunRecord
 	}
 	if (run.ParentRunID != "" && !runIdentifierPattern.MatchString(run.ParentRunID)) ||
@@ -1116,19 +1110,14 @@ func textOutput(output kernelecho.Output) string {
 	return string(output.Data)
 }
 
-func nonNilStrings(values []string) []string {
-	if values == nil {
-		return []string{}
-	}
-	return values
-}
-
-func validCanonicalScope(values []string, maximum int, valid func(string) bool) bool {
-	if len(values) > maximum || !sort.StringsAreSorted(values) {
+func validCanonicalGrants(values []capability.Grant, maximum int) bool {
+	if len(values) > maximum {
 		return false
 	}
 	for index, value := range values {
-		if !valid(value) || (index > 0 && values[index-1] == value) {
+		grant, err := capability.NormalizeGrant(value)
+		if err != nil || grant.ID != value.ID ||
+			(index > 0 && values[index-1].ID >= value.ID) {
 			return false
 		}
 	}

@@ -37,8 +37,8 @@ const (
 )
 
 const (
-	SideEffectWrite    = capability.SideEffectWrite
-	SideEffectExternal = capability.SideEffectExternal
+	EffectState    = capability.EffectState
+	EffectExternal = capability.EffectExternal
 )
 
 // DefaultLifetime 是未显式指定有效期时待确认记录的默认有效时长。
@@ -78,7 +78,7 @@ type Confirmation struct {
 	RunID          string     // 发起确认的 Run
 	CallID         string     // 发起确认的调用
 	CapabilityID   string     // 目标 Capability
-	SideEffect     string     // 副作用类型：write / external
+	EffectTarget   string     // governed_state 或 external
 	IdempotencyKey string     // 与执行期一致的幂等键
 	ArgumentDigest string     // 确认时参数摘要（规范化 JSON 的 sha256 十六进制）
 	Status         string     // 状态：waiting/approved/rejected/expired/revoked
@@ -91,7 +91,7 @@ type Confirmation struct {
 // RequestSpec 描述一条待确认请求的目标与副作用绑定。
 type RequestSpec struct {
 	CapabilityID   string // 目标 Capability 标识
-	SideEffect     string // write 或 external
+	Execution      capability.ExecutionSpec
 	IdempotencyKey string // 与执行期相同的幂等键
 }
 
@@ -150,13 +150,13 @@ func ValidateStatus(value string) error {
 	}
 }
 
-// ValidateSideEffect 校验确认适用的副作用类型。
-func ValidateSideEffect(value string) error {
+// ValidateEffectTarget 校验确认适用的执行边界。
+func ValidateEffectTarget(value string) error {
 	switch value {
-	case SideEffectWrite, SideEffectExternal:
+	case EffectState, EffectExternal:
 		return nil
 	default:
-		return fmt.Errorf("%w: invalid side effect %q", ErrInvalidRequest, value)
+		return fmt.Errorf("%w: invalid effect target %q", ErrInvalidRequest, value)
 	}
 }
 
@@ -177,7 +177,7 @@ func ValidateRequest(request runtime.ConfirmationRequest) error {
 		return ErrInvalidRequest
 	case !validID(request.CapabilityID):
 		return ErrInvalidRequest
-	case ValidateSideEffect(request.SideEffect) != nil:
+	case ValidateEffectTarget(request.EffectTarget) != nil:
 		return ErrInvalidRequest
 	case idempotency.ValidateKey(request.IdempotencyKey) != nil:
 		return ErrInvalidRequest
@@ -195,7 +195,7 @@ func ValidateConfirmation(record Confirmation) error {
 	if !validID(record.CapabilityID) {
 		return ErrInvalidRequest
 	}
-	if ValidateSideEffect(record.SideEffect) != nil || idempotency.ValidateKey(record.IdempotencyKey) != nil {
+	if ValidateEffectTarget(record.EffectTarget) != nil || idempotency.ValidateKey(record.IdempotencyKey) != nil {
 		return ErrInvalidRequest
 	}
 	if ValidateArgumentDigest(record.ArgumentDigest) != nil {

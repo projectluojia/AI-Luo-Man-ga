@@ -133,8 +133,9 @@ func (h *Hub) Intake(ctx context.Context, message InboundMessage) (IntakeResult,
 	}, nil
 }
 
-// ResolveIdentity 解析并校验当前 App 的外部身份，返回包含成员关系和生效权限
-// 的受治理身份快照。它供非消息入口（例如 Capability invoke）复用同一身份边界。
+// ResolveIdentity 解析并校验当前 App 的外部身份，返回包含成员关系的受治理身份
+// 快照。Capability 授权由 App/Run Grant 与 Dispatcher 统一决定；该方法供非消息
+// 入口（例如 Capability invoke）复用同一身份边界。
 func (h *Hub) ResolveIdentity(ctx context.Context, appID, platform, platformSpaceID, platformUserID string) (identity.IdentityContext, error) {
 	if h == nil || appID != h.appID {
 		return identity.IdentityContext{}, ErrAppMismatch

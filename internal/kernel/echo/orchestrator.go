@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"sort"
 	"time"
 	"unicode/utf8"
 
@@ -250,8 +249,7 @@ func (o *Orchestrator) CreateIdempotent(ctx context.Context, request RunRequest)
 		ExecutionTimeoutMS: uint32(app.ExecutionTimeout.Milliseconds()),
 		Deadline:           createdAt.Add(o.config.RunTimeout),
 		AvailableAt:        createdAt,
-		CapabilityScope:    append([]string(nil), acceptedPolicy.EnabledCapabilities...),
-		PermissionScope:    append([]string(nil), acceptedPolicy.PermissionScope...),
+		CapabilityGrants:   append([]capability.Grant(nil), acceptedPolicy.CapabilityGrants...),
 		RecoverableState:   json.RawMessage(`{}`),
 		CreatedAt:          createdAt,
 	}, o.config.QueueCapacity)
@@ -671,7 +669,7 @@ func (o *Orchestrator) executeClaimedRun(ctx context.Context, emit EventEmitter,
 			)
 		case *executor.Frame_CapabilityCall:
 			if spec, _, resolveErr := o.registry.ResolveCapability(body.CapabilityCall.CapabilityId); resolveErr == nil &&
-				(spec.SideEffect == capability.SideEffectWrite || spec.SideEffect == capability.SideEffectExternal) {
+				spec.Execution.Replay != capability.ReplaySafe {
 				automaticRetrySafe = false
 			}
 			observe.Info(ctx, "执行者请求调用 Capability",
@@ -780,21 +778,15 @@ func (o *Orchestrator) executeClaimedRun(ctx context.Context, emit EventEmitter,
 func (o *Orchestrator) projectCapabilities(policy appconfig.PolicySnapshot, run RunRecord) []*executor.Capability {
 	all := o.registry.Capabilities()
 	projected := make([]*executor.Capability, 0, len(all))
-	scope := make(map[string]struct{}, len(run.CapabilityScope))
-	for _, capabilityID := range run.CapabilityScope {
-		scope[capabilityID] = struct{}{}
+	scope := make(map[string]struct{}, len(run.CapabilityGrants))
+	for _, grant := range run.CapabilityGrants {
+		scope[grant.CapabilityID] = struct{}{}
 	}
 	for _, capability := range all {
-		if !policy.CapabilityEnabled(capability.ID) {
+		if !policy.HasCapability(capability.ID) {
 			continue
 		}
 		if _, enabled := scope[capability.ID]; !enabled {
-			continue
-		}
-		if _, err := registry.NarrowPermissions(policy.PermissionScope, capability.RequiredPermissions); err != nil {
-			continue
-		}
-		if _, err := registry.NarrowPermissions(run.PermissionScope, capability.RequiredPermissions); err != nil {
 			continue
 		}
 		projected = append(projected, &executor.Capability{
@@ -908,13 +900,8 @@ func (o *Orchestrator) invokeCapabilityOnce(ctx context.Context, run RunRecord, 
 			ErrorCode: public.Code, ErrorMessage: public.Message,
 		}
 	}
-	index := sort.SearchStrings(run.CapabilityScope, call.CapabilityId)
-	if index >= len(run.CapabilityScope) || run.CapabilityScope[index] != call.CapabilityId {
+	if _, allowed := capabilityGrantIDs(run.CapabilityGrants)[call.CapabilityId]; !allowed {
 		return o.rejectedCapability(ctx, run, call, started, runtime.ErrCapabilityDisabled)
-	}
-	permissionScope, err := registry.NarrowPermissions(policy.PermissionScope, run.PermissionScope)
-	if err != nil {
-		return o.rejectedCapability(ctx, run, call, started, registry.ErrPermissionDenied)
 	}
 	deadline := started.Add(30 * time.Second)
 	if contextDeadline, ok := ctx.Deadline(); ok && contextDeadline.Before(deadline) {
@@ -934,7 +921,6 @@ func (o *Orchestrator) invokeCapabilityOnce(ctx context.Context, run RunRecord, 
 		Deadline:        deadline,
 		IdempotencyKey:  call.CallId,
 		ProtocolVersion: executor.Version,
-		PermissionScope: permissionScope,
 	}
 	payload, err := o.dispatcher.InvokeCapability(ctx, request, call.CapabilityId, call.PayloadJson)
 	result := &executor.CapabilityResult{
@@ -976,6 +962,14 @@ func (o *Orchestrator) invokeCapabilityOnce(ctx context.Context, run RunRecord, 
 		)
 	}
 	return result
+}
+
+func capabilityGrantIDs(grants []capability.Grant) map[string]struct{} {
+	ids := make(map[string]struct{}, len(grants))
+	for _, grant := range grants {
+		ids[grant.CapabilityID] = struct{}{}
+	}
+	return ids
 }
 
 func (o *Orchestrator) rejectedCapability(ctx context.Context, run RunRecord, call *executor.CapabilityCall, started time.Time, cause error) *executor.CapabilityResult {

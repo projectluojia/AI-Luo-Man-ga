@@ -8,6 +8,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/capability"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/idempotency"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/publicerror"
 )
@@ -58,45 +59,44 @@ type RunRecord struct {
 	EchoID     string `json:"echo_id"`
 	// ParentRunID 和 OriginCallID 只记录通用执行因果关系；Core 不为某种
 	// Executor 定义子任务语义。
-	ParentRunID          string          `json:"parent_run_id,omitempty"`
-	OriginCallID         string          `json:"origin_call_id,omitempty"`
-	SessionID            string          `json:"session_id,omitempty"`
-	UserID               string          `json:"user_id,omitempty"`
-	MessageID            string          `json:"message_id,omitempty"`
-	Channel              string          `json:"channel,omitempty"` // 平台渠道，恢复重装配时传入执行上下文
-	Attempt              uint32          `json:"attempt"`
-	Status               string          `json:"status"`
-	ExecutorID           string          `json:"executor_id"`
-	ConfigRevision       string          `json:"config_revision"`
-	ProtocolVersion      string          `json:"protocol_version"`
-	ExecutorConfig       json.RawMessage `json:"-"`
-	InputPayload         []byte          `json:"-"`
-	InputContentType     string          `json:"-"`
-	ContextDigest        string          `json:"context_digest,omitempty"`
-	ContextSources       json.RawMessage `json:"-"`
-	MaxSteps             uint32          `json:"max_steps"`
-	MaxCapabilityCalls   uint32          `json:"max_capability_calls"`
-	MaxExecutionUnits    uint64          `json:"max_execution_units"`
-	MaxOutputBytes       uint64          `json:"max_output_bytes"`
-	MaxCostMicrousd      uint64          `json:"max_cost_microusd"`
-	ExecutionTimeoutMS   uint32          `json:"execution_timeout_ms"`
-	UsedExecutionUnits   uint64          `json:"used_execution_units"`
-	UsedCostMicrousd     uint64          `json:"used_cost_microusd"`
-	UsedRetries          uint32          `json:"used_retries"`
-	Deadline             time.Time       `json:"deadline"`
-	AvailableAt          time.Time       `json:"available_at"`
-	LeaseToken           string          `json:"-"`
-	LeaseExpiresAt       *time.Time      `json:"lease_expires_at,omitempty"`
-	LastExecutorSequence uint64          `json:"last_executor_sequence"`
-	CapabilityScope      []string        `json:"capability_scope,omitempty"`
-	PermissionScope      []string        `json:"-"`
-	RecoverableState     json.RawMessage `json:"-"`
-	Result               Output          `json:"-"`
-	ErrorCode            string          `json:"error_code,omitempty"`
-	ErrorMessage         string          `json:"error_message,omitempty"`
-	CreatedAt            time.Time       `json:"created_at"`
-	StartedAt            *time.Time      `json:"started_at,omitempty"`
-	CompletedAt          *time.Time      `json:"completed_at,omitempty"`
+	ParentRunID          string             `json:"parent_run_id,omitempty"`
+	OriginCallID         string             `json:"origin_call_id,omitempty"`
+	SessionID            string             `json:"session_id,omitempty"`
+	UserID               string             `json:"user_id,omitempty"`
+	MessageID            string             `json:"message_id,omitempty"`
+	Channel              string             `json:"channel,omitempty"` // 平台渠道，恢复重装配时传入执行上下文
+	Attempt              uint32             `json:"attempt"`
+	Status               string             `json:"status"`
+	ExecutorID           string             `json:"executor_id"`
+	ConfigRevision       string             `json:"config_revision"`
+	ProtocolVersion      string             `json:"protocol_version"`
+	ExecutorConfig       json.RawMessage    `json:"-"`
+	InputPayload         []byte             `json:"-"`
+	InputContentType     string             `json:"-"`
+	ContextDigest        string             `json:"context_digest,omitempty"`
+	ContextSources       json.RawMessage    `json:"-"`
+	MaxSteps             uint32             `json:"max_steps"`
+	MaxCapabilityCalls   uint32             `json:"max_capability_calls"`
+	MaxExecutionUnits    uint64             `json:"max_execution_units"`
+	MaxOutputBytes       uint64             `json:"max_output_bytes"`
+	MaxCostMicrousd      uint64             `json:"max_cost_microusd"`
+	ExecutionTimeoutMS   uint32             `json:"execution_timeout_ms"`
+	UsedExecutionUnits   uint64             `json:"used_execution_units"`
+	UsedCostMicrousd     uint64             `json:"used_cost_microusd"`
+	UsedRetries          uint32             `json:"used_retries"`
+	Deadline             time.Time          `json:"deadline"`
+	AvailableAt          time.Time          `json:"available_at"`
+	LeaseToken           string             `json:"-"`
+	LeaseExpiresAt       *time.Time         `json:"lease_expires_at,omitempty"`
+	LastExecutorSequence uint64             `json:"last_executor_sequence"`
+	CapabilityGrants     []capability.Grant `json:"-"`
+	RecoverableState     json.RawMessage    `json:"-"`
+	Result               Output             `json:"-"`
+	ErrorCode            string             `json:"error_code,omitempty"`
+	ErrorMessage         string             `json:"error_message,omitempty"`
+	CreatedAt            time.Time          `json:"created_at"`
+	StartedAt            *time.Time         `json:"started_at,omitempty"`
+	CompletedAt          *time.Time         `json:"completed_at,omitempty"`
 }
 
 type RunWork struct {

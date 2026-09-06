@@ -425,44 +425,6 @@ FROM app_memberships WHERE app_id=? AND user_id=?`, appID, userID,
 	return membership, nil
 }
 
-// EffectivePermissions 在查询时刻实时计算用户在 App 的生效权限
-// （成员直接授予与角色授予的并集），不缓存，保证撤权立即生效。
-func (s *Store) EffectivePermissions(ctx context.Context, appID, userID string) (_ []string, resultErr error) {
-	started := time.Now()
-	defer func() { observeStorageOperation(ctx, "identity_effective_permissions", started, resultErr) }()
-	if err := identity.ValidateAppID(appID); err != nil || identity.ValidateUserID(userID) != nil {
-		return nil, identity.ErrInvalid
-	}
-	rows, err := s.db.QueryContext(ctx, `
-SELECT DISTINCT permission FROM (
-  SELECT permission FROM permission_grants
-  WHERE app_id=? AND user_id=? AND user_id IS NOT NULL
-  UNION ALL
-  SELECT pg.permission FROM permission_grants pg
-  JOIN app_memberships m ON m.app_id=pg.app_id AND m.user_id=?
-  JOIN json_each(m.role_ids) role ON role.value=pg.role_id
-  WHERE pg.app_id=? AND pg.role_id IS NOT NULL
-) ORDER BY permission`,
-		appID, userID, userID, appID,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("query effective permissions: %w", err)
-	}
-	defer rows.Close()
-	permissions := make([]string, 0)
-	for rows.Next() {
-		var permission string
-		if err := rows.Scan(&permission); err != nil {
-			return nil, fmt.Errorf("scan effective permission: %w", err)
-		}
-		permissions = append(permissions, permission)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate effective permissions: %w", err)
-	}
-	return permissions, nil
-}
-
 func (s *Store) BindingRevision(ctx context.Context, appID string) (_ int64, resultErr error) {
 	started := time.Now()
 	defer func() { observeStorageOperation(ctx, "identity_binding_revision", started, resultErr) }()

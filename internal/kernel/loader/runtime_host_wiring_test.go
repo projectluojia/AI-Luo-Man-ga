@@ -20,7 +20,9 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// testRuntimeID 是 Unix Runtime Host 接线测试中运行组件的稳定标识。
+// testRuntimeID 是 Runtime Host 集成测试包内运行组件的稳定标识：
+// Runtime Manifest ID 与 Package ID 不同名，与 testcontract_test.go 的
+// hosted 常量构成同一测试包的两条身份。
 const testRuntimeID = testPackageID + ".runtime"
 
 // TestRuntimeHostProductionWiring 验证外部 Runtime Host 产品接线：真实安装目录
@@ -46,7 +48,8 @@ func TestRuntimeHostProductionWiring(t *testing.T) {
 			ID: testCapabilityID, Version: "1.0.0", Name: "测试回显",
 			Description:     "测试回显",
 			InputSchemaJSON: `{"type":"object","properties":{"value":{"type":"string"}},"required":["value"],"additionalProperties":false}`,
-			SideEffect:      capability.SideEffectRead,
+			Authorization:   capability.AuthorizationSpec{ResourceType: "capability.resource"},
+			Execution:       capability.ExecutionSpec{EffectTarget: capability.EffectNone, Replay: capability.ReplaySafe, ConfirmationFloor: capability.ConfirmationPolicy},
 		}},
 		Components: []packagecontract.Component{{
 			ID: "runtime", Mode: loader.ModeHosted, Role: packagecontract.RoleProvider, Entrypoint: "success.wasm",
