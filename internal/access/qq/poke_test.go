@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access"
+	kernelecho "github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
 )
 
 func newPokeAdapter(t *testing.T, bot *fakeOneBot) *Adapter {
@@ -16,6 +17,7 @@ func newPokeAdapter(t *testing.T, bot *fakeOneBot) *Adapter {
 	adapter, err := New(Config{
 		AppID: "campus-services", WSURL: bot.wsURL(), BotQQID: "2647414417",
 		AllowedGroupIDs: []string{"12345"}, AllowedPrivateUserIDs: []string{"67890"}, Provisioner: testProvisioner{},
+		PokeReplies: DefaultPokeReplies(),
 		DialTimeout: 2 * time.Second, ReconnectDelay: 50 * time.Millisecond, RunTimeout: 5 * time.Second,
 	}, hub, access.NewEventHub(), &qqFakeOrchestrator{store: store, created: make(chan struct{})}, store)
 	if err != nil {
@@ -222,11 +224,12 @@ func TestQQAdapterHandlesGroupMessageWithMention(t *testing.T) {
 	store := newQQTestStore(t, "qq-mention.db")
 	hub := newQQTestHub(t, store, stubResolver{user: "user-1"})
 	orchestrator := &qqFakeOrchestrator{store: store, created: make(chan struct{})}
+	echoReader := completedEchoReader{}
 	adapter, err := New(Config{
 		AppID: "campus-services", WSURL: bot.wsURL(), BotQQID: "2647414417",
 		AllowedGroupIDs: []string{"12345"}, AllowedPrivateUserIDs: []string{"67890"}, Provisioner: testProvisioner{},
 		DialTimeout: 2 * time.Second, ReconnectDelay: 50 * time.Millisecond, RunTimeout: 5 * time.Second,
-	}, hub, access.NewEventHub(), orchestrator, store)
+	}, hub, access.NewEventHub(), orchestrator, echoReader)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,4 +259,10 @@ func TestQQAdapterHandlesGroupMessageWithMention(t *testing.T) {
 	if !strings.Contains(orchestrator.echoID, "-") {
 		t.Fatalf("unexpected echo id=%q", orchestrator.echoID)
 	}
+}
+
+type completedEchoReader struct{}
+
+func (completedEchoReader) GetEcho(context.Context, string, string) (kernelecho.Record, []kernelecho.Event, error) {
+	return kernelecho.Record{Status: kernelecho.StatusSucceeded}, nil, nil
 }

@@ -24,10 +24,10 @@ func TestPromptSettingsStoreRoundTripAndAppIsolation(t *testing.T) {
 	}
 	if err := store.SavePromptSettings(ctx, "campus-services", promptservice.Settings{
 		UserID:     "user-1",
-		BasicStyle: "专业可靠",
+		BasicStyle: "professional",
 		ExtraTraitLevels: map[string]string{
-			"表情符号":  "减弱",
-			"标题和列表": "增强",
+			"emoji":          "reduced",
+			"headings_lists": "enhanced",
 		},
 	}); err != nil {
 		t.Fatal(err)

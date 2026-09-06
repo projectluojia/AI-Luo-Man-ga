@@ -229,7 +229,6 @@ paths:
                     type: string
                   result:
                     description: Capability output payload.
-                    type: object
         "400":
           description: Malformed request body, schema violation, or missing idempotency key for a side-effecting Capability.
           content:

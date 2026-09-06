@@ -140,6 +140,17 @@ jobs:
           tarball="$(ls dist/*.tgz)"
           ./ailuo install --root "$RUNNER_TEMP/pkgroot" "$tarball"
           ./ailuo list --root "$RUNNER_TEMP/pkgroot" | grep -q '^strings.tool@1.0.0'
+      - name: 打包零声明 Go 包（无 ailuo.toml，源码自动提取）并冒烟安装验证
+        shell: bash
+        run: |
+          set -euo pipefail
+          # 夹具是 testdata/hello.pkg 下的真实源码（go 工具链忽略 testdata），
+          # 拷到临时目录再打包：pack 会在包目录内生成产物，不污染工作树。
+          cp -r testdata/hello.pkg "$RUNNER_TEMP/hello.pkg"
+          ./ailuo pack --version 0.1.0 "$RUNNER_TEMP/hello.pkg" dist
+          tarball="$(ls dist/hello.pkg-*.tgz)"
+          ./ailuo install --root "$RUNNER_TEMP/pkgroot" "$tarball"
+          ./ailuo list --root "$RUNNER_TEMP/pkgroot" | grep -q '^hello.pkg@0.1.0'
   # Docker Compose 编排语法校验（QQ OneBot 容器）。
   compose-config:
     name: compose-config

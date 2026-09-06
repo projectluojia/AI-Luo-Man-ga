@@ -6,11 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"time"
+
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/jsonutil"
 )
 
 const maxSettingsFileBytes = 256 << 10
@@ -109,7 +112,11 @@ func (m *Service) CurrentResolved() (Resolved, bool) {
 	if m.settings.Revision == 0 || !m.modelKeyPresent {
 		return Resolved{}, false
 	}
-	return Resolved{Settings: cloneSettings(m.settings), ModelAPIKeyFile: m.modelSecretPath, QQWSTokenFile: optionalPath(m.qqTokenPresent, m.qqSecretPath)}, true
+	qqTokenFile := ""
+	if m.qqTokenPresent {
+		qqTokenFile = m.qqSecretPath
+	}
+	return Resolved{Settings: cloneSettings(m.settings), ModelAPIKeyFile: m.modelSecretPath, QQWSTokenFile: qqTokenFile}, true
 }
 
 func (m *Service) Changes() <-chan struct{} { return m.changes }
@@ -151,7 +158,7 @@ func (m *Service) load() error {
 	if err := decoder.Decode(&settings); err != nil {
 		return errors.Join(ErrInvalid, err)
 	}
-	if err := ensureJSONEOF(decoder); err != nil {
+	if err := jsonutil.EnsureEOF(decoder); err != nil {
 		return errors.Join(ErrInvalid, err)
 	}
 	normalized, err := validateStored(settings)
@@ -207,38 +214,11 @@ func writePrivateFile(path string, data []byte) error {
 }
 
 func cloneSettings(settings Settings) Settings {
-	settings.QQAllowedGroupIDs = append([]string(nil), settings.QQAllowedGroupIDs...)
-	settings.QQAllowedPrivateUserIDs = append([]string(nil), settings.QQAllowedPrivateUserIDs...)
-	settings.QQQuickReplies = append([]QQQuickReply(nil), settings.QQQuickReplies...)
-	settings.QQPokeReplies = append([]string(nil), settings.QQPokeReplies...)
+	settings.QQAllowedGroupIDs = slices.Clone(settings.QQAllowedGroupIDs)
+	settings.QQAllowedPrivateUserIDs = slices.Clone(settings.QQAllowedPrivateUserIDs)
+	settings.QQQuickReplies = slices.Clone(settings.QQQuickReplies)
+	settings.QQPokeReplies = slices.Clone(settings.QQPokeReplies)
 	settings.PromptCatalog = settings.PromptCatalog.Clone()
-	settings.ChannelPrompts = cloneStringMap(settings.ChannelPrompts)
+	settings.ChannelPrompts = maps.Clone(settings.ChannelPrompts)
 	return settings
-}
-
-func cloneStringMap(values map[string]string) map[string]string {
-	if values == nil {
-		return nil
-	}
-	result := make(map[string]string, len(values))
-	for key, value := range values {
-		result[key] = value
-	}
-	return result
-}
-
-func optionalPath(present bool, path string) string {
-	if present {
-		return path
-	}
-	return ""
-}
-
-func ensureJSONEOF(decoder *json.Decoder) error {
-	var extra any
-	if err := decoder.Decode(&extra); errors.Is(err, io.EOF) {
-		return nil
-	} else {
-		return err
-	}
 }

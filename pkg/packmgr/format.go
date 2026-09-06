@@ -1,11 +1,13 @@
 // Package packmgr 是 AI珞 包管理器的中立包格式层：semver、包清单、声明与
-// 校验。本包只依赖标准库，不引用任何内核包，是可整体迁移到独立仓库的
-// 包管理器基底；宿主（AI珞 内核）在装载时解释包清单中的宿主扩展段。
+// 校验。本包不引用任何内核包，除 semver 约束求解（github.com/Masterminds/semver/v3）
+// 外只依赖标准库，是可整体迁移到独立仓库的包管理器基底；宿主（AI珞 内核）在
+// 装载时解释包清单中的宿主扩展段。
 package packmgr
 
 import (
 	"errors"
 	"regexp"
+	"strings"
 	"unicode/utf8"
 )
 
@@ -102,9 +104,28 @@ func ValidateDependency(dep Dependency) error {
 	return nil
 }
 
-// HostedFunctionKey 返回宿主函数声明/实现的唯一键。
+// HostedFunctionKey 返回宿主函数声明/实现的唯一键。分隔符用 NUL：module 与
+// name 都允许含 `.`，用 `.` 拼接会让 {"a.b","c"} 与 {"a","b.c"} 撞成同一个键。
+// 该键只作进程内查找，不序列化、不出现在任何契约里。
 func HostedFunctionKey(module, name string) string {
-	return module + "." + name
+	return module + "\x00" + name
+}
+
+// IsPackagePath 校验包内相对路径，使用与宿主平台无关的正斜杠语法。
+// 点路径允许表示包根目录；其他路径不得含空段、.、..、反斜杠或卷标。
+func IsPackagePath(value string) bool {
+	if value == "." {
+		return true
+	}
+	if value == "" || strings.ContainsAny(value, "\\:\x00") || strings.HasPrefix(value, "/") {
+		return false
+	}
+	for _, part := range strings.Split(value, "/") {
+		if part == "" || part == "." || part == ".." {
+			return false
+		}
+	}
+	return true
 }
 
 // EqualHostedFunctions 比较声明集合（忽略用途文本：用途只作说明，不参与身份）。
@@ -118,9 +139,4 @@ func EqualHostedFunctions(left, right []HostedFunctionDecl) bool {
 		}
 	}
 	return true
-}
-
-// CloneHostedFunctions 返回声明的副本。
-func CloneHostedFunctions(decls []HostedFunctionDecl) []HostedFunctionDecl {
-	return append([]HostedFunctionDecl(nil), decls...)
 }

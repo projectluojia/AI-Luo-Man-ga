@@ -49,6 +49,23 @@ type schemaSpec struct {
 	Properties           map[string]json.RawMessage `json:"properties"`
 	Required             []string                   `json:"required"`
 	AdditionalProperties *bool                      `json:"additionalProperties"`
+	// 约束由内核 Schema 校验执行，SDK 生成器只保留其声明以拒绝未知关键字。
+	Minimum         json.RawMessage `json:"minimum"`
+	Maximum         json.RawMessage `json:"maximum"`
+	MinLength       json.RawMessage `json:"minLength"`
+	MaxLength       json.RawMessage `json:"maxLength"`
+	MinItems        json.RawMessage `json:"minItems"`
+	MaxItems        json.RawMessage `json:"maxItems"`
+	UniqueItems     json.RawMessage `json:"uniqueItems"`
+	Pattern         json.RawMessage `json:"pattern"`
+	ContentEncoding json.RawMessage `json:"contentEncoding"`
+	// $schema 是方言声明（ts-json-schema-generator 等工具会自动带上），
+	// 不参与类型派生，按 JSON Schema 规范允许出现。
+	SchemaDialect json.RawMessage `json:"$schema"`
+	// definitions/$defs 只能经 $ref 引用才生效，而 $ref 在下方被显式拒绝，
+	// 因此未引用的定义块是惰性死重，容忍其存在但不参与派生。
+	Definitions       json.RawMessage `json:"definitions"`
+	SchemaDefinitions json.RawMessage `json:"$defs"`
 	// 组合/引用结构（改变类型语义，生成器无法正确表达 → 显式拒绝）：
 	OneOf []json.RawMessage `json:"oneOf"`
 	AllOf []json.RawMessage `json:"allOf"`
@@ -66,6 +83,7 @@ func schemaType(schema json.RawMessage, name string) (*TypeModel, error) {
 	// 容忍合法但不参与类型派生的约束关键字（minimum 等），拒绝尾随内容：
 	// decoder.More() 不覆盖尾随 `}`/`]`，故用二次 Decode 断言 io.EOF。
 	decoder := json.NewDecoder(bytes.NewReader(schema))
+	decoder.DisallowUnknownFields()
 	var spec schemaSpec
 	if err := decoder.Decode(&spec); err != nil {
 		return nil, fmt.Errorf("sdkgen: 解码 JSON Schema 失败: %w", err)
@@ -105,6 +123,13 @@ func schemaType(schema json.RawMessage, name string) (*TypeModel, error) {
 	default:
 		return nil, fmt.Errorf("sdkgen: 不支持的 JSON Schema 类型 %q", spec.Type)
 	}
+}
+
+// ValidateSchema 校验生成器可消费的严格 JSON Schema 子集。
+// 源码契约提取器与消费方 SDK 生成器共用这一入口，保证两处接受同一契约。
+func ValidateSchema(schema json.RawMessage) error {
+	_, err := schemaType(schema, "Input")
+	return err
 }
 
 // stringOrEnum 处理 string：带 enum 派生枚举类型，date-time 派生时间类型。

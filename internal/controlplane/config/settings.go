@@ -227,6 +227,9 @@ func normalize(input SaveInput) (Settings, error) {
 	settings.QQAllowedGroupIDs = qqValue.AllowedGroupIDs
 	settings.QQAllowedPrivateUserIDs = qqValue.AllowedPrivateUserIDs
 	quick := make([]qq.QuickReply, 0, len(settings.QQQuickReplies))
+	if settings.QQPokeReplies == nil {
+		return Settings{}, ErrInvalid
+	}
 	for _, rule := range settings.QQQuickReplies {
 		quick = append(quick, qq.QuickReply{Trigger: rule.Trigger, Reply: rule.Reply})
 	}

@@ -9,7 +9,7 @@ func TestNormalizeBehaviorCanonicalizesAndRejectsAmbiguousRules(t *testing.T) {
 	quick, poke, err := NormalizeBehavior([]QuickReply{
 		{Trigger: " ping ", Reply: " pong "},
 		{Trigger: "帮助", Reply: "请查看说明"},
-	}, nil)
+	}, DefaultPokeReplies())
 	if err != nil {
 		t.Fatal(err)
 	}

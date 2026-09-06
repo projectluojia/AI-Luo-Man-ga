@@ -108,78 +108,30 @@ func defaultGovernanceSettings() GovernanceSettings {
 
 func normalizeAgentRun(value AgentRunSettings) (AgentRunSettings, error) {
 	if value.Timezone == "" {
-		value.Timezone = defaultAgentRunSettings().Timezone
+		return AgentRunSettings{}, ErrInvalid
 	}
 	if _, err := time.LoadLocation(value.Timezone); err != nil {
 		return AgentRunSettings{}, ErrInvalid
 	}
-	defaults := defaultAgentRunSettings()
-	if value.MaxSteps == 0 {
-		value.MaxSteps = defaults.MaxSteps
-	}
-	if value.MaxToolCalls == 0 {
-		value.MaxToolCalls = defaults.MaxToolCalls
-	}
-	if value.MaxInputTokens == 0 {
-		value.MaxInputTokens = defaults.MaxInputTokens
-	}
-	if value.MaxOutputTokens == 0 {
-		value.MaxOutputTokens = defaults.MaxOutputTokens
-	}
-	if value.MaxTotalTokens == 0 {
-		value.MaxTotalTokens = defaults.MaxTotalTokens
-	}
-	if value.MaxOutputBytes == 0 {
-		value.MaxOutputBytes = defaults.MaxOutputBytes
-	}
-	if value.MaxChildRuns == 0 {
-		value.MaxChildRuns = defaults.MaxChildRuns
-	}
-	if value.MaxSteps > 64 || value.MaxToolCalls > 128 ||
-		value.MaxInputTokens > 10_000_000 || value.MaxOutputTokens > 1_000_000 ||
+	if value.MaxSteps < 1 || value.MaxSteps > 64 || value.MaxToolCalls < 1 || value.MaxToolCalls > 128 ||
+		value.MaxInputTokens < 1 || value.MaxInputTokens > 10_000_000 || value.MaxOutputTokens < 1 || value.MaxOutputTokens > 1_000_000 ||
 		value.MaxTotalTokens < value.MaxInputTokens || value.MaxTotalTokens > 11_000_000 ||
-		value.MaxOutputBytes > 256<<10 || value.MaxChildRuns > kernelecho.MaxChildRunsPerRoot {
+		value.MaxOutputBytes < 1 || value.MaxOutputBytes > 256<<10 || value.MaxChildRuns < 1 || value.MaxChildRuns > kernelecho.MaxChildRunsPerRoot {
 		return AgentRunSettings{}, ErrInvalid
 	}
 	return value, nil
 }
 
 func normalizeOrchestration(value OrchestrationSettings) (OrchestrationSettings, error) {
-	defaults := defaultOrchestrationSettings()
-	if value.RunTimeoutSeconds == 0 {
-		value.RunTimeoutSeconds = defaults.RunTimeoutSeconds
-	}
-	if value.MaxRunAttempts == 0 {
-		value.MaxRunAttempts = defaults.MaxRunAttempts
-	}
-	if value.QueueCapacity == 0 {
-		value.QueueCapacity = defaults.QueueCapacity
-	}
-	if value.MaxCallDepth == 0 {
-		value.MaxCallDepth = defaults.MaxCallDepth
-	}
 	if value.RunTimeoutSeconds < 1 || value.RunTimeoutSeconds > 600 ||
-		value.MaxRunAttempts > 10 || value.QueueCapacity < 1 || value.QueueCapacity > 10_000 ||
-		value.MaxCallDepth > 64 {
+		value.MaxRunAttempts < 1 || value.MaxRunAttempts > 10 || value.QueueCapacity < 1 || value.QueueCapacity > 10_000 ||
+		value.MaxCallDepth < 1 || value.MaxCallDepth > 64 {
 		return OrchestrationSettings{}, ErrInvalid
 	}
 	return value, nil
 }
 
 func normalizeContextAssembly(value ContextAssemblySettings) (ContextAssemblySettings, error) {
-	defaults := defaultContextAssemblySettings()
-	if value.MaxMessages == 0 {
-		value.MaxMessages = defaults.MaxMessages
-	}
-	if value.MaxCharsPerMsg == 0 {
-		value.MaxCharsPerMsg = defaults.MaxCharsPerMsg
-	}
-	if value.MaxTotalChars == 0 {
-		value.MaxTotalChars = defaults.MaxTotalChars
-	}
-	if value.MaxPromptBytes == 0 {
-		value.MaxPromptBytes = defaults.MaxPromptBytes
-	}
 	if value.MaxMessages < 1 || value.MaxMessages > 1000 ||
 		value.MaxCharsPerMsg < 1 || value.MaxCharsPerMsg > 64<<10 ||
 		value.MaxTotalChars < 1 || value.MaxTotalChars > 1<<20 ||
@@ -190,16 +142,6 @@ func normalizeContextAssembly(value ContextAssemblySettings) (ContextAssemblySet
 }
 
 func normalizeScheduler(value SchedulerSettings) (SchedulerSettings, error) {
-	defaults := defaultSchedulerSettings()
-	if value.Workers == 0 {
-		value.Workers = defaults.Workers
-	}
-	if value.PollMs == 0 {
-		value.PollMs = defaults.PollMs
-	}
-	if value.BatchSize == 0 {
-		value.BatchSize = defaults.BatchSize
-	}
 	if value.Workers < 1 || value.Workers > 64 || value.PollMs < 10 || value.PollMs > 60_000 ||
 		value.BatchSize < 1 || value.BatchSize > 1000 {
 		return SchedulerSettings{}, ErrInvalid
@@ -208,19 +150,6 @@ func normalizeScheduler(value SchedulerSettings) (SchedulerSettings, error) {
 }
 
 func normalizeQQConnection(value QQConnectionSettings) (QQConnectionSettings, error) {
-	defaults := defaultQQConnectionSettings()
-	if value.DialTimeoutSeconds == 0 {
-		value.DialTimeoutSeconds = defaults.DialTimeoutSeconds
-	}
-	if value.ReconnectDelaySeconds == 0 {
-		value.ReconnectDelaySeconds = defaults.ReconnectDelaySeconds
-	}
-	if value.RunTimeoutSeconds == 0 {
-		value.RunTimeoutSeconds = defaults.RunTimeoutSeconds
-	}
-	if value.ManagerStopTimeoutSeconds == 0 {
-		value.ManagerStopTimeoutSeconds = defaults.ManagerStopTimeoutSeconds
-	}
 	if value.DialTimeoutSeconds < 0.1 || value.DialTimeoutSeconds > 120 ||
 		value.ReconnectDelaySeconds < 0.1 || value.ReconnectDelaySeconds > 600 ||
 		value.RunTimeoutSeconds < 1 || value.RunTimeoutSeconds > 3600 ||
@@ -231,16 +160,6 @@ func normalizeQQConnection(value QQConnectionSettings) (QQConnectionSettings, er
 }
 
 func normalizeAgentProcess(value AgentProcessSettings) (AgentProcessSettings, error) {
-	defaults := defaultAgentProcessSettings()
-	if value.DialTimeoutSeconds == 0 {
-		value.DialTimeoutSeconds = defaults.DialTimeoutSeconds
-	}
-	if value.StopGraceSeconds == 0 {
-		value.StopGraceSeconds = defaults.StopGraceSeconds
-	}
-	if value.TerminateGraceSeconds == 0 {
-		value.TerminateGraceSeconds = defaults.TerminateGraceSeconds
-	}
 	if value.DialTimeoutSeconds < 1 || value.DialTimeoutSeconds > 120 ||
 		value.StopGraceSeconds < 1 || value.StopGraceSeconds > 120 ||
 		value.TerminateGraceSeconds < 1 || value.TerminateGraceSeconds > 60 {
@@ -250,9 +169,6 @@ func normalizeAgentProcess(value AgentProcessSettings) (AgentProcessSettings, er
 }
 
 func normalizeGovernance(value GovernanceSettings) (GovernanceSettings, error) {
-	if value.ConfirmationSweepSeconds == 0 {
-		value.ConfirmationSweepSeconds = defaultGovernanceSettings().ConfirmationSweepSeconds
-	}
 	if value.ConfirmationSweepSeconds < 10 || value.ConfirmationSweepSeconds > 86400 {
 		return GovernanceSettings{}, ErrInvalid
 	}

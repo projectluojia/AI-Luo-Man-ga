@@ -70,30 +70,28 @@ func TestManagerRejectsDuplicateQuickReplyTriggers(t *testing.T) {
 	}
 }
 
-func TestManagerLoadsLegacySettingsWithDefaultPokeReplies(t *testing.T) {
-	root := t.TempDir()
-	manager, err := NewService(root)
-	if err != nil {
-		t.Fatal(err)
+func TestManagerRejectsIncompleteSettings(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*SaveInput)
+	}{
+		{name: "prompt catalog", mutate: func(input *SaveInput) { input.PromptCatalog = promptcatalog.Catalog{} }},
+		{name: "base system prompt", mutate: func(input *SaveInput) { input.BaseSystemPrompt = "" }},
+		{name: "channel prompts", mutate: func(input *SaveInput) { input.ChannelPrompts = nil }},
+		{name: "agent run", mutate: func(input *SaveInput) { input.AgentRun = AgentRunSettings{} }},
 	}
-	if _, err := manager.Save(validInput()); err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(root, "ailuo-settings.json")
-	content, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	legacy := strings.Replace(string(content), `,"qq_quick_replies":[{"trigger":"ping","reply":"pong"}],"qq_poke_replies":["在呢"]`, "", 1)
-	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	reloaded, err := NewService(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(reloaded.Snapshot().Settings.QQPokeReplies) == 0 {
-		t.Fatal("legacy settings did not receive default poke replies")
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			manager, err := NewService(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			input := validInput()
+			test.mutate(&input)
+			if _, err := manager.Save(input); err != ErrInvalid {
+				t.Fatalf("incomplete settings error=%v", err)
+			}
+		})
 	}
 }
 
@@ -126,6 +124,7 @@ func TestManagerUsesRevisionCASAndPreservesBlankSecrets(t *testing.T) {
 }
 
 func validInput() SaveInput {
+	defaults := DefaultSettings()
 	return SaveInput{
 		Model: "test-model", ModelBaseURL: "https://models.example.test/v1", ModelAPIKey: "model-secret",
 		ModelRequestTimeoutSeconds: 30, ModelReadinessTimeoutSeconds: 3, ModelMaxRetries: 2,
@@ -133,10 +132,14 @@ func validInput() SaveInput {
 		QQEnabled: true, QQWSURL: "ws://127.0.0.1:3001", QQWSToken: "qq-secret", QQBotID: "2647414417",
 		QQAllowedGroupIDs: []string{"123456"}, QQAllowedPrivateUserIDs: []string{"654321"},
 		QQQuickReplies: []QQQuickReply{{Trigger: " ping ", Reply: " pong "}}, QQPokeReplies: []string{" 在呢 "},
+		PromptCatalog: defaults.PromptCatalog, BaseSystemPrompt: defaults.BaseSystemPrompt, ChannelPrompts: defaults.ChannelPrompts,
+		AgentRun: defaults.AgentRun, Orchestration: defaults.Orchestration, ContextAssembly: defaults.ContextAssembly,
+		Scheduler: defaults.Scheduler, QQConnection: defaults.QQConnection, AgentProcess: defaults.AgentProcess,
+		Governance: defaults.Governance,
 	}
 }
 
-func TestManagerPersistsPromptCatalogAndDefaultsLegacySettings(t *testing.T) {
+func TestManagerPersistsPromptCatalog(t *testing.T) {
 	root := t.TempDir()
 	manager, err := NewService(root)
 	if err != nil {
@@ -168,30 +171,6 @@ func TestManagerPersistsPromptCatalogAndDefaultsLegacySettings(t *testing.T) {
 		resolved.Settings.ChannelPrompts["web"] != "自定义 web 渠道提示" {
 		t.Fatalf("reloaded prompt catalog style=%q styles=%d base=%q channels=%#v ready=%v", gotStyle, len(resolved.Settings.PromptCatalog.BasicStyles), resolved.Settings.BaseSystemPrompt, resolved.Settings.ChannelPrompts, ready)
 	}
-	// 旧配置文件没有 prompt_catalog 字段：加载时自动补默认目录。
-	legacy := SaveInput{
-		Model: "legacy-model", ModelAPIKey: "legacy-key",
-		ModelRequestTimeoutSeconds: 30, ModelReadinessTimeoutSeconds: 3,
-		ModelMaxRetries: 2, ModelRetryBaseSeconds: 0.25, ModelRetryMaxSeconds: 2,
-		ModelRequestsPerMinute: 60, ModelMaxConcurrency: 4,
-	}
-	legacyManager, err := NewService(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	legacySnapshot, err := legacyManager.Save(legacy)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(legacySnapshot.Settings.PromptCatalog.BasicStyles) != len(promptcatalog.Default().BasicStyles) {
-		t.Fatalf("legacy prompt catalog=%#v", legacySnapshot.Settings.PromptCatalog)
-	}
-	if legacySnapshot.Settings.BaseSystemPrompt != promptcatalog.DefaultBaseSystemPrompt {
-		t.Fatal("legacy settings did not receive default base system prompt")
-	}
-	if len(legacySnapshot.Settings.ChannelPrompts) != len(promptcatalog.DefaultChannelPrompts()) {
-		t.Fatal("legacy settings did not receive default channel prompts")
-	}
 }
 
 func TestManagerRejectsInvalidPromptCatalog(t *testing.T) {
@@ -207,7 +186,7 @@ func TestManagerRejectsInvalidPromptCatalog(t *testing.T) {
 	}
 }
 
-func TestManagerPersistsRuntimeSettingsAndDefaultsLegacyValues(t *testing.T) {
+func TestManagerPersistsRuntimeSettings(t *testing.T) {
 	root := t.TempDir()
 	manager, err := NewService(root)
 	if err != nil {
@@ -241,19 +220,5 @@ func TestManagerPersistsRuntimeSettingsAndDefaultsLegacyValues(t *testing.T) {
 	}
 	if snapshot.Settings.AgentRun.MaxSteps != 12 {
 		t.Fatalf("snapshot agent run=%+v", snapshot.Settings.AgentRun)
-	}
-	// 旧配置没有嵌套运行时设置：自动补默认值。
-	legacy, err := NewService(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	legacySnapshot, err := legacy.Save(validInput())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if legacySnapshot.Settings.AgentRun.MaxChildRuns != 4 ||
-		legacySnapshot.Settings.Orchestration.QueueCapacity != 128 ||
-		legacySnapshot.Settings.ContextAssembly.MaxMessages != 20 {
-		t.Fatalf("legacy runtime defaults=%+v", legacySnapshot.Settings)
 	}
 }

@@ -68,7 +68,7 @@ class OpenAICompatibleProvider:
             self._client = client
             return
         if not api_key:
-            raise ValueError("AILUO_MODEL_API_KEY or OPENAI_API_KEY is required")
+            raise ValueError("AILUO_MODEL_API_KEY_FILE is required")
         self._client = AsyncOpenAI(
             api_key=api_key,
             base_url=base_url or None,
@@ -304,12 +304,8 @@ def _float_environment(name: str, default: float) -> float:
 
 def _model_api_key() -> str:
     secret_file = os.getenv("AILUO_MODEL_API_KEY_FILE", "")
-    raw_secret = os.getenv("AILUO_MODEL_API_KEY") or os.getenv("OPENAI_API_KEY", "")
-    environment = os.getenv("AILUO_ENVIRONMENT", "development").lower()
-    if environment in ("production", "prod") and raw_secret:
-        raise ValueError("生产环境模型密钥必须来自受限文件")
     if not secret_file:
-        return raw_secret
+        raise ValueError("AILUO_MODEL_API_KEY_FILE is required")
     if os.name != "posix":
         raise ValueError("当前平台不支持模型密钥文件属主校验，请使用受治理的密钥源")
     flags = os.O_RDONLY

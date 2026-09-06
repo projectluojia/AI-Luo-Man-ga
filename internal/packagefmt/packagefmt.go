@@ -1,6 +1,7 @@
 // Package packagefmt 是 AI珞 包管理器的作者侧源格式层：把 ailuo.toml（Cargo.toml
-// 风格源清单）转换为中性包清单 packmgr.Manifest。与 packmgr（stdlib-only 中立
-// 格式层）分离：TOML 解析依赖只存在于本包，packmgr 保持可整体迁移。
+// 风格源清单）转换为中性包清单 packmgr.Manifest。与 packmgr（仅标准库 +
+// Masterminds/semver 的中立格式层）分离：TOML 解析依赖只存在于本包，packmgr
+// 保持可整体迁移。
 //
 // ailuo.toml 采用继承式精简：tool 以 `[tool.<id>]` 表声明（id 即键，不重复）；
 // capability 只声明 id 与引用的 tool，其余字段（schema、side_effect、name、
@@ -19,6 +20,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
 )
 
@@ -202,17 +204,17 @@ func (s sourceManifest) buildExtensions() (json.RawMessage, error) {
 		toolIDs = append(toolIDs, id)
 	}
 	sort.Strings(toolIDs)
-	tools := make([]jsonTool, 0, len(toolIDs))
+	tools := make([]registry.ToolSpec, 0, len(toolIDs))
 	for _, id := range toolIDs {
 		tool := s.Tools[id]
-		tools = append(tools, jsonTool{
+		tools = append(tools, registry.ToolSpec{
 			ID: id, Version: s.Package.Version, Description: tool.Description,
 			InputSchemaJSON: tool.Schema, SideEffect: tool.SideEffect,
 			RequiresConfirmation: tool.RequiresConfirmation,
 			RequiredPermissions:  tool.RequiredPermissions,
 		})
 	}
-	service := jsonService{
+	service := registry.ServiceSpec{
 		ID: s.Package.ID, Version: s.Package.Version, Description: s.Package.Description,
 	}
 	if s.Service != nil {
@@ -222,7 +224,7 @@ func (s sourceManifest) buildExtensions() (json.RawMessage, error) {
 	if len(service.ToolDependencies) == 0 {
 		service.ToolDependencies = append([]string(nil), toolIDs...)
 	}
-	capabilities := make([]jsonCapability, 0, len(s.Capabilities))
+	capabilities := make([]registry.CapabilitySpec, 0, len(s.Capabilities))
 	for _, capability := range s.Capabilities {
 		tool, ok := s.Tools[capability.Tool]
 		if !ok {
@@ -236,7 +238,7 @@ func (s sourceManifest) buildExtensions() (json.RawMessage, error) {
 		if description == "" {
 			description = tool.Description
 		}
-		capabilities = append(capabilities, jsonCapability{
+		capabilities = append(capabilities, registry.CapabilitySpec{
 			ID: capability.ID, Version: s.Package.Version, Name: name,
 			Description: description, ServiceID: s.Package.ID,
 			InputSchemaJSON: tool.Schema, SideEffect: tool.SideEffect,
@@ -246,46 +248,13 @@ func (s sourceManifest) buildExtensions() (json.RawMessage, error) {
 		})
 	}
 	extensions := struct {
-		Tools        []jsonTool       `json:"tools,omitempty"`
-		Service      jsonService      `json:"service,omitempty"`
-		Capabilities []jsonCapability `json:"capabilities,omitempty"`
+		Tools        []registry.ToolSpec       `json:"tools,omitempty"`
+		Service      registry.ServiceSpec      `json:"service,omitempty"`
+		Capabilities []registry.CapabilitySpec `json:"capabilities,omitempty"`
 	}{Tools: tools, Service: service, Capabilities: capabilities}
 	data, err := json.Marshal(extensions)
 	if err != nil {
 		return nil, fmt.Errorf("%w: 扩展段序列化失败: %v", ErrSourceInvalid, err)
 	}
 	return data, nil
-}
-
-// jsonTool/jsonService/jsonCapability 是内核 registry 规格的 JSON 表达
-// （字段名与 registry.ToolSpec/ServiceSpec/CapabilitySpec 一致）。
-type jsonTool struct {
-	ID                   string   `json:"id"`
-	Version              string   `json:"version"`
-	Description          string   `json:"description"`
-	InputSchemaJSON      string   `json:"input_schema_json"`
-	SideEffect           string   `json:"side_effect"`
-	RequiresConfirmation bool     `json:"requires_confirmation"`
-	RequiredPermissions  []string `json:"required_permissions,omitempty"`
-}
-
-type jsonService struct {
-	ID                   string   `json:"id"`
-	Version              string   `json:"version"`
-	Description          string   `json:"description"`
-	ToolDependencies     []string `json:"tool_dependencies,omitempty"`
-	RequestedPermissions []string `json:"requested_permissions,omitempty"`
-}
-
-type jsonCapability struct {
-	ID                   string   `json:"id"`
-	Version              string   `json:"version"`
-	Name                 string   `json:"name"`
-	Description          string   `json:"description"`
-	ServiceID            string   `json:"service_id"`
-	InputSchemaJSON      string   `json:"input_schema_json"`
-	SideEffect           string   `json:"side_effect"`
-	RequiresConfirmation bool     `json:"requires_confirmation"`
-	RequiredPermissions  []string `json:"required_permissions,omitempty"`
-	ToolID               string   `json:"tool_id,omitempty"`
 }

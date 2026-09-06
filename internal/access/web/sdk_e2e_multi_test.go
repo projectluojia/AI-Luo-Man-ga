@@ -80,7 +80,7 @@ print(json.dumps(result))
 }
 
 // TestGeneratedTypeScriptSDKInvokesRealCapability 端到端：生成的 TypeScript SDK
-// 经 tsx 运行调真实端点（npx/tsx 不可用或网络下载失败时跳过）。
+// 经 tsx 运行调真实端点（仅 npx 不可用时跳过）。
 func TestGeneratedTypeScriptSDKInvokesRealCapability(t *testing.T) {
 	if _, err := exec.LookPath("npx"); err != nil {
 		t.Skip("npx 不可用，跳过 TS 端到端")
@@ -115,14 +115,14 @@ void main();
 	if err := os.WriteFile(filepath.Join(dir, "main.ts"), []byte(main), 0644); err != nil {
 		t.Fatal(err)
 	}
-	// npx 首次运行需下载 tsx，超时给足；超时后子进程被杀，测试转为 Skip。
+	// npx 首次运行需下载 tsx，超时给足；工具链存在但运行失败必须让测试失败。
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	command := exec.CommandContext(ctx, "npx", "--yes", "tsx", "main.ts", testServer.URL)
+	command := exec.CommandContext(ctx, "npx", "--yes", "tsx@4.20.5", "main.ts", testServer.URL)
 	command.Dir = dir
 	output, err := command.CombinedOutput()
 	if err != nil {
-		t.Skipf("tsx 运行生成的 SDK 失败（外部工具链/网络）: %v\n%s", err, output)
+		t.Fatalf("tsx 运行生成的 SDK 失败: %v\n%s", err, output)
 	}
 	assertJourneysResult(t, output)
 }

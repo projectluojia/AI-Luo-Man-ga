@@ -29,27 +29,26 @@ type hostedEnvelope struct {
 }
 
 func main() {
-	run(os.Stdin, os.Stdout)
+	if err := run(os.Stdin, os.Stdout); err != nil {
+		os.Exit(1)
+	}
 }
 
 // run 读取调用信封、按工具分发、写回结果信封；任何解析失败都输出失败信封而非 panic。
-func run(input io.Reader, output io.Writer) {
+func run(input io.Reader, output io.Writer) error {
 	inputBytes, err := io.ReadAll(input)
 	if err != nil {
-		writeEnvelope(output, hostedEnvelope{OK: false, Code: "internal", Message: "read stdin failed"})
-		return
+		return writeEnvelope(output, hostedEnvelope{OK: false, Code: "internal", Message: "read stdin failed"})
 	}
 	var request hostedRequest
 	if err := json.Unmarshal(inputBytes, &request); err != nil {
-		writeEnvelope(output, hostedEnvelope{OK: false, Code: "invalid_argument", Message: "request envelope is malformed"})
-		return
+		return writeEnvelope(output, hostedEnvelope{OK: false, Code: "invalid_argument", Message: "request envelope is malformed"})
 	}
 	result, err := dispatch(request.ToolID, request.Payload)
 	if err != nil {
-		writeEnvelope(output, hostedEnvelope{OK: false, Code: "invalid_argument", Message: err.Error()})
-		return
+		return writeEnvelope(output, hostedEnvelope{OK: false, Code: "invalid_argument", Message: err.Error()})
 	}
-	writeEnvelope(output, hostedEnvelope{OK: true, Result: result})
+	return writeEnvelope(output, hostedEnvelope{OK: true, Result: result})
 }
 
 // dispatch 按工具标识分发到具体实现。
@@ -59,14 +58,8 @@ func dispatch(toolID string, payload json.RawMessage) (json.RawMessage, error) {
 		return stringsLen(payload)
 	case "strings.upper":
 		return transform(payload, strings.ToUpper)
-	case "strings.lower":
-		return transform(payload, strings.ToLower)
-	case "strings.trim":
-		return stringsTrim(payload)
 	case "strings.join":
 		return stringsJoin(payload)
-	case "strings.split":
-		return stringsSplit(payload)
 	default:
 		return nil, errors.New("unknown tool: " + toolID)
 	}
@@ -94,18 +87,6 @@ func transform(payload json.RawMessage, apply func(string) string) (json.RawMess
 	return json.Marshal(map[string]any{"value": apply(args.Value)})
 }
 
-// stringsTrim 按 cutset 去除首尾字符。
-func stringsTrim(payload json.RawMessage) (json.RawMessage, error) {
-	var args struct {
-		Value  string `json:"value"`
-		Cutset string `json:"cutset"`
-	}
-	if err := json.Unmarshal(payload, &args); err != nil {
-		return nil, err
-	}
-	return json.Marshal(map[string]any{"value": strings.Trim(args.Value, args.Cutset)})
-}
-
 // stringsJoin 以分隔符拼接字符串切片。
 func stringsJoin(payload json.RawMessage) (json.RawMessage, error) {
 	var args struct {
@@ -118,24 +99,12 @@ func stringsJoin(payload json.RawMessage) (json.RawMessage, error) {
 	return json.Marshal(map[string]any{"value": strings.Join(args.Values, args.Separator)})
 }
 
-// stringsSplit 按分隔符切分字符串。
-func stringsSplit(payload json.RawMessage) (json.RawMessage, error) {
-	var args struct {
-		Value     string `json:"value"`
-		Separator string `json:"separator"`
-	}
-	if err := json.Unmarshal(payload, &args); err != nil {
-		return nil, err
-	}
-	return json.Marshal(map[string]any{"parts": strings.Split(args.Value, args.Separator)})
-}
-
-// writeEnvelope 序列化并写出结果信封；序列化失败时输出固定的失败信封兜底。
-func writeEnvelope(output io.Writer, envelope hostedEnvelope) {
+// writeEnvelope 序列化并写出结果信封。
+func writeEnvelope(output io.Writer, envelope hostedEnvelope) error {
 	data, err := json.Marshal(envelope)
 	if err != nil {
-		output.Write([]byte(`{"ok":false,"code":"internal","message":"envelope marshal failed"}`))
-		return
+		return err
 	}
-	output.Write(data)
+	_, err = output.Write(data)
+	return err
 }

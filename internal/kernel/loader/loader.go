@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"regexp"
 	"sort"
 	"sync"
 	"time"
@@ -50,10 +49,7 @@ var (
 	ErrRuntimeBusy      = errors.New("runtime host capacity is exhausted")
 )
 
-var (
-	stableIDPattern = id.AppID
-	versionPattern  = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$`)
-)
+var stableIDPattern = id.AppID
 
 // Manifest 是运行时的注册与装载清单。ID/Version/Mode 是身份字段；Role、
 // Pin、IdleTTL、LockedDigest 与 HostFunctions 是声明字段——装载与绑定校验
@@ -769,10 +765,6 @@ func (m *Manager) Shutdown(ctx context.Context) error {
 		items = append(items, item)
 	}
 	m.mu.Unlock()
-	if upgradeDone == nil {
-		upgradeDone = make(chan struct{})
-		close(upgradeDone)
-	}
 	select {
 	case <-upgradeDone:
 	case <-ctx.Done():

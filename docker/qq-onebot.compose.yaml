@@ -4,7 +4,7 @@
 # 用法：
 #   docker compose -f docker/qq-onebot.compose.yaml up -d
 #   # 浏览器打开 http://127.0.0.1:6099 登录 QQ 账号
-#   # 内核启动环境变量：AILUO_QQ_WS_URL=ws://127.0.0.1:3001 AILUO_QQ_WS_TOKEN=<WS_TOKEN>
+#   # 启动内核后，在 http://127.0.0.1:9178 配置 QQ WebSocket 地址、Token 与白名单。
 services:
   napcat:
     image: mlikiowa/napcat-docker:latest

@@ -83,9 +83,7 @@ const tsClientTemplate = `  private baseUrl: string;
     const headers = new Headers(this.options.headers);
     headers.set("Content-Type", "application/json");
     if (this.options.headerProvider !== undefined) {
-      for (const [name, value] of new Headers(this.options.headerProvider(capabilityId))) {
-        headers.set(name, value);
-      }
+      new Headers(this.options.headerProvider(capabilityId)).forEach((value, name) => headers.set(name, value));
     }
     if (options?.idempotencyKey !== undefined) {
       headers.set("Idempotency-Key", options.idempotencyKey);

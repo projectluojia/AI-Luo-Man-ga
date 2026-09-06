@@ -3,6 +3,8 @@ package packmgr
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,8 +22,9 @@ import (
 // 下载。token 来自 GITHUB_TOKEN/GH_TOKEN（发布与私有仓库需要，公开安装可缺省）。
 
 const (
-	githubAPI     = "https://api.github.com"
-	githubUploads = "https://uploads.github.com"
+	githubAPI      = "https://api.github.com"
+	githubUploads  = "https://uploads.github.com"
+	githubMaxPages = 100
 )
 
 // GitHubClient 是 GitHub Releases 分发后端客户端。
@@ -44,35 +47,109 @@ func NewGitHubClient() *GitHubClient {
 	}
 }
 
-// Publish 打包并发布到 GitHub Release：API 自动从默认分支创建 tag
-// v{version}（无 git CLI 依赖），创建 Release 并上传 tarball。同版本
-// 重复发布返回错误（版本不可变）。清单来自源目录 manifest.json。
-func (c *GitHubClient) Publish(ctx context.Context, owner, repo, sourceDir string) (string, error) {
-	source, err := readSourceManifest(sourceDir)
-	if err != nil {
-		return "", err
+func (c *GitHubClient) validatePublishArgs(owner, repo string) error {
+	if owner == "" || repo == "" {
+		return fmt.Errorf("发布需要 --repo owner/repo")
 	}
-	return c.PublishFromSource(ctx, owner, repo, sourceDir, source.Manifest, source.manifestBytes)
+	if c.Token == "" {
+		return fmt.Errorf("发布需要 GITHUB_TOKEN（或 GH_TOKEN）")
+	}
+	return nil
 }
 
 // PublishFromSource 用调用方提供的清单发布（与 PackFromSource 对称）：供作者侧
 // 源清单（ailuo.toml）路径使用，不读取 manifest.json。
 func (c *GitHubClient) PublishFromSource(ctx context.Context, owner, repo, sourceDir string, manifest Manifest, manifestBytes []byte) (string, error) {
-	if owner == "" || repo == "" {
-		return "", fmt.Errorf("发布需要 --repo owner/repo")
-	}
-	if c.Token == "" {
-		return "", fmt.Errorf("发布需要 GITHUB_TOKEN（或 GH_TOKEN）")
+	if err := c.validatePublishArgs(owner, repo); err != nil {
+		return "", err
 	}
 	tempDir, err := os.MkdirTemp("", "ailuo-publish-")
 	if err != nil {
 		return "", err
 	}
-	defer os.RemoveAll(tempDir)
+	defer func() { _ = os.RemoveAll(tempDir) }()
 	tarballPath, err := PackFromSource(ctx, sourceDir, tempDir, manifest, manifestBytes)
 	if err != nil {
 		return "", err
 	}
+	return c.publishTarball(ctx, owner, repo, tarballPath, manifest)
+}
+
+// PublishTarball 校验并发布已打包的 tarball。构建与发布分离时，发布端只需
+// 处理已验证的发布物，不执行调用方提供的构建命令。
+func (c *GitHubClient) PublishTarball(ctx context.Context, owner, repo, tarballPath string) (string, error) {
+	if err := c.validatePublishArgs(owner, repo); err != nil {
+		return "", err
+	}
+	manifest, err := validateTarball(ctx, tarballPath)
+	if err != nil {
+		return "", fmt.Errorf("发布物校验失败: %w", err)
+	}
+	return c.publishTarball(ctx, owner, repo, tarballPath, manifest)
+}
+
+// validateTarball 校验发布物自身的清单、锁和工件，不把部署依赖当作发布前提。
+// 依赖是否已安装属于目标 Deployment 的 Install 阶段，不应阻塞作者发布。
+func validateTarball(ctx context.Context, tarballPath string) (Manifest, error) {
+	sourceDir, cleanup, err := unpackSource(tarballPath)
+	if err != nil {
+		return Manifest{}, err
+	}
+	if cleanup != nil {
+		defer cleanup()
+	}
+	source, err := readManifest(sourceDir)
+	if err != nil {
+		return Manifest{}, err
+	}
+	if _, err := readSourceArtifacts(sourceDir, source.Manifest); err != nil {
+		return Manifest{}, err
+	}
+	lockBytes, err := ReadFileLimited(filepath.Join(sourceDir, "lock.json"), MaxLockBytes)
+	if err != nil {
+		return Manifest{}, err
+	}
+	var lock Lock
+	if err := DecodeStrictJSON(lockBytes, &lock); err != nil {
+		return Manifest{}, err
+	}
+	manifestDigest := sha256.Sum256(source.manifestBytes)
+	if lock.ManifestSHA256 != hex.EncodeToString(manifestDigest[:]) {
+		return Manifest{}, ErrInvalidFormat
+	}
+	for index := range lock.Artifacts {
+		if !isPackageEntrypoint(lock.Artifacts[index].Path) {
+			return Manifest{}, ErrInvalidFormat
+		}
+		lock.Artifacts[index].Path = filepath.Join(sourceDir, lock.Artifacts[index].Path)
+	}
+	if err := validatePackagedLock(lock, source.Manifest); err != nil {
+		return Manifest{}, err
+	}
+	if err := verifyInstalledArtifacts(ctx, sourceDir, lock.Artifacts); err != nil {
+		return Manifest{}, err
+	}
+	return source.Manifest, nil
+}
+
+func validatePackagedLock(lock Lock, manifest Manifest) error {
+	for _, artifact := range lock.Artifacts {
+		if component, ok := findComponent(manifest, artifact.ComponentID); ok &&
+			component.Mode == ModeIsolated && artifact.Process != nil {
+			return ErrInvalidFormat
+		}
+	}
+	packaged := manifest
+	packaged.Components = append([]Component(nil), manifest.Components...)
+	for index := range packaged.Components {
+		if packaged.Components[index].Mode == ModeIsolated {
+			packaged.Components[index].Mode = ModeHosted
+		}
+	}
+	return ValidateLock(lock, packaged)
+}
+
+func (c *GitHubClient) publishTarball(ctx context.Context, owner, repo, tarballPath string, manifest Manifest) (string, error) {
 	tag := "v" + manifest.Version
 	release, err := c.createRelease(ctx, owner, repo, tag)
 	if err != nil {
@@ -93,7 +170,7 @@ func (c *GitHubClient) PublishFromSource(ctx context.Context, owner, repo, sourc
 	if err != nil {
 		return "", cleanupRelease(err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, assetURL, file)
 	if err != nil {
 		return "", cleanupRelease(err)
@@ -104,7 +181,7 @@ func (c *GitHubClient) PublishFromSource(ctx context.Context, owner, repo, sourc
 	if err != nil {
 		return "", cleanupRelease(err)
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode != http.StatusCreated {
 		return "", cleanupRelease(fmt.Errorf("上传资产失败（HTTP %d）", response.StatusCode))
 	}
@@ -122,7 +199,7 @@ func (c *GitHubClient) deleteRelease(ctx context.Context, owner, repo string, re
 	if err != nil {
 		return err
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode != http.StatusNoContent {
 		return fmt.Errorf("删除 Release 失败（HTTP %d）", response.StatusCode)
 	}
@@ -154,7 +231,7 @@ func (c *GitHubClient) createRelease(ctx context.Context, owner, repo, tag strin
 	if err != nil {
 		return gitHubRelease{}, err
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode == http.StatusUnprocessableEntity {
 		return gitHubRelease{}, fmt.Errorf("版本 %s 已发布（GitHub Release 不可变）", tag)
 	}
@@ -179,10 +256,14 @@ func (c *GitHubClient) ResolveRelease(ctx context.Context, owner, repo, constrai
 			return "", "", err
 		}
 	}
-	var bestVersion Version
-	bestURL := ""
-	found := false
-	for page := 1; ; page++ {
+	// GitHub /releases 按创建时间排序，不按版本：必须扫完所有页取最高版本，
+	// 返回首个匹配项会在"旧版本线的补丁晚于新主版本发布"时解析出旧版本。
+	var (
+		bestVersion Version
+		bestURL     string
+		found       bool
+	)
+	for page := 1; page <= githubMaxPages; page++ {
 		request, err := http.NewRequestWithContext(ctx, http.MethodGet,
 			fmt.Sprintf("%s/repos/%s/%s/releases?per_page=100&page=%d", c.APIBase, owner, repo, page), nil)
 		if err != nil {
@@ -196,11 +277,11 @@ func (c *GitHubClient) ResolveRelease(ctx context.Context, owner, repo, constrai
 			return "", "", err
 		}
 		if response.StatusCode == http.StatusNotFound {
-			response.Body.Close()
+			_ = response.Body.Close()
 			return "", "", fmt.Errorf("仓库 %s/%s 不存在或不可访问", owner, repo)
 		}
 		if response.StatusCode != http.StatusOK {
-			response.Body.Close()
+			_ = response.Body.Close()
 			return "", "", fmt.Errorf("查询 Release 失败（HTTP %d）", response.StatusCode)
 		}
 		var releases []struct {
@@ -211,12 +292,12 @@ func (c *GitHubClient) ResolveRelease(ctx context.Context, owner, repo, constrai
 			} `json:"assets"`
 		}
 		if err := json.NewDecoder(response.Body).Decode(&releases); err != nil {
-			response.Body.Close()
+			_ = response.Body.Close()
 			return "", "", err
 		}
-		response.Body.Close()
+		_ = response.Body.Close()
 		if len(releases) == 0 {
-			break
+			break // 空页之后不会再有 Release
 		}
 		for _, release := range releases {
 			version, err := ParseVersion(strings.TrimPrefix(release.TagName, "v"))
@@ -226,11 +307,12 @@ func (c *GitHubClient) ResolveRelease(ctx context.Context, owner, repo, constrai
 			if constraint != "" && !parsedConstraint.Matches(version) {
 				continue
 			}
+			if found && CompareVersions(version, bestVersion) <= 0 {
+				continue
+			}
 			for _, asset := range release.Assets {
 				if strings.HasSuffix(asset.Name, ".tgz") {
-					if !found || CompareVersions(version, bestVersion) > 0 {
-						bestVersion, bestURL, found = version, asset.BrowserDownloadURL, true
-					}
+					bestVersion, bestURL, found = version, asset.BrowserDownloadURL, true
 					break
 				}
 			}
@@ -255,7 +337,7 @@ func (c *GitHubClient) DownloadRelease(ctx context.Context, assetURL, dest strin
 	if err != nil {
 		return err
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode != http.StatusOK {
 		return fmt.Errorf("下载资产失败（HTTP %d）", response.StatusCode)
 	}
@@ -263,7 +345,7 @@ func (c *GitHubClient) DownloadRelease(ctx context.Context, assetURL, dest strin
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	written, err := io.Copy(file, io.LimitReader(response.Body, MaxArtifactBytes+1))
 	if err != nil {
 		return err
@@ -284,7 +366,7 @@ func InstallFromRelease(ctx context.Context, root string, client *GitHubClient, 
 	if err != nil {
 		return InstalledRecord{}, err
 	}
-	defer os.RemoveAll(tempDir)
+	defer func() { _ = os.RemoveAll(tempDir) }()
 	tarball := filepath.Join(tempDir, "package.tgz")
 	if err := client.DownloadRelease(ctx, assetURL, tarball); err != nil {
 		return InstalledRecord{}, err
@@ -294,7 +376,7 @@ func InstallFromRelease(ctx context.Context, root string, client *GitHubClient, 
 		return InstalledRecord{}, err
 	}
 	defer cleanup()
-	source, err := readSourceManifest(sourceDir)
+	source, err := readManifest(sourceDir)
 	if err != nil {
 		return InstalledRecord{}, err
 	}

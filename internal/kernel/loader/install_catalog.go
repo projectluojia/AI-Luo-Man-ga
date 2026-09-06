@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -72,6 +73,9 @@ func (c *Catalog) Discover(ctx context.Context) ([]InstalledRecord, error) {
 	if err := validateSecureDirectory(c.root); err != nil {
 		return nil, errors.Join(ErrInstallCatalogInvalid, err)
 	}
+	if err := packmgr.RecoverInstallRoot(ctx, c.root); err != nil {
+		return nil, errors.Join(ErrInstallCatalogInvalid, err)
+	}
 	entries, err := os.ReadDir(c.root)
 	if err != nil {
 		return nil, errors.Join(ErrInstallCatalogInvalid, err)
@@ -83,6 +87,12 @@ func (c *Catalog) Discover(ctx context.Context) ([]InstalledRecord, error) {
 	for _, entry := range entries {
 		if err := ctx.Err(); err != nil {
 			return nil, err
+		}
+		if packmgr.IsTransientInstallDirectory(entry.Name()) {
+			if !entry.IsDir() {
+				return nil, ErrInstallCatalogInvalid
+			}
+			continue
 		}
 		if strings.HasPrefix(entry.Name(), ".") {
 			return nil, ErrInstallCatalogInvalid
@@ -137,7 +147,7 @@ func (c *Catalog) VerifyProcess(ctx context.Context, manifest Manifest, process 
 		return err
 	}
 	if !sameRuntimeManifest(record.Runtime, manifest) || record.Process == nil ||
-		!reflect.DeepEqual(cloneProcessSpec(*record.Process), cloneProcessSpec(process)) {
+		!reflect.DeepEqual(*record.Process, process) {
 		return ErrInstallChanged
 	}
 	return nil
@@ -176,21 +186,31 @@ func (c *Catalog) readRecordByID(ctx context.Context, id string) (InstalledRecor
 	if err := validateSecureDirectory(c.root); err != nil {
 		return InstalledRecord{}, errors.Join(ErrInstallCatalogInvalid, err)
 	}
+	if err := packmgr.RecoverInstallRoot(ctx, c.root); err != nil {
+		return InstalledRecord{}, errors.Join(ErrInstallCatalogInvalid, err)
+	}
 	entries, err := os.ReadDir(c.root)
 	if err != nil {
 		return InstalledRecord{}, errors.Join(ErrInstallCatalogInvalid, err)
 	}
-	for _, entry := range entries {
-		if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
-			continue
-		}
-		records, err := c.readPackage(ctx, filepath.Join(c.root, entry.Name()))
-		if err != nil {
-			return InstalledRecord{}, err
-		}
-		for _, record := range records {
-			if record.Runtime.ID == id {
-				return record, nil
+	for pass := 0; pass < 2; pass++ {
+		for _, entry := range entries {
+			name := entry.Name()
+			if packmgr.IsTransientInstallDirectory(name) || !entry.IsDir() || strings.HasPrefix(name, ".") {
+				continue
+			}
+			candidate := id == name || strings.HasPrefix(id, name+".")
+			if (pass == 0) != candidate {
+				continue
+			}
+			records, err := c.readPackage(ctx, filepath.Join(c.root, name))
+			if err != nil {
+				return InstalledRecord{}, err
+			}
+			for _, record := range records {
+				if record.Runtime.ID == id {
+					return record, nil
+				}
 			}
 		}
 	}
@@ -247,7 +267,7 @@ func (c *Catalog) readPackage(ctx context.Context, directory string) ([]Installe
 			ID: runtimeID, Version: neutral.Manifest.Version, Mode: component.Mode,
 			Role: RoleCapability, LockedDigest: artifact.SHA256,
 			Pin: neutral.Manifest.Pin, IdleTTL: time.Duration(neutral.Manifest.IdleTTLMS) * time.Millisecond,
-			HostFunctions: packmgr.CloneHostedFunctions(component.HostFunctions),
+			HostFunctions: slices.Clone(component.HostFunctions),
 		}
 		if err := validateManifest(runtimeManifest); err != nil {
 			return nil, err
@@ -473,27 +493,27 @@ func sameRuntimeIdentity(left, right Manifest) bool {
 }
 
 func cloneProcessSpec(spec packmgr.ProcessSpec) packmgr.ProcessSpec {
-	spec.Args = append([]string(nil), spec.Args...)
-	spec.Env = append([]string(nil), spec.Env...)
+	spec.Args = slices.Clone(spec.Args)
+	spec.Env = slices.Clone(spec.Env)
 	return spec
 }
 
 func cloneToolSpecs(specs []registry.ToolSpec) []registry.ToolSpec {
-	cloned := append([]registry.ToolSpec(nil), specs...)
+	cloned := slices.Clone(specs)
 	for index := range cloned {
-		cloned[index].RequiredPermissions = append([]string(nil), cloned[index].RequiredPermissions...)
+		cloned[index].RequiredPermissions = slices.Clone(cloned[index].RequiredPermissions)
 	}
 	return cloned
 }
 
 func cloneCapabilitySpec(spec registry.CapabilitySpec) registry.CapabilitySpec {
-	spec.RequiredPermissions = append([]string(nil), spec.RequiredPermissions...)
+	spec.RequiredPermissions = slices.Clone(spec.RequiredPermissions)
 	return spec
 }
 
 func cloneInstalledService(spec registry.ServiceSpec) registry.ServiceSpec {
-	spec.ToolDependencies = append([]string(nil), spec.ToolDependencies...)
-	spec.RequestedPermissions = append([]string(nil), spec.RequestedPermissions...)
+	spec.ToolDependencies = slices.Clone(spec.ToolDependencies)
+	spec.RequestedPermissions = slices.Clone(spec.RequestedPermissions)
 	return spec
 }
 

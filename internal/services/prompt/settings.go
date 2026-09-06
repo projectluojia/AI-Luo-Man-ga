@@ -23,84 +23,58 @@ func DefaultSettings(userID string) Settings {
 	}
 }
 
-var basicStyleAliases = map[string]string{
-	"default": "default", "默认": "default",
-	"professional": "professional", "专业可靠": "professional",
-	"friendly": "friendly", "亲和友善": "friendly",
-	"direct": "direct", "直言不讳": "direct",
-	"imaginative": "imaginative", "天马行空": "imaginative",
-	"pragmatic": "pragmatic", "高效务实": "pragmatic",
-	"roast": "roast", "吐槽达人": "roast",
-}
-
-var extraTraitAliases = map[string]string{
-	"considerate": "considerate", "温和体贴": "considerate",
-	"enthusiastic": "enthusiastic", "热情洋溢": "enthusiastic",
-	"emoji": "emoji", "表情符号": "emoji",
-	"headings_lists": "headings_lists", "headings": "headings_lists",
-	"lists": "headings_lists", "标题和列表": "headings_lists",
-}
-
-var levelAliases = map[string]string{
-	"enhanced": "enhanced", "strong": "enhanced", "increase": "enhanced", "增强": "enhanced",
-	"default": "default", "normal": "default", "默认": "default",
-	"reduced": "reduced", "weak": "reduced", "decrease": "reduced", "减弱": "reduced",
-}
-
-// NormalizeBasicStyle 把用户输入归一化为目录中的稳定 Key。
+// NormalizeBasicStyle 校验目录中的稳定 Key。
 func NormalizeBasicStyle(raw string) (string, error) {
-	key, ok := basicStyleAliases[strings.ToLower(strings.TrimSpace(raw))]
-	if !ok {
-		key, ok = basicStyleAliases[strings.TrimSpace(raw)]
-	}
-	if !ok {
+	key := strings.TrimSpace(raw)
+	switch key {
+	case "default", "professional", "friendly", "direct", "imaginative", "pragmatic", "roast":
+		return key, nil
+	default:
 		return "", ErrInvalid
 	}
-	return key, nil
 }
 
-// NormalizeTraitKey 把用户输入归一化为目录中的稳定 Key。
+// NormalizeTraitKey 校验目录中的稳定 Key。
 func NormalizeTraitKey(raw string) (string, error) {
-	key, ok := extraTraitAliases[strings.ToLower(strings.TrimSpace(raw))]
-	if !ok {
-		key, ok = extraTraitAliases[strings.TrimSpace(raw)]
-	}
-	if !ok {
+	key := strings.TrimSpace(raw)
+	switch key {
+	case "considerate", "enthusiastic", "emoji", "headings_lists":
+		return key, nil
+	default:
 		return "", ErrInvalid
 	}
-	return key, nil
 }
 
-// NormalizeLevel 把用户输入归一化为 enhanced/default/reduced。
+// NormalizeLevel 校验 enhanced/default/reduced。
 func NormalizeLevel(raw string) (string, error) {
-	level, ok := levelAliases[strings.ToLower(strings.TrimSpace(raw))]
-	if !ok {
-		level, ok = levelAliases[strings.TrimSpace(raw)]
-	}
-	if !ok {
+	level := strings.TrimSpace(raw)
+	switch level {
+	case "enhanced", "default", "reduced":
+		return level, nil
+	default:
 		return "", ErrInvalid
 	}
-	return level, nil
 }
 
-// NormalizeSettings 规范化一份设置：风格未知时回退默认，特征级别只保留已知键。
-func NormalizeSettings(settings Settings) Settings {
+// NormalizeSettings 校验并规范化一份设置。
+func NormalizeSettings(settings Settings) (Settings, error) {
 	settings.UserID = strings.TrimSpace(settings.UserID)
 	settings.BasicStyle = strings.TrimSpace(settings.BasicStyle)
-	normalizedBasicStyle, err := NormalizeBasicStyle(settings.BasicStyle)
-	if err != nil {
-		settings.BasicStyle = "default"
-	} else {
-		settings.BasicStyle = normalizedBasicStyle
+	if _, err := NormalizeBasicStyle(settings.BasicStyle); err != nil {
+		return Settings{}, err
 	}
 	levels := make(map[string]string, len(settings.ExtraTraitLevels))
 	for rawTrait, rawLevel := range settings.ExtraTraitLevels {
 		trait, traitErr := NormalizeTraitKey(rawTrait)
 		level, levelErr := NormalizeLevel(rawLevel)
-		if traitErr == nil && levelErr == nil {
-			levels[trait] = level
+		if traitErr != nil {
+			return Settings{}, traitErr
 		}
+		if levelErr != nil {
+			return Settings{}, levelErr
+		}
+		levels[trait] = level
 	}
 	settings.ExtraTraitLevels = levels
-	return settings
+	return settings, nil
 }

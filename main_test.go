@@ -9,6 +9,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -21,52 +22,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
 )
 
-func TestLoadDotEnvLoadsMissingKeysAndSkipsComments(t *testing.T) {
-	t.Chdir(t.TempDir())
-	if err := os.WriteFile(".env", []byte("# 注释行\nAILUO_DOTENV_A=value-1\n\nAILUO_DOTENV_B=\"quoted value\"\nAILUO_DOTENV_C='single quoted'\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	for _, key := range []string{"AILUO_DOTENV_A", "AILUO_DOTENV_B", "AILUO_DOTENV_C"} {
-		if err := os.Unsetenv(key); err != nil { // 清空，保证 .env 补足
-			t.Fatal(err)
-		}
-	}
-	t.Cleanup(func() {
-		for _, key := range []string{"AILUO_DOTENV_A", "AILUO_DOTENV_B", "AILUO_DOTENV_C"} {
-			os.Unsetenv(key)
-		}
-	})
-	loadDotEnv()
-	if got := os.Getenv("AILUO_DOTENV_A"); got != "value-1" {
-		t.Fatalf("A=%q", got)
-	}
-	if got := os.Getenv("AILUO_DOTENV_B"); got != "quoted value" {
-		t.Fatalf("B=%q", got)
-	}
-	if got := os.Getenv("AILUO_DOTENV_C"); got != "single quoted" {
-		t.Fatalf("C=%q", got)
-	}
-}
-
-func TestLoadDotEnvKeepsExistingEnvironmentPriority(t *testing.T) {
-	t.Chdir(t.TempDir())
-	if err := os.WriteFile(".env", []byte("AILUO_DOTENV_PRIORITY=from-file\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("AILUO_DOTENV_PRIORITY", "from-env")
-	loadDotEnv()
-	if got := os.Getenv("AILUO_DOTENV_PRIORITY"); got != "from-env" {
-		t.Fatalf("priority=%q, want from-env", got)
-	}
-}
-
-func TestLoadDotEnvSkipsMissingFile(t *testing.T) {
-	t.Chdir(t.TempDir())
-	loadDotEnv() // .env 不存在必须静默返回，不崩溃
-}
-
-func TestLoadConfigAllowsBootstrapWithoutModel(t *testing.T) {
-	t.Setenv("AILUO_MODEL", "")
+func TestLoadConfigUsesControlPlaneDefaults(t *testing.T) {
 	t.Setenv("AILUO_MANAGE_AGENT", "false")
 	config, err := loadConfig()
 	if err != nil || config.configUIAddress != configui.DefaultAddress {
@@ -75,7 +31,6 @@ func TestLoadConfigAllowsBootstrapWithoutModel(t *testing.T) {
 }
 
 func TestLoadConfigRejectsInvalidBoolean(t *testing.T) {
-	t.Setenv("AILUO_MODEL", "test")
 	t.Setenv("AILUO_MANAGE_AGENT", "sometimes")
 	_, err := loadConfig()
 	if err == nil || !strings.Contains(err.Error(), "AILUO_MANAGE_AGENT must be a boolean") {
@@ -84,7 +39,6 @@ func TestLoadConfigRejectsInvalidBoolean(t *testing.T) {
 }
 
 func TestLoadConfigRejectsSourcePathLogging(t *testing.T) {
-	t.Setenv("AILUO_MODEL", "test")
 	t.Setenv("AILUO_MANAGE_AGENT", "false")
 	t.Setenv("AILUO_LOG_SOURCE", "true")
 	if _, err := loadConfig(); err == nil || !strings.Contains(err.Error(), "must be false") {
@@ -92,64 +46,7 @@ func TestLoadConfigRejectsSourcePathLogging(t *testing.T) {
 	}
 }
 
-func TestLoadConfigAllowsBootstrapWithoutModelKey(t *testing.T) {
-	t.Setenv("AILUO_MODEL", "test")
-	t.Setenv("AILUO_MANAGE_AGENT", "true")
-	t.Setenv("AILUO_MODEL_API_KEY", "")
-	t.Setenv("OPENAI_API_KEY", "")
-	t.Setenv("AILUO_MODEL_API_KEY_FILE", "")
-	if _, err := loadConfig(); err != nil {
-		t.Fatalf("bootstrap config error=%v", err)
-	}
-}
-
-func TestLoadConfigRequiresRestrictedSecretFileInProduction(t *testing.T) {
-	t.Setenv("AILUO_MODEL", "test")
-	t.Setenv("AILUO_MANAGE_AGENT", "true")
-	t.Setenv("AILUO_ENVIRONMENT", "production")
-	t.Setenv("AILUO_MODEL_API_KEY", "raw-secret")
-	t.Setenv("OPENAI_API_KEY", "")
-	t.Setenv("AILUO_MODEL_API_KEY_FILE", "")
-	if _, err := loadConfig(); err == nil || !strings.Contains(err.Error(), "must use AILUO_MODEL_API_KEY_FILE") {
-		t.Fatalf("raw production secret error=%v", err)
-	}
-
-	secretPath := filepath.Join(t.TempDir(), "model-key")
-	if err := os.WriteFile(secretPath, []byte("secret\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("AILUO_MODEL_API_KEY", "")
-	t.Setenv("AILUO_MODEL_API_KEY_FILE", secretPath)
-	if !unixSecurityAvailable {
-		if _, err := loadConfig(); err == nil || !strings.Contains(err.Error(), "owner-only permission verification") {
-			t.Fatalf("unsupported secret file verification error=%v", err)
-		}
-		return
-	}
-	if _, err := loadConfig(); err != nil {
-		t.Fatalf("restricted secret file rejected: %v", err)
-	}
-	if err := os.Chmod(secretPath, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := loadConfig(); err == nil || !strings.Contains(err.Error(), "no group or other permissions") {
-		t.Fatalf("insecure secret file error=%v", err)
-	}
-	if err := os.Chmod(secretPath, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	secretLink := filepath.Join(t.TempDir(), "model-key-link")
-	if err := os.Symlink(secretPath, secretLink); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("AILUO_MODEL_API_KEY_FILE", secretLink)
-	if _, err := loadConfig(); err == nil {
-		t.Fatal("symlinked production secret was accepted")
-	}
-}
-
 func TestLoadConfigRejectsDemoDataInProduction(t *testing.T) {
-	t.Setenv("AILUO_MODEL", "test")
 	t.Setenv("AILUO_MANAGE_AGENT", "false")
 	t.Setenv("AILUO_ENVIRONMENT", "production")
 	t.Setenv("AILUO_LOAD_DEMO_DATA", "true")
@@ -160,7 +57,6 @@ func TestLoadConfigRejectsDemoDataInProduction(t *testing.T) {
 }
 
 func TestLoadConfigRejectsRelativeRuntimeInstallRoot(t *testing.T) {
-	t.Setenv("AILUO_MODEL", "test")
 	t.Setenv("AILUO_MANAGE_AGENT", "false")
 	t.Setenv("AILUO_RUNTIME_INSTALL_ROOT", "relative/runtime")
 	if _, err := loadConfig(); err == nil || !strings.Contains(err.Error(), "clean absolute path") {
@@ -178,8 +74,38 @@ func TestDefaultRuntimeRootIsAbsoluteOrEmpty(t *testing.T) {
 	}
 }
 
+func TestResolveSourceRequiresVersionForZeroDeclarationPackage(t *testing.T) {
+	sourceDir := filepath.Join(t.TempDir(), "hello.pkg")
+	if err := os.MkdirAll(sourceDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceDir, "main.go"), []byte("package main\nfunc hello(args HelloArgs) {}\ntype HelloArgs struct { Name string `json:\"name\"` }\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := resolveSource(t.Context(), sourceDir, ""); err == nil || !strings.Contains(err.Error(), "--version") {
+		t.Fatalf("resolveSource error = %v, want required version", err)
+	}
+}
+
+func TestResolveSDKSourceExtractsZeroDeclarationContract(t *testing.T) {
+	sourceDir := filepath.Join(t.TempDir(), "hello.pkg")
+	if err := os.MkdirAll(sourceDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceDir, "main.go"), []byte("package main\nfunc hello(args HelloArgs) {}\ntype HelloArgs struct { Name string `json:\"name\"` }\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	packageID, extensions, err := resolveSDKSource(t.Context(), sourceDir)
+	if err != nil {
+		t.Fatalf("resolveSDKSource: %v", err)
+	}
+	if packageID != "hello.pkg" || len(extensions) == 0 {
+		t.Fatalf("package ID/extensions = %q/%s, want extracted extensions", packageID, extensions)
+	}
+}
+
 func TestConfigureInstalledRuntimesAllowsEmptySecureCatalog(t *testing.T) {
-	if !unixSecurityAvailable {
+	if runtime.GOOS == "windows" {
 		t.Skip("非 Unix 平台显式关闭安装目录属主校验")
 	}
 	root := t.TempDir()
@@ -196,7 +122,7 @@ func TestConfigureInstalledRuntimesAllowsEmptySecureCatalog(t *testing.T) {
 }
 
 func TestConfigureInstalledRuntimesRegistersHostedCatalogAndRequiresAddress(t *testing.T) {
-	if !unixSecurityAvailable {
+	if runtime.GOOS == "windows" {
 		t.Skip("非 Unix 平台显式关闭安装目录属主校验")
 	}
 	root := writeMainInstalledFixture(t)

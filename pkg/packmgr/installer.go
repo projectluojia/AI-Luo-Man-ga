@@ -14,6 +14,9 @@ import (
 	"sync"
 )
 
+// 安装根内的内部工作目录前缀：Install 的阶段目录与旧版本备份目录都建在安装根
+// 内（保证与目标同文件系统，rename 才是原子的）。ListInstalled 按这些前缀跳过
+// 它们，否则一次崩掉的安装会让 `ailuo list` 与依赖解析永久失败。
 var installLocks sync.Map
 
 const (
@@ -45,7 +48,7 @@ func Install(ctx context.Context, root, sourcePath string) (InstalledRecord, err
 	if cleanup != nil {
 		defer cleanup()
 	}
-	source, err := readSourceManifest(sourceDir)
+	source, err := readManifest(sourceDir)
 	if err != nil {
 		return InstalledRecord{}, err
 	}
@@ -56,12 +59,15 @@ func Install(ctx context.Context, root, sourcePath string) (InstalledRecord, err
 	if err := os.MkdirAll(root, 0o750); err != nil {
 		return InstalledRecord{}, err
 	}
-	installLock := packageInstallLock(root, source.Manifest.ID)
-	installLock.Lock()
-	defer installLock.Unlock()
+	if err := RecoverInstallRoot(ctx, root); err != nil {
+		return InstalledRecord{}, err
+	}
 	if err := resolveDependencies(ctx, root, source.Manifest.Dependencies); err != nil {
 		return InstalledRecord{}, err
 	}
+	installLock := packageInstallLock(root, source.Manifest.ID)
+	installLock.Lock()
+	defer installLock.Unlock()
 	targetDir := filepath.Join(root, source.Manifest.ID)
 	if existing, err := ReadInstalled(ctx, targetDir); err == nil {
 		if existing.Manifest.Version == source.Manifest.Version {
@@ -76,7 +82,7 @@ func Install(ctx context.Context, root, sourcePath string) (InstalledRecord, err
 	if err != nil {
 		return InstalledRecord{}, err
 	}
-	defer os.RemoveAll(stageDir)
+	defer func() { _ = os.RemoveAll(stageDir) }()
 	// 写入 manifest（保留源字节，lock 中的 manifest digest 必须一致）。
 	if err := os.WriteFile(filepath.Join(stageDir, "manifest.json"), source.manifestBytes, 0o640); err != nil {
 		return InstalledRecord{}, err
@@ -117,11 +123,14 @@ func Install(ctx context.Context, root, sourcePath string) (InstalledRecord, err
 	if err := os.WriteFile(filepath.Join(stageDir, "lock.json"), lockBytes, 0o640); err != nil {
 		return InstalledRecord{}, err
 	}
+	// 原子发布 + 回滚：旧版本先移到备份目录而非直接删除，rename 或发布后回读
+	// 失败都恢复原安装，绝不留下"包消失"或"目录无效"的中间态。
 	return publishStage(ctx, root, targetDir, stageDir)
 }
 
-// publishStage 把阶段目录发布为安装目录并回读验证。旧安装先移到同一安装根内
-// 的备份目录，任何失败都恢复旧版本，成功后才清理备份。
+// publishStage 把阶段目录发布为安装目录并回读验证。旧安装先 rename 为安装根内
+// 的备份目录：任一步失败都把备份恢复回原位，成功后才删除备份。
+// （Windows 不支持 rename 覆盖已存在目录，因此走"移走旧的→移入新的"两步。）
 func publishStage(ctx context.Context, root, targetDir, stageDir string) (InstalledRecord, error) {
 	backupDir, err := reserveBackupDir(root, targetDir)
 	if err != nil {
@@ -164,7 +173,8 @@ func publishStage(ctx context.Context, root, targetDir, stageDir string) (Instal
 	return record, nil
 }
 
-// reserveBackupDir 把已有安装目录移到同一安装根内的唯一备份目录。
+// reserveBackupDir 把已存在的安装目录移到安装根内的备份目录并返回其路径；
+// 目标原本不存在时返回空字符串（无需备份，失败时直接删除新目录即可）。
 func reserveBackupDir(root, targetDir string) (string, error) {
 	if _, err := os.Lstat(targetDir); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -172,6 +182,7 @@ func reserveBackupDir(root, targetDir string) (string, error) {
 		}
 		return "", err
 	}
+	// MkdirTemp 只用于取唯一名字；rename 要求目标不存在，因此先删掉空目录。
 	backupDir, err := os.MkdirTemp(root, backupPrefix)
 	if err != nil {
 		return "", err
@@ -204,11 +215,14 @@ func Upgrade(ctx context.Context, root, id, sourceDir string) (InstalledRecord, 
 	if err != nil {
 		return InstalledRecord{}, err
 	}
+	if err := RecoverInstallRoot(ctx, absoluteRoot); err != nil {
+		return InstalledRecord{}, err
+	}
 	existing, err := ReadInstalled(ctx, filepath.Join(absoluteRoot, id))
 	if err != nil {
 		return InstalledRecord{}, fmt.Errorf("包 %q 未安装", id)
 	}
-	source, err := readSourceManifest(sourceDir)
+	source, err := readManifest(sourceDir)
 	if err != nil {
 		return InstalledRecord{}, err
 	}
@@ -233,6 +247,9 @@ func Uninstall(ctx context.Context, root, id string) error {
 	if err := os.MkdirAll(absoluteRoot, 0o750); err != nil {
 		return err
 	}
+	if err := RecoverInstallRoot(ctx, absoluteRoot); err != nil {
+		return err
+	}
 	lock := packageInstallLock(absoluteRoot, id)
 	lock.Lock()
 	defer lock.Unlock()
@@ -245,8 +262,11 @@ func Uninstall(ctx context.Context, root, id string) error {
 	if errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("包 %q 未安装", id)
 	}
-	if err != nil || !info.IsDir() {
-		return fmt.Errorf("目标 %q 不是目录", target)
+	if err != nil {
+		return fmt.Errorf("读取 %q 失败: %w", target, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("%q 不是目录，不是安装包", target)
 	}
 	manifestInfo, err := os.Lstat(filepath.Join(target, "manifest.json"))
 	if err != nil || !manifestInfo.Mode().IsRegular() {
@@ -258,8 +278,8 @@ func Uninstall(ctx context.Context, root, id string) error {
 	return os.RemoveAll(target)
 }
 
-// sourcePackage 是源包目录读取结果：清单字节原样保留以锁定 digest。
-type sourcePackage struct {
+// manifestFile 是包目录读取结果：清单字节原样保留以锁定 digest。
+type manifestFile struct {
 	Manifest      Manifest
 	manifestBytes []byte
 }
@@ -270,40 +290,46 @@ type sourceArtifact struct {
 	path        string
 }
 
-// readSourceManifest 读取源包目录的 manifest.json 并校验。
-func readSourceManifest(sourceDir string) (sourcePackage, error) {
-	manifestBytes, err := ReadFileLimited(filepath.Join(sourceDir, "manifest.json"), MaxManifestBytes)
+// readManifest 读取包目录的 manifest.json 并校验。
+func readManifest(directory string) (manifestFile, error) {
+	manifestBytes, err := ReadFileLimited(filepath.Join(directory, "manifest.json"), MaxManifestBytes)
 	if err != nil {
-		return sourcePackage{}, err
+		return manifestFile{}, err
 	}
 	var manifest Manifest
 	if err := DecodeStrictJSON(manifestBytes, &manifest); err != nil {
-		return sourcePackage{}, err
+		return manifestFile{}, err
 	}
 	if err := ValidateManifest(manifest); err != nil {
-		return sourcePackage{}, err
+		return manifestFile{}, err
 	}
-	return sourcePackage{Manifest: manifest, manifestBytes: manifestBytes}, nil
+	return manifestFile{Manifest: manifest, manifestBytes: manifestBytes}, nil
 }
 
-// readSourceArtifacts 校验并收集清单声明的每组件 entrypoint 工件。
+// readSourceArtifacts 校验并收集清单声明的每组件 entrypoint 工件。安装与打包
+// 都按 basename 平铺工件，因此这里拒绝 basename 冲突：否则两个组件的
+// `a/mod.wasm` 与 `b/mod.wasm` 会互相覆盖，且 lock 里两条记录指向同一个文件。
 func readSourceArtifacts(sourceDir string, manifest Manifest) ([]sourceArtifact, error) {
 	artifacts := make([]sourceArtifact, 0, len(manifest.Components))
-	seenNames := make(map[string]struct{}, len(manifest.Components))
+	ownerByName := make(map[string]string, len(manifest.Components))
 	for _, component := range manifest.Components {
 		artifactPath := filepath.Join(sourceDir, component.Entrypoint)
 		info, err := os.Lstat(artifactPath)
 		if err != nil {
 			return nil, fmt.Errorf("组件 %s entrypoint 工件不可读: %w", component.ID, err)
 		}
-		if !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > MaxArtifactBytes {
-			return nil, fmt.Errorf("组件 %s entrypoint 工件无效", component.ID)
+		if !info.Mode().IsRegular() {
+			return nil, fmt.Errorf("组件 %s entrypoint 工件不是普通文件", component.ID)
+		}
+		if info.Size() <= 0 || info.Size() > MaxArtifactBytes {
+			return nil, fmt.Errorf("组件 %s entrypoint 工件大小 %d 超出 (0, %d]", component.ID, info.Size(), MaxArtifactBytes)
 		}
 		name := filepath.Base(artifactPath)
-		if _, exists := seenNames[name]; exists {
-			return nil, fmt.Errorf("%w: 组件 entrypoint basename 重复 %q", ErrInvalidFormat, name)
+		if owner, exists := ownerByName[name]; exists {
+			return nil, fmt.Errorf("%w: 组件 %s 与 %s 的 entrypoint 同名 %q（工件按 basename 平铺，不可冲突）",
+				ErrInvalidFormat, owner, component.ID, name)
 		}
-		seenNames[name] = struct{}{}
+		ownerByName[name] = component.ID
 		artifacts = append(artifacts, sourceArtifact{componentID: component.ID, path: artifactPath})
 	}
 	return artifacts, nil
@@ -326,10 +352,10 @@ func unpackSource(source string) (string, func(), error) {
 		return "", nil, err
 	}
 	if err := unpackTarball(source, temp); err != nil {
-		os.RemoveAll(temp)
+		_ = os.RemoveAll(temp)
 		return "", nil, err
 	}
-	return temp, func() { os.RemoveAll(temp) }, nil
+	return temp, func() { _ = os.RemoveAll(temp) }, nil
 }
 
 // resolveDependencies 检查每个依赖在安装根内存在已安装包且版本满足约束。
@@ -337,7 +363,7 @@ func resolveDependencies(ctx context.Context, root string, deps []Dependency) er
 	if len(deps) == 0 {
 		return nil
 	}
-	installed, err := ListInstalled(ctx, root)
+	installed, err := listInstalled(ctx, root)
 	if err != nil {
 		return err
 	}
@@ -372,7 +398,7 @@ func resolveDependencies(ctx context.Context, root string, deps []Dependency) er
 
 // validateDependents 拒绝会破坏已安装直接依赖者的卸载或升级。
 func validateDependents(ctx context.Context, root, id, replacement string) error {
-	installed, err := ListInstalled(ctx, root)
+	installed, err := listInstalled(ctx, root)
 	if err != nil {
 		return err
 	}
@@ -403,13 +429,15 @@ func validateDependents(ctx context.Context, root, id, replacement string) error
 	return nil
 }
 
-// copyFile 复制文件并保留源权限位。
+// copyFile 复制文件并保留源权限位。写入路径必须 Sync + 检查 Close：ENOSPC 这类
+// 错误只在 flush/close 时才浮出来，丢掉它会让一个被截断的工件照样通过后续哈希
+// 并被写进 lock（自洽但内容错误）。
 func copyFile(src, dst string) error {
 	source, err := os.Open(src)
 	if err != nil {
 		return err
 	}
-	defer source.Close()
+	defer func() { _ = source.Close() }()
 	info, err := source.Stat()
 	if err != nil {
 		return err

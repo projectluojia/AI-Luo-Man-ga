@@ -63,6 +63,28 @@ func TestSchemaTypeArray(t *testing.T) {
 	}
 }
 
+// TestSchemaTypeToleratesDialectDeclaration 验证 $schema 方言声明与未被引用的
+// definitions/$defs 块（ts-json-schema-generator 等工具自动携带）不参与类型派生
+// 但被接受，未知关键字和 $ref 引用仍然拒绝。
+func TestSchemaTypeToleratesDialectDeclaration(t *testing.T) {
+	schema := `{"$schema":"http://json-schema.org/draft-07/schema#","definitions":{},"type":"object","properties":{"query":{"type":"string"}},"required":["query"],"additionalProperties":false}`
+	model, err := schemaType(json.RawMessage(schema), "SearchInput")
+	if err != nil {
+		t.Fatalf("schemaType 带 $schema/definitions: %v", err)
+	}
+	if model.Kind != KindObject || len(model.Fields) != 1 {
+		t.Fatalf("object model = %+v", model)
+	}
+	for _, rejected := range []string{
+		`{"$defs":{"a":{"type":"string"}},"type":"string","$ref":"#/$defs/a"}`,
+		`{"definitions":{"a":{"type":"string"}},"type":"string","$ref":"#/definitions/a"}`,
+	} {
+		if _, err := schemaType(json.RawMessage(rejected), "Input"); err == nil {
+			t.Fatalf("schemaType 应拒绝 $ref：%s", rejected)
+		}
+	}
+}
+
 func TestSchemaTypeObject(t *testing.T) {
 	schema := `{"type":"object","properties":{"query":{"type":"string","minLength":1},"limit":{"type":"integer","minimum":1}},"required":["query"],"additionalProperties":false}`
 	model, err := schemaType(json.RawMessage(schema), "SearchInput")
@@ -96,6 +118,7 @@ func TestSchemaTypeRejects(t *testing.T) {
 		`{"type":"boolean","enum":[true]}`,                        // boolean 不支持 enum
 		`{"type":"array","items":{"type":"string"},"enum":["x"]}`, // array 不支持 enum（不静默忽略）
 		`{"type":"string","format":"date-time","enum":["x"]}`,     // enum 与 format 冲突
+		`{"type":"string","const":"x"}`,                           // 未知关键字
 	}
 	for _, schema := range tests {
 		if _, err := schemaType(json.RawMessage(schema), "Input"); err == nil {

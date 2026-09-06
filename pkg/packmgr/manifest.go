@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"path"
 	"path/filepath"
 	"strings"
 )
@@ -124,7 +125,8 @@ func ValidateManifest(manifest Manifest) error {
 		if component.Mode != ModeHosted && component.Mode != ModeIsolated {
 			return ErrInvalidFormat
 		}
-		if !isPackageEntrypoint(component.Entrypoint) {
+		if !isPackageEntrypoint(component.Entrypoint) ||
+			component.Entrypoint == "manifest.json" || component.Entrypoint == "lock.json" {
 			return ErrInvalidFormat
 		}
 		for _, id := range append(append([]string(nil), component.Exports...), component.Imports...) {
@@ -232,6 +234,11 @@ func ValidateLock(lock Lock, manifest Manifest) error {
 		if !filepath.IsAbs(artifact.Path) || filepath.Clean(artifact.Path) != artifact.Path {
 			return ErrInvalidFormat
 		}
+		// 工件按 basename 平铺安装，lock 的文件名必须与清单声明的 entrypoint 一致：
+		// 否则 lock 可以把摘要绑到包目录外任意一个绝对路径文件上。
+		if filepath.Base(artifact.Path) != filepath.Base(component.Entrypoint) {
+			return ErrInvalidFormat
+		}
 		switch component.Mode {
 		case ModeHosted:
 			if artifact.Process != nil {
@@ -254,14 +261,14 @@ func ValidateLock(lock Lock, manifest Manifest) error {
 // isPackageEntrypoint 只接受包根目录下的普通文件名。包格式明确采用扁平工件
 // 布局，不能依赖运行验证器所在平台解释路径分隔符或盘符。
 func isPackageEntrypoint(value string) bool {
-	return value != "" && value != "." && value != ".." &&
-		!strings.ContainsAny(value, `/\\:`) && !strings.ContainsRune(value, '\x00')
+	return IsPackagePath(value) && value != "." && !strings.ContainsRune(value, '/')
 }
 
-// isSHA256Hex 判断摘要是否恰好是 32 字节的小写或大写十六进制值。
-func isSHA256Hex(value string) bool {
-	decoded, err := hex.DecodeString(value)
-	return err == nil && len(decoded) == sha256.Size
+// isSHA256Hex 判断字符串是否为合法十六进制 SHA-256 摘要。只校验长度会让 64 个
+// "g" 这类非十六进制垃圾通过 lock 校验，摘要比对之前就该拒掉。
+func isSHA256Hex(digest string) bool {
+	raw, err := hex.DecodeString(digest)
+	return err == nil && len(raw) == sha256.Size
 }
 
 func findComponent(manifest Manifest, id string) (Component, bool) {
@@ -289,6 +296,9 @@ func ValidateProcessSpec(spec ProcessSpec) error {
 func IsLocalRuntimeAddress(address string) bool {
 	if strings.HasPrefix(address, "unix:") {
 		socketPath := strings.TrimPrefix(address, "unix:")
+		if strings.HasPrefix(socketPath, "/") {
+			return path.Clean(socketPath) == socketPath
+		}
 		return filepath.IsAbs(socketPath) && filepath.Clean(socketPath) == socketPath
 	}
 	host, _, err := net.SplitHostPort(address)

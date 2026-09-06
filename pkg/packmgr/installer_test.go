@@ -2,10 +2,14 @@ package packmgr_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
@@ -179,6 +183,44 @@ func TestInstallRejectsInvalidSource(t *testing.T) {
 	}
 }
 
+func TestReadInstalledRejectsArtifactOutsidePackage(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	source := filepath.Join(t.TempDir(), "pkg")
+	writeSourcePackage(t, source, "demo.pkg", "1.0.0", packmgr.ModeHosted, "app.wasm", nil)
+	if _, err := packmgr.Install(ctx, root, source); err != nil {
+		t.Fatal(err)
+	}
+	outsideDir := t.TempDir()
+	outsidePath := filepath.Join(outsideDir, "app.wasm")
+	outsideBody := []byte("outside")
+	if err := os.WriteFile(outsidePath, outsideBody, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	lockPath := filepath.Join(root, "demo.pkg", "lock.json")
+	lockBytes, err := os.ReadFile(lockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lock packmgr.Lock
+	if err := json.Unmarshal(lockBytes, &lock); err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(outsideBody)
+	lock.Artifacts[0].Path = outsidePath
+	lock.Artifacts[0].SHA256 = hex.EncodeToString(digest[:])
+	lockBytes, err = json.Marshal(lock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(lockPath, lockBytes, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := packmgr.ReadInstalled(ctx, filepath.Join(root, "demo.pkg")); err == nil {
+		t.Fatal("ReadInstalled accepted artifact outside package directory")
+	}
+}
+
 func TestUpgradeAndUninstall(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
@@ -221,5 +263,127 @@ func TestUpgradeAndUninstall(t *testing.T) {
 	// 非包目录不可卸载。
 	if err := packmgr.Uninstall(ctx, root, "demo.pkg"); err == nil {
 		t.Fatal("Uninstall missing = nil, want error")
+	}
+}
+
+// 工件按 basename 平铺，两个组件的 entrypoint 同名会互相覆盖并让 lock 的两条
+// 记录指向同一个文件，必须在读源阶段拒绝。
+func TestInstallRejectsEntrypointBasenameCollision(t *testing.T) {
+	source := filepath.Join(t.TempDir(), "pkg")
+	if err := os.MkdirAll(source, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "mod.wasm"), []byte("bytes"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := json.Marshal(packmgr.Manifest{
+		SchemaVersion: packmgr.SchemaVersion, ID: "demo.pkg", Version: "1.0.0",
+		Components: []packmgr.Component{
+			{ID: "one", Mode: packmgr.ModeHosted, Entrypoint: "mod.wasm"},
+			{ID: "two", Mode: packmgr.ModeHosted, Entrypoint: "mod.wasm"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "manifest.json"), manifest, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	_, err = packmgr.Install(context.Background(), t.TempDir(), source)
+	if !errors.Is(err, packmgr.ErrInvalidFormat) || !strings.Contains(err.Error(), "同名") {
+		t.Fatalf("Install error = %v, want basename collision ErrInvalidFormat", err)
+	}
+}
+
+// isolated 组件必须在 lock 中固化进程规格（可执行文件 = 工件、工作目录 = 包目录、
+// 本机 Unix socket），否则宿主装载时拿不到启动参数。
+func TestInstallLocksProcessSpecForIsolatedComponent(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	source := filepath.Join(t.TempDir(), "pkg")
+	writeSourcePackage(t, source, "demo.svc", "1.0.0", packmgr.ModeIsolated, "svc-bin", nil)
+	record, err := packmgr.Install(ctx, root, source)
+	if err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	if len(record.Lock.Artifacts) != 1 {
+		t.Fatalf("artifacts = %d, want 1", len(record.Lock.Artifacts))
+	}
+	artifact := record.Lock.Artifacts[0]
+	if artifact.Process == nil {
+		t.Fatal("isolated 组件缺少进程规格")
+	}
+	targetDir := filepath.Join(root, "demo.svc")
+	if artifact.Process.Path != filepath.Join(targetDir, "svc-bin") ||
+		artifact.Process.WorkDir != targetDir {
+		t.Fatalf("process spec = %+v, want path/workdir 位于 %s", artifact.Process, targetDir)
+	}
+	if !packmgr.IsLocalRuntimeAddress(artifact.Process.Address) {
+		t.Fatalf("process address = %q, want 本机地址", artifact.Process.Address)
+	}
+}
+
+func TestInstallSerializesSamePackagePublication(t *testing.T) {
+	root := t.TempDir()
+	sources := make([]string, 2)
+	for i, version := range []string{"1.0.0", "2.0.0"} {
+		sources[i] = filepath.Join(t.TempDir(), "pkg")
+		writeSourcePackage(t, sources[i], "demo.concurrent", version, packmgr.ModeHosted, "app.wasm", nil)
+	}
+	start := make(chan struct{})
+	errorsSeen := make(chan error, len(sources))
+	var group sync.WaitGroup
+	for _, source := range sources {
+		group.Add(1)
+		go func(source string) {
+			defer group.Done()
+			<-start
+			_, err := packmgr.Install(context.Background(), root, source)
+			errorsSeen <- err
+		}(source)
+	}
+	close(start)
+	group.Wait()
+	close(errorsSeen)
+	for err := range errorsSeen {
+		if err != nil {
+			t.Fatalf("concurrent Install: %v", err)
+		}
+	}
+	record, err := packmgr.ReadInstalled(context.Background(), filepath.Join(root, "demo.concurrent"))
+	if err != nil {
+		t.Fatalf("ReadInstalled after concurrent Install: %v", err)
+	}
+	if record.Manifest.Version != "1.0.0" && record.Manifest.Version != "2.0.0" {
+		t.Fatalf("version=%s, want one complete installation", record.Manifest.Version)
+	}
+}
+
+// Install 的阶段目录与备份目录建在安装根内（同文件系统才能原子 rename），崩溃后
+// 可能残留；ListInstalled 必须跳过它们，否则一次失败的安装会永久破坏 list 与依赖
+// 解析。其他非包条目仍然 fail closed。
+func TestListInstalledSkipsInternalWorkDirs(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	source := filepath.Join(t.TempDir(), "pkg")
+	writeSourcePackage(t, source, "demo.pkg", "1.0.0", packmgr.ModeHosted, "app.wasm", nil)
+	if _, err := packmgr.Install(ctx, root, source); err != nil {
+		t.Fatal(err)
+	}
+	for _, leftover := range []string{".stage-123456", ".backup-654321"} {
+		if err := os.MkdirAll(filepath.Join(root, leftover), 0o750); err != nil {
+			t.Fatal(err)
+		}
+	}
+	records, err := packmgr.ListInstalled(ctx, root)
+	if err != nil || len(records) != 1 || records[0].Manifest.ID != "demo.pkg" {
+		t.Fatalf("ListInstalled = %+v err=%v, want 仅 demo.pkg", records, err)
+	}
+	// 其他隐藏条目不属于安装器内部目录，仍然报错。
+	if err := os.MkdirAll(filepath.Join(root, ".sneaky"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := packmgr.ListInstalled(ctx, root); !errors.Is(err, packmgr.ErrInvalidFormat) {
+		t.Fatalf("ListInstalled with unknown hidden entry error = %v, want ErrInvalidFormat", err)
 	}
 }
