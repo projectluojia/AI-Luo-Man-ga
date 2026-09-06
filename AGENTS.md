@@ -91,10 +91,10 @@ AI珞 V3 是长期维护的生产级项目。功能范围可以窄，但已实�
 - 非 loopback/远程边界需要认证传输和文档化信任模型；明文 gRPC 仅限显式同 Deployment loopback。
 - Secret 来自批准的秘密源，不提交、不启动回显，并具备轮换和撤销路径。
 - 安装根、阶段/备份目录、包树和 isolated 进程路径统一经过 `contracts/pkg/packageio`
-  的安全路径策略：Unix 校验当前 eUID 与组/其他不可写；Windows 校验当前进程 token
+  的安全路径策略：Unix 校验当前 eUID 与组/其他不可写；Windows 校验当前进程令牌的
   owner SID、有效 DACL，并拒绝非受信主体的 `DELETE`、`WRITE_DAC`、`WRITE_OWNER`、
-  文件写入、目录删子项和等价通用写权限。Windows 仅当前用户、LocalSystem 和
-  token user/token owner、LocalSystem 和 Builtin Administrators 可作为写入主体；未知平台 fail-closed。发布、恢复、卸载
+  文件写入、目录删子项和等价通用写权限。Windows 仅当前进程令牌的 user SID、
+  LocalSystem 和 Builtin Administrators 可作为写入主体；未知平台 fail-closed。发布、恢复、卸载
   和进程启动前必须复验，不能只信任发现时的结果。
 
 ## Durable State
