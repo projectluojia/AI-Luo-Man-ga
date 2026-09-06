@@ -7,6 +7,7 @@
 
 ```bash
 uv sync --project runtime --locked
+uv run --project runtime --locked ruff check runtime
 uv run --project runtime --locked python -m unittest discover -s runtime -p 'test_*.py' -v
 cd runtime
 uv run --project . --locked python -m agent.runtime --listen 127.0.0.1:50051

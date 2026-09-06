@@ -8,39 +8,54 @@
 
 ```bash
 make test-agent    # 按 packages/agent/runtime/uv.lock 运行 Executor 包测试
+make test-campus   # 校巴 guest 的 WASI vet 与交叉编译
 make test          # Core Go 单元测试
 make test-race     # Go race 检测
 make vet           # go vet
 make test-integration  # Runtime Host 跨进程集成测试（Unix 平台）
+make test-e2e      # Executor e2e（源包，Unix 平台）
 ```
 
 ## 分支与提交
 
 - 分支命名使用前缀：`feat/`、`fix/`、`chore/`、`docs/`、`refactor/`。
-- 提交信息遵循 Conventional Commits。开发分支上的逐条提交不强制格式；**PR 标题与 squash 合并消息必须规范**（`pr-title.yml` 强制校验）。
+- 提交信息、PR 标题和 squash 合并消息均严格遵循 Conventional Commits；破坏性变更在标题中使用 `!`，并在 footer 写明 `BREAKING CHANGE: <说明>`（`pr-title.yml` 强制校验）。
 - 一个 commit 是一个自洽的逻辑单元：可独立构建、独立回滚（例如迁移 + 存取代码 + 测试同处一个 commit）。
 - `main` 只接受 squash 合并，合并前必须通过全部 required status checks。
 
 ## PR 流程
 
 1. 从最新 `main` 切出前缀分支，合并前自行 rebase 保持 up-to-date。
-2. 按 `.github/PULL_REQUEST_TEMPLATE.md` 填写变更内容、影响范围、验证证据与安全治理清单。
-3. 标题格式：`<type>(<scope>): <描述>`，类型限定 `feat` / `fix` / `docs` / `style` / `refactor` / `perf` / `test` / `build` / `ci` / `chore` / `revert`。
-4. 等待 CI 全绿：三平台核心测试、Linux 完整质量门禁、proto 生成物漂移检查。
+2. 必须按 `.github/PULL_REQUEST_TEMPLATE.md` 填写变更内容、堆叠关系、影响范围、验证证据与安全治理清单；人工描述使用中文，命令、路径、API/协议名称和标准关键字可保留原文。
+3. 标题格式：`<type>[optional scope][!]: <描述>`，类型限定 `feat` / `fix` / `docs` / `style` / `refactor` / `perf` / `test` / `build` / `ci` / `chore` / `revert`；破坏性变更还要有 `BREAKING CHANGE: <说明>` footer。
+4. 等待 `ci-required`、CodeQL 和安全扫描等 required checks 全绿；再确认变更涉及的 Agent/Campus 独立包 workflow 通过。Core 门禁覆盖三平台核心测试、Linux 完整质量门禁和 proto 生成物漂移；Agent workflow 额外覆盖安装后 e2e。
 5. 合并需 1 人审批；审批后新的 push 会使旧审批失效，需重新审批。管理员绕过仅限紧急修复，日常合并一律走规则集。
 
-### 合并前自测门禁（与 CI 一致）
+### 堆叠 PR
+
+存在真实依赖时，用 `gh stack` 按底层到顶层维护分支和 PR：`gh stack init --base main <bottom> <next> ...` 创建新 stack，`gh stack link <stack-number> <pr-or-branch> ...` 接管已有 PR，`gh stack sync` 同步远端，`gh stack view --json` 复核完整链条。每个上层 PR 只能以直接依赖的下一层分支为 base；PR body 使用同一模板，只描述本层增量，不复制父层内容。需要 ready 审查时使用 `--open`，否则保持 draft。不要手工改 base 后继续提交。
+
+### 合并前本地验证（与 CI 部分重合）
+
+以下是本地可运行的主要门禁，不等同于 CI 完整门禁。CI 另外执行 Protobuf 漂移、包发布物 `pack → install → list`、Agent 安装后 e2e、CodeQL 和安全扫描；任何未运行的适用门禁都要在交付说明中标明。
 
 ```bash
-gofmt -w .
-GOCACHE=/tmp/github.com/projectluojia/AI-Luo-Man-ga-gocache go test ./...
+files="$(gofmt -l .)"
+test -z "$files" || { echo "$files"; exit 1; }
+go mod verify
+go mod tidy -diff
+go test ./...
+make test-campus
+go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 '-checks=inherit,-SA1019' ./...
+actionlint .github/workflows/*.yml
 uv sync --project packages/agent/runtime --locked
 uv run --project packages/agent/runtime --locked python -m compileall -q packages/agent/runtime
+(cd packages/agent/runtime && uv run --project . --locked ruff check .)
 uv run --project packages/agent/runtime --locked python -m unittest discover -s packages/agent/runtime -p 'test_*.py' -v
-GOCACHE=/tmp/github.com/projectluojia/AI-Luo-Man-ga-gocache go test -race ./...
-GOCACHE=/tmp/github.com/projectluojia/AI-Luo-Man-ga-gocache go vet ./...
-GOCACHE=/tmp/github.com/projectluojia/AI-Luo-Man-ga-gocache go test -tags=integration ./internal/kernel/loader -v -timeout=30s
-AILUO_EXECUTOR_PACKAGE_DIR="$PWD/packages/agent" GOCACHE=/tmp/github.com/projectluojia/AI-Luo-Man-ga-gocache go test -tags=integration ./e2e -v -timeout=30s
+go test -race ./...
+go vet ./...
+go test -tags=integration ./internal/kernel/loader -v -timeout=30s
+AILUO_EXECUTOR_PACKAGE_DIR="$PWD/packages/agent" go test -tags=integration ./e2e -v -timeout=60s
 ```
 
 ## 代码规范

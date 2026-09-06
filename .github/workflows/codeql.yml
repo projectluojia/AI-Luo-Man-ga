@@ -6,6 +6,7 @@ on:
   pull_request:
     paths:
       - "**/*.go"
+      - packages/campus-bus/go.mod
       - "packages/agent/**/*.py"
       - go.mod
       - go.sum
@@ -29,6 +30,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     permissions:
+      contents: read
       security-events: write
     strategy:
       fail-fast: false
