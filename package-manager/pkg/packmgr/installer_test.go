@@ -63,9 +63,17 @@ func TestInstallReplacesVersionsAndVerifiesIntegrity(t *testing.T) {
 	if reloaded.Manifest.Version != "1.0.0" {
 		t.Fatalf("reloaded version = %s", reloaded.Manifest.Version)
 	}
-	// 同版本重复安装报错。
-	if _, err := packmgr.Install(ctx, root, sourceV1); err == nil {
-		t.Fatal("Install same version = nil, want error")
+	// 同版本同内容安装是幂等操作。
+	replayed, err := packmgr.Install(ctx, root, sourceV1)
+	if err != nil || replayed.Manifest.Version != "1.0.0" {
+		t.Fatalf("Install same version = %+v, want existing 1.0.0: %v", replayed.Manifest, err)
+	}
+	// 同版本不同工件不能覆盖已发布内容。
+	if err := os.WriteFile(filepath.Join(sourceV1, "app.wasm"), []byte("changed"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := packmgr.Install(ctx, root, sourceV1); err == nil || !strings.Contains(err.Error(), "内容不一致") {
+		t.Fatalf("Install same version with changed artifact = %v, want immutable-content error", err)
 	}
 	// 新版本替换。
 	sourceV2 := filepath.Join(t.TempDir(), "pkg")
