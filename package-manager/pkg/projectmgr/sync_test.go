@@ -33,7 +33,7 @@ version = "^1.0.0"
 path = "packages/app"
 `)
 
-	root := filepath.Join(projectDir, "runtime")
+	root := packageiotest.TempDir(t)
 	lock, err := projectmgr.Sync(context.Background(), filepath.Join(projectDir, "ailuo.toml"), root, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -78,7 +78,7 @@ id = "ailuo"
 version = "1.0.0"
 path = "packages/demo"
 `)
-	installRoot := filepath.Join(projectDir, "runtime")
+	installRoot := packageiotest.TempDir(t)
 	if _, err := projectmgr.Sync(t.Context(), filepath.Join(projectDir, "ailuo.toml"), installRoot, nil); err != nil {
 		t.Fatal(err)
 	}

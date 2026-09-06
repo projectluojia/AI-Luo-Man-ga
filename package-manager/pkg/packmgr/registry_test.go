@@ -255,7 +255,7 @@ func TestInstallFromReleaseRejectsManifestVersionBeforeInstall(t *testing.T) {
 			}},
 		}})
 	}, http.NotFound)
-	root := t.TempDir()
+	root := packageiotest.TempDir(t)
 	if _, err := packmgr.InstallFromRelease(context.Background(), root, client, "owner", "repo", ""); err == nil {
 		t.Fatal("InstallFromRelease accepted mismatched manifest version")
 	}
