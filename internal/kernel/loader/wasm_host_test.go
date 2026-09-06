@@ -13,19 +13,8 @@ import (
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
-	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packagecontract"
 )
-
-// stringToolArtifact 读取参考包编译产物；测试工作目录为 internal/kernel/loader。
-func stringToolArtifact(t *testing.T) []byte {
-	t.Helper()
-	path := filepath.Join("..", "..", "..", "extensions", "strings.tool", "strings.tool.wasm")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("读取 strings.tool 工件（请先运行 ailuo pack extensions/strings.tool）: %v", err)
-	}
-	return data
-}
 
 // hostedArtifact 读取 testdata 下的测试工件。
 func hostedArtifact(t *testing.T, name string) []byte {
@@ -40,81 +29,82 @@ func hostedArtifact(t *testing.T, name string) []byte {
 // hostedTestRequest 构造携带工具标识的治理上下文。
 func hostedTestRequest(toolID string) contracts.RequestContext {
 	return contracts.RequestContext{
-		AppID: "app.campus", EchoID: "echo-1", RequestID: "request-1",
+		AppID: "app.test", EchoID: "echo-1", RequestID: "request-1",
 		ToolID: toolID,
 	}
 }
 
-// newStringToolHost 用 strings.tool 工件构造 WasmHost。
-func newStringToolHost(t *testing.T, functions ...loader.HostedFunction) *loader.WasmHost {
-	t.Helper()
-	artifact := stringToolArtifact(t)
+func TestWasmHostRejectsInvalidConfiguration(t *testing.T) {
+	if _, err := loader.NewWasmHost(loader.WasmHostConfig{}); !errors.Is(err, loader.ErrUnavailable) {
+		t.Fatalf("NewWasmHost without read artifact error = %v, want ErrUnavailable", err)
+	}
+	// 宿主函数问题不再在构造期暴露：按清单提供，Verify/Load 期 fail-closed。
 	host, err := loader.NewWasmHost(loader.WasmHostConfig{
-		ReadArtifact: func(_ context.Context, manifest loader.Manifest) ([]byte, error) {
-			if manifest.ID != "strings.tool" {
-				return nil, loader.ErrNotFound
-			}
-			return artifact, nil
-		},
-		HostFunctions: functions,
+		ReadArtifact: func(context.Context, loader.Manifest) ([]byte, error) { return nil, nil },
+		HostFunctionsFor: staticHostFunctions(loader.HostedFunction{
+			Module: "ailuo.host", Name: "echo",
+		}),
 	})
 	if err != nil {
 		t.Fatalf("NewWasmHost: %v", err)
 	}
-	return host
+	if err := host.Verify(context.Background(), loader.Manifest{
+		ID: testPackageID, Version: "1.0.0", Mode: loader.ModeHosted, Role: loader.RoleCapability, LockedDigest: digest,
+	}); !errors.Is(err, loader.ErrUnavailable) {
+		t.Fatalf("Verify with incomplete host function error = %v, want ErrUnavailable", err)
+	}
+	duplicate := loader.HostedFunction{
+		Module: "ailuo.host", Name: "echo",
+		Call: func(context.Context, contracts.RequestContext, []byte) ([]byte, error) { return nil, nil },
+	}
+	host, err = loader.NewWasmHost(loader.WasmHostConfig{
+		ReadArtifact:     func(context.Context, loader.Manifest) ([]byte, error) { return nil, nil },
+		HostFunctionsFor: staticHostFunctions(duplicate, duplicate),
+	})
+	if err != nil {
+		t.Fatalf("NewWasmHost: %v", err)
+	}
+	if err := host.Verify(context.Background(), loader.Manifest{
+		ID: testPackageID, Version: "1.0.0", Mode: loader.ModeHosted, Role: loader.RoleCapability, LockedDigest: digest,
+	}); !errors.Is(err, loader.ErrDuplicateID) {
+		t.Fatalf("Verify with duplicate host function error = %v, want ErrDuplicateID", err)
+	}
 }
 
-func TestWasmHostRejectsInvalidConfiguration(t *testing.T) {
-	cases := []struct {
-		name   string
-		config loader.WasmHostConfig
-		want   error
-	}{
-		{name: "nil read artifact", config: loader.WasmHostConfig{}, want: loader.ErrUnavailable},
-		{name: "bad host function", config: loader.WasmHostConfig{
-			ReadArtifact:  func(context.Context, loader.Manifest) ([]byte, error) { return nil, nil },
-			HostFunctions: []loader.HostedFunction{{Module: "ailuo.host", Name: "echo"}},
-		}, want: loader.ErrUnavailable},
-		{name: "duplicate host function", config: loader.WasmHostConfig{
-			ReadArtifact: func(context.Context, loader.Manifest) ([]byte, error) { return nil, nil },
-			HostFunctions: []loader.HostedFunction{
-				{Module: "ailuo.host", Name: "echo", Call: func(context.Context, contracts.RequestContext, []byte) ([]byte, error) { return nil, nil }},
-				{Module: "ailuo.host", Name: "echo", Call: func(context.Context, contracts.RequestContext, []byte) ([]byte, error) { return nil, nil }},
-			},
-		}, want: loader.ErrDuplicateID},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if _, err := loader.NewWasmHost(tc.config); !errors.Is(err, tc.want) {
-				t.Fatalf("NewWasmHost error = %v, want %v", err, tc.want)
+func TestWasmHostServesHostedArtifactThroughLoader(t *testing.T) {
+	artifact := hostedArtifact(t, filepath.Join("success", "success.wasm"))
+	host, err := loader.NewWasmHost(loader.WasmHostConfig{
+		ReadArtifact: func(_ context.Context, manifest loader.Manifest) ([]byte, error) {
+			if manifest.ID != testPackageID {
+				return nil, loader.ErrNotFound
 			}
-		})
+			return artifact, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewWasmHost: %v", err)
 	}
-}
-
-func TestWasmHostServesStringToolsThroughLoader(t *testing.T) {
-	host := newStringToolHost(t)
 	manager, err := loader.New(host)
 	if err != nil {
 		t.Fatalf("loader.New: %v", err)
 	}
 	ctx := context.Background()
 	manifest := loader.Manifest{
-		ID: "strings.tool", Version: "1.0.0", Mode: loader.ModeHosted, Role: loader.RoleCapability, LockedDigest: digest,
+		ID: testPackageID, Version: "1.0.0", Mode: loader.ModeHosted, Role: loader.RoleCapability, LockedDigest: digest,
 	}
 	if err := manager.Register(ctx, manifest); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
-	if err := manager.EnsureLoaded(ctx, "strings.tool"); err != nil {
+	if err := manager.EnsureLoaded(ctx, testPackageID); err != nil {
 		t.Fatalf("EnsureLoaded: %v", err)
 	}
-	if err := manager.EnsureLoaded(ctx, "strings.tool"); err != nil {
+	if err := manager.EnsureLoaded(ctx, testPackageID); err != nil {
 		t.Fatalf("已加载运行时应幂等返回：%v", err)
 	}
 
 	invoke := func(toolID string, payload string) (map[string]any, error) {
 		t.Helper()
-		lease, err := manager.Acquire(ctx, "strings.tool")
+		lease, err := manager.Acquire(ctx, testPackageID)
 		if err != nil {
 			return nil, err
 		}
@@ -130,34 +120,17 @@ func TestWasmHostServesStringToolsThroughLoader(t *testing.T) {
 		return decoded, nil
 	}
 
-	length, err := invoke("strings.len", `{"value":"hello"}`)
+	echo, err := invoke(testToolID, `{"value":"hello"}`)
 	if err != nil {
-		t.Fatalf("strings.len: %v", err)
+		t.Fatalf("invoke %s: %v", testToolID, err)
 	}
-	if length["length"] != float64(5) {
-		t.Fatalf("strings.len result = %v, want length 5", length)
-	}
-	joined, err := invoke("strings.join", `{"values":["a","b","c"],"separator":"-"}`)
-	if err != nil {
-		t.Fatalf("strings.join: %v", err)
-	}
-	if joined["value"] != "a-b-c" {
-		t.Fatalf("strings.join result = %v, want a-b-c", joined)
-	}
-	upper, err := invoke("strings.upper", `{"value":"abc"}`)
-	if err != nil {
-		t.Fatalf("strings.upper: %v", err)
-	}
-	if upper["value"] != "ABC" {
-		t.Fatalf("strings.upper result = %v, want ABC", upper)
-	}
-
-	// guest 显式拒绝：未知工具返回稳定错误，guest 错误码不进外部响应。
-	if _, err := invoke("strings.missing", `{}`); !errors.Is(err, loader.ErrHostedCallRejected) {
-		t.Fatalf("unknown tool error = %v, want ErrHostedCallRejected", err)
+	if echo["value"] != "hello" {
+		t.Fatalf("echo result = %v, want original payload", echo)
 	}
 	// 载荷本身不是合法 JSON 属于协议违例，在进入 guest 之前被拒绝。
-	if _, err := invoke("strings.len", `{"value":`); !errors.Is(err, loader.ErrRuntimeProtocol) {
+	// guest 显式拒绝路径的错误码映射由 wasm_host_internal_test 覆盖；
+	// 固件不做工具路由，Loader 不测 guest 的分发行为。
+	if _, err := invoke(testToolID, `{"value":`); !errors.Is(err, loader.ErrRuntimeProtocol) {
 		t.Fatalf("malformed payload error = %v, want ErrRuntimeProtocol", err)
 	}
 
@@ -173,20 +146,20 @@ func TestWasmHostHostFunctionProjectionBindsGovernedContext(t *testing.T) {
 	seen := make(chan contracts.RequestContext, 1)
 	host, err := loader.NewWasmHost(loader.WasmHostConfig{
 		ReadArtifact: func(_ context.Context, _ loader.Manifest) ([]byte, error) { return artifact, nil },
-		HostFunctions: []loader.HostedFunction{{
+		HostFunctionsFor: staticHostFunctions(loader.HostedFunction{
 			Module: "ailuo.host", Name: "echo",
 			Call: func(_ context.Context, request contracts.RequestContext, body []byte) ([]byte, error) {
 				seen <- request
 				return body, nil
 			},
-		}},
+		}),
 	})
 	if err != nil {
 		t.Fatalf("NewWasmHost: %v", err)
 	}
 	runtime, err := host.Load(context.Background(), loader.Manifest{
 		ID: "hostfn.test", Version: "1.0.0", Mode: loader.ModeHosted, Role: loader.RoleCapability, LockedDigest: digest,
-		HostFunctions: []packmgr.HostedFunctionDecl{{Module: "ailuo.host", Name: "echo"}},
+		HostFunctions: []packagecontract.HostedFunctionDecl{{Module: "ailuo.host", Name: "echo"}},
 	})
 	if err != nil {
 		t.Fatalf("Load: %v", err)
@@ -207,8 +180,8 @@ func TestWasmHostHostFunctionProjectionBindsGovernedContext(t *testing.T) {
 	}
 	select {
 	case request := <-seen:
-		if request.AppID != "app.campus" || request.ToolID != "hostfn.echo" {
-			t.Fatalf("host function received request = %+v, want app.campus/hostfn.echo", request)
+		if request.AppID != "app.test" || request.ToolID != "hostfn.echo" {
+			t.Fatalf("host function received request = %+v, want app.test/hostfn.echo", request)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("host function was not invoked")
@@ -219,10 +192,10 @@ func TestWasmHostRejectsUndeclaredHostFunctionImport(t *testing.T) {
 	artifact := hostedArtifact(t, filepath.Join("hostfn", "hostfn.wasm"))
 	host, err := loader.NewWasmHost(loader.WasmHostConfig{
 		ReadArtifact: func(_ context.Context, _ loader.Manifest) ([]byte, error) { return artifact, nil },
-		HostFunctions: []loader.HostedFunction{{
+		HostFunctionsFor: staticHostFunctions(loader.HostedFunction{
 			Module: "ailuo.host", Name: "echo",
 			Call: func(_ context.Context, _ contracts.RequestContext, body []byte) ([]byte, error) { return body, nil },
-		}},
+		}),
 	})
 	if err != nil {
 		t.Fatalf("NewWasmHost: %v", err)
@@ -239,17 +212,17 @@ func TestWasmHostVerifyRejectsUndeclaredHostFunction(t *testing.T) {
 	artifact := hostedArtifact(t, filepath.Join("hostfn", "hostfn.wasm"))
 	host, err := loader.NewWasmHost(loader.WasmHostConfig{
 		ReadArtifact: func(_ context.Context, _ loader.Manifest) ([]byte, error) { return artifact, nil },
-		HostFunctions: []loader.HostedFunction{{
+		HostFunctionsFor: staticHostFunctions(loader.HostedFunction{
 			Module: "ailuo.host", Name: "echo",
 			Call: func(_ context.Context, _ contracts.RequestContext, body []byte) ([]byte, error) { return body, nil },
-		}},
+		}),
 	})
 	if err != nil {
 		t.Fatalf("NewWasmHost: %v", err)
 	}
 	manifest := loader.Manifest{
 		ID: "hostfn.verify", Version: "1.0.0", Mode: loader.ModeHosted, Role: loader.RoleCapability, LockedDigest: digest,
-		HostFunctions: []packmgr.HostedFunctionDecl{{Module: "ailuo.nonexistent", Name: "missing"}},
+		HostFunctions: []packagecontract.HostedFunctionDecl{{Module: "ailuo.nonexistent", Name: "missing"}},
 	}
 	if err := host.Verify(context.Background(), manifest); !errors.Is(err, loader.ErrInvalidManifest) {
 		t.Fatalf("Verify with undeclared host function error = %v, want ErrInvalidManifest", err)
@@ -260,19 +233,19 @@ func TestWasmHostConcurrentInvocationsAreIsolated(t *testing.T) {
 	artifact := hostedArtifact(t, filepath.Join("hostfn", "hostfn.wasm"))
 	host, err := loader.NewWasmHost(loader.WasmHostConfig{
 		ReadArtifact: func(_ context.Context, _ loader.Manifest) ([]byte, error) { return artifact, nil },
-		HostFunctions: []loader.HostedFunction{{
+		HostFunctionsFor: staticHostFunctions(loader.HostedFunction{
 			Module: "ailuo.host", Name: "echo",
 			Call: func(_ context.Context, request contracts.RequestContext, body []byte) ([]byte, error) {
 				return json.Marshal(map[string]any{"app_id": request.AppID, "body": json.RawMessage(body)})
 			},
-		}},
+		}),
 	})
 	if err != nil {
 		t.Fatalf("NewWasmHost: %v", err)
 	}
 	runtime, err := host.Load(context.Background(), loader.Manifest{
 		ID: "hostfn.conc", Version: "1.0.0", Mode: loader.ModeHosted, Role: loader.RoleCapability, LockedDigest: digest,
-		HostFunctions: []packmgr.HostedFunctionDecl{{Module: "ailuo.host", Name: "echo"}},
+		HostFunctions: []packagecontract.HostedFunctionDecl{{Module: "ailuo.host", Name: "echo"}},
 	})
 	if err != nil {
 		t.Fatalf("Load: %v", err)
@@ -320,7 +293,7 @@ func TestWasmHostConcurrentInvocationsAreIsolated(t *testing.T) {
 }
 
 func TestWasmHostEnforcesMemoryLimit(t *testing.T) {
-	artifact := stringToolArtifact(t)
+	artifact := hostedArtifact(t, filepath.Join("success", "success.wasm"))
 	host, err := loader.NewWasmHost(loader.WasmHostConfig{
 		ReadArtifact:     func(_ context.Context, _ loader.Manifest) ([]byte, error) { return artifact, nil },
 		MemoryLimitPages: 1, // 64 KiB：低于 Go 运行时初始内存，编译阶段即拒绝
@@ -329,7 +302,7 @@ func TestWasmHostEnforcesMemoryLimit(t *testing.T) {
 		t.Fatalf("NewWasmHost: %v", err)
 	}
 	manifest := loader.Manifest{
-		ID: "strings.memlimit", Version: "1.0.0", Mode: loader.ModeHosted, Role: loader.RoleCapability, LockedDigest: digest,
+		ID: "memory.test", Version: "1.0.0", Mode: loader.ModeHosted, Role: loader.RoleCapability, LockedDigest: digest,
 	}
 	// 编译阶段强制线性内存上限：超限工件无法加载。
 	if _, err := host.Load(context.Background(), manifest); !errors.Is(err, loader.ErrLoadFailed) {
@@ -358,7 +331,7 @@ func TestWasmHostRejectsOversizedArtifact(t *testing.T) {
 
 func TestWasmHostTerminatesRunawayGuest(t *testing.T) {
 	// 死循环 guest：不开启执行时间预算的话会永远占用 worker。
-	artifact := hostedArtifact(t, "busy.wasm")
+	artifact := hostedArtifact(t, filepath.Join("busy", "busy.wasm"))
 	host, err := loader.NewWasmHost(loader.WasmHostConfig{
 		ReadArtifact: func(_ context.Context, manifest loader.Manifest) ([]byte, error) {
 			if manifest.ID != "busy.test" {

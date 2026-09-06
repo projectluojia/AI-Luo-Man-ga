@@ -525,16 +525,9 @@ components:
       additionalProperties: false
       required:
         - revision
+        - app_id
         - model
-        - model_base_url
-        - model_api_key
-        - model_request_timeout_seconds
-        - model_readiness_timeout_seconds
-        - model_max_retries
-        - model_retry_base_seconds
-        - model_retry_max_seconds
-        - model_requests_per_minute
-        - model_max_concurrency
+        - executor_timeout_seconds
         - qq_enabled
         - qq_ws_url
         - qq_ws_token
@@ -546,46 +539,19 @@ components:
         revision:
           type: integer
           minimum: 0
+        app_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: "^[a-z0-9][a-z0-9._-]{0,127}$"
         model:
           type: string
           minLength: 1
           maxLength: 256
-        model_base_url:
-          type: string
-          description: Optional OpenAI-compatible HTTP(S) base URL; empty selects the provider default.
-        model_api_key:
-          type: string
-          writeOnly: true
-          maxLength: 16384
-          description: Empty preserves the currently stored model secret.
-        model_request_timeout_seconds:
+        executor_timeout_seconds:
           type: number
           minimum: 0.1
           maximum: 120
-        model_readiness_timeout_seconds:
-          type: number
-          minimum: 0.1
-          maximum: 30
-        model_max_retries:
-          type: integer
-          minimum: 0
-          maximum: 5
-        model_retry_base_seconds:
-          type: number
-          exclusiveMinimum: 0
-          maximum: 30
-        model_retry_max_seconds:
-          type: number
-          exclusiveMinimum: 0
-          maximum: 30
-        model_requests_per_minute:
-          type: integer
-          minimum: 1
-          maximum: 10000
-        model_max_concurrency:
-          type: integer
-          minimum: 1
-          maximum: 64
         qq_enabled:
           type: boolean
         qq_ws_url:
@@ -643,22 +609,16 @@ components:
     DeploymentConfigSnapshot:
       type: object
       additionalProperties: false
-      required: [settings, model_api_key_configured, qq_ws_token_configured, runtime]
+      required: [settings, qq_ws_token_configured, runtime]
       properties:
         settings:
           type: object
           additionalProperties: false
           required:
             - revision
+            - app_id
             - model
-            - model_base_url
-            - model_request_timeout_seconds
-            - model_readiness_timeout_seconds
-            - model_max_retries
-            - model_retry_base_seconds
-            - model_retry_max_seconds
-            - model_requests_per_minute
-            - model_max_concurrency
+            - executor_timeout_seconds
             - qq_enabled
             - qq_ws_url
             - qq_bot_id
@@ -671,24 +631,15 @@ components:
             revision:
               type: integer
               minimum: 0
+            app_id:
+              type: string
+              maxLength: 128
+              pattern: "^(?:[a-z0-9][a-z0-9._-]{0,127})?$"
+              description: Empty only before the first local configuration is saved.
             model:
               type: string
-            model_base_url:
-              type: string
-            model_request_timeout_seconds:
+            executor_timeout_seconds:
               type: number
-            model_readiness_timeout_seconds:
-              type: number
-            model_max_retries:
-              type: integer
-            model_retry_base_seconds:
-              type: number
-            model_retry_max_seconds:
-              type: number
-            model_requests_per_minute:
-              type: integer
-            model_max_concurrency:
-              type: integer
             qq_enabled:
               type: boolean
             qq_ws_url:
@@ -714,8 +665,6 @@ components:
             updated_at:
               type: string
               format: date-time
-        model_api_key_configured:
-          type: boolean
         qq_ws_token_configured:
           type: boolean
         runtime:
@@ -998,7 +947,7 @@ components:
           type: array
           maxItems: 64
           uniqueItems: true
-          description: Persisted acceptance-time Capability ceiling; child Runs contain a further narrowed subset and never contain agent.run.
+          description: Persisted acceptance-time Capability ceiling; child Runs contain a further narrowed subset and never contain run.create_child.
           items:
             type: string
         error_code:

@@ -17,8 +17,7 @@ import (
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
-	"github.com/projectluojia/AI-Luo-Man-ga/pkg/bus"
-	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packagecontract"
 )
 
 const (
@@ -42,8 +41,6 @@ var (
 	// ErrHostedCallRejected 表示 hosted 包显式拒绝了调用（guest 信封 ok=false）。
 	// guest 提供的错误码与消息只进入内部日志，不进入外部响应。
 	ErrHostedCallRejected = errors.New("hosted package rejected the call")
-	// ErrHostedInvalidArgument 表示 hosted 包拒绝了调用参数（guest 信封 code=invalid_argument）。
-	ErrHostedInvalidArgument = errors.New("hosted package rejected the arguments")
 )
 
 // HostedFunction 是投影给 hosted 包调用的宿主函数：JSON 请求进、JSON 响应出。
@@ -66,8 +63,10 @@ type WasmHostConfig struct {
 	// CallTimeout 是单次 hosted 调用的执行时间预算；预算耗尽时强制终止 guest。
 	// 0 使用默认值（30 秒）。没有"不限时"路径：每次调用必然带预算。
 	CallTimeout time.Duration
-	// HostFunctions 是投影给 guest 的宿主函数（可空）。
-	HostFunctions []HostedFunction
+	// HostFunctionsFor 按清单返回投影给该 guest 的宿主函数（可空：无宿主函数
+	// 时声明了宿主函数依赖的清单在 Verify 期 fail-closed）。按清单提供使宿主
+	// 函数可绑定到包自身的声明（如 ailuo.store 的 namespace 隔离）。
+	HostFunctionsFor func(Manifest) ([]HostedFunction, error)
 	// RequireHostFunctions 为 true 时只接受声明了宿主函数的清单（安装目录 hosted
 	// 包专用宿主）：无宿主函数声明的包交给外部 GRPCHost 执行，避免双宿主歧义。
 	RequireHostFunctions bool
@@ -93,18 +92,35 @@ func NewWasmHost(config WasmHostConfig) (*WasmHost, error) {
 	if config.CallTimeout <= 0 {
 		config.CallTimeout = hostedDefaultCallTimeout
 	}
-	seen := make(map[string]struct{}, len(config.HostFunctions))
-	for _, fn := range config.HostFunctions {
+	return &WasmHost{config: config}, nil
+}
+
+// manifestHostFunctions 解析按清单提供的宿主函数并校验：函数字段完整、模块名
+// 唯一。提供者返回的错误原样上浮（装配期的声明问题不得延迟到调用期）。
+func (h *WasmHost) manifestHostFunctions(manifest Manifest) ([]HostedFunction, error) {
+	if h.config.HostFunctionsFor == nil {
+		if len(manifest.HostFunctions) > 0 {
+			return nil, fmt.Errorf("%w: host provides no host functions for package %q",
+				ErrInvalidManifest, manifest.ID)
+		}
+		return nil, nil
+	}
+	functions, err := h.config.HostFunctionsFor(manifest)
+	if err != nil {
+		return nil, err
+	}
+	seen := make(map[string]struct{}, len(functions))
+	for _, fn := range functions {
 		if fn.Module == "" || fn.Name == "" || fn.Call == nil {
 			return nil, ErrUnavailable
 		}
-		key := fn.Module + "." + fn.Name
+		key := packagecontract.HostedFunctionKey(fn.Module, fn.Name)
 		if _, exists := seen[key]; exists {
 			return nil, ErrDuplicateID
 		}
 		seen[key] = struct{}{}
 	}
-	return &WasmHost{config: config}, nil
+	return functions, nil
 }
 
 // Mode 返回宿主服务的运行模式：hosted 沙箱。
@@ -118,6 +134,10 @@ func (h *WasmHost) Verify(ctx context.Context, manifest Manifest) error {
 	if h.config.RequireHostFunctions && len(manifest.HostFunctions) == 0 {
 		return fmt.Errorf("%w: host requires host_functions declarations", ErrUnsupportedMode)
 	}
+	functions, err := h.manifestHostFunctions(manifest)
+	if err != nil {
+		return err
+	}
 	artifact, err := h.config.ReadArtifact(ctx, manifest)
 	if err != nil {
 		return err
@@ -125,12 +145,12 @@ func (h *WasmHost) Verify(ctx context.Context, manifest Manifest) error {
 	if int64(len(artifact)) > h.config.MaxArtifactBytes {
 		return ErrInvalidManifest
 	}
-	available := make(map[string]struct{}, len(h.config.HostFunctions))
-	for _, fn := range h.config.HostFunctions {
-		available[packmgr.HostedFunctionKey(fn.Module, fn.Name)] = struct{}{}
+	available := make(map[string]struct{}, len(functions))
+	for _, fn := range functions {
+		available[packagecontract.HostedFunctionKey(fn.Module, fn.Name)] = struct{}{}
 	}
 	for _, decl := range manifest.HostFunctions {
-		if _, ok := available[packmgr.HostedFunctionKey(decl.Module, decl.Name)]; !ok {
+		if _, ok := available[packagecontract.HostedFunctionKey(decl.Module, decl.Name)]; !ok {
 			return fmt.Errorf("%w: host function %s.%s is not provided by this host",
 				ErrInvalidManifest, decl.Module, decl.Name)
 		}
@@ -142,6 +162,11 @@ func (h *WasmHost) Verify(ctx context.Context, manifest Manifest) error {
 // 加载期强制"只投影声明集合"：guest 只能 import 清单声明的宿主函数（WASI
 // 除外），未声明导入直接拒绝，宿主函数实现仍只来自宿主配置。
 func (h *WasmHost) Load(ctx context.Context, manifest Manifest) (Runtime, error) {
+	// 装配期问题（提供者错误、重复函数）先于编译快速失败，不产生半装配运行时。
+	functions, err := h.manifestHostFunctions(manifest)
+	if err != nil {
+		return nil, err
+	}
 	artifact, err := h.config.ReadArtifact(ctx, manifest)
 	if err != nil {
 		return nil, err
@@ -165,7 +190,7 @@ func (h *WasmHost) Load(ctx context.Context, manifest Manifest) (Runtime, error)
 		_ = wazeroRuntime.Close(ctx)
 		return nil, errors.Join(ErrLoadFailed, err)
 	}
-	projected := h.projectedFunctions(manifest.HostFunctions)
+	projected := functions
 	hosted := &wasmRuntime{
 		wazeroRuntime: wazeroRuntime,
 		compiled:      compiled,
@@ -175,7 +200,7 @@ func (h *WasmHost) Load(ctx context.Context, manifest Manifest) (Runtime, error)
 		hostFuncs:     make(map[string]func(context.Context, contracts.RequestContext, []byte) ([]byte, error), len(projected)),
 	}
 	for _, fn := range projected {
-		hosted.hostFuncs[packmgr.HostedFunctionKey(fn.Module, fn.Name)] = fn.Call
+		hosted.hostFuncs[packagecontract.HostedFunctionKey(fn.Module, fn.Name)] = fn.Call
 	}
 	if err := hosted.registerHostFunctions(ctx, projected); err != nil {
 		_ = wazeroRuntime.Close(ctx)
@@ -184,35 +209,19 @@ func (h *WasmHost) Load(ctx context.Context, manifest Manifest) (Runtime, error)
 	return hosted, nil
 }
 
-// projectedFunctions 返回清单声明且宿主配置提供的宿主函数（Verify 已保证
-// 声明 ⊆ 可用，此处防御性过滤）。
-func (h *WasmHost) projectedFunctions(decls []packmgr.HostedFunctionDecl) []HostedFunction {
-	available := make(map[string]HostedFunction, len(h.config.HostFunctions))
-	for _, fn := range h.config.HostFunctions {
-		available[packmgr.HostedFunctionKey(fn.Module, fn.Name)] = fn
-	}
-	projected := make([]HostedFunction, 0, len(decls))
-	for _, decl := range decls {
-		if fn, ok := available[packmgr.HostedFunctionKey(decl.Module, decl.Name)]; ok {
-			projected = append(projected, fn)
-		}
-	}
-	return projected
-}
-
 // checkDeclaredHostFunctionImports 校验编译产物的函数导入：除 WASI 外，所有
 // 导入必须属于清单声明的宿主函数集合，未声明导入在加载期拒绝（fail-closed）。
-func checkDeclaredHostFunctionImports(compiled wazero.CompiledModule, decls []packmgr.HostedFunctionDecl) error {
+func checkDeclaredHostFunctionImports(compiled wazero.CompiledModule, decls []packagecontract.HostedFunctionDecl) error {
 	declared := make(map[string]struct{}, len(decls))
 	for _, decl := range decls {
-		declared[packmgr.HostedFunctionKey(decl.Module, decl.Name)] = struct{}{}
+		declared[packagecontract.HostedFunctionKey(decl.Module, decl.Name)] = struct{}{}
 	}
 	for _, definition := range compiled.ImportedFunctions() {
 		moduleName, name, isImport := definition.Import()
 		if !isImport || moduleName == wasiModuleName {
 			continue
 		}
-		if _, ok := declared[packmgr.HostedFunctionKey(moduleName, name)]; !ok {
+		if _, ok := declared[packagecontract.HostedFunctionKey(moduleName, name)]; !ok {
 			return fmt.Errorf("guest imports undeclared host function %s.%s", moduleName, name)
 		}
 	}
@@ -285,7 +294,7 @@ func (r *wasmRuntime) hostFunction(fn HostedFunction) func(context.Context, api.
 		}
 		state := value.(*hostedInvokeState)
 		// 必须走 HostedFunctionKey：手写拼接与注册端不一致时查表恒失败。
-		call, ok := state.funcs[packmgr.HostedFunctionKey(fn.Module, fn.Name)]
+		call, ok := state.funcs[packagecontract.HostedFunctionKey(fn.Module, fn.Name)]
 		if !ok {
 			return hostedHostFunctionError
 		}
@@ -400,16 +409,12 @@ func parseHostedEnvelope(runtimeID string, output []byte) (json.RawMessage, erro
 		observe.StringAttr("reason", envelope.Message),
 	)
 	switch envelope.Code {
-	case "data_unavailable":
-		return nil, errors.Join(ErrHostedCallRejected, bus.ErrDataUnavailable)
-	case "data_incomplete":
-		return nil, errors.Join(ErrHostedCallRejected, bus.ErrDataIncomplete)
+	case "data_unavailable", "data_incomplete", "data_expired":
+		return nil, errors.Join(ErrHostedCallRejected, InvocationError{Code: envelope.Code})
 	case "data_untrusted":
-		return nil, errors.Join(ErrHostedCallRejected, bus.ErrDataUntrusted)
-	case "data_expired":
-		return nil, errors.Join(ErrHostedCallRejected, bus.ErrDataExpired)
+		return nil, errors.Join(ErrHostedCallRejected, InvocationError{Code: "data_non_authoritative"})
 	case "invalid_argument":
-		return nil, errors.Join(ErrHostedCallRejected, ErrHostedInvalidArgument)
+		return nil, errors.Join(ErrHostedCallRejected, InvocationError{Code: "invalid_arguments"})
 	case "internal":
 		return nil, ErrHostedCallRejected
 	default:

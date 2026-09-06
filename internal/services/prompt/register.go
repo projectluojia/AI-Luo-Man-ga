@@ -9,6 +9,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/jsonutil"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/capability"
 )
 
 const (
@@ -61,48 +62,48 @@ func Register(reg *registry.Registry, service *Service) error {
 		return registry.ErrInvalidSpec
 	}
 	return reg.RegisterService(registry.ServiceRegistration{
-		Spec: registry.ServiceSpec{
+		Spec: capability.ServiceSpec{
 			ID:          ServiceID,
 			Version:     "1.0.0",
 			Description: "User prompt style preferences migrated from LuoYingRebuild V2.",
 		},
 		Capabilities: map[string]struct {
-			Spec    registry.CapabilitySpec
+			Spec    capability.CapabilitySpec
 			Handler registry.Handler
 		}{
 			PreferenceGetID: {
-				Spec: registry.CapabilitySpec{
+				Spec: capability.CapabilitySpec{
 					ID:              PreferenceGetID,
 					Version:         "1.0.0",
 					Name:            "查看我的提示词偏好",
 					Description:     "Get the current user's prompt style preference, including basic style and extra trait levels.",
 					ServiceID:       ServiceID,
 					InputSchemaJSON: emptyInputSchema,
-					SideEffect:      registry.SideEffectRead,
+					SideEffect:      capability.SideEffectRead,
 				},
 				Handler: service.getPreference,
 			},
 			PreferenceSetID: {
-				Spec: registry.CapabilitySpec{
+				Spec: capability.CapabilitySpec{
 					ID:              PreferenceSetID,
 					Version:         "1.0.0",
 					Name:            "设置我的提示词偏好",
 					Description:     "Set the current user's prompt style preference using stable keys and enhanced/default/reduced levels.",
 					ServiceID:       ServiceID,
 					InputSchemaJSON: setInputSchema,
-					SideEffect:      registry.SideEffectWrite,
+					SideEffect:      capability.SideEffectWrite,
 				},
 				Handler: service.setPreference,
 			},
 			PreferenceResetID: {
-				Spec: registry.CapabilitySpec{
+				Spec: capability.CapabilitySpec{
 					ID:              PreferenceResetID,
 					Version:         "1.0.0",
 					Name:            "重置我的提示词偏好",
 					Description:     "Reset the current user's prompt style preference to defaults.",
 					ServiceID:       ServiceID,
 					InputSchemaJSON: emptyInputSchema,
-					SideEffect:      registry.SideEffectWrite,
+					SideEffect:      capability.SideEffectWrite,
 				},
 				Handler: service.resetPreference,
 			},

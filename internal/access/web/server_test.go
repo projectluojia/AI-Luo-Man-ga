@@ -70,6 +70,10 @@ func (testController) Enqueue(context.Context, string) {}
 
 func (testController) Cancel(context.Context, string) (bool, error) { return false, nil }
 
+func newEchoAdmission(creator kernelecho.Creator, enqueuer kernelecho.Enqueuer) kernelecho.Admission {
+	return kernelecho.NewAdmission(creator, enqueuer)
+}
+
 type testOrchestrator interface {
 	kernelecho.SchedulerRunner
 	kernelecho.Creator
@@ -113,7 +117,7 @@ func newAuthenticatedServer(
 		}
 	})
 	return &testWebServer{
-		Server: web.NewServer(orchestrator, reader, health, reg, policy, appID, platformHub, scheduler, events,
+		Server: web.NewServer(newEchoAdmission(orchestrator, scheduler), reader, health, reg, policy, appID, platformHub, scheduler, events,
 			web.WithWebAuthenticator(testWebAuthenticator{})),
 		scheduler: scheduler,
 	}
@@ -324,7 +328,7 @@ func TestWebAccessRejectsUnauthenticatedEchoBeforePersistence(t *testing.T) {
 	}
 	t.Cleanup(func() { sqlitetest.CloseAndWait(t, store, tempDir) })
 	server := web.NewServer(
-		&fakeOrchestrator{store: store}, store, store,
+		newEchoAdmission(&fakeOrchestrator{store: store}, testController{}), store, store,
 		registry.New(), runtimetest.NewStaticAppPolicy(), "campus-services", newTestHub(store, "campus-services"), testController{}, access.NewEventHub(),
 	)
 	response := createEchoRequest(t, server.Handler(), "不应写入", "unauthenticated")

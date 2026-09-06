@@ -16,7 +16,7 @@ import (
 	runtimev1 "github.com/projectluojia/AI-Luo-Man-ga/gen/runtimev1"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
-	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packagecontract"
 
 	"google.golang.org/grpc"
 )
@@ -109,14 +109,14 @@ func TestIsolatedRuntimeHelper(t *testing.T) {
 	<-serveDone
 }
 
-func TestIsolatedProcessHostRunsOutsideKernelAndShutsDownGracefully(t *testing.T) {
+func TestProcessHostRunsOutsideKernelAndShutsDownGracefully(t *testing.T) {
 	executable, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
 	workDir := t.TempDir()
 	socketPath := filepath.Join(workDir, "runtime.sock")
-	spec := packmgr.ProcessSpec{
+	spec := packagecontract.ProcessSpec{
 		Path: executable, Args: []string{"-test.run=^TestIsolatedRuntimeHelper$"},
 		Env: []string{
 			helperEnabled + "=1", helperSocket + "=" + socketPath, helperMode + "=" + loader.ModeIsolated,
@@ -125,18 +125,19 @@ func TestIsolatedProcessHostRunsOutsideKernelAndShutsDownGracefully(t *testing.T
 	}
 	var resolves atomic.Int32
 	var verifies atomic.Int32
-	host, err := loader.NewIsolatedProcessHost(loader.IsolatedProcessHostConfig{
-		ResolveInstalled: func(context.Context, loader.Manifest) (packmgr.ProcessSpec, error) {
+	host, err := loader.NewProcessHost(loader.ProcessHostConfig{
+		Resolve: func(context.Context, loader.Manifest) (packagecontract.ProcessSpec, error) {
 			resolves.Add(1)
 			return spec, nil
 		},
-		VerifyInstalled: func(_ context.Context, manifest loader.Manifest, resolved packmgr.ProcessSpec) error {
+		Verify: func(_ context.Context, manifest loader.Manifest, resolved packagecontract.ProcessSpec) error {
 			verifies.Add(1)
 			if manifest.LockedDigest != digest || resolved.Path != executable {
 				t.Fatalf("manifest=%#v spec=%#v", manifest, resolved)
 			}
 			return nil
 		},
+		Spawn:       true,
 		DialTimeout: 3 * time.Second, StopGrace: time.Second, TerminateGrace: time.Second,
 	})
 	if err != nil {
@@ -152,8 +153,8 @@ func TestIsolatedProcessHostRunsOutsideKernelAndShutsDownGracefully(t *testing.T
 	result, err := manager.Handler("isolated.real")(
 		context.Background(),
 		contracts.RequestContext{
-			AppID: "campus-services", EchoID: "echo-1", RequestID: "request-1", CallID: "call-1",
-			TargetType: "capability", CapabilityID: "campus.bus.routes.list", ServiceID: "campus",
+			AppID: "app.test", EchoID: "echo-1", RequestID: "request-1", CallID: "call-1",
+			TargetType: "capability", CapabilityID: "test.capability", ServiceID: "test.service",
 		},
 		json.RawMessage(`{"value":1}`),
 	)
@@ -162,7 +163,7 @@ func TestIsolatedProcessHostRunsOutsideKernelAndShutsDownGracefully(t *testing.T
 	}
 	var decoded map[string]string
 	if err := json.Unmarshal(result, &decoded); err != nil ||
-		decoded["app_id"] != "campus-services" || decoded["call_id"] != "call-1" {
+		decoded["app_id"] != "app.test" || decoded["call_id"] != "call-1" {
 		t.Fatalf("result=%s err=%v", result, err)
 	}
 	// 三层校验：注册期 selectHost、加载期 loadRuntime、执行前 Load 内部 TOCTOU 防御各一次。
@@ -179,7 +180,7 @@ func TestIsolatedProcessHostRunsOutsideKernelAndShutsDownGracefully(t *testing.T
 	}
 }
 
-func TestIsolatedProcessHostEnforcesFileSizeLimit(t *testing.T) {
+func TestProcessHostEnforcesFileSizeLimit(t *testing.T) {
 	executable, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
@@ -187,7 +188,7 @@ func TestIsolatedProcessHostEnforcesFileSizeLimit(t *testing.T) {
 	workDir := t.TempDir()
 	socketPath := filepath.Join(workDir, "runtime.sock")
 	writeTarget := filepath.Join(workDir, "out.bin")
-	spec := packmgr.ProcessSpec{
+	spec := packagecontract.ProcessSpec{
 		Path: executable, Args: []string{"-test.run=^TestIsolatedRuntimeHelper$"},
 		Env: []string{
 			helperEnabled + "=1", helperSocket + "=" + socketPath, helperMode + "=" + loader.ModeIsolated,
@@ -195,12 +196,13 @@ func TestIsolatedProcessHostEnforcesFileSizeLimit(t *testing.T) {
 		},
 		WorkDir: workDir, Address: "unix:" + socketPath,
 		// RLIMIT_FSIZE=1 KiB：helper 写入 8 KiB 必须被限额阻止。
-		Limits: packmgr.ProcessLimits{MaxFileBytes: 1024},
+		Limits: packagecontract.ProcessLimits{MaxFileBytes: 1024},
 	}
-	host, err := loader.NewIsolatedProcessHost(loader.IsolatedProcessHostConfig{
-		ResolveInstalled: func(context.Context, loader.Manifest) (packmgr.ProcessSpec, error) { return spec, nil },
-		VerifyInstalled:  func(context.Context, loader.Manifest, packmgr.ProcessSpec) error { return nil },
-		DialTimeout:      3 * time.Second, StopGrace: time.Second, TerminateGrace: time.Second,
+	host, err := loader.NewProcessHost(loader.ProcessHostConfig{
+		Resolve:     func(context.Context, loader.Manifest) (packagecontract.ProcessSpec, error) { return spec, nil },
+		Verify:      func(context.Context, loader.Manifest, packagecontract.ProcessSpec) error { return nil },
+		Spawn:       true,
+		DialTimeout: 3 * time.Second, StopGrace: time.Second, TerminateGrace: time.Second,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -215,8 +217,8 @@ func TestIsolatedProcessHostEnforcesFileSizeLimit(t *testing.T) {
 	_, err = manager.Handler("isolated.limit")(
 		context.Background(),
 		contracts.RequestContext{
-			AppID: "campus-services", EchoID: "echo-1", RequestID: "request-1", CallID: "call-1",
-			TargetType: "capability", CapabilityID: "campus.bus.routes.list", ServiceID: "campus",
+			AppID: "app.test", EchoID: "echo-1", RequestID: "request-1", CallID: "call-1",
+			TargetType: "capability", CapabilityID: "test.capability", ServiceID: "test.service",
 		},
 		json.RawMessage(`{"value":1}`),
 	)
@@ -234,14 +236,14 @@ func TestIsolatedProcessHostEnforcesFileSizeLimit(t *testing.T) {
 	}
 }
 
-func TestIsolatedProcessHostForcesBoundedExitAfterStopGrace(t *testing.T) {
+func TestProcessHostForcesBoundedExitAfterStopGrace(t *testing.T) {
 	executable, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
 	workDir := t.TempDir()
 	socketPath := filepath.Join(workDir, "runtime.sock")
-	spec := packmgr.ProcessSpec{
+	spec := packagecontract.ProcessSpec{
 		Path: executable, Args: []string{"-test.run=^TestIsolatedRuntimeHelper$"},
 		Env: []string{
 			helperEnabled + "=1", helperSocket + "=" + socketPath, helperMode + "=" + loader.ModeIsolated,
@@ -249,12 +251,13 @@ func TestIsolatedProcessHostForcesBoundedExitAfterStopGrace(t *testing.T) {
 		},
 		WorkDir: workDir, Address: "unix:" + socketPath,
 	}
-	host, err := loader.NewIsolatedProcessHost(loader.IsolatedProcessHostConfig{
-		ResolveInstalled: func(context.Context, loader.Manifest) (packmgr.ProcessSpec, error) { return spec, nil },
-		VerifyInstalled:  func(context.Context, loader.Manifest, packmgr.ProcessSpec) error { return nil },
-		DialTimeout:      3 * time.Second,
-		StopGrace:        100 * time.Millisecond,
-		TerminateGrace:   100 * time.Millisecond,
+	host, err := loader.NewProcessHost(loader.ProcessHostConfig{
+		Resolve:        func(context.Context, loader.Manifest) (packagecontract.ProcessSpec, error) { return spec, nil },
+		Verify:         func(context.Context, loader.Manifest, packagecontract.ProcessSpec) error { return nil },
+		Spawn:          true,
+		DialTimeout:    3 * time.Second,
+		StopGrace:      100 * time.Millisecond,
+		TerminateGrace: 100 * time.Millisecond,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -280,33 +283,46 @@ func TestIsolatedProcessHostForcesBoundedExitAfterStopGrace(t *testing.T) {
 	}
 }
 
-func TestIsolatedProcessHostRejectsUnsafeLaunchSpecifications(t *testing.T) {
+func TestProcessHostRejectsUnsafeLaunchSpecifications(t *testing.T) {
 	executable, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
 	workDir := t.TempDir()
-	base := packmgr.ProcessSpec{
+	base := packagecontract.ProcessSpec{
 		Path: executable, WorkDir: workDir, Address: "unix:" + filepath.Join(workDir, "runtime.sock"),
 	}
-	tests := []packmgr.ProcessSpec{
-		func() packmgr.ProcessSpec { value := base; value.Path = "relative"; return value }(),
-		func() packmgr.ProcessSpec { value := base; value.WorkDir = "relative"; return value }(),
-		func() packmgr.ProcessSpec { value := base; value.Address = "192.0.2.1:9000"; return value }(),
-		func() packmgr.ProcessSpec { value := base; value.Env = []string{"API_TOKEN=private"}; return value }(),
-		func() packmgr.ProcessSpec {
+	tests := []packagecontract.ProcessSpec{
+		func() packagecontract.ProcessSpec { value := base; value.Path = "relative"; return value }(),
+		func() packagecontract.ProcessSpec { value := base; value.WorkDir = "relative"; return value }(),
+		func() packagecontract.ProcessSpec { value := base; value.Address = "192.0.2.1:9000"; return value }(),
+		func() packagecontract.ProcessSpec {
+			value := base
+			value.Env = []string{"API_TOKEN=private"}
+			return value
+		}(),
+		func() packagecontract.ProcessSpec {
 			value := base
 			value.Env = []string{"LD_PRELOAD=/tmp/inject.so"}
 			return value
 		}(),
-		func() packmgr.ProcessSpec { value := base; value.Env = []string{"SAFE=1", "SAFE=2"}; return value }(),
-		func() packmgr.ProcessSpec { value := base; value.Args = []string{"bad\x00argument"}; return value }(),
+		func() packagecontract.ProcessSpec {
+			value := base
+			value.Env = []string{"SAFE=1", "SAFE=2"}
+			return value
+		}(),
+		func() packagecontract.ProcessSpec {
+			value := base
+			value.Args = []string{"bad\x00argument"}
+			return value
+		}(),
 	}
 	for _, spec := range tests {
 		var verifies atomic.Int32
-		host, err := loader.NewIsolatedProcessHost(loader.IsolatedProcessHostConfig{
-			ResolveInstalled: func(context.Context, loader.Manifest) (packmgr.ProcessSpec, error) { return spec, nil },
-			VerifyInstalled: func(context.Context, loader.Manifest, packmgr.ProcessSpec) error {
+		host, err := loader.NewProcessHost(loader.ProcessHostConfig{
+			Resolve: func(context.Context, loader.Manifest) (packagecontract.ProcessSpec, error) { return spec, nil },
+			Spawn:   true,
+			Verify: func(context.Context, loader.Manifest, packagecontract.ProcessSpec) error {
 				verifies.Add(1)
 				return nil
 			},

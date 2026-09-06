@@ -6,11 +6,11 @@ on:
   pull_request:
     paths:
       - "**/*.go"
-      - "**/*.py"
+      - "packages/agent/**/*.py"
       - go.mod
       - go.sum
-      - agent/pyproject.toml
-      - agent/uv.lock
+      - packages/agent/runtime/pyproject.toml
+      - packages/agent/runtime/uv.lock
       - .github/workflows/codeql.yml
   schedule:
     - cron: "0 3 * * 1" # 每周一 03:00 UTC 全量扫描

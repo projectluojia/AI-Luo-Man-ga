@@ -6,11 +6,8 @@ import (
 	"strings"
 
 	"github.com/iancoleman/strcase"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/capability"
 )
-
-// capabilityIDPattern 与内核 id.StableLower 一致：capability ID 的闭式格式。
-// sdkgen 是中立包（不 import 内核 internal），此处自持校验。
-var capabilityIDPattern = regexp.MustCompile(`^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$`)
 
 // reservedKeywords 是 Python 与 TypeScript 保留字的并集：字段名直接作为标识符
 // （Python dataclass 属性 / TS interface 属性），撞保留字会生成非法代码 → 显式
@@ -20,15 +17,15 @@ var reservedKeywords = stringSet(
 	"False None True and as assert async await break class continue def del elif else except finally for from global if import in is lambda nonlocal not or pass raise return try while with yield " +
 		"case catch const debugger default delete do enum export extends false function instanceof new null super switch this throw true typeof var void implements interface let package private protected public static")
 
-// validateCapabilityID 校验 capability ID 符合内核 StableLower 格式。
+// validateCapabilityID 校验 capability ID 符合公共契约格式。
 func validateCapabilityID(id string) error {
-	if !capabilityIDPattern.MatchString(id) {
+	if !capability.IsStableID(id) {
 		return fmt.Errorf("sdkgen: capability id %q 不合法（需小写字母/数字，点/下划线/连字符分段）", id)
 	}
 	return nil
 }
 
-func validateDerivedNames(capabilities []capabilitySpec, packageID string) error {
+func validateDerivedNames(capabilities []capability.CapabilitySpec, packageID string) error {
 	seenTypes := make(map[string]string, len(capabilities))
 	seenGoMethods := make(map[string]string, len(capabilities))
 	seenPythonMethods := make(map[string]string, len(capabilities))

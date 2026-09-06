@@ -22,6 +22,11 @@ type Client interface {
 	Health(ctx context.Context, in *executorv1.HealthRequest, opts ...grpc.CallOption) (*executorv1.HealthResponse, error)
 }
 
+// NewClient 将 gRPC 连接收敛为内核执行者契约，其他内核包不直接依赖生成客户端。
+func NewClient(conn grpc.ClientConnInterface) Client {
+	return executorv1.NewExecutorRuntimeClient(conn)
+}
+
 // ClientProvider 由向内核提供执行者客户端的运行时实现；任何以 embedded /
 // hosted / isolated 形态注册、实现本契约的运行时都可作为内核的 AI 执行者。
 type ClientProvider interface {

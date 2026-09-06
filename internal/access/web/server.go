@@ -20,6 +20,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/capability"
 )
 
 //go:embed static/*
@@ -37,8 +38,8 @@ type HealthChecker interface {
 
 type Server struct {
 	*access.AdmissionGate
-	orchestrator     kernelecho.Creator
-	scheduler        kernelecho.Controller
+	admission        kernelecho.Admission
+	canceller        kernelecho.Canceller
 	reader           EchoReader
 	health           HealthChecker
 	registry         *registry.Registry
@@ -53,24 +54,24 @@ type Server struct {
 }
 
 func NewServer(
-	orchestrator kernelecho.Creator,
+	admission kernelecho.Admission,
 	reader EchoReader,
 	health HealthChecker,
 	reg *registry.Registry,
 	policy runtime.AppPolicy,
 	appID string,
 	platformHub *access.Hub,
-	scheduler kernelecho.Controller,
+	canceller kernelecho.Canceller,
 	events *access.EventHub,
 	options ...ServerOption,
 ) *Server {
-	if scheduler == nil || events == nil {
+	if admission == nil || canceller == nil || events == nil {
 		panic("web access dependencies are incomplete")
 	}
 	server := &Server{
 		AdmissionGate: access.NewAdmissionGate(),
-		orchestrator:  orchestrator,
-		scheduler:     scheduler,
+		admission:     admission,
+		canceller:     canceller,
 		reader:        reader,
 		health:        health,
 		registry:      reg,
@@ -157,7 +158,7 @@ func (s *Server) capabilities(writer http.ResponseWriter, request *http.Request)
 		})
 		return
 	}
-	items := make([]registry.CapabilitySpec, 0)
+	items := make([]capability.CapabilitySpec, 0)
 	for _, capability := range s.registry.Capabilities() {
 		if snapshot.CapabilityEnabled(capability.ID) {
 			items = append(items, capability)
@@ -224,14 +225,12 @@ func (s *Server) createEcho(writer http.ResponseWriter, request *http.Request) {
 	input.SessionID = intake.SessionID
 	input.UserID = intake.UserID
 	input.MessageID = intake.MessageID
-	echoID, created, err := s.orchestrator.CreateIdempotent(request.Context(), input)
+	echoID, created, err := s.admission.Create(request.Context(), input)
 	if err != nil {
 		access.WriteEchoError(writer, request, err)
 		return
 	}
-	if created {
-		s.scheduler.Enqueue(request.Context(), echoID)
-	} else {
+	if !created {
 		writer.Header().Set("Idempotency-Replayed", "true")
 	}
 	runContext := observe.With(request.Context(),
@@ -320,7 +319,7 @@ func (s *Server) cancelEcho(writer http.ResponseWriter, request *http.Request) {
 		access.WriteJSON(writer, http.StatusNotFound, map[string]string{"code": "echo_not_found", "message": "Echo 不存在"})
 		return
 	}
-	cancelled, err := s.scheduler.Cancel(request.Context(), echoID)
+	cancelled, err := s.canceller.Cancel(request.Context(), echoID)
 	if err != nil {
 		if errors.Is(err, kernelecho.ErrInvalidTransition) {
 			access.WriteJSON(writer, http.StatusConflict, map[string]string{"code": "echo_not_running", "message": "Echo 当前不在运行"})

@@ -9,8 +9,8 @@ import (
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
 
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/id"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/strictschema"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/capability"
 )
 
 const maxSchemaBytes = 64 << 10
@@ -47,7 +47,7 @@ func NewTypeRegistry() *TypeRegistry {
 // Register 原子注册一个封闭任务类型。重复注册、非法标识、缺失处理器或
 // 非法 Schema 都会失败，保证注册表只包含可安全执行的类型。
 func (r *TypeRegistry) Register(spec TypeSpec) error {
-	if len(spec.TypeID) == 0 || len(spec.TypeID) > maxTypeIDBytes || !id.StableLower.MatchString(spec.TypeID) {
+	if !capability.IsStableID(spec.TypeID) || len(spec.TypeID) > maxTypeIDBytes {
 		return fmt.Errorf("%w: 非法类型标识 %q", ErrInvalidTypeSpec, spec.TypeID)
 	}
 	if spec.Handler == nil {

@@ -24,6 +24,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/capability"
 )
 
 var (
@@ -83,7 +84,7 @@ type Orchestrator struct {
 	registry    *registry.Registry
 	dispatcher  *runtime.Dispatcher
 	policy      runtime.AppPolicy
-	store       OrchestratorStore
+	ports       StorePorts
 	idempotency *idempotency.Manager
 	context     *contextasm.Assembler
 	config      Config
@@ -95,7 +96,7 @@ func NewOrchestrator(
 	reg *registry.Registry,
 	dispatcher *runtime.Dispatcher,
 	policy runtime.AppPolicy,
-	store OrchestratorStore,
+	ports StorePorts,
 	config Config,
 ) *Orchestrator {
 	if config.RunTimeout == 0 {
@@ -103,6 +104,9 @@ func NewOrchestrator(
 	}
 	if config.LeaseDuration == 0 {
 		config.LeaseDuration = 15 * time.Second
+	}
+	if config.LeaseDuration <= 0 {
+		panic("orchestrator lease duration must be positive")
 	}
 	if config.MaxRunAttempts == 0 {
 		config.MaxRunAttempts = 1
@@ -122,6 +126,10 @@ func NewOrchestrator(
 	if config.QueueCapacity == 0 {
 		config.QueueCapacity = 128
 	}
+	if ports.Idempotency == nil || ports.Creation == nil || ports.Execution == nil ||
+		ports.Recovery == nil || ports.Cancellation == nil || ports.Events == nil || ports.Audit == nil {
+		panic("orchestrator storage ports are incomplete")
+	}
 	if config.AppConfigSource == nil {
 		// 装配期编程错误：持久配置来源缺失时显式终止，不做合成配置回退。
 		panic("orchestrator requires an app config source")
@@ -139,8 +147,8 @@ func NewOrchestrator(
 		registry:    reg,
 		dispatcher:  dispatcher,
 		policy:      policy,
-		store:       store,
-		idempotency: idempotency.NewManager(store),
+		ports:       ports,
+		idempotency: idempotency.NewManager(ports.Idempotency),
 		context:     assembler,
 		config:      config,
 		now:         time.Now,
@@ -197,7 +205,7 @@ func (o *Orchestrator) RunChild(ctx context.Context, request ChildRunRequest) (C
 		len(request.CapabilityScope) > 16 {
 		return ChildRunResult{}, ErrInvalidChildRun
 	}
-	parent, err := o.store.GetRun(ctx, o.config.AppID, request.ParentRunID)
+	parent, err := o.ports.Execution.GetRun(ctx, o.config.AppID, request.ParentRunID)
 	if err != nil {
 		return ChildRunResult{}, errors.Join(ErrChildRunUnavailable, err)
 	}
@@ -269,7 +277,7 @@ func (o *Orchestrator) RunChild(ctx context.Context, request ChildRunRequest) (C
 		RecoverableState:   json.RawMessage(`{}`),
 		CreatedAt:          now,
 	}
-	if err := o.store.CreateChildRun(ctx, parent, child, o.config.MaxChildRuns); err != nil {
+	if err := o.ports.Execution.CreateChildRun(ctx, parent, child, o.config.MaxChildRuns); err != nil {
 		return ChildRunResult{}, errors.Join(ErrChildRunUnavailable, err)
 	}
 	observe.DefaultMetrics().QueueAdded()
@@ -287,7 +295,7 @@ func (o *Orchestrator) GetChild(ctx context.Context, request ChildStatusRequest)
 	if request.ParentRunID == "" || request.RunID == "" {
 		return ChildStatusResult{}, ErrInvalidChildRun
 	}
-	run, err := o.store.GetRun(ctx, o.config.AppID, request.RunID)
+	run, err := o.ports.Execution.GetRun(ctx, o.config.AppID, request.RunID)
 	if err != nil {
 		return ChildStatusResult{}, errors.Join(ErrChildRunUnavailable, err)
 	}
@@ -304,7 +312,7 @@ func (o *Orchestrator) GetChild(ctx context.Context, request ChildStatusRequest)
 func (o *Orchestrator) childScopes(policy appconfig.PolicySnapshot, parent RunRecord, requested []string) ([]string, []string, error) {
 	if len(requested) == 0 {
 		for _, capability := range o.projectCapabilities(policy, parent) {
-			if capability.Id != SubagentCapabilityID && capability.Id != SubagentStatusCapabilityID {
+			if capability.Id != CreateChildRunCapabilityID && capability.Id != GetChildStatusCapabilityID {
 				requested = append(requested, capability.Id)
 			}
 		}
@@ -316,7 +324,7 @@ func (o *Orchestrator) childScopes(policy appconfig.PolicySnapshot, parent RunRe
 	sort.Strings(requested)
 	permissions := make(map[string]struct{})
 	for index, capabilityID := range requested {
-		if capabilityID == SubagentCapabilityID || capabilityID == SubagentStatusCapabilityID ||
+		if capabilityID == CreateChildRunCapabilityID || capabilityID == GetChildStatusCapabilityID ||
 			(index > 0 && requested[index-1] == capabilityID) ||
 			!policy.CapabilityEnabled(capabilityID) {
 			return nil, nil, registry.ErrPermissionDenied
@@ -362,7 +370,7 @@ func halfUnlessUnlimited(value uint64) uint64 {
 }
 
 func (o *Orchestrator) Recoverable(ctx context.Context) ([]RunWork, error) {
-	failed, err := o.store.FailAbandonedRuns(ctx, o.config.AppID, o.now().UTC())
+	failed, err := o.ports.Recovery.FailAbandonedRuns(ctx, o.config.AppID, o.now().UTC())
 	if err != nil {
 		return nil, err
 	}
@@ -372,7 +380,7 @@ func (o *Orchestrator) Recoverable(ctx context.Context) ([]RunWork, error) {
 			observe.Int64Attr("run_count", failed),
 		)
 	}
-	work, err := o.store.ListQueuedRuns(ctx, o.config.AppID, 1000)
+	work, err := o.ports.Recovery.ListQueuedRuns(ctx, o.config.AppID, 1000)
 	if err == nil {
 		observe.DefaultMetrics().SetQueuedRuns(len(work))
 	}
@@ -380,7 +388,7 @@ func (o *Orchestrator) Recoverable(ctx context.Context) ([]RunWork, error) {
 }
 
 func (o *Orchestrator) Runnable(ctx context.Context, limit int) ([]RunWork, error) {
-	work, err := o.store.ListRunnableRuns(ctx, o.config.AppID, o.now().UTC(), limit)
+	work, err := o.ports.Recovery.ListRunnableRuns(ctx, o.config.AppID, o.now().UTC(), limit)
 	if err == nil {
 		observe.DefaultMetrics().SetQueuedRuns(len(work))
 	}
@@ -388,7 +396,7 @@ func (o *Orchestrator) Runnable(ctx context.Context, limit int) ([]RunWork, erro
 }
 
 func (o *Orchestrator) Cancel(ctx context.Context, echoID string) (bool, error) {
-	cancelled, err := o.store.CancelQueuedRun(ctx, o.config.AppID, echoID, o.now().UTC())
+	cancelled, err := o.ports.Cancellation.CancelQueuedRun(ctx, o.config.AppID, echoID, o.now().UTC())
 	if err == nil && cancelled {
 		observe.DefaultMetrics().Cancellation()
 		observe.DefaultMetrics().QueueRemoved()
@@ -397,7 +405,7 @@ func (o *Orchestrator) Cancel(ctx context.Context, echoID string) (bool, error) 
 }
 
 func (o *Orchestrator) CancelQueuedRuns(ctx context.Context) error {
-	return o.store.CancelQueuedRuns(ctx, o.config.AppID, o.now().UTC())
+	return o.ports.Cancellation.CancelQueuedRuns(ctx, o.config.AppID, o.now().UTC())
 }
 
 func (o *Orchestrator) CreateIdempotent(ctx context.Context, request RunRequest) (string, bool, error) {
@@ -430,7 +438,7 @@ func (o *Orchestrator) CreateIdempotent(ctx context.Context, request RunRequest)
 	echoID := uuid.NewString()
 	runID := uuid.NewString()
 	createdAt := o.now().UTC()
-	storedEchoID, created, err := o.store.CreateEchoRunIdempotentLimited(ctx, request.IdempotencyKey, idempotency.Fingerprint([]byte(request.Message)), Record{
+	storedEchoID, created, err := o.ports.Creation.CreateEchoRunIdempotentLimited(ctx, request.IdempotencyKey, idempotency.Fingerprint([]byte(request.Message)), Record{
 		ID:           echoID,
 		AppID:        o.config.AppID,
 		InputMessage: request.Message,
@@ -490,25 +498,6 @@ func (o *Orchestrator) CreateIdempotent(ctx context.Context, request RunRequest)
 	return storedEchoID, true, nil
 }
 
-func (o *Orchestrator) RunExisting(ctx context.Context, echoID string, request RunRequest, emit EventEmitter) (resultErr error) {
-	echoRecord, _, err := o.store.GetEcho(ctx, o.config.AppID, echoID)
-	if err != nil {
-		return err
-	}
-	if request.Message == "" {
-		request.Message = echoRecord.InputMessage
-	} else if request.Message != echoRecord.InputMessage {
-		return ErrRunInputMismatch
-	}
-	runStarted := o.now().UTC()
-	leaseToken := uuid.NewString()
-	run, err := o.store.ClaimRun(ctx, o.config.AppID, echoID, leaseToken, runStarted, runStarted.Add(o.config.LeaseDuration))
-	if err != nil {
-		return err
-	}
-	return o.executeClaimedRun(ctx, request, emit, run, runStarted, nil)
-}
-
 // RunQueued 按持久队列返回的精确 run_id 认领并执行 root 或 child Run。
 // child 的任务正文只从 Run 业务状态读取，不能回退到 Echo 用户输入。
 func (o *Orchestrator) RunQueued(ctx context.Context, work RunWork, emit EventEmitter) (resultErr error) {
@@ -522,9 +511,9 @@ func (o *Orchestrator) RunQueued(ctx context.Context, work RunWork, emit EventEm
 	var claimed RunRecord
 	var err error
 	if run.ParentRunID == "" {
-		claimed, err = o.store.ClaimRun(ctx, o.config.AppID, run.EchoID, leaseToken, runStarted, runStarted.Add(o.config.LeaseDuration))
+		claimed, err = o.ports.Execution.ClaimRun(ctx, o.config.AppID, run.EchoID, leaseToken, runStarted, runStarted.Add(o.config.LeaseDuration))
 	} else {
-		claimed, err = o.store.ClaimChildRun(ctx, o.config.AppID, run.EchoID, run.ID, run.ParentRunID, leaseToken, runStarted, runStarted.Add(o.config.LeaseDuration))
+		claimed, err = o.ports.Execution.ClaimChildRun(ctx, o.config.AppID, run.EchoID, run.ID, run.ParentRunID, leaseToken, runStarted, runStarted.Add(o.config.LeaseDuration))
 	}
 	if err != nil {
 		return err
@@ -610,7 +599,7 @@ func (o *Orchestrator) executeClaimedRun(ctx context.Context, request RunRequest
 		// 事件追加脱离取消上下文：取消竞速时用已取消 ctx 写库会中断语句并
 		// 遗留 SQLite 写锁（影响后续终态写入）；事件是持久日志，走有界独立上下文。
 		appendCtx, cancelAppend := context.WithTimeout(context.WithoutCancel(runContext), 5*time.Second)
-		event, err = o.store.AppendEchoEvent(appendCtx, event)
+		event, err = o.ports.Events.AppendEchoEvent(appendCtx, event)
 		cancelAppend()
 		if err != nil {
 			observe.Error(ctx, "持久化 Echo 事件失败", err,
@@ -676,7 +665,7 @@ func (o *Orchestrator) executeClaimedRun(ctx context.Context, request RunRequest
 		observe.Error(ctx, "装配 Run 上下文快照失败", err)
 		return errors.Join(err, o.fail(ctx, run, "context_unavailable", true))
 	}
-	if err := o.store.SetRunContext(runContext, run, snapshot.Digest, snapshot.SourcesJSON()); err != nil {
+	if err := o.ports.Execution.SetRunContext(runContext, run, snapshot.Digest, snapshot.SourcesJSON()); err != nil {
 		observe.Error(ctx, "固化 Run 上下文来源版本失败", err)
 		// 取消优先：上下文已取消时不得落入重试/失败路径。
 		if errors.Is(runContext.Err(), context.Canceled) {
@@ -917,7 +906,7 @@ func (o *Orchestrator) executeClaimedRun(ctx context.Context, request RunRequest
 		}
 		var sequenceErr error
 		if usage := frame.GetRunUsage(); usage != nil {
-			sequenceErr = o.store.AdvanceRunAgentSequenceWithUsage(
+			sequenceErr = o.ports.Execution.AdvanceRunAgentSequenceWithUsage(
 				runContext,
 				run,
 				frame.Sequence,
@@ -928,7 +917,7 @@ func (o *Orchestrator) executeClaimedRun(ctx context.Context, request RunRequest
 				usage.ProviderRetries,
 			)
 		} else {
-			sequenceErr = o.store.AdvanceRunAgentSequence(runContext, run, frame.Sequence)
+			sequenceErr = o.ports.Execution.AdvanceRunAgentSequence(runContext, run, frame.Sequence)
 		}
 		if sequenceErr != nil {
 			if errors.Is(runContext.Err(), context.Canceled) {
@@ -968,7 +957,7 @@ func (o *Orchestrator) executeClaimedRun(ctx context.Context, request RunRequest
 			)
 		case *executor.Frame_CapabilityCall:
 			if spec, _, resolveErr := o.registry.ResolveCapability(body.CapabilityCall.CapabilityId); resolveErr == nil &&
-				(spec.SideEffect == registry.SideEffectWrite || spec.SideEffect == registry.SideEffectExternal) {
+				(spec.SideEffect == capability.SideEffectWrite || spec.SideEffect == capability.SideEffectExternal) {
 				automaticRetrySafe = false
 			}
 			observe.Info(ctx, "模型请求调用 Capability",
@@ -1007,7 +996,7 @@ func (o *Orchestrator) executeClaimedRun(ctx context.Context, request RunRequest
 				runErr := fmt.Errorf("send capability result: %w", err)
 				return errors.Join(runErr, o.fail(ctx, run, "agent_stream_failed", automaticRetrySafe))
 			}
-			if run.ParentRunID == "" && body.CapabilityCall.CapabilityId == SubagentCapabilityID && result.Success {
+			if run.ParentRunID == "" && body.CapabilityCall.CapabilityId == CreateChildRunCapabilityID && result.Success {
 				var child ChildRunResult
 				if err := json.Unmarshal(result.PayloadJson, &child); err != nil || child.RunID == "" || child.Status != RunStatusQueued {
 					return errors.Join(ErrInvalidChildRun, o.fail(ctx, run, "protocol_violation", false))
@@ -1126,7 +1115,7 @@ func (o *Orchestrator) projectCapabilities(policy appconfig.PolicySnapshot, run 
 		if _, enabled := scope[capability.ID]; !enabled {
 			continue
 		}
-		if run.ParentRunID != "" && (capability.ID == SubagentCapabilityID || capability.ID == SubagentStatusCapabilityID) {
+		if run.ParentRunID != "" && (capability.ID == CreateChildRunCapabilityID || capability.ID == GetChildStatusCapabilityID) {
 			continue
 		}
 		if _, err := registry.NarrowPermissions(policy.PermissionScope, capability.RequiredPermissions); err != nil {
@@ -1247,7 +1236,7 @@ func (o *Orchestrator) invokeCapabilityOnce(ctx context.Context, run RunRecord, 
 		}
 	}
 	index := sort.SearchStrings(run.CapabilityScope, call.CapabilityId)
-	if (run.ParentRunID != "" && (call.CapabilityId == SubagentCapabilityID || call.CapabilityId == SubagentStatusCapabilityID)) ||
+	if (run.ParentRunID != "" && (call.CapabilityId == CreateChildRunCapabilityID || call.CapabilityId == GetChildStatusCapabilityID)) ||
 		index >= len(run.CapabilityScope) || run.CapabilityScope[index] != call.CapabilityId {
 		return o.rejectedCapability(ctx, run, call, started, runtime.ErrCapabilityDisabled)
 	}
@@ -1293,7 +1282,7 @@ func (o *Orchestrator) invokeCapabilityOnce(ctx context.Context, run RunRecord, 
 	}
 	auditPayload := observe.SanitizeAuditJSON(call.PayloadJson, 8192)
 	auditContext, auditCancel := detachedContext(ctx)
-	auditErr := o.store.RecordCapabilityCall(auditContext, call.CallId, runID, echoID, o.config.AppID, call.CapabilityId, auditPayload, result.Success, capabilityFailure, o.now().Sub(started))
+	auditErr := o.ports.Audit.RecordCapabilityCall(auditContext, call.CallId, runID, echoID, o.config.AppID, call.CapabilityId, auditPayload, result.Success, capabilityFailure, o.now().Sub(started))
 	auditCancel()
 	if auditErr != nil && err == nil {
 		public := publicerror.Echo("internal_error")
@@ -1328,7 +1317,7 @@ func (o *Orchestrator) rejectedCapability(ctx context.Context, run RunRecord, ca
 	}
 	auditPayload := observe.SanitizeAuditJSON(call.PayloadJson, 8192)
 	auditContext, auditCancel := detachedContext(ctx)
-	auditErr := o.store.RecordCapabilityCall(
+	auditErr := o.ports.Audit.RecordCapabilityCall(
 		auditContext, call.CallId, run.ID, run.EchoID, run.AppID, call.CapabilityId,
 		auditPayload, false, public, o.now().Sub(started),
 	)
@@ -1404,7 +1393,7 @@ func (o *Orchestrator) retryRun(ctx context.Context, run RunRecord, failure publ
 	next.UsedProviderRetries = 0
 	finishContext, cancel := detachedContext(ctx)
 	defer cancel()
-	if err := o.store.RetryRun(finishContext, run, next, failure, completedAt); err != nil {
+	if err := o.ports.Execution.RetryRun(finishContext, run, next, failure, completedAt); err != nil {
 		return err
 	}
 	startedAt := run.CreatedAt
@@ -1441,6 +1430,10 @@ func (o *Orchestrator) renewLease(ctx context.Context, cancel context.CancelFunc
 	if interval <= 0 {
 		interval = time.Millisecond
 	}
+	renewBudget := o.config.LeaseDuration + interval
+	if renewBudget < o.config.LeaseDuration {
+		renewBudget = o.config.LeaseDuration
+	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -1451,8 +1444,8 @@ func (o *Orchestrator) renewLease(ctx context.Context, cancel context.CancelFunc
 			// 续期预算取完整租约窗口（而非 1/3）：续期只需在租约到期前完成，
 			// 1/3 窗口在负载下会把瞬时存储慢写误判为续期失败并取消整个 Run。
 			// 每次续期把租约延长到 renewedAt+LeaseDuration，慢续期不丢所有权。
-			renewContext, renewCancel := context.WithTimeout(ctx, o.config.LeaseDuration)
-			err := o.store.RenewRunLease(renewContext, run, renewedAt.UTC(), renewedAt.UTC().Add(o.config.LeaseDuration))
+			renewContext, renewCancel := context.WithTimeout(ctx, renewBudget)
+			err := o.ports.Execution.RenewRunLease(renewContext, run, renewedAt.UTC(), renewedAt.UTC().Add(o.config.LeaseDuration))
 			renewCancel()
 			if err != nil {
 				select {
@@ -1472,9 +1465,9 @@ func (o *Orchestrator) completeRun(ctx context.Context, run RunRecord, runStatus
 	completedAt := o.now().UTC()
 	var err error
 	if run.ParentRunID == "" {
-		err = o.store.CompleteRun(finishContext, run, runStatus, echoStatus, finalMessage, public, completedAt)
+		err = o.ports.Execution.CompleteRun(finishContext, run, runStatus, echoStatus, finalMessage, public, completedAt)
 	} else {
-		err = o.store.CompleteChildRun(finishContext, run, runStatus, finalMessage, public, completedAt)
+		err = o.ports.Execution.CompleteChildRun(finishContext, run, runStatus, finalMessage, public, completedAt)
 	}
 	if err == nil {
 		startedAt := run.CreatedAt

@@ -15,6 +15,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packagecontract"
 )
 
 // 以 GitHub Releases 作为包分发后端（REST，仅标准库）：发布走 tag+Release+
@@ -59,7 +61,7 @@ func (c *GitHubClient) validatePublishArgs(owner, repo string) error {
 
 // PublishFromSource 用调用方提供的清单发布（与 PackFromSource 对称）：供作者侧
 // 源清单（ailuo.toml）路径使用，不读取 manifest.json。
-func (c *GitHubClient) PublishFromSource(ctx context.Context, owner, repo, sourceDir string, manifest Manifest, manifestBytes []byte) (string, error) {
+func (c *GitHubClient) PublishFromSource(ctx context.Context, owner, repo, sourceDir string, manifest packagecontract.Manifest, manifestBytes []byte) (string, error) {
 	if err := c.validatePublishArgs(owner, repo); err != nil {
 		return "", err
 	}
@@ -90,66 +92,66 @@ func (c *GitHubClient) PublishTarball(ctx context.Context, owner, repo, tarballP
 
 // validateTarball 校验发布物自身的清单、锁和工件，不把部署依赖当作发布前提。
 // 依赖是否已安装属于目标 Deployment 的 Install 阶段，不应阻塞作者发布。
-func validateTarball(ctx context.Context, tarballPath string) (Manifest, error) {
+func validateTarball(ctx context.Context, tarballPath string) (packagecontract.Manifest, error) {
 	sourceDir, cleanup, err := unpackSource(tarballPath)
 	if err != nil {
-		return Manifest{}, err
+		return packagecontract.Manifest{}, err
 	}
 	if cleanup != nil {
 		defer cleanup()
 	}
 	source, err := readManifest(sourceDir)
 	if err != nil {
-		return Manifest{}, err
+		return packagecontract.Manifest{}, err
 	}
-	if _, err := readSourceArtifacts(sourceDir, source.Manifest); err != nil {
-		return Manifest{}, err
+	if _, err := readSourceArtifacts(ctx, sourceDir, source.Manifest); err != nil {
+		return packagecontract.Manifest{}, err
 	}
-	lockBytes, err := ReadFileLimited(filepath.Join(sourceDir, "lock.json"), MaxLockBytes)
+	lockBytes, err := ReadFileLimited(filepath.Join(sourceDir, "lock.json"), packagecontract.MaxLockBytes)
 	if err != nil {
-		return Manifest{}, err
+		return packagecontract.Manifest{}, err
 	}
-	var lock Lock
-	if err := DecodeStrictJSON(lockBytes, &lock); err != nil {
-		return Manifest{}, err
+	var lock packagecontract.Lock
+	if err := packagecontract.DecodeStrictJSON(lockBytes, &lock); err != nil {
+		return packagecontract.Manifest{}, err
 	}
 	manifestDigest := sha256.Sum256(source.manifestBytes)
 	if lock.ManifestSHA256 != hex.EncodeToString(manifestDigest[:]) {
-		return Manifest{}, ErrInvalidFormat
+		return packagecontract.Manifest{}, packagecontract.ErrInvalidFormat
 	}
 	for index := range lock.Artifacts {
-		if !isPackageEntrypoint(lock.Artifacts[index].Path) {
-			return Manifest{}, ErrInvalidFormat
+		if !packagecontract.IsPackagePath(lock.Artifacts[index].Path) || lock.Artifacts[index].Path == "." {
+			return packagecontract.Manifest{}, packagecontract.ErrInvalidFormat
 		}
 		lock.Artifacts[index].Path = filepath.Join(sourceDir, lock.Artifacts[index].Path)
 	}
 	if err := validatePackagedLock(lock, source.Manifest); err != nil {
-		return Manifest{}, err
+		return packagecontract.Manifest{}, err
 	}
 	if err := verifyInstalledArtifacts(ctx, sourceDir, lock.Artifacts); err != nil {
-		return Manifest{}, err
+		return packagecontract.Manifest{}, err
 	}
 	return source.Manifest, nil
 }
 
-func validatePackagedLock(lock Lock, manifest Manifest) error {
+func validatePackagedLock(lock packagecontract.Lock, manifest packagecontract.Manifest) error {
 	for _, artifact := range lock.Artifacts {
-		if component, ok := findComponent(manifest, artifact.ComponentID); ok &&
-			component.Mode == ModeIsolated && artifact.Process != nil {
-			return ErrInvalidFormat
+		if component, ok := packagecontract.FindComponent(manifest, artifact.ComponentID); ok &&
+			component.Mode == packagecontract.ModeIsolated && artifact.Process != nil {
+			return packagecontract.ErrInvalidFormat
 		}
 	}
 	packaged := manifest
-	packaged.Components = append([]Component(nil), manifest.Components...)
+	packaged.Components = append([]packagecontract.Component(nil), manifest.Components...)
 	for index := range packaged.Components {
-		if packaged.Components[index].Mode == ModeIsolated {
-			packaged.Components[index].Mode = ModeHosted
+		if packaged.Components[index].Mode == packagecontract.ModeIsolated {
+			packaged.Components[index].Mode = packagecontract.ModeHosted
 		}
 	}
-	return ValidateLock(lock, packaged)
+	return packagecontract.ValidateLock(lock, packaged)
 }
 
-func (c *GitHubClient) publishTarball(ctx context.Context, owner, repo, tarballPath string, manifest Manifest) (string, error) {
+func (c *GitHubClient) publishTarball(ctx context.Context, owner, repo, tarballPath string, manifest packagecontract.Manifest) (string, error) {
 	tag := "v" + manifest.Version
 	release, err := c.createRelease(ctx, owner, repo, tag)
 	if err != nil {
@@ -248,10 +250,10 @@ func (c *GitHubClient) createRelease(ctx context.Context, owner, repo, tag strin
 // ResolveRelease 解析 owner/repo 的发行版：按 semver 约束选择最高版本，
 // 返回版本号与 tarball 下载 URL。constraint 为空表示最新版。
 func (c *GitHubClient) ResolveRelease(ctx context.Context, owner, repo, constraint string) (string, string, error) {
-	var parsedConstraint Constraint
+	var parsedConstraint packagecontract.Constraint
 	if constraint != "" {
 		var err error
-		parsedConstraint, err = ParseConstraint(constraint)
+		parsedConstraint, err = packagecontract.ParseConstraint(constraint)
 		if err != nil {
 			return "", "", err
 		}
@@ -259,7 +261,7 @@ func (c *GitHubClient) ResolveRelease(ctx context.Context, owner, repo, constrai
 	// GitHub /releases 按创建时间排序，不按版本：必须扫完所有页取最高版本，
 	// 返回首个匹配项会在"旧版本线的补丁晚于新主版本发布"时解析出旧版本。
 	var (
-		bestVersion Version
+		bestVersion packagecontract.Version
 		bestURL     string
 		found       bool
 	)
@@ -300,14 +302,14 @@ func (c *GitHubClient) ResolveRelease(ctx context.Context, owner, repo, constrai
 			break // 空页之后不会再有 Release
 		}
 		for _, release := range releases {
-			version, err := ParseVersion(strings.TrimPrefix(release.TagName, "v"))
+			version, err := packagecontract.ParseVersion(strings.TrimPrefix(release.TagName, "v"))
 			if err != nil {
 				continue // 非 semver 的 tag（如 release-2026）跳过
 			}
 			if constraint != "" && !parsedConstraint.Matches(version) {
 				continue
 			}
-			if found && CompareVersions(version, bestVersion) <= 0 {
+			if found && packagecontract.CompareVersions(version, bestVersion) <= 0 {
 				continue
 			}
 			for _, asset := range release.Assets {
@@ -346,12 +348,12 @@ func (c *GitHubClient) DownloadRelease(ctx context.Context, assetURL, dest strin
 		return err
 	}
 	defer func() { _ = file.Close() }()
-	written, err := io.Copy(file, io.LimitReader(response.Body, MaxArtifactBytes+1))
+	written, err := io.Copy(file, io.LimitReader(response.Body, packagecontract.MaxArtifactBytes+1))
 	if err != nil {
 		return err
 	}
-	if written > MaxArtifactBytes {
-		return ErrInvalidFormat
+	if written > packagecontract.MaxArtifactBytes {
+		return packagecontract.ErrInvalidFormat
 	}
 	return nil
 }
@@ -380,12 +382,12 @@ func InstallFromRelease(ctx context.Context, root string, client *GitHubClient, 
 	if err != nil {
 		return InstalledRecord{}, err
 	}
-	resolved, err := ParseVersion(version)
+	resolved, err := packagecontract.ParseVersion(version)
 	if err != nil {
 		return InstalledRecord{}, err
 	}
-	manifestVersion, err := ParseVersion(source.Manifest.Version)
-	if err != nil || CompareVersions(resolved, manifestVersion) != 0 {
+	manifestVersion, err := packagecontract.ParseVersion(source.Manifest.Version)
+	if err != nil || packagecontract.CompareVersions(resolved, manifestVersion) != 0 {
 		return InstalledRecord{}, fmt.Errorf("发布包版本 %s 与解析版本 %s 不一致", source.Manifest.Version, version)
 	}
 	record, err := Install(ctx, root, sourceDir)

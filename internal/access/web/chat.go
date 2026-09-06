@@ -55,22 +55,39 @@ func (s *Server) chatStream(writer http.ResponseWriter, request *http.Request) {
 	if !ok {
 		return
 	}
-	echoID, created, ok := s.startChatRun(writer, request, req, webIdentity)
+	echoID, ok := s.startChatRun(writer, request, req, webIdentity)
 	if !ok {
 		return
 	}
 	live, unsubscribe := s.hub.Subscribe(s.appID, echoID)
 	defer unsubscribe()
+	s.Done()
+	admissionReleased = true
+	started := time.Now()
+	_, events, err := s.reader.GetEcho(request.Context(), s.appID, echoID)
+	if err != nil {
+		observe.Error(request.Context(), "聊天流建立后读取 Echo 事件失败", err,
+			observe.StringAttr("app_id", s.appID), observe.StringAttr("echo_id", echoID))
+		access.WriteJSON(writer, http.StatusInternalServerError, map[string]string{
+			"code": "internal_error", "message": "Echo 状态读取失败",
+		})
+		return
+	}
 	writer.Header().Set("Content-Type", "text/event-stream")
 	writer.Header().Set("Cache-Control", "no-cache, no-transform")
 	writer.Header().Set("Connection", "keep-alive")
 	writer.WriteHeader(http.StatusOK)
-	if created {
-		s.scheduler.Enqueue(request.Context(), echoID)
+	lastSequence := uint64(0)
+	for _, event := range events {
+		if event.Sequence > lastSequence {
+			lastSequence = event.Sequence
+		}
+		if s.translateChatEvent(writer, event) {
+			_ = writeChatSSE(writer, "done", map[string]any{})
+			return
+		}
 	}
-	s.Done()
-	admissionReleased = true
-	started := time.Now()
+	flusher.Flush()
 	heartbeat := time.NewTicker(15 * time.Second)
 	defer heartbeat.Stop()
 	finalSent := false
@@ -96,6 +113,10 @@ func (s *Server) chatStream(writer http.ResponseWriter, request *http.Request) {
 				}
 				return
 			}
+			if event.Sequence <= lastSequence {
+				continue
+			}
+			lastSequence = event.Sequence
 			terminal := s.translateChatEvent(writer, event)
 			if terminal {
 				finalSent = true
@@ -128,7 +149,7 @@ func (s *Server) decodeChatRequest(writer http.ResponseWriter, request *http.Req
 
 // startChatRun 执行受治理的标准链路：平台消息入库 → 幂等 Echo 创建。
 // 平台消息标识与幂等键由服务端生成（前端契约不携带幂等键）。
-func (s *Server) startChatRun(writer http.ResponseWriter, request *http.Request, req *chatRequest, webIdentity AuthenticatedWebIdentity) (string, bool, bool) {
+func (s *Server) startChatRun(writer http.ResponseWriter, request *http.Request, req *chatRequest, webIdentity AuthenticatedWebIdentity) (string, bool) {
 	idempotencyKey := uuid.NewString()
 	intake, err := s.platformHub.Intake(request.Context(), access.InboundMessage{
 		AppID:             s.appID,
@@ -145,7 +166,7 @@ func (s *Server) startChatRun(writer http.ResponseWriter, request *http.Request,
 	})
 	if err != nil {
 		access.WriteIntakeError(writer, request, err)
-		return "", false, false
+		return "", false
 	}
 	input := kernelecho.RunRequest{
 		Message:        intake.Text,
@@ -155,17 +176,17 @@ func (s *Server) startChatRun(writer http.ResponseWriter, request *http.Request,
 		MessageID:      intake.MessageID,
 		Channel:        "web",
 	}
-	echoID, created, err := s.orchestrator.CreateIdempotent(request.Context(), input)
+	echoID, created, err := s.admission.Create(request.Context(), input)
 	if err != nil {
 		access.WriteEchoError(writer, request, err)
-		return "", false, false
+		return "", false
 	}
 	observe.Info(request.Context(), "前端聊天请求已进入标准链路",
 		observe.StringAttr("app_id", s.appID),
 		observe.StringAttr("echo_id", echoID),
 		observe.BoolAttr("idempotency_replayed", !created),
 	)
-	return echoID, created, true
+	return echoID, true
 }
 
 // translateChatEvent 把内核 Echo 事件翻译为前端流式事件并写出；返回值表示

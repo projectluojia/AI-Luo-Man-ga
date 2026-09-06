@@ -8,13 +8,13 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packmgr"
+	"github.com/projectluojia/AI-Luo-Man-ga/pkg/packagecontract"
 )
 
 // applyProcessLimits 在子进程启动后立即用 prlimit 应用资源限额。
 // exec 完成到 prlimit 生效之间只有启动初始化窗口，之后运行期资源严格受限。
 // Linux 无需额外的释放资源（rlimit 随进程存续），返回 nil 释放器。
-func applyProcessLimits(process *os.Process, limits packmgr.ProcessLimits) (func() error, error) {
+func applyProcessLimits(process *os.Process, limits packagecontract.ProcessLimits) (func() error, error) {
 	if limits.MaxAddressBytes > 0 {
 		if err := unix.Prlimit(process.Pid, unix.RLIMIT_AS,
 			&unix.Rlimit{Cur: limits.MaxAddressBytes, Max: limits.MaxAddressBytes}, nil); err != nil {

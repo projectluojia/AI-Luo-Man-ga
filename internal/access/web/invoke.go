@@ -16,7 +16,6 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
-	"github.com/projectluojia/AI-Luo-Man-ga/pkg/bus"
 )
 
 const invokeTimeout = 30 * time.Second
@@ -152,14 +151,13 @@ func writeInvokeError(writer http.ResponseWriter, request *http.Request, capabil
 	case errors.Is(err, runtime.ErrIdempotencyUnavailable):
 		observe.Error(request.Context(), "幂等存储不可用", err)
 		access.WriteJSON(writer, http.StatusServiceUnavailable, map[string]string{"code": "idempotency_unavailable", "message": "幂等存储暂时不可用"})
-	case errors.Is(err, bus.ErrDataUnavailable), errors.Is(err, bus.ErrDataIncomplete),
-		errors.Is(err, bus.ErrDataUntrusted), errors.Is(err, bus.ErrDataExpired):
-		observe.Warn(request.Context(), "Capability 返回受治理数据状态",
-			observe.StringAttr("capability_id", capabilityID),
-		)
-		access.WriteJSON(writer, http.StatusServiceUnavailable, publicerror.Capability(err))
 	case errors.As(err, &invocationError):
-		access.WriteJSON(writer, http.StatusServiceUnavailable, publicerror.Capability(err))
+		public := publicerror.Capability(err)
+		observe.Warn(request.Context(), "Capability 运行时返回结构化错误",
+			observe.StringAttr("capability_id", capabilityID),
+			observe.StringAttr("error_code", public.Code),
+		)
+		access.WriteJSON(writer, http.StatusServiceUnavailable, public)
 	default:
 		observe.Error(request.Context(), "Capability 调用失败", err,
 			observe.StringAttr("capability_id", capabilityID),
