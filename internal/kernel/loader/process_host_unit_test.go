@@ -60,6 +60,7 @@ func TestValidateProcessSpecRejectsUnsafeExecutionInputs(t *testing.T) {
 	}
 	tests := []packagecontract.ProcessSpec{
 		func() packagecontract.ProcessSpec { value := base; value.Path = "relative"; return value }(),
+		func() packagecontract.ProcessSpec { value := base; value.Path = workDir; return value }(),
 		func() packagecontract.ProcessSpec { value := base; value.WorkDir = "relative"; return value }(),
 		func() packagecontract.ProcessSpec { value := base; value.Address = "192.0.2.1:9000"; return value }(),
 		func() packagecontract.ProcessSpec {
