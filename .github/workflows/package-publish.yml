@@ -8,8 +8,8 @@ name: 包发布流水线（可复用）
 #
 # 打包与发布分两个 job：package 只读（PR 冒烟走这条路，构建由包清单声明驱动），
 # contents: write 只在 tag 触发的 publish job 里存在；发布 job
-# 只处理 package job 生成的 tarball，不执行调用方构建命令。构建器工具链只按
-# 调用方声明的 build-tool 条件准备，不绑定任何具体业务包。
+# 只处理 package job 生成的 tarball，不执行调用方构建命令。构建器工具链从
+# ailuo.toml 的 component.build 声明推导，不绑定任何具体业务包。
 
 on:
   workflow_call:
@@ -22,18 +22,6 @@ on:
         type: string
         required: true
         description: AI珞 Package Manager 的完整 40 位 commit SHA
-      build-tool:
-        type: string
-        required: true
-        description: 与 ailuo.toml [build].tool 一致；无构建器时填写 none
-      uv-version:
-        type: string
-        default: ""
-        description: python-uv 构建器使用的完整 uv 版本（x.y.z）
-      node-version:
-        type: string
-        default: ""
-        description: ts-as 构建器使用的完整 Node.js 版本（x.y.z）
       test-command:
         type: string
         required: true
@@ -78,10 +66,20 @@ jobs:
       - name: 校验 Package Manager ref
         env:
           PACKAGE_MANAGER_REF: ${{ inputs.package-manager-ref }}
+          PACKAGE_DIR: ${{ inputs.package-dir }}
+          TEST_COMMAND: ${{ inputs.test-command }}
         shell: bash
         run: |
           [[ "$PACKAGE_MANAGER_REF" =~ ^[0-9a-fA-F]{40}$ ]] || {
             echo "package-manager-ref 必须是完整 40 位 commit SHA" >&2
+            exit 1
+          }
+          [[ -n "$PACKAGE_DIR" && "$PACKAGE_DIR" != /* && "$PACKAGE_DIR" != *..* && "$PACKAGE_DIR" != *\\* ]] || {
+            echo "package-dir 必须是调用方仓库内的相对路径" >&2
+            exit 1
+          }
+          [[ -n "${TEST_COMMAND//[[:space:]]/}" ]] || {
+            echo "test-command 不能为空" >&2
             exit 1
           }
       # 只检出受信 Package Manager 仓库的调用方指定不可变提交。
@@ -99,47 +97,50 @@ jobs:
             .ailuo-cli/contracts/go.sum
             .ailuo-cli/package-manager/go.sum
             .ailuo-cli/go.work.sum
-      - name: 校验构建器与工具链版本
-        env:
-          BUILD_TOOL: ${{ inputs.build-tool }}
-          UV_VERSION: ${{ inputs.uv-version }}
-          NODE_VERSION: ${{ inputs.node-version }}
-        shell: bash
-        run: |
-          version_pattern='^[0-9]+\.[0-9]+\.[0-9]+$'
-          case "$BUILD_TOOL" in
-            none|go-wasm) ;;
-            python-uv)
-              [[ "$UV_VERSION" =~ $version_pattern ]] || {
-                echo "python-uv 必须传入完整 uv 版本 x.y.z" >&2
-                exit 1
-              }
-              ;;
-            ts-as)
-              [[ "$NODE_VERSION" =~ $version_pattern ]] || {
-                echo "ts-as 必须传入完整 Node.js 版本 x.y.z" >&2
-                exit 1
-              }
-              ;;
-            *)
-              echo "不支持的 build-tool: $BUILD_TOOL" >&2
-              exit 1
-              ;;
-          esac
-      # 包构建器是包格式的通用能力；workflow 只按 manifest 声明准备工具链。
-      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
-        if: ${{ inputs.build-tool == 'python-uv' }}
-        with:
-          version: ${{ inputs.uv-version }}
-          enable-cache: true
-          cache-dependency-glob: "**/uv.lock"
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        if: ${{ inputs.build-tool == 'ts-as' }}
-        with:
-          node-version: ${{ inputs.node-version }}
       - name: 构建 ailuo-pm CLI
         run: go build -o "$RUNNER_TEMP/ailuo" ./cmd/ailuo-pm
         working-directory: .ailuo-cli/package-manager
+      - name: 读取包清单构建计划
+        id: inspect
+        env:
+          PACKAGE_DIR: ${{ inputs.package-dir }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          metadata="$("$RUNNER_TEMP/ailuo" inspect "$PACKAGE_DIR")"
+          printf '%s\n' "$metadata" > "$RUNNER_TEMP/package-metadata.json"
+          jq -e '.id | type == "string" and length > 0' "$RUNNER_TEMP/package-metadata.json" >/dev/null
+          jq -e '.version | type == "string" and length > 0' "$RUNNER_TEMP/package-metadata.json" >/dev/null
+          jq -e '(.build_tools // []) | type == "array"' "$RUNNER_TEMP/package-metadata.json" >/dev/null
+          if jq -e 'any(.build_tools[]?; . == "go-wasm" or . == "go-native")' "$RUNNER_TEMP/package-metadata.json" >/dev/null; then
+            echo "uses-go=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "uses-go=false" >> "$GITHUB_OUTPUT"
+          fi
+          if jq -e 'any(.build_tools[]?; . == "python-uv")' "$RUNNER_TEMP/package-metadata.json" >/dev/null; then
+            echo "uses-uv=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "uses-uv=false" >> "$GITHUB_OUTPUT"
+          fi
+          if jq -e 'any(.build_tools[]?; . == "ts-as")' "$RUNNER_TEMP/package-metadata.json" >/dev/null; then
+            echo "uses-node=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "uses-node=false" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        if: ${{ steps.inspect.outputs.uses-go == 'true' }}
+        with:
+          go-version: stable
+          cache: false
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        if: ${{ steps.inspect.outputs.uses-uv == 'true' }}
+        with:
+          enable-cache: true
+          cache-dependency-glob: ${{ inputs.package-dir }}/**/uv.lock
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        if: ${{ steps.inspect.outputs.uses-node == 'true' }}
+        with:
+          node-version: 'lts/*'
 
       - name: 运行发布前测试
         env:
@@ -154,7 +155,6 @@ jobs:
           }
           cd "$PACKAGE_DIR"
           bash -euo pipefail -c "$TEST_COMMAND"
-
       - name: 打包并冒烟安装验证
         id: pack
         shell: bash

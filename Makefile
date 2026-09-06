@@ -2,14 +2,16 @@
 
 UV ?= uv
 AGENT_PROJECT := packages/agent/runtime
-AGENT_PACKAGE := packages/agent
 AGENT_PYTHON := $(UV) run --project $(AGENT_PROJECT) --locked python
+CONTRACTS_MODULE := github.com/projectluojia/AI-Luo-Man-ga/contracts
+CORE_MODULE := github.com/projectluojia/AI-Luo-Man-ga
 
 generate:
 	@command -v protoc-gen-go >/dev/null 2>&1 || { echo "缺少 protoc-gen-go，请先安装 google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.12" >&2; exit 1; }
 	@command -v protoc-gen-go-grpc >/dev/null 2>&1 || { echo "缺少 protoc-gen-go-grpc，请先安装 google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.2" >&2; exit 1; }
 	$(UV) sync --project $(AGENT_PROJECT) --locked
-	$(AGENT_PYTHON) -m grpc_tools.protoc -I proto --go_out=. --go_opt=module=github.com/projectluojia/AI-Luo-Man-ga --go-grpc_out=. --go-grpc_opt=module=github.com/projectluojia/AI-Luo-Man-ga proto/executor.proto proto/runtime_host.proto
+	$(AGENT_PYTHON) -m grpc_tools.protoc -I proto --go_out=contracts --go_opt=module=$(CONTRACTS_MODULE) --go-grpc_out=contracts --go-grpc_opt=module=$(CONTRACTS_MODULE) proto/executor.proto
+	$(AGENT_PYTHON) -m grpc_tools.protoc -I proto --go_out=. --go_opt=module=$(CORE_MODULE) --go-grpc_out=. --go-grpc_opt=module=$(CORE_MODULE) proto/runtime_host.proto
 	$(AGENT_PYTHON) -m grpc_tools.protoc -I proto --python_out=$(AGENT_PROJECT)/agent/generated --grpc_python_out=$(AGENT_PROJECT)/agent/generated proto/executor.proto
 
 test:
@@ -33,7 +35,7 @@ test-campus:
 
 test-e2e:
 	$(UV) sync --project $(AGENT_PROJECT) --locked
-	AILUO_EXECUTOR_PACKAGE_DIR=$(AGENT_PACKAGE) go test -tags=integration ./e2e -v -timeout=60s
+	go test -tags=integration ./e2e -v -timeout=60s
 
 test-race:
 	go test -race ./...

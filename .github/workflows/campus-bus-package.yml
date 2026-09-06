@@ -1,7 +1,7 @@
 name: Campus bus package
 
-# 过渡期包仍在本仓库，但拥有独立的 CI 边界；迁移到 packages/campus-bus 独立仓库时
-# 可直接携带本文件。该流程不依赖 Agent 包，也不参与 Core 的 ci-required。
+# Campus bus 包拥有独立的 CI 边界；迁移到独立仓库时可直接携带本文件。
+# 该流程不依赖 Agent 包，也不参与 Core 的 ci-required。
 
 on:
   push:
@@ -56,7 +56,6 @@ jobs:
           go mod verify
           go mod tidy -diff
           GOOS=wasip1 GOARCH=wasm go vet ./src
-          GOOS=wasip1 GOARCH=wasm go build -trimpath -o "$RUNNER_TEMP/campus.wasm" ./src
       - name: 构建 Package Manager CLI
         working-directory: package-manager
         run: |
@@ -68,8 +67,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          campus_tgz="$(find "$RUNNER_TEMP/campus-package-dist" -maxdepth 1 -type f -name 'campus-*.tgz' -print -quit)"
-          test -n "$campus_tgz"
+          mapfile -t campus_tarballs < <(find "$RUNNER_TEMP/campus-package-dist" -maxdepth 1 -type f -name 'campus-*.tgz' -print)
+          test "${#campus_tarballs[@]}" -eq 1
+          campus_tgz="${campus_tarballs[0]}"
           campus_version="$(tar -xzOf "$campus_tgz" manifest.json | jq -er .version)"
           "$RUNNER_TEMP/ailuo" install --root "$RUNNER_TEMP/campus-package-root" "$campus_tgz"
           "$RUNNER_TEMP/ailuo" list --root "$RUNNER_TEMP/campus-package-root" | grep -q "^campus@${campus_version}"
