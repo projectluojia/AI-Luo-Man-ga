@@ -4,13 +4,10 @@
 package ingress
 
 import (
-	"context"
-	"encoding/json"
 	"net/http"
 	"time"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/jsonutil"
 	kernelecho "github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/identity"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
@@ -36,21 +33,21 @@ type Event struct {
 	IdempotencyKey    string    `json:"idempotency_key"`
 }
 
-// EchoCreator 是 Echo 创建的窄端口（由 orchestrator 实现）。
-type EchoCreator interface {
-	CreateIdempotent(context.Context, kernelecho.RunRequest) (string, bool, error)
-}
-
 // Server 是平台事件入口：POST /api/v1/ingress/{platform}。
 type Server struct {
-	appID  string
-	hub    *access.Hub
-	echoes EchoCreator
+	*access.AdmissionGate
+	appID     string
+	hub       *access.Hub
+	echoes    kernelecho.Creator
+	scheduler kernelecho.Enqueuer
 }
 
 // NewServer 构造平台事件入口。
-func NewServer(appID string, hub *access.Hub, echoes EchoCreator) *Server {
-	return &Server{appID: appID, hub: hub, echoes: echoes}
+func NewServer(appID string, hub *access.Hub, echoes kernelecho.Creator, scheduler kernelecho.Enqueuer) *Server {
+	if scheduler == nil {
+		panic("platform ingress requires a Run scheduler")
+	}
+	return &Server{AdmissionGate: access.NewAdmissionGate(), appID: appID, hub: hub, echoes: echoes, scheduler: scheduler}
 }
 
 // Handler 返回平台事件 HTTP 处理器。
@@ -63,24 +60,19 @@ func (s *Server) Handler() http.Handler {
 // ingest 处理一条平台事件：严格解码 → 标准消息校验（Hub）→ 身份解析 → 会话/消息入库 →
 // Echo 创建。重复投递（相同幂等键）返回既有 Echo 且 created 为 false。
 func (s *Server) ingest(writer http.ResponseWriter, request *http.Request) {
+	if !s.Begin() {
+		access.WriteJSON(writer, http.StatusServiceUnavailable, map[string]string{"code": "shutting_down", "message": "服务正在关闭"})
+		return
+	}
+	defer s.Done()
 	platform := request.PathValue("platform")
 	if err := identity.ValidatePlatform(platform); err != nil {
 		observe.Warn(request.Context(), "平台事件路径标识非法", observe.StringAttr("reason", platform))
 		access.WriteJSON(writer, http.StatusBadRequest, map[string]string{"code": "invalid_request", "message": "平台标识不合法"})
 		return
 	}
-	request.Body = http.MaxBytesReader(writer, request.Body, maxEventBytes)
-	decoder := json.NewDecoder(request.Body)
-	decoder.DisallowUnknownFields()
 	var event Event
-	if err := decoder.Decode(&event); err != nil {
-		observe.Warn(request.Context(), "平台事件请求体解析失败", observe.StringAttr("reason", err.Error()))
-		access.WriteJSON(writer, http.StatusBadRequest, map[string]string{"code": "invalid_request", "message": "请求体不是有效的 JSON 对象"})
-		return
-	}
-	if err := jsonutil.EnsureEOF(decoder); err != nil {
-		observe.Warn(request.Context(), "平台事件请求体包含多余内容", observe.StringAttr("reason", err.Error()))
-		access.WriteJSON(writer, http.StatusBadRequest, map[string]string{"code": "invalid_request", "message": "请求体只能包含一个 JSON 对象"})
+	if !access.DecodeJSONBody(writer, request, &event, maxEventBytes) {
 		return
 	}
 	intake, err := s.hub.Intake(request.Context(), s.toInbound(platform, event))
@@ -95,6 +87,9 @@ func (s *Server) ingest(writer http.ResponseWriter, request *http.Request) {
 	if err != nil {
 		access.WriteEchoError(writer, request, err)
 		return
+	}
+	if created {
+		s.scheduler.Enqueue(request.Context(), echoID)
 	}
 	observe.Info(request.Context(), "平台事件已完成 Echo 创建",
 		observe.StringAttr("app_id", s.appID),

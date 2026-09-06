@@ -11,12 +11,10 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 	"unicode/utf8"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/jsonutil"
 	kernelecho "github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/idempotency"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
@@ -28,7 +26,7 @@ import (
 var staticFiles embed.FS
 
 type EchoReader interface {
-	GetEcho(context.Context, string, string) (kernelecho.Record, []kernelecho.Event, error)
+	kernelecho.Reader
 	ListRuns(context.Context, string, string) ([]kernelecho.RunRecord, error)
 	GetRun(context.Context, string, string) (kernelecho.RunRecord, error)
 }
@@ -37,107 +35,49 @@ type HealthChecker interface {
 	Ping(context.Context) error
 }
 
-type EchoOrchestrator interface {
-	CreateIdempotent(context.Context, kernelecho.RunRequest) (string, bool, error)
-	RunQueued(context.Context, kernelecho.RunWork, kernelecho.EventEmitter) error
-	Recoverable(context.Context) ([]kernelecho.RunWork, error)
-	Runnable(context.Context, int) ([]kernelecho.RunWork, error)
-	Cancel(context.Context, string) (bool, error)
-}
-
 type Server struct {
-	schedulerCtx       context.Context
-	stopSchedule       context.CancelFunc
-	orchestrator       EchoOrchestrator
-	reader             EchoReader
-	health             HealthChecker
-	registry           *registry.Registry
-	dispatcher         *runtime.Dispatcher
-	policy             runtime.AppPolicy
-	appID              string
-	platformHub        *access.Hub
-	identityResolver   access.IdentityResolver
-	webAuthenticator   WebAuthenticator
-	qqAccessAdmin      QQAccessAdmin
-	hub                *access.EventHub
-	activeMu           sync.Mutex
-	active             map[runKey]context.CancelFunc
-	pending            map[echoKey]context.Context
-	activeWG           sync.WaitGroup
-	workerWG           sync.WaitGroup
-	admissionWG        sync.WaitGroup
-	workSignal         chan struct{}
-	scheduleOnce       sync.Once
-	accepting          bool
-	schedulerWorkers   int
-	schedulerPoll      time.Duration
-	schedulerBatchSize int
-}
-
-const (
-	schedulerWorkers   = 4
-	schedulerBatchSize = 32
-	schedulerPoll      = 250 * time.Millisecond
-)
-
-// WithScheduler 配置持久 Run 调度器的 worker 数量、轮询周期与批大小。
-func WithScheduler(workers int, poll time.Duration, batchSize int) ServerOption {
-	return func(server *Server) {
-		if workers > 0 {
-			server.schedulerWorkers = workers
-		}
-		if poll > 0 {
-			server.schedulerPoll = poll
-		}
-		if batchSize > 0 {
-			server.schedulerBatchSize = batchSize
-		}
-	}
-}
-
-// echoKey 是活动/待处理 Echo 的进程内键。
-type echoKey struct {
-	appID  string
-	echoID string
-}
-
-// runKey 允许同一 Echo 的 root 与 child Run 同时处于活动状态。
-type runKey struct {
-	appID  string
-	echoID string
-	runID  string
+	*access.AdmissionGate
+	orchestrator     kernelecho.Creator
+	scheduler        kernelecho.Controller
+	reader           EchoReader
+	health           HealthChecker
+	registry         *registry.Registry
+	dispatcher       *runtime.Dispatcher
+	policy           runtime.AppPolicy
+	appID            string
+	platformHub      *access.Hub
+	identityResolver access.IdentityResolver
+	webAuthenticator WebAuthenticator
+	qqAccessAdmin    QQAccessAdmin
+	hub              *access.EventHub
 }
 
 func NewServer(
-	ctx context.Context,
-	orchestrator EchoOrchestrator,
+	orchestrator kernelecho.Creator,
 	reader EchoReader,
 	health HealthChecker,
 	reg *registry.Registry,
 	policy runtime.AppPolicy,
 	appID string,
 	platformHub *access.Hub,
+	scheduler kernelecho.Controller,
+	events *access.EventHub,
 	options ...ServerOption,
 ) *Server {
-	schedulerCtx, stopSchedule := context.WithCancel(ctx)
+	if scheduler == nil || events == nil {
+		panic("web access dependencies are incomplete")
+	}
 	server := &Server{
-		schedulerCtx:       schedulerCtx,
-		stopSchedule:       stopSchedule,
-		orchestrator:       orchestrator,
-		reader:             reader,
-		health:             health,
-		registry:           reg,
-		policy:             policy,
-		appID:              appID,
-		platformHub:        platformHub,
-		hub:                access.NewEventHub(),
-		active:             make(map[runKey]context.CancelFunc),
-		pending:            make(map[echoKey]context.Context),
-		workSignal:         make(chan struct{}, 1),
-		accepting:          true,
-		schedulerWorkers:   schedulerWorkers,
-		schedulerPoll:      schedulerPoll,
-		schedulerBatchSize: schedulerBatchSize,
+		AdmissionGate: access.NewAdmissionGate(),
+		orchestrator:  orchestrator,
+		scheduler:     scheduler,
+		reader:        reader,
+		health:        health,
+		registry:      reg,
+		policy:        policy,
+		appID:         appID,
+		platformHub:   platformHub,
+		hub:           events,
 	}
 	if platformHub != nil {
 		server.identityResolver = platformHub
@@ -172,33 +112,12 @@ func (s *Server) Handler() http.Handler {
 	return observe.HTTPMiddleware("web_access", access.SecurityHeaders(mux))
 }
 
-func (s *Server) Recover(ctx context.Context) (int, error) {
-	work, err := s.orchestrator.Recoverable(ctx)
-	if err != nil {
-		return 0, err
-	}
-	s.activateScheduler()
-	for _, item := range work {
-		s.queueEcho(ctx, item.Run.EchoID)
-	}
-	if len(work) > 0 {
-		observe.Info(ctx, "已重新调度持久化的排队 Run",
-			observe.StringAttr("app_id", s.appID),
-			observe.IntAttr("run_count", len(work)),
-		)
-	}
-	return len(work), nil
-}
-
 func (s *Server) healthz(writer http.ResponseWriter, request *http.Request) {
 	access.WriteJSON(writer, http.StatusOK, map[string]string{"status": "live"})
 }
 
 func (s *Server) readyz(writer http.ResponseWriter, request *http.Request) {
-	s.activeMu.Lock()
-	accepting := s.accepting
-	s.activeMu.Unlock()
-	if !accepting {
+	if !s.Accepting() {
 		access.WriteJSON(writer, http.StatusServiceUnavailable, map[string]string{"code": "shutting_down", "message": "服务正在关闭"})
 		return
 	}
@@ -252,11 +171,11 @@ func (s *Server) capabilities(writer http.ResponseWriter, request *http.Request)
 }
 
 func (s *Server) createEcho(writer http.ResponseWriter, request *http.Request) {
-	if !s.beginAdmission() {
+	if !s.Begin() {
 		access.WriteJSON(writer, http.StatusServiceUnavailable, map[string]string{"code": "shutting_down", "message": "服务正在关闭"})
 		return
 	}
-	defer s.admissionWG.Done()
+	defer s.Done()
 	webIdentity, authenticated := s.authenticateWeb(writer, request)
 	if !authenticated {
 		return
@@ -267,22 +186,8 @@ func (s *Server) createEcho(writer http.ResponseWriter, request *http.Request) {
 		access.WriteJSON(writer, http.StatusBadRequest, map[string]string{"code": "invalid_idempotency_key", "message": "Idempotency-Key 必须是 1 至 128 位安全字符"})
 		return
 	}
-	request.Body = http.MaxBytesReader(writer, request.Body, 64<<10)
-	decoder := json.NewDecoder(request.Body)
-	decoder.DisallowUnknownFields()
 	var input kernelecho.RunRequest
-	if err := decoder.Decode(&input); err != nil {
-		observe.Warn(request.Context(), "创建 Echo 的请求体解析失败",
-			observe.StringAttr("reason", err.Error()),
-		)
-		access.WriteJSON(writer, http.StatusBadRequest, map[string]string{"code": "invalid_request", "message": "请求体不是有效的 JSON 对象"})
-		return
-	}
-	if err := jsonutil.EnsureEOF(decoder); err != nil {
-		observe.Warn(request.Context(), "创建 Echo 的请求体包含多余内容",
-			observe.StringAttr("reason", err.Error()),
-		)
-		access.WriteJSON(writer, http.StatusBadRequest, map[string]string{"code": "invalid_request", "message": "请求体只能包含一个 JSON 对象"})
+	if !access.DecodeJSONBody(writer, request, &input, 64<<10) {
 		return
 	}
 	input.Message = strings.TrimSpace(input.Message)
@@ -325,7 +230,7 @@ func (s *Server) createEcho(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	if created {
-		s.queueEcho(request.Context(), echoID)
+		s.scheduler.Enqueue(request.Context(), echoID)
 	} else {
 		writer.Header().Set("Idempotency-Replayed", "true")
 	}
@@ -346,214 +251,6 @@ func (s *Server) createEcho(writer http.ResponseWriter, request *http.Request) {
 		"status_url": "/api/v1/echoes/" + echoID,
 		"events_url": "/api/v1/echoes/" + echoID + "/events",
 	})
-}
-
-func (s *Server) queueEcho(parent context.Context, echoID string) {
-	s.activateScheduler()
-	key := echoKey{appID: s.appID, echoID: echoID}
-	runContext := observe.Copy(parent, s.schedulerCtx)
-	s.activeMu.Lock()
-	active := false
-	for run := range s.active {
-		if run.appID == key.appID && run.echoID == key.echoID {
-			active = true
-			break
-		}
-	}
-	if !active {
-		s.pending[key] = runContext
-	}
-	s.activeMu.Unlock()
-	s.signalWork()
-}
-
-func (s *Server) startWorkers() {
-	for worker := 0; worker < s.schedulerWorkers; worker++ {
-		s.workerWG.Add(1)
-		go s.worker()
-	}
-}
-
-func (s *Server) worker() {
-	defer s.workerWG.Done()
-	ticker := time.NewTicker(s.schedulerPoll)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-s.schedulerCtx.Done():
-			return
-		case <-s.workSignal:
-		case <-ticker.C:
-		}
-		for s.runNext() {
-		}
-	}
-}
-
-func (s *Server) activateScheduler() {
-	s.scheduleOnce.Do(func() {
-		s.startWorkers()
-	})
-}
-
-func (s *Server) runNext() bool {
-	work, err := s.orchestrator.Runnable(s.schedulerCtx, s.schedulerBatchSize)
-	if err != nil {
-		if s.schedulerCtx.Err() == nil {
-			observe.Error(s.schedulerCtx, "读取持久 Run 队列失败", err,
-				observe.StringAttr("app_id", s.appID),
-			)
-		}
-		return false
-	}
-	var selected *kernelecho.RunWork
-	var runContext context.Context
-	var cancel context.CancelFunc
-	s.activeMu.Lock()
-	if s.schedulerCtx.Err() == nil {
-		for index := range work {
-			key := runKey{appID: s.appID, echoID: work[index].Run.EchoID, runID: work[index].Run.ID}
-			if _, running := s.active[key]; running {
-				continue
-			}
-			selected = &work[index]
-			base := s.schedulerCtx
-			echo := echoKey{appID: key.appID, echoID: key.echoID}
-			if pendingContext, exists := s.pending[echo]; exists && work[index].Run.ParentRunID == "" {
-				base = observe.Copy(pendingContext, s.schedulerCtx)
-				delete(s.pending, echo)
-			}
-			runContext = observe.With(base,
-				observe.StringAttr("app_id", s.appID),
-				observe.StringAttr("echo_id", key.echoID),
-				observe.StringAttr("run_id", key.runID),
-			)
-			runContext, cancel = context.WithCancel(runContext)
-			s.active[key] = cancel
-			s.activeWG.Add(1)
-			break
-		}
-	}
-	s.activeMu.Unlock()
-	if selected == nil {
-		return false
-	}
-	key := runKey{appID: s.appID, echoID: selected.Run.EchoID, runID: selected.Run.ID}
-	emit := func(event kernelecho.Event) error {
-		s.hub.Publish(event)
-		return nil
-	}
-	runErr := s.orchestrator.RunQueued(runContext, *selected, emit)
-	s.activeMu.Lock()
-	delete(s.active, key)
-	s.activeMu.Unlock()
-	s.finishEchoIfTerminal(runContext, key.echoID)
-	cancel()
-	s.activeWG.Done()
-	if runErr != nil && !errors.Is(runErr, context.Canceled) && !errors.Is(runErr, kernelecho.ErrInvalidTransition) &&
-		!errors.Is(runErr, kernelecho.ErrRunRetryScheduled) {
-		observe.Error(runContext, "持久调度 Run 执行失败", runErr)
-	}
-	s.signalWork()
-	return true
-}
-
-func (s *Server) finishEchoIfTerminal(ctx context.Context, echoID string) {
-	record, _, err := s.reader.GetEcho(ctx, s.appID, echoID)
-	if err != nil {
-		observe.Error(ctx, "Run 结束后读取 Echo 状态失败", err,
-			observe.StringAttr("app_id", s.appID),
-			observe.StringAttr("echo_id", echoID),
-		)
-		return
-	}
-	if record.Status != kernelecho.StatusRunning {
-		s.hub.Finish(s.appID, echoID)
-	}
-}
-
-func (s *Server) signalWork() {
-	select {
-	case s.workSignal <- struct{}{}:
-	default:
-	}
-}
-
-func (s *Server) Shutdown(ctx context.Context) error {
-	s.StopAccepting()
-	admissionDone := make(chan struct{})
-	go func() {
-		s.admissionWG.Wait()
-		close(admissionDone)
-	}()
-	select {
-	case <-admissionDone:
-	case <-ctx.Done():
-		return fmt.Errorf("等待 Echo 接入事务完成：%w", ctx.Err())
-	}
-	s.stopSchedule()
-	s.activeMu.Lock()
-	cancellations := make([]context.CancelFunc, 0, len(s.active))
-	echoIDSet := make(map[string]struct{}, len(s.active)+len(s.pending))
-	for key, cancel := range s.active {
-		cancellations = append(cancellations, cancel)
-		echoIDSet[key.echoID] = struct{}{}
-	}
-	for key := range s.pending {
-		echoIDSet[key.echoID] = struct{}{}
-	}
-	s.activeMu.Unlock()
-	if queued, err := s.orchestrator.Runnable(ctx, 1000); err != nil {
-		return fmt.Errorf("读取关闭时排队 Run：%w", err)
-	} else {
-		for _, item := range queued {
-			echoIDSet[item.Run.EchoID] = struct{}{}
-		}
-	}
-	var cancellationErrors []error
-	for echoID := range echoIDSet {
-		if _, err := s.orchestrator.Cancel(ctx, echoID); err != nil {
-			if !errors.Is(err, kernelecho.ErrInvalidTransition) {
-				cancellationErrors = append(cancellationErrors, fmt.Errorf("持久化取消 Echo %s：%w", echoID, err))
-			}
-		}
-	}
-	for _, cancel := range cancellations {
-		cancel()
-	}
-	done := make(chan struct{})
-	go func() {
-		s.activeWG.Wait()
-		s.workerWG.Wait()
-		close(done)
-	}()
-	select {
-	case <-done:
-		return errors.Join(cancellationErrors...)
-	case <-ctx.Done():
-		return errors.Join(append(cancellationErrors, fmt.Errorf("等待活动 Run 停止：%w", ctx.Err()))...)
-	}
-}
-
-func (s *Server) StopAccepting() {
-	s.activeMu.Lock()
-	s.accepting = false
-	s.activeMu.Unlock()
-}
-
-// Hub 返回共享的 Echo 事件订阅中心，供平台适配器（QQ 等）订阅 Run 事件回发。
-func (s *Server) Hub() *access.EventHub {
-	return s.hub
-}
-
-func (s *Server) beginAdmission() bool {
-	s.activeMu.Lock()
-	defer s.activeMu.Unlock()
-	if !s.accepting {
-		return false
-	}
-	s.admissionWG.Add(1)
-	return true
 }
 
 func (s *Server) getEcho(writer http.ResponseWriter, request *http.Request) {
@@ -623,7 +320,7 @@ func (s *Server) cancelEcho(writer http.ResponseWriter, request *http.Request) {
 		access.WriteJSON(writer, http.StatusNotFound, map[string]string{"code": "echo_not_found", "message": "Echo 不存在"})
 		return
 	}
-	cancelledQueued, err := s.orchestrator.Cancel(request.Context(), echoID)
+	cancelled, err := s.scheduler.Cancel(request.Context(), echoID)
 	if err != nil {
 		if errors.Is(err, kernelecho.ErrInvalidTransition) {
 			access.WriteJSON(writer, http.StatusConflict, map[string]string{"code": "echo_not_running", "message": "Echo 当前不在运行"})
@@ -636,23 +333,12 @@ func (s *Server) cancelEcho(writer http.ResponseWriter, request *http.Request) {
 		access.WriteJSON(writer, http.StatusInternalServerError, map[string]string{"code": "internal_error", "message": "Echo 取消失败"})
 		return
 	}
-	s.activeMu.Lock()
-	cancellations := make([]context.CancelFunc, 0, 2)
-	for key, cancel := range s.active {
-		if key.appID == s.appID && key.echoID == echoID {
-			cancellations = append(cancellations, cancel)
-		}
-	}
-	s.activeMu.Unlock()
-	if len(cancellations) == 0 && !cancelledQueued {
+	if !cancelled {
 		observe.Warn(request.Context(), "无法取消未运行的 Echo",
 			observe.StringAttr("echo_id", echoID),
 		)
 		access.WriteJSON(writer, http.StatusConflict, map[string]string{"code": "echo_not_running", "message": "Echo 当前不在运行"})
 		return
-	}
-	for _, cancel := range cancellations {
-		cancel()
 	}
 	observe.Info(request.Context(), "已请求取消 Echo",
 		observe.StringAttr("echo_id", echoID),

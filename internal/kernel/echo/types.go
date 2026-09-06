@@ -180,30 +180,29 @@ type CapabilityAuditRecord struct {
 	CreatedAt    time.Time       `json:"created_at"`
 }
 
-type Store interface {
+// OrchestratorStore 是 Echo 编排流程使用的持久化端口；查询侧端口由各访问/审计
+// 消费者自行声明，避免把读取能力混入编排写端口。
+type OrchestratorStore interface {
 	idempotency.Store
-	CreateEchoRun(ctx context.Context, echo Record, run RunRecord) error
 	CreateEchoRunIdempotentLimited(ctx context.Context, key, fingerprint string, echo Record, run RunRecord, maxPending int) (string, bool, error)
 	CreateChildRun(ctx context.Context, parent, child RunRecord, maxChildRuns int) error
 	ClaimRun(ctx context.Context, appID, echoID, leaseToken string, startedAt, leaseExpiresAt time.Time) (RunRecord, error)
 	ClaimChildRun(ctx context.Context, appID, echoID, runID, parentRunID, leaseToken string, startedAt, leaseExpiresAt time.Time) (RunRecord, error)
-	FailQueuedChildRun(ctx context.Context, child RunRecord, failure publicerror.Error, completedAt time.Time) error
 	RenewRunLease(ctx context.Context, run RunRecord, renewedAt, leaseExpiresAt time.Time) error
 	AdvanceRunAgentSequence(ctx context.Context, run RunRecord, sequence uint64) error
 	AdvanceRunAgentSequenceWithUsage(ctx context.Context, run RunRecord, sequence, inputTokens, outputTokens, totalTokens, costMicrousd uint64, providerRetries uint32) error
 	// SetRunContext 固化 Run 的上下文摘要与来源版本（每次执行只可设置一次）。
 	SetRunContext(ctx context.Context, run RunRecord, digest string, sources json.RawMessage) error
 	CancelQueuedRun(ctx context.Context, appID, echoID string, completedAt time.Time) (bool, error)
+	CancelQueuedRuns(ctx context.Context, appID string, completedAt time.Time) error
 	RetryRun(ctx context.Context, current, next RunRecord, failure publicerror.Error, completedAt time.Time) error
 	CompleteRun(ctx context.Context, run RunRecord, runStatus, echoStatus, finalMessage string, failure publicerror.Error, completedAt time.Time) error
 	CompleteChildRun(ctx context.Context, run RunRecord, runStatus, resultMessage string, failure publicerror.Error, completedAt time.Time) error
 	AppendEchoEvent(ctx context.Context, event Event) (Event, error)
 	GetEcho(ctx context.Context, appID, echoID string) (Record, []Event, error)
 	GetRun(ctx context.Context, appID, runID string) (RunRecord, error)
-	ListRuns(ctx context.Context, appID, echoID string) ([]RunRecord, error)
 	ListQueuedRuns(ctx context.Context, appID string, limit int) ([]RunWork, error)
 	ListRunnableRuns(ctx context.Context, appID string, now time.Time, limit int) ([]RunWork, error)
 	FailAbandonedRuns(ctx context.Context, appID string, now time.Time) (int64, error)
 	RecordCapabilityCall(ctx context.Context, callID, runID, echoID, appID, capabilityID string, payload []byte, success bool, failure publicerror.Error, duration time.Duration) error
-	ListCapabilityCalls(ctx context.Context, appID, echoID string) ([]CapabilityAuditRecord, error)
 }

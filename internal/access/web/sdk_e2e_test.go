@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/access"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access/web"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime"
@@ -126,8 +127,8 @@ func TestInvokeEndpointRejectsUnknownCapability(t *testing.T) {
 	policy := runtimetest.NewStaticAppPolicy()
 	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{})
 	server := web.NewServer(
-		context.Background(), &fakeOrchestrator{}, nil, nil,
-		reg, policy, campus.AppID, nil,
+		&fakeOrchestrator{}, nil, nil,
+		reg, policy, campus.AppID, nil, testController{}, access.NewEventHub(),
 		web.WithWebAuthenticator(testWebAuthenticator{}),
 		web.WithIdentityResolver(testWebResolver{}),
 		web.WithDispatcher(dispatcher),
@@ -183,8 +184,8 @@ func newCampusE2E(t *testing.T) (*httptest.Server, json.RawMessage) {
 	}
 	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{})
 	server := web.NewServer(
-		context.Background(), &fakeOrchestrator{}, nil, nil,
-		reg, policy, campus.AppID, nil,
+		&fakeOrchestrator{}, nil, nil,
+		reg, policy, campus.AppID, nil, testController{}, access.NewEventHub(),
 		web.WithWebAuthenticator(sdkTestWebAuthenticator{}),
 		web.WithIdentityResolver(testWebResolver{}),
 		web.WithDispatcher(dispatcher),

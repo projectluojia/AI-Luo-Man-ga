@@ -28,29 +28,6 @@ var (
 	permissionIDPattern  = id.Permission
 )
 
-func (s *Store) CreateEchoRun(ctx context.Context, echo kernelecho.Record, run kernelecho.RunRecord) (resultErr error) {
-	started := time.Now()
-	defer func() { observeStorageOperation(ctx, "create_echo_run", started, resultErr) }()
-	if echo.AppID == "" || echo.ID == "" || echo.InputMessage == "" || echo.Status != kernelecho.StatusRunning || echo.CreatedAt.IsZero() {
-		return kernelecho.ErrInvalidEchoRecord
-	}
-	if err := validateNewRun(echo, run); err != nil {
-		return err
-	}
-	tx, err := s.beginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin Echo/Run creation: %w", err)
-	}
-	defer s.finishTx(tx, &resultErr, "create Echo/Run")
-	if err := insertEchoRun(ctx, tx, echo, run); err != nil {
-		return err
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit Echo/Run creation: %w", err)
-	}
-	return nil
-}
-
 func (s *Store) CreateEchoRunIdempotentLimited(
 	ctx context.Context,
 	key string,
@@ -323,34 +300,6 @@ WHERE app_id=? AND run_id=? AND echo_id=? AND parent_run_id=? AND status=?`,
 	return run, nil
 }
 
-func (s *Store) FailQueuedChildRun(ctx context.Context, child kernelecho.RunRecord, failure publicerror.Error, completedAt time.Time) (resultErr error) {
-	started := time.Now()
-	defer func() { observeStorageOperation(ctx, "fail_queued_child_run", started, resultErr) }()
-	if child.AppID == "" || child.ID == "" || child.EchoID == "" || child.ParentRunID == "" ||
-		child.Status != kernelecho.RunStatusQueued || child.LeaseToken != "" || completedAt.IsZero() {
-		return kernelecho.ErrInvalidRunRecord
-	}
-	failure = publicerror.Echo(failure.Code)
-	result, err := s.db.ExecContext(ctx, `
-UPDATE runs
-SET status=?,result_message='',error_code=?,error_message=?,completed_at=?
-WHERE app_id=? AND run_id=? AND echo_id=? AND parent_run_id=? AND status=?`,
-		kernelecho.RunStatusFailed, failure.Code, failure.Message, completedAt.UTC().Format(time.RFC3339Nano),
-		child.AppID, child.ID, child.EchoID, child.ParentRunID, kernelecho.RunStatusQueued,
-	)
-	if err != nil {
-		return fmt.Errorf("fail queued child Run: %w", err)
-	}
-	affected, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("read failed queued child Run row count: %w", err)
-	}
-	if affected != 1 {
-		return kernelecho.ErrInvalidTransition
-	}
-	return nil
-}
-
 func (s *Store) RenewRunLease(ctx context.Context, run kernelecho.RunRecord, renewedAt, leaseExpiresAt time.Time) (resultErr error) {
 	started := time.Now()
 	defer func() { observeStorageOperation(ctx, "renew_run_lease", started, resultErr) }()
@@ -502,6 +451,44 @@ func (s *Store) CancelQueuedRun(ctx context.Context, appID, echoID string, compl
 		return false, fmt.Errorf("commit queued Run cancellation: %w", err)
 	}
 	return true, nil
+}
+
+func (s *Store) CancelQueuedRuns(ctx context.Context, appID string, completedAt time.Time) (resultErr error) {
+	started := time.Now()
+	defer func() { observeStorageOperation(ctx, "cancel_queued_runs", started, resultErr) }()
+	if appID == "" || completedAt.IsZero() {
+		return kernelecho.ErrInvalidRunRecord
+	}
+	tx, err := s.beginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin queued Runs cancellation: %w", err)
+	}
+	defer s.finishTx(tx, &resultErr, "cancel queued Runs")
+	public := publicerror.Echo("cancelled")
+	if _, err := tx.ExecContext(ctx, `
+UPDATE echoes
+SET status=?,final_message='',error_code=?,error_message=?,completed_at=?
+WHERE app_id=? AND status=?
+  AND EXISTS (
+    SELECT 1 FROM runs
+    WHERE runs.app_id=echoes.app_id AND runs.echo_id=echoes.echo_id AND runs.status=?
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM runs
+    WHERE runs.app_id=echoes.app_id AND runs.echo_id=echoes.echo_id AND runs.status=?
+  )`,
+		kernelecho.StatusCancelled, public.Code, public.Message, completedAt.UTC().Format(time.RFC3339Nano),
+		appID, kernelecho.StatusRunning, kernelecho.RunStatusQueued, kernelecho.RunStatusRunning); err != nil {
+		return fmt.Errorf("cancel queued Echoes: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+UPDATE runs SET status=?,error_code=?,error_message=?,completed_at=?
+WHERE app_id=? AND status=?`,
+		kernelecho.RunStatusCancelled, public.Code, public.Message, completedAt.UTC().Format(time.RFC3339Nano),
+		appID, kernelecho.RunStatusQueued); err != nil {
+		return fmt.Errorf("cancel queued Runs: %w", err)
+	}
+	return tx.Commit()
 }
 
 func (s *Store) RetryRun(ctx context.Context, current, next kernelecho.RunRecord, failure publicerror.Error, completedAt time.Time) (resultErr error) {
@@ -1118,10 +1105,6 @@ SELECT
   coalesce(session_id,''),coalesce(user_id,''),coalesce(message_id,''),coalesce(context_digest,''),coalesce(context_sources,'{}'),
   coalesce(channel,''),coalesce(task_message,'')
 FROM runs`
-
-type rowScanner interface {
-	Scan(dest ...any) error
-}
 
 func queryRun(scanner rowScanner) (kernelecho.RunRecord, error) {
 	var run kernelecho.RunRecord

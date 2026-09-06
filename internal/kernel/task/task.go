@@ -60,8 +60,6 @@ var (
 	ErrLeaseLost           = errors.New("task execution lease was lost")
 )
 
-var taskIDPattern = id.StableMixed
-
 const (
 	maxTaskIDBytes  = 128
 	maxTypeIDBytes  = 128
@@ -95,7 +93,7 @@ func ValidateNewTask(value Task) error {
 	if err := appconfig.ValidateAppID(value.AppID); err != nil {
 		return errors.Join(ErrInvalidTask, err)
 	}
-	if len(value.TaskID) == 0 || len(value.TaskID) > maxTaskIDBytes || !taskIDPattern.MatchString(value.TaskID) {
+	if len(value.TaskID) == 0 || len(value.TaskID) > maxTaskIDBytes || !id.StableMixed.MatchString(value.TaskID) {
 		return fmt.Errorf("%w: 非法 task_id", ErrInvalidTask)
 	}
 	if len(value.Type) == 0 || len(value.Type) > maxTypeIDBytes {
