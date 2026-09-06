@@ -107,8 +107,16 @@ func invokeRequest(id string) *runtimev1.InvokeRequest {
 func newProtocolServer(t *testing.T, backend *fakeRuntimeBackend, maxRuntimes, maxConcurrent int) *loader.RuntimeHostProtocolServer {
 	t.Helper()
 	server, err := loader.NewRuntimeHostProtocolServer(loader.RuntimeHostServerConfig{
-		Mode: loader.ModeHosted, Backend: backend,
-		MaxRuntimes: maxRuntimes, MaxConcurrent: maxConcurrent,
+		Mode: loader.ModeHosted, Backend: backend, AllowedRuntimes: []loader.BackendIdentity{
+			{ID: "hosted.server", Version: "1.2.3"},
+			{ID: "hosted.one", Version: "1.2.3"},
+			{ID: "hosted.two", Version: "1.2.3"},
+			{ID: "hosted.invalid", Version: "1.2.3"},
+			{ID: "hosted.drain", Version: "1.2.3"},
+			{ID: "hosted.secret", Version: "1.2.3"},
+			{ID: testPackageID, Version: "1.2.3"},
+			{ID: "busy.host", Version: "1.2.3"},
+		}, MaxRuntimes: maxRuntimes, MaxConcurrent: maxConcurrent,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -289,7 +297,7 @@ func TestRuntimeHostServesHostedArtifactOverProtocol(t *testing.T) {
 		t.Fatal(err)
 	}
 	protocolServer, err := loader.NewRuntimeHostProtocolServer(loader.RuntimeHostServerConfig{
-		Mode: loader.ModeHosted, Backend: backend, MaxRuntimes: 2, MaxConcurrent: 2,
+		Mode: loader.ModeHosted, Backend: backend, AllowedRuntimes: []loader.BackendIdentity{{ID: testPackageID, Version: "1.2.3"}}, MaxRuntimes: 2, MaxConcurrent: 2,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -341,7 +349,7 @@ func TestRuntimeHostEnforcesExecutionBudgetOverProtocol(t *testing.T) {
 		t.Fatal(err)
 	}
 	protocolServer, err := loader.NewRuntimeHostProtocolServer(loader.RuntimeHostServerConfig{
-		Mode: loader.ModeHosted, Backend: backend, MaxRuntimes: 1, MaxConcurrent: 1,
+		Mode: loader.ModeHosted, Backend: backend, AllowedRuntimes: []loader.BackendIdentity{{ID: "busy.host", Version: "1.2.3"}}, MaxRuntimes: 1, MaxConcurrent: 1,
 	})
 	if err != nil {
 		t.Fatal(err)

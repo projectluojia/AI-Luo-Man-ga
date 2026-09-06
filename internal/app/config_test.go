@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -14,6 +15,8 @@ import (
 
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/capability"
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packagecontract"
+	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packageio"
+	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/projectcontract"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access/configui"
 	kernelecho "github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
@@ -80,7 +83,9 @@ func TestConfigureInstalledRuntimesAllowsEmptySecureCatalog(t *testing.T) {
 	if err := os.Chmod(root, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	hosts, records, err := configureInstalledRuntimes(t.Context(), config{runtimeInstallRoot: root}, nil)
+	projectRoot := t.TempDir()
+	writeEmptyProject(t, projectRoot)
+	hosts, records, err := configureInstalledRuntimes(t.Context(), config{projectRoot: projectRoot, runtimeInstallRoot: root}, nil)
 	if err != nil {
 		t.Fatalf("configure empty catalog: %v", err)
 	}
@@ -91,11 +96,13 @@ func TestConfigureInstalledRuntimesAllowsEmptySecureCatalog(t *testing.T) {
 
 func TestConfigureInstalledRuntimesRegistersHostedCatalog(t *testing.T) {
 	root := writeInstalledFixture(t)
-	if _, _, err := configureInstalledRuntimes(t.Context(), config{runtimeInstallRoot: root}, nil); err == nil || !strings.Contains(err.Error(), "AILUO_RUNTIME_HOST_ADDRESS") {
+	projectRoot := t.TempDir()
+	writeProjectLock(t, projectRoot, root)
+	if _, _, err := configureInstalledRuntimes(t.Context(), config{projectRoot: projectRoot, runtimeInstallRoot: root}, nil); err == nil || !strings.Contains(err.Error(), "AILUO_RUNTIME_HOST_ADDRESS") {
 		t.Fatalf("missing hosted address error=%v", err)
 	}
 	hosts, records, err := configureInstalledRuntimes(t.Context(), config{
-		runtimeInstallRoot: root, runtimeHostAddress: "unix:" + filepath.Join(root, "host.sock"),
+		projectRoot: projectRoot, runtimeInstallRoot: root, runtimeHostAddress: "unix:" + filepath.Join(root, "host.sock"),
 	}, nil)
 	if err != nil {
 		t.Fatalf("configure hosted catalog: %v", err)
@@ -126,13 +133,91 @@ func TestConfigureInstalledRuntimesRegistersHostedCatalog(t *testing.T) {
 	}
 }
 
+func TestConfigureInstalledRuntimesIgnoresUnlistedInstalledPackages(t *testing.T) {
+	root := writeInstalledFixture(t)
+	writeInstalledPackage(t, root, "extra.extension")
+	projectRoot := t.TempDir()
+	writeProjectLock(t, projectRoot, root)
+	hosts, records, err := configureInstalledRuntimes(t.Context(), config{
+		projectRoot: projectRoot, runtimeInstallRoot: root,
+		runtimeHostAddress: "unix:" + filepath.Join(root, "host.sock"),
+	}, nil)
+	if err != nil {
+		t.Fatalf("configure locked catalog: %v", err)
+	}
+	if len(hosts) != 1 || len(records) != 1 || records[0].PackageID != "main.extension" {
+		t.Fatalf("hosts=%d records=%+v, want only locked package", len(hosts), records)
+	}
+}
+
+func writeEmptyProject(t *testing.T, projectRoot string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(projectRoot, "ailuo.toml"), []byte("[project]\nid = \"ailuo\"\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	writeProjectLock(t, projectRoot, "")
+}
+
+func writeProjectLock(t *testing.T, projectRoot, installRoot string) {
+	t.Helper()
+	manifestPath := filepath.Join(projectRoot, "ailuo.toml")
+	if _, err := os.Stat(manifestPath); errors.Is(err, os.ErrNotExist) {
+		if err := os.WriteFile(manifestPath, []byte("[project]\nid = \"ailuo\"\n"), 0o640); err != nil {
+			t.Fatal(err)
+		}
+	}
+	manifestSHA, err := packageio.HashFile(t.Context(), manifestPath, packagecontract.MaxManifestBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock := projectcontract.Lock{
+		SchemaVersion: projectcontract.SchemaVersion, ProjectID: "ailuo", ProjectManifestSHA256: manifestSHA,
+	}
+	if installRoot != "" {
+		directory := filepath.Join(installRoot, "main.extension")
+		packageManifestSHA, err := packageio.HashFile(t.Context(), filepath.Join(directory, "manifest.json"), packagecontract.MaxManifestBytes)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lockBytes, err := os.ReadFile(filepath.Join(directory, "lock.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var packageLock packagecontract.Lock
+		if err := packagecontract.DecodeStrictJSON(lockBytes, &packageLock); err != nil {
+			t.Fatal(err)
+		}
+		packageLockSHA, err := packageio.CanonicalLockDigest(t.Context(), directory, packageLock)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lock.Packages = []projectcontract.LockedPackage{{
+			ID: "main.extension", Version: "1.0.0", Source: "github:owner/main-extension",
+			ManifestSHA256: packageManifestSHA, LockSHA256: packageLockSHA,
+		}}
+	}
+	encoded, err := json.Marshal(lock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectRoot, "ailuo.lock"), encoded, 0o640); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func writeInstalledFixture(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
+	writeInstalledPackage(t, root, "main.extension")
+	return root
+}
+
+func writeInstalledPackage(t *testing.T, root, packageID string) {
+	t.Helper()
 	if err := os.Chmod(root, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	directory := filepath.Join(root, "main.extension")
+	directory := filepath.Join(root, packageID)
 	if err := os.Mkdir(directory, 0o750); err != nil {
 		t.Fatal(err)
 	}
@@ -176,5 +261,4 @@ func writeInstalledFixture(t *testing.T) string {
 	if err := os.WriteFile(filepath.Join(directory, "lock.json"), lockBytes, 0o640); err != nil {
 		t.Fatal(err)
 	}
-	return root
 }
