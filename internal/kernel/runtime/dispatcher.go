@@ -118,6 +118,14 @@ func (d *Dispatcher) route(
 		observe.Warn(ctx, "Registry 中未找到 Capability 路由", observe.StringAttr("error", err.Error()))
 		return nil, err
 	}
+	// Schema 校验先于授权：ResourceIDFrom 提取和预算检查都以合法载荷为前提，
+	// 畸形输入必须稳定映射到 400 invalid_input，而不是被授权错误吞成 403。
+	if err := d.registry.ValidateCapabilityInput(spec.ID, payload); err != nil {
+		observe.Warn(ctx, "输入未通过 Capability Schema 校验",
+			observe.StringAttr("error_class", "validation"),
+		)
+		return nil, err
+	}
 	decision, err := authorization.Authorize(ctx, spec, authorization.Request{
 		AppID: request.AppID, Principal: principal(request.UserID), RunID: request.RunID,
 		CapabilityID: spec.ID, Payload: payload, Now: time.Now().UTC(),
@@ -142,12 +150,6 @@ func (d *Dispatcher) route(
 		}); err != nil {
 			return nil, fmt.Errorf("%w: target=%q", ErrConfirmationRequired, spec.ID)
 		}
-	}
-	if err := d.registry.ValidateCapabilityInput(spec.ID, payload); err != nil {
-		observe.Warn(ctx, "输入未通过 Capability Schema 校验",
-			observe.StringAttr("error_class", "validation"),
-		)
-		return nil, err
 	}
 	child, fingerprint, err := d.childRequest(request, spec.ID, spec.Version, payload)
 	if err != nil {

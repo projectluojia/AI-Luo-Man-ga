@@ -200,12 +200,12 @@ func authorizeStoreOperation(request contracts.RequestContext, operation string,
 	if !ok {
 		return ErrAccessDenied
 	}
-	switch spec.Execution.EffectTarget {
-	case capability.EffectNone, capability.EffectState, capability.EffectExternal:
-	default:
-		return ErrAccessDenied
-	}
-	if operation != OpPut && operation != OpDelete {
+	if spec.Execution.EffectTarget != capability.EffectState && spec.Execution.EffectTarget != capability.EffectExternal {
+		// EffectNone 承诺无副作用：读可以放行，写（Put/Delete）一律拒绝，
+		// 不因幂等键/确认满足而破例。
+		if operation == OpPut || operation == OpDelete {
+			return ErrAccessDenied
+		}
 		return nil
 	}
 	if spec.Execution.Replay != capability.ReplayIdempotencyKey || request.IdempotencyKey == "" ||

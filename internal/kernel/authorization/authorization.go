@@ -90,7 +90,9 @@ func Authorize(ctx context.Context, spec capability.CapabilitySpec, request Requ
 			}
 		}
 		if request.CallsUsed >= grant.MaxCalls || grant.MaxCostMicrousd != 0 && request.CostUsed >= grant.MaxCostMicrousd {
-			return Decision{}, errors.Join(ErrDenied, ErrBudgetExceeded)
+			// 预算耗尽的 Grant 跳过，继续尝试后续匹配 Grant；NormalizeGrant
+			// 已拒绝 MaxCalls==0，不会在这里形成无意义循环。
+			continue
 		}
 		return Decision{
 			Grant:               grant,

@@ -41,3 +41,31 @@ func TestDispatcherAuthorizesConcreteResource(t *testing.T) {
 		t.Fatalf("unauthorized resource error=%v", err)
 	}
 }
+
+// TestDispatcherValidatesSchemaBeforeAuthorization 验证 Schema 校验先于授权：
+// 载荷畸形时即使 Grant 也不匹配，也必须返回 Schema 校验错误（HTTP 400
+// invalid_input），而不是被授权错误吞成 permission_denied（403）。
+func TestDispatcherValidatesSchemaBeforeAuthorization(t *testing.T) {
+	reg := registry.New()
+	if err := reg.Register(registry.CapabilityRegistration{
+		Spec: capability.CapabilitySpec{
+			ID: "library.book.get", Version: "1.0.0", Name: "查看图书",
+			InputSchemaJSON: `{"type":"object","required":["book_id"],"additionalProperties":false,"properties":{"book_id":{"type":"string"}}}`,
+			Authorization:   capability.AuthorizationSpec{ResourceType: "library.book", ResourceIDFrom: "/book_id"},
+			Execution:       capability.ExecutionSpec{EffectTarget: capability.EffectNone, Replay: capability.ReplaySafe, ConfirmationFloor: capability.ConfirmationPolicy},
+		},
+		Handler: func(context.Context, contracts.RequestContext, json.RawMessage) (json.RawMessage, error) {
+			return json.RawMessage(`{"ok":true}`), nil
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	policy := runtimetest.NewStaticAppPolicy()
+	// 故意不授权该 Capability：授权必然拒绝，但畸形载荷应先被 Schema 拦下。
+	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{})
+	request := contracts.RequestContext{AppID: "app", EchoID: "echo", RequestID: "request", UserID: "alice", Deadline: time.Now().Add(time.Minute)}
+	_, err := dispatcher.InvokeCapability(t.Context(), request, "library.book.get", []byte(`{"book_id":123}`))
+	if !errors.Is(err, registry.ErrSchemaValidation) {
+		t.Fatalf("malformed payload error=%v, want ErrSchemaValidation", err)
+	}
+}

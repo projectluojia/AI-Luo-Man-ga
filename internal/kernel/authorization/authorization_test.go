@@ -108,3 +108,33 @@ func TestGrantSubsetRejectsChangingAudience(t *testing.T) {
 		t.Fatal("child changed a parent-bound audience")
 	}
 }
+
+// TestAuthorizeSkipsBudgetExhaustedGrantForNextMatch 验证预算耗尽的 Grant
+// 被跳过后继续尝试同 Capability 的后续匹配 Grant。
+func TestAuthorizeSkipsBudgetExhaustedGrantForNextMatch(t *testing.T) {
+	exhausted := authorizationGrant()
+	exhausted.MaxCalls = 2
+	fresh := exhausted
+	fresh.ID = "grant-2"
+	fresh.MaxCalls = 4
+	decision, err := Authorize(context.Background(), authorizationSpec("/book_id"), Request{
+		AppID: "campus-services", Principal: "user-alice", RunID: "run-1",
+		CapabilityID: "library.book.get", Payload: []byte(`{"book_id":"book-1"}`),
+		CallsUsed: 2,
+	}, []capability.Grant{exhausted, fresh}, nil)
+	if err != nil {
+		t.Fatalf("budget-exhausted grant blocked next match: %v", err)
+	}
+	if decision.Grant.ID != "grant-2" {
+		t.Fatalf("selected grant=%s, want grant-2", decision.Grant.ID)
+	}
+	// 所有匹配 Grant 都耗尽时仍必须拒绝。
+	_, err = Authorize(context.Background(), authorizationSpec("/book_id"), Request{
+		AppID: "campus-services", Principal: "user-alice", RunID: "run-1",
+		CapabilityID: "library.book.get", Payload: []byte(`{"book_id":"book-1"}`),
+		CallsUsed: 4,
+	}, []capability.Grant{exhausted, fresh}, nil)
+	if !errors.Is(err, ErrDenied) {
+		t.Fatalf("all grants exhausted error=%v, want ErrDenied", err)
+	}
+}

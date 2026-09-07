@@ -473,6 +473,17 @@ func TestInstallRejectsRelativeSourceDirectory(t *testing.T) {
 	}
 }
 
+// 空源路径经 filepath.Abs 会解析为调用方 CWD：若 CWD 恰好是包目录，Install/
+// Inspect 可能装入错误的包，必须在解析前 fail closed 拒绝。
+func TestInstallAndInspectRejectEmptySource(t *testing.T) {
+	if _, err := packmgr.Install(context.Background(), t.TempDir(), ""); err == nil {
+		t.Fatal("Install accepted an empty source path")
+	}
+	if _, _, err := packmgr.Inspect(context.Background(), ""); err == nil {
+		t.Fatal("Inspect accepted an empty source path")
+	}
+}
+
 func TestUpgradeAcceptsPackagedTarball(t *testing.T) {
 	ctx := context.Background()
 	root := packageiotest.TempDir(t)

@@ -132,6 +132,32 @@ func TestHostWriteRequiresWriteCapabilityAndIdempotency(t *testing.T) {
 	}
 }
 
+// TestHostEffectNoneCapabilityCannotWrite 验证 EffectNone Capability 即使声明
+// 幂等键 Replay 也无法执行写操作（无副作用承诺不被幂等/确认绕过）。
+func TestHostEffectNoneCapabilityCannotWrite(t *testing.T) {
+	docs := memory.NewDocuments()
+	sideEffectFree := capability.CapabilitySpec{
+		ID: "test.none.idempotent", Version: "1.0.0", Name: "无副作用但幂等键",
+		InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
+		Authorization:   capability.AuthorizationSpec{ResourceType: "capability.resource"},
+		Execution:       capability.ExecutionSpec{EffectTarget: capability.EffectNone, Replay: capability.ReplayIdempotencyKey, ConfirmationFloor: capability.ConfirmationPolicy},
+	}
+	functions := packstore.HostFunctions(docs, "test", "test/pkg", append(testCapabilities(), sideEffectFree))
+	putFn := hostFunctionByName(functions, packstore.OpPut)
+	deleteFn := hostFunctionByName(functions, packstore.OpDelete)
+	payload := []byte(`{"collection":"routes","id":"route-a","doc":{"name":"A"}}`)
+	if _, err := putFn.Call(context.Background(), contracts.RequestContext{
+		AppID: "app-a", CapabilityID: "test.none.idempotent", IdempotencyKey: "call-1",
+	}, payload); !errors.Is(err, packstore.ErrAccessDenied) {
+		t.Fatalf("EffectNone put error=%v, want ErrAccessDenied", err)
+	}
+	if _, err := deleteFn.Call(context.Background(), contracts.RequestContext{
+		AppID: "app-a", CapabilityID: "test.none.idempotent", IdempotencyKey: "call-2",
+	}, []byte(`{"collection":"routes","id":"route-a"}`)); !errors.Is(err, packstore.ErrAccessDenied) {
+		t.Fatalf("EffectNone delete error=%v, want ErrAccessDenied", err)
+	}
+}
+
 func TestHostRejectsNamespaceOwnedByAnotherPackage(t *testing.T) {
 	docs := memory.NewDocuments()
 	listFn := hostFunctionByName(packstore.HostFunctions(docs, "test", "other/pkg", testCapabilities()), packstore.OpList)

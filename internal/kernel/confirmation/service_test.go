@@ -729,7 +729,7 @@ func TestDispatcherRejectsUnapprovedConfirmation(t *testing.T) {
 	registerCapability(t, reg, capability.CapabilitySpec{
 		ID:              "external-capability",
 		Version:         "1.0.0",
-		InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
+		InputSchemaJSON: `{"type":"object","properties":{"value":{"type":"integer"}},"additionalProperties":false}`,
 		Authorization:   capability.AuthorizationSpec{ResourceType: "capability.resource"},
 		Execution:       capability.ExecutionSpec{EffectTarget: capability.EffectExternal, Replay: capability.ReplayIdempotencyKey, ConfirmationFloor: capability.ConfirmationRequired},
 	}, func(context.Context, contracts.RequestContext, json.RawMessage) (json.RawMessage, error) {

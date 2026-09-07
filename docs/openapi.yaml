@@ -2,7 +2,13 @@ openapi: 3.1.0
 info:
   title: AI珞（爱珞） V3 Web Access API
   version: 2.0.0
-  description: Every HTTP response carries X-Request-ID, X-Trace-ID, and a W3C traceparent. An incoming W3C traceparent is validated and continued; a missing or invalid value starts a new trace root.
+  description: >-
+    Every HTTP response carries X-Request-ID, X-Trace-ID, and a W3C traceparent.
+    An incoming W3C traceparent is validated and continued; a missing or invalid
+    value starts a new trace root. This is a pre-GA contract: the v1 capability
+    model was reset to Package → Component → Capability with structured
+    authorization/execution specs (refactor(auth)!, BREAKING CHANGE). No v1
+    client compatibility layer is maintained; deployments must migrate together.
 servers:
   - url: https://api.example.invalid
     description: Example HTTPS endpoint; deployments must replace this hostname with their real production endpoint.

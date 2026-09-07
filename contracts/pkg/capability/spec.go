@@ -135,10 +135,12 @@ func NormalizeGrant(grant Grant) (Grant, error) {
 }
 
 // GrantSubset 判断 child 是否不会扩大 parent 的权限。
+// parent 未绑定 Audience 时不限制 child 的 Audience（App 级 Grant 的
+// Audience 为空，attenuate 到具体 Run 前不能被它挡住）。
 func GrantSubset(child, parent Grant) bool {
 	if child.AppID != parent.AppID || child.Principal != parent.Principal ||
 		child.CapabilityID != parent.CapabilityID || child.Resource.Type != parent.Resource.Type ||
-		child.Resource.Relation != parent.Resource.Relation || child.Audience == "" ||
+		child.Resource.Relation != parent.Resource.Relation ||
 		parent.Audience != "" && child.Audience != parent.Audience ||
 		parent.MaxCalls < child.MaxCalls || child.ExpiresAt.After(parent.ExpiresAt) ||
 		(!parent.NotBefore.IsZero() && child.NotBefore.Before(parent.NotBefore)) ||

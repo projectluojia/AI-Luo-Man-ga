@@ -62,3 +62,33 @@ func TestNarrowGrantRejectsEmptyResourceScopeAgainstBoundedParent(t *testing.T) 
 		t.Fatal("unbounded resource request unexpectedly succeeded")
 	}
 }
+
+// TestGrantSubsetAllowsAudienceUnderUnboundParent 验证 App 级 Grant（Audience
+// 为空）可以收窄到绑定具体 Run 的 child Grant；绑定后仍要求 Audience 一致。
+func TestGrantSubsetAllowsAudienceUnderUnboundParent(t *testing.T) {
+	unbound := testGrant()
+	unbound.Audience = ""
+	parent, err := NormalizeGrant(unbound)
+	if err != nil {
+		t.Fatal(err)
+	}
+	child := parent
+	child.ID = "grant-2"
+	if !GrantSubset(child, parent) {
+		t.Fatal("unbound parent rejected same-audience child")
+	}
+	child.Audience = "run-9"
+	if !GrantSubset(child, parent) {
+		t.Fatal("unbound parent rejected bound child audience")
+	}
+	bound := parent
+	bound.Audience = "run-1"
+	if _, err := NormalizeGrant(bound); err != nil {
+		t.Fatal(err)
+	}
+	mismatch := child
+	mismatch.Audience = "run-9"
+	if GrantSubset(mismatch, bound) {
+		t.Fatal("bound parent accepted mismatched audience")
+	}
+}

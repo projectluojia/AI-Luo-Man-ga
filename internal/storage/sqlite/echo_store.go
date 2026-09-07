@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -1115,8 +1116,20 @@ func validCanonicalGrants(values []capability.Grant, maximum int) bool {
 		return false
 	}
 	for index, value := range values {
+		// 与完整规范化结果逐字段比较：NormalizeGrant 还会排序 Resource.IDs，
+		// 只比 ID 会漏放未排序的 ID 集合，导致非规范形态被持久化或读出。
+		// Grant 含切片字段，不能直接 ==，IDs 用 slices.Equal 比较。
 		grant, err := capability.NormalizeGrant(value)
-		if err != nil || grant.ID != value.ID ||
+		if err != nil || grant.ID != value.ID || grant.AppID != value.AppID ||
+			grant.Principal != value.Principal || grant.CapabilityID != value.CapabilityID ||
+			grant.Resource.Type != value.Resource.Type ||
+			!slices.Equal(grant.Resource.IDs, value.Resource.IDs) ||
+			grant.Resource.Relation != value.Resource.Relation ||
+			!grant.NotBefore.Equal(value.NotBefore) || !grant.ExpiresAt.Equal(value.ExpiresAt) ||
+			grant.MaxCalls != value.MaxCalls || grant.MaxCostMicrousd != value.MaxCostMicrousd ||
+			grant.Audience != value.Audience || grant.Delegable != value.Delegable ||
+			grant.MaxDelegationDepth != value.MaxDelegationDepth ||
+			grant.PolicyRevision != value.PolicyRevision ||
 			(index > 0 && values[index-1].ID >= value.ID) {
 			return false
 		}
