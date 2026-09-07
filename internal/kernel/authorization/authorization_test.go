@@ -138,3 +138,26 @@ func TestAuthorizeSkipsBudgetExhaustedGrantForNextMatch(t *testing.T) {
 		t.Fatalf("all grants exhausted error=%v, want ErrDenied", err)
 	}
 }
+
+// MaxCalls 按 Capability 各自计数：传给 Authorize 的 CallsUsed 必须是当前
+// Capability 的已调用次数，而不是 Run 内全局调用序号（其它 Capability 的
+// 调用不消耗本 Grant 的额度）。
+func TestAuthorizeCountsCallsPerCapability(t *testing.T) {
+	for callsUsed := uint32(0); callsUsed < 2; callsUsed++ {
+		if _, err := Authorize(context.Background(), authorizationSpec("/book_id"), Request{
+			AppID: "campus-services", Principal: "user-alice", RunID: "run-1",
+			CapabilityID: "library.book.get", Payload: []byte(`{"book_id":"book-1"}`),
+			Now: time.Now(), CallsUsed: callsUsed,
+		}, []capability.Grant{authorizationGrant()}, nil); err != nil {
+			t.Fatalf("callsUsed=%d rejected: %v", callsUsed, err)
+		}
+	}
+	// 唯一匹配 Grant 预算耗尽时没有后续 Grant 可选，统一归入 ErrDenied。
+	if _, err := Authorize(context.Background(), authorizationSpec("/book_id"), Request{
+		AppID: "campus-services", Principal: "user-alice", RunID: "run-1",
+		CapabilityID: "library.book.get", Payload: []byte(`{"book_id":"book-1"}`),
+		Now: time.Now(), CallsUsed: 2,
+	}, []capability.Grant{authorizationGrant()}, nil); !errors.Is(err, ErrDenied) {
+		t.Fatalf("third call within MaxCalls=2 accepted: %v", err)
+	}
+}

@@ -17,7 +17,6 @@ var (
 	ErrInvalidResource         = errors.New("capability resource binding is invalid")
 	ErrPrincipalRequired       = errors.New("capability requires an authenticated principal")
 	ErrRelationshipUnavailable = errors.New("capability relationship data is unavailable")
-	ErrBudgetExceeded          = errors.New("capability grant budget exceeded")
 )
 
 // Request 是一次 Capability 授权判断的 PARC 请求。

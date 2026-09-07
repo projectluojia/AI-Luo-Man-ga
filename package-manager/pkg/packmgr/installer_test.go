@@ -451,9 +451,10 @@ func TestUpgradeAndUninstall(t *testing.T) {
 	}
 }
 
-// 相对源目录依赖调用方 CWD，无法纳入安全边界校验：Install 必须 fail closed，
-// 要求调用方提供绝对路径。
-func TestInstallRejectsRelativeSourceDirectory(t *testing.T) {
+// 相对源目录在 unpackSource 入口统一解析为绝对路径（与 projectmgr 一致），
+// 后续 os.Stat 与安全边界校验都作用在解析后的节点上：Install 必须接受相对
+// 路径，行为与绝对路径源完全一致。
+func TestInstallAcceptsRelativeSourceDirectory(t *testing.T) {
 	source, err := os.MkdirTemp(".", ".test-relative-")
 	if err != nil {
 		t.Fatal(err)
@@ -468,8 +469,8 @@ func TestInstallRejectsRelativeSourceDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := packmgr.Install(context.Background(), t.TempDir(), relative); err == nil {
-		t.Fatal("Install accepted a relative source directory")
+	if _, err := packmgr.Install(context.Background(), packageiotest.TempDir(t), relative); err != nil {
+		t.Fatalf("Install rejected a relative source directory: %v", err)
 	}
 }
 
