@@ -15,22 +15,26 @@ var (
 // RequestContext 是所有内核治理调用必须传递的安全与可观测上下文。
 // 面向公共校园服务时 UserID 可以为空，但 App、Echo 和请求标识仍不可缺失。
 type RequestContext struct {
-	AppID           string
-	EchoID          string
-	RequestID       string
-	TraceID         string
-	UserID          string
-	SessionID       string
-	RunID           string
-	ParentRunID     string
-	CallID          string
-	CallDepth       uint16
-	Deadline        time.Time
-	IdempotencyKey  string
-	ConfirmationID  string
-	ProtocolVersion string
-	CapabilityID    string
-	CallChain       []string
+	AppID               string
+	EchoID              string
+	RequestID           string
+	TraceID             string
+	UserID              string
+	SessionID           string
+	RunID               string
+	ParentRunID         string
+	CallID              string
+	CallDepth           uint16
+	Deadline            time.Time
+	IdempotencyKey      string
+	ConfirmationID      string
+	ProtocolVersion     string
+	CapabilityID        string
+	CallChain           []string
+	CapabilityCallsUsed uint32 `json:"-"`
+	CapabilityCostUsed  uint64 `json:"-"`
+	// LeaseToken 仅供 Core 内部的 child Run 创建器校验，不会投影到外部协议。
+	LeaseToken string `json:"-"`
 }
 
 func (c RequestContext) Validate(now time.Time) error {

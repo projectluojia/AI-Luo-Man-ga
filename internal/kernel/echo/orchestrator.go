@@ -26,15 +26,16 @@ import (
 )
 
 var (
-	ErrEmptyMessage         = errors.New("message is required")
-	ErrExecutorRunFailed    = errors.New("executor run failed")
-	ErrNoFinalResult        = errors.New("executor stream ended without final message")
-	ErrOutputBudgetExceeded = errors.New("executor output exceeds run budget")
-	ErrRunInputMismatch     = errors.New("run input does not match persisted Echo")
-	ErrRunConfigUnavailable = errors.New("persisted run configuration is unavailable")
-	ErrMessageTooLong       = errors.New("message exceeds the maximum length")
-	ErrAppConfigUnavailable = errors.New("app configuration is unavailable")
-	ErrAppDisabled          = errors.New("app is disabled")
+	ErrEmptyMessage             = errors.New("message is required")
+	ErrExecutorRunFailed        = errors.New("executor run failed")
+	ErrNoFinalResult            = errors.New("executor stream ended without final message")
+	ErrOutputBudgetExceeded     = errors.New("executor output exceeds run budget")
+	ErrCapabilityBudgetExceeded = errors.New("executor Capability call budget exceeded")
+	ErrRunInputMismatch         = errors.New("run input does not match persisted Echo")
+	ErrRunConfigUnavailable     = errors.New("persisted run configuration is unavailable")
+	ErrMessageTooLong           = errors.New("message exceeds the maximum length")
+	ErrAppConfigUnavailable     = errors.New("app configuration is unavailable")
+	ErrAppDisabled              = errors.New("app is disabled")
 )
 
 type EventEmitter func(Event) error
@@ -94,7 +95,7 @@ func NewOrchestrator(
 		config.QueueCapacity = 128
 	}
 	if ports.Idempotency == nil || ports.Creation == nil || ports.Execution == nil ||
-		ports.Recovery == nil || ports.Cancellation == nil || ports.Events == nil || ports.Audit == nil {
+		ports.Children == nil || ports.Recovery == nil || ports.Cancellation == nil || ports.Events == nil || ports.Audit == nil {
 		panic("orchestrator storage ports are incomplete")
 	}
 	if config.AppConfigSource == nil {
@@ -141,12 +142,18 @@ func (o *Orchestrator) appConfigRevision(ctx context.Context, revision string) (
 	return config, nil
 }
 
+// runMatchesAppConfig 校验 Run 与其创建时锁定的配置修订一致，且全部预算
+// 不超过该修订的上限。root Run 的预算按配置原样写入（相等），child Run 的
+// 预算是父 Run 的收窄结果（≤ 上限），同一规则同时覆盖两类来源。
+// 复核发生在 claim 之后：防止持久层记录被篡改或在配置修订回退后继续执行。
 func runMatchesAppConfig(run RunRecord, config appconfig.Config) bool {
 	return run.ConfigRevision == config.Revision && run.ExecutorID == config.ExecutorID &&
-		run.MaxSteps == config.MaxSteps && run.MaxCapabilityCalls == config.MaxCapabilityCalls &&
-		run.MaxExecutionUnits == config.MaxExecutionUnits && run.MaxOutputBytes == config.MaxOutputBytes &&
-		run.MaxCostMicrousd == config.MaxCostMicrousd &&
-		run.ExecutionTimeoutMS == uint32(config.ExecutionTimeout.Milliseconds())
+		run.MaxSteps > 0 && run.MaxSteps <= config.MaxSteps &&
+		run.MaxCapabilityCalls > 0 && run.MaxCapabilityCalls <= config.MaxCapabilityCalls &&
+		run.MaxExecutionUnits > 0 && run.MaxExecutionUnits <= config.MaxExecutionUnits &&
+		run.MaxOutputBytes > 0 && run.MaxOutputBytes <= config.MaxOutputBytes &&
+		run.MaxCostMicrousd <= config.MaxCostMicrousd &&
+		run.ExecutionTimeoutMS > 0 && run.ExecutionTimeoutMS <= uint32(config.ExecutionTimeout.Milliseconds())
 }
 
 func (o *Orchestrator) Recoverable(ctx context.Context) ([]RunWork, error) {
@@ -336,7 +343,14 @@ func (o *Orchestrator) executeClaimedRun(ctx context.Context, emit EventEmitter,
 		observe.Int64Attr("deadline_unix_ms", run.Deadline.UnixMilli()),
 		observe.IntAttr("max_steps", int(run.MaxSteps)),
 	)
+	// Echo 事件流是面向用户的执行叙事：child Run 是 root Run 的内部委托，
+	// 其进度和结果只通过持久状态（run.get_child_status）返回给父 Run，
+	// 不进入 Echo 事件流——否则子 Run 的 run.completed 会被聊天入口当作
+	// 终态提前关闭用户流，其输出也会越过治理边界直接暴露给前端。
 	emitEvent := func(eventType string, payload any) error {
+		if run.ParentRunID != "" {
+			return nil
+		}
 		encoded, err := json.Marshal(payload)
 		if err != nil {
 			return fmt.Errorf("encode echo event: %w", err)
@@ -487,6 +501,9 @@ func (o *Orchestrator) executeClaimedRun(ctx context.Context, emit EventEmitter,
 	expectedExecutorSequence := run.LastExecutorSequence + 1
 	kernelSequence := uint64(1)
 	seenCallIDs := make(map[string]struct{})
+	// Grant 的 MaxCalls 按 Capability 各自计数（见 authorize 的预算比较）；
+	// Run 级总量由 MaxCapabilityCalls 与 seenCallIDs 单独约束。
+	capabilityCallCounts := make(map[string]uint32)
 	automaticRetrySafe := true
 	outputBytes := uint64(0)
 	addOutput := func(output Output) error {
@@ -573,6 +590,10 @@ func (o *Orchestrator) executeClaimedRun(ctx context.Context, emit EventEmitter,
 			if err = executor.ValidateCapabilityCall(body.CapabilityCall); err != nil {
 				break
 			}
+			if len(seenCallIDs) >= int(run.MaxCapabilityCalls) {
+				err = ErrCapabilityBudgetExceeded
+				break
+			}
 			if _, exists := seenCallIDs[body.CapabilityCall.CallId]; exists {
 				err = executor.ErrDuplicateCall
 				break
@@ -620,7 +641,11 @@ func (o *Orchestrator) executeClaimedRun(ctx context.Context, emit EventEmitter,
 			observe.Error(ctx, "执行者帧载荷或顺序违反协议", err,
 				observe.Int64Attr("executor_sequence", int64(frame.Sequence)),
 			)
-			return errors.Join(err, o.fail(ctx, run, "protocol_violation", automaticRetrySafe))
+			failureCode := "protocol_violation"
+			if errors.Is(err, ErrCapabilityBudgetExceeded) {
+				failureCode = "budget_exceeded"
+			}
+			return errors.Join(err, o.fail(ctx, run, failureCode, automaticRetrySafe))
 		}
 		var sequenceErr error
 		if usage := frame.GetResourceUsage(); usage != nil {
@@ -677,7 +702,8 @@ func (o *Orchestrator) executeClaimedRun(ctx context.Context, emit EventEmitter,
 				observe.StringAttr("capability_id", body.CapabilityCall.CapabilityId),
 				observe.IntAttr("argument_bytes", len(body.CapabilityCall.PayloadJson)),
 			)
-			result := o.invokeCapability(runContext, run, body.CapabilityCall)
+			result := o.invokeCapability(runContext, run, body.CapabilityCall, capabilityCallCounts[body.CapabilityCall.CapabilityId])
+			capabilityCallCounts[body.CapabilityCall.CapabilityId]++
 			if errors.Is(runContext.Err(), context.Canceled) {
 				return errors.Join(context.Canceled, o.completeRun(ctx, run, RunStatusCancelled, StatusCancelled, Output{}, publicerror.Echo("cancelled")))
 			}
@@ -810,7 +836,7 @@ func capabilityVersions(capabilities []*executor.Capability) []string {
 	return versions
 }
 
-func (o *Orchestrator) invokeCapability(ctx context.Context, run RunRecord, call *executor.CapabilityCall) *executor.CapabilityResult {
+func (o *Orchestrator) invokeCapability(ctx context.Context, run RunRecord, call *executor.CapabilityCall, callsUsed uint32) *executor.CapabilityResult {
 	runID := run.ID
 	if call == nil || call.CallId == "" || len(call.CallId) > 128 || idempotency.ValidateKey(call.CallId) != nil {
 		public := publicerror.Executor("protocol_violation", false)
@@ -828,7 +854,7 @@ func (o *Orchestrator) invokeCapability(ctx context.Context, run RunRecord, call
 		Fingerprint: idempotency.Fingerprint([]byte(runID), []byte(call.CapabilityId), call.PayloadJson),
 		OwnerID:     runID + ":" + call.CallId,
 	}, func(executionContext context.Context) ([]byte, error) {
-		result := o.invokeCapabilityOnce(executionContext, run, call)
+		result := o.invokeCapabilityOnce(executionContext, run, call, callsUsed)
 		return proto.Marshal(result)
 	})
 	if err != nil {
@@ -868,7 +894,7 @@ func (o *Orchestrator) invokeCapability(ctx context.Context, run RunRecord, call
 	return &result
 }
 
-func (o *Orchestrator) invokeCapabilityOnce(ctx context.Context, run RunRecord, call *executor.CapabilityCall) *executor.CapabilityResult {
+func (o *Orchestrator) invokeCapabilityOnce(ctx context.Context, run RunRecord, call *executor.CapabilityCall, callsUsed uint32) *executor.CapabilityResult {
 	started := o.now()
 	echoID := run.EchoID
 	runID := run.ID
@@ -909,18 +935,21 @@ func (o *Orchestrator) invokeCapabilityOnce(ctx context.Context, run RunRecord, 
 	}
 	traceID := observe.String(ctx, "trace_id")
 	request := contracts.RequestContext{
-		AppID:           o.config.AppID,
-		EchoID:          echoID,
-		RequestID:       requestID,
-		TraceID:         traceID,
-		UserID:          run.UserID,
-		SessionID:       run.SessionID,
-		RunID:           runID,
-		ParentRunID:     run.ParentRunID,
-		CallID:          call.CallId,
-		Deadline:        deadline,
-		IdempotencyKey:  call.CallId,
-		ProtocolVersion: executor.Version,
+		AppID:               o.config.AppID,
+		EchoID:              echoID,
+		RequestID:           requestID,
+		TraceID:             traceID,
+		UserID:              run.UserID,
+		SessionID:           run.SessionID,
+		RunID:               runID,
+		ParentRunID:         run.ParentRunID,
+		CallID:              call.CallId,
+		LeaseToken:          run.LeaseToken,
+		Deadline:            deadline,
+		IdempotencyKey:      call.CallId,
+		ProtocolVersion:     executor.Version,
+		CapabilityCallsUsed: callsUsed,
+		CapabilityCostUsed:  run.UsedCostMicrousd,
 	}
 	payload, err := o.dispatcher.InvokeCapability(ctx, request, call.CapabilityId, call.PayloadJson)
 	result := &executor.CapabilityResult{
@@ -1030,6 +1059,10 @@ func (o *Orchestrator) canRetry(run RunRecord, public publicerror.Error, automat
 }
 
 func (o *Orchestrator) retryRun(ctx context.Context, run RunRecord, failure publicerror.Error) error {
+	// 重试是"全新 attempt"语义：新 run.ID 下预算（units/cost/retries）与
+	// Capability 调用幂等 scope（executor.call/<runID>）都从零开始，attempt
+	// 数由 canRetry 的 MaxRunAttempts 封顶。这是有意设计——跨 attempt 累积
+	// 预算会把 RunGroup 变成无上限的长生命周期能力预算池。
 	completedAt := o.now().UTC()
 	availableAt := completedAt.Add(o.retryDelay(run))
 	next := run
