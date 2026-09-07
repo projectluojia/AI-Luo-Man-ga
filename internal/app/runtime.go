@@ -19,6 +19,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access/web"
 	controlconfig "github.com/projectluojia/AI-Luo-Man-ga/internal/controlplane/config"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/appconfig"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/childrun"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/confirmation"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contextasm"
 	kernelecho "github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
@@ -167,6 +168,13 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 	}
 
 	reg := registry.New()
+	childService, err := childrun.NewService(store, store)
+	if err != nil {
+		return fmt.Errorf("create child Run service: %w", err)
+	}
+	if err := childrun.Register(reg, childService); err != nil {
+		return fmt.Errorf("register Core child Run capabilities: %w", err)
+	}
 	installedHosts, installedRecords, err := configureInstalledRuntimes(ctx, config, store.PackageDocuments())
 	if err != nil {
 		return err
@@ -255,7 +263,7 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 
 	orchestrator := kernelecho.NewOrchestrator(executorClient, reg, dispatcher, policy, kernelecho.StorePorts{
 		Idempotency: store, Creation: store, Execution: store, Recovery: store,
-		Cancellation: store, Events: store, Audit: store,
+		Children: store, Cancellation: store, Events: store, Audit: store,
 	}, kernelecho.Config{
 		AppID: config.appID, AppConfigSource: store, Context: sessionService,
 		ContextBudget: contextasm.Budget{
