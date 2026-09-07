@@ -56,8 +56,8 @@ func insertExpiredConfirmation(t *testing.T, store *sqlite.Store) {
 	}
 	if err := store.Create(context.Background(), confirmation.Confirmation{
 		AppID: testAppID, ConfirmationID: "confirmation-1", EchoID: "echo-1", RunID: "run-1", CallID: "call-1",
-		CapabilityID: "test.notify",
-		SideEffect:   confirmation.SideEffectExternal, IdempotencyKey: "operation-1", ArgumentDigest: digest,
+		CapabilityID: "test.notify", EffectTarget: confirmation.EffectExternal,
+		IdempotencyKey: "operation-1", ArgumentDigest: digest,
 		Status: confirmation.StatusWaiting, ExpiresAt: created.Add(time.Minute), CreatedAt: created,
 	}); err != nil {
 		t.Fatal(err)

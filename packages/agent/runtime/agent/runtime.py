@@ -225,7 +225,7 @@ class ExecutorRuntime(executor_pb2_grpc.ExecutorRuntimeServicer):
                     outbound_sequence += 1
                     if isinstance(event, CapabilityRequested):
                         if event.call.id in expected_capabilities:
-                            raise ProtocolViolation("模型返回了重复的 ToolCall ID")
+                            raise ProtocolViolation("模型返回了重复的 CapabilityCall ID")
                         self._validate_capability_call(event.call.id, event.capability_id, event.call.arguments)
                         expected_capabilities[event.call.id] = event.capability_id
                         logger.info(

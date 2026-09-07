@@ -97,8 +97,7 @@ func invokeRequest(id string) *runtimev1.InvokeRequest {
 		Context: &runtimev1.GovernedRequestContext{
 			AppId: "app.test", EchoId: "echo-1", RequestId: "request-1", TraceId: "trace-1",
 			RunId: "run-1", CallId: "call-1", ProtocolVersion: "1.0",
-			CapabilityId:    "test.capability",
-			PermissionScope: []string{"test.read"},
+			CapabilityId: "test.capability",
 		},
 		PayloadJson: []byte(`{}`),
 	}
@@ -274,8 +273,7 @@ func capabilityRuntimeRequest() contracts.RequestContext {
 		AppID: "app.test", EchoID: "echo-1", RequestID: "request-1", TraceID: "trace-1",
 		RunID: "run-1", CallID: "call-1", CallDepth: 1,
 		IdempotencyKey: "operation-1", ProtocolVersion: "1.0",
-		CapabilityID:    testCapabilityID,
-		PermissionScope: []string{testInvokeScope},
+		CapabilityID: testCapabilityID,
 	}
 }
 

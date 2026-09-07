@@ -46,7 +46,8 @@ func registerRouteCapability(t *testing.T, reg *registry.Registry, calls *atomic
 	if err := reg.Register(registry.CapabilityRegistration{
 		Spec: capability.CapabilitySpec{
 			ID: routeCapabilityID, Version: "1.0.0", Name: "线路查询", Description: "编排测试能力",
-			SideEffect:      capability.SideEffectRead,
+			Authorization:   capability.AuthorizationSpec{ResourceType: "capability.resource"},
+			Execution:       capability.ExecutionSpec{EffectTarget: capability.EffectNone, Replay: capability.ReplaySafe, ConfirmationFloor: capability.ConfirmationPolicy},
 			InputSchemaJSON: `{"type":"object","properties":{"limit":{"type":"integer","minimum":1,"maximum":50}},"additionalProperties":false}`,
 		},
 		Handler: func(ctx context.Context, request contracts.RequestContext, payload json.RawMessage) (json.RawMessage, error) {
@@ -344,7 +345,7 @@ func (a *revokingPolicyExecutor) Run(stream executorv1.ExecutorRuntime_RunServer
 		return err
 	}
 	result := resultFrame.GetCapabilityResult()
-	if result.GetSuccess() || result.GetErrorCode() != "capability_disabled" {
+	if result.GetSuccess() || result.GetErrorCode() != "permission_denied" {
 		a.testing.Errorf("撤权后的 Capability 结果=%#v", result)
 	}
 	for _, frame := range []*executorv1.ExecutorFrame{
@@ -399,7 +400,7 @@ func (a *grantingPolicyExecutor) Run(stream executorv1.ExecutorRuntime_RunServer
 		errorCode    string
 	}{
 		{callID: "late-capability-grant", capabilityID: a.newCapability, errorCode: "capability_disabled"},
-		{callID: "late-permission-grant", capabilityID: a.permissionCapability, errorCode: "permission_denied"},
+		{callID: "late-permission-grant", capabilityID: a.permissionCapability, errorCode: "capability_disabled"},
 	} {
 		if err := stream.Send(&executorv1.ExecutorFrame{
 			EchoId: start.EchoId, RunId: start.RunId, Sequence: uint64(index + 2),
@@ -913,7 +914,11 @@ func TestOrchestratorRevalidatesCapabilityPolicyAfterProjection(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 	seed := orchestratorAppConfig()
-	seed.EnabledCapabilities = []string{capabilityID}
+	seed.CapabilityGrants = []capability.Grant{{
+		ID: "grant-" + capabilityID, AppID: seed.AppID, Principal: capability.PrincipalAny,
+		CapabilityID: capabilityID, Resource: capability.ResourceScope{Type: "capability.resource"},
+		ExpiresAt: time.Now().UTC().Add(time.Hour), MaxCalls: 100, PolicyRevision: "test",
+	}}
 	current, _, err := store.Ensure(t.Context(), seed)
 	if err != nil {
 		t.Fatal(err)
@@ -928,8 +933,9 @@ func TestOrchestratorRevalidatesCapabilityPolicyAfterProjection(t *testing.T) {
 		Spec: capability.CapabilitySpec{
 			ID: capabilityID, Version: "1.0.0", Name: "测试读取",
 			Description:     "验证运行中动态撤权",
+			Authorization:   capability.AuthorizationSpec{ResourceType: "capability.resource"},
+			Execution:       capability.ExecutionSpec{EffectTarget: capability.EffectNone, Replay: capability.ReplaySafe, ConfirmationFloor: capability.ConfirmationPolicy},
 			InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
-			SideEffect:      capability.SideEffectRead,
 		},
 		Handler: func(context.Context, contracts.RequestContext, json.RawMessage) (json.RawMessage, error) {
 			called.Add(1)
@@ -944,7 +950,7 @@ func TestOrchestratorRevalidatesCapabilityPolicyAfterProjection(t *testing.T) {
 		testing: t, capabilityID: capabilityID,
 		revoke: func() error {
 			replacement := current
-			replacement.EnabledCapabilities = nil
+			replacement.CapabilityGrants = nil
 			_, updateErr := store.CompareAndSwap(context.Background(), current.Generation, replacement)
 			return updateErr
 		},
@@ -987,7 +993,13 @@ func TestOrchestratorAcceptedRunScopeCannotExpandAfterGrant(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 	seed := orchestratorAppConfig()
-	seed.EnabledCapabilities = []string{acceptedCapability, permissionCapability}
+	seed.CapabilityGrants = []capability.Grant{
+		{
+			ID: "grant-" + acceptedCapability, AppID: seed.AppID, Principal: capability.PrincipalAny,
+			CapabilityID: acceptedCapability, Resource: capability.ResourceScope{Type: "capability.resource"},
+			ExpiresAt: time.Now().UTC().Add(time.Hour), MaxCalls: 100, PolicyRevision: "test",
+		},
+	}
 	current, _, err := store.Ensure(t.Context(), seed)
 	if err != nil {
 		t.Fatal(err)
@@ -1009,21 +1021,29 @@ func TestOrchestratorAcceptedRunScopeCannotExpandAfterGrant(t *testing.T) {
 			}
 			return json.RawMessage(`{}`), nil
 		})
-		var requiredPermissions []string
+		var specCapability capability.CapabilitySpec
 		if capabilityID == permissionCapability {
-			requiredPermissions = []string{permission}
+			specCapability = capability.CapabilitySpec{
+				ID: capabilityID, Version: "1.0.0", Name: "测试读取",
+				Description:     "验证已接受 Run 的授权范围不可扩张",
+				Authorization:   capability.AuthorizationSpec{ResourceType: "capability.resource", Principal: capability.PrincipalCurrentUser},
+				Execution:       capability.ExecutionSpec{EffectTarget: capability.EffectNone, Replay: capability.ReplaySafe, ConfirmationFloor: capability.ConfirmationPolicy},
+				InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
+			}
+		} else {
+			specCapability = capability.CapabilitySpec{
+				ID: capabilityID, Version: "1.0.0", Name: "测试读取",
+				Description:     "验证已接受 Run 的授权范围不可扩张",
+				Authorization:   capability.AuthorizationSpec{ResourceType: "capability.resource"},
+				Execution:       capability.ExecutionSpec{EffectTarget: capability.EffectNone, Replay: capability.ReplaySafe, ConfirmationFloor: capability.ConfirmationPolicy},
+				InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
+			}
 		}
 		capabilities[capabilityID] = struct {
 			Spec    capability.CapabilitySpec
 			Handler registry.Handler
 		}{
-			Spec: capability.CapabilitySpec{
-				ID: capabilityID, Version: "1.0.0", Name: "测试读取",
-				Description:         "验证已接受 Run 的授权范围不可扩张",
-				InputSchemaJSON:     `{"type":"object","additionalProperties":false}`,
-				SideEffect:          capability.SideEffectRead,
-				RequiredPermissions: requiredPermissions,
-			},
+			Spec:    specCapability,
 			Handler: handler,
 		}
 	}
@@ -1039,8 +1059,14 @@ func TestOrchestratorAcceptedRunScopeCannotExpandAfterGrant(t *testing.T) {
 		permissionCapability: permissionCapability,
 		grantNewScope: func() error {
 			replacement := current
-			replacement.EnabledCapabilities = []string{acceptedCapability, newCapability, permissionCapability}
-			replacement.PermissionScope = []string{permission}
+			for _, capabilityID := range []string{newCapability, permissionCapability} {
+				replacement.CapabilityGrants = append(replacement.CapabilityGrants,
+					capability.Grant{
+						ID: "grant-" + capabilityID, AppID: replacement.AppID, Principal: capability.PrincipalAny,
+						CapabilityID: capabilityID, Resource: capability.ResourceScope{Type: "capability.resource"},
+						ExpiresAt: time.Now().UTC().Add(time.Hour), MaxCalls: 100, PolicyRevision: "test",
+					})
+			}
 			_, updateErr := store.CompareAndSwap(context.Background(), current.Generation, replacement)
 			return updateErr
 		},
@@ -1071,10 +1097,8 @@ func TestOrchestratorAcceptedRunScopeCannotExpandAfterGrant(t *testing.T) {
 	}
 	runs, err := store.ListRuns(t.Context(), testAppID, echoID)
 	if err != nil || len(runs) != 1 ||
-		len(runs[0].CapabilityScope) != 2 ||
-		runs[0].CapabilityScope[0] != acceptedCapability ||
-		runs[0].CapabilityScope[1] != permissionCapability ||
-		len(runs[0].PermissionScope) != 0 {
+		len(runs[0].CapabilityGrants) != 1 ||
+		runs[0].CapabilityGrants[0].CapabilityID != acceptedCapability {
 		t.Fatalf("持久化 Run Scope=%#v err=%v", runs, err)
 	}
 }
@@ -1307,7 +1331,8 @@ func TestOrchestratorDoesNotAutomaticallyRetryAfterSideEffect(t *testing.T) {
 		Spec: capability.CapabilitySpec{
 			ID: "test.external", Version: "1.0.0", Name: "外部测试", Description: "验证副作用重试边界",
 			InputSchemaJSON: `{"type":"object","properties":{},"additionalProperties":false}`,
-			SideEffect:      capability.SideEffectExternal,
+			Authorization:   capability.AuthorizationSpec{ResourceType: "capability.resource"},
+			Execution:       capability.ExecutionSpec{EffectTarget: capability.EffectExternal, Replay: capability.ReplayIdempotencyKey, ConfirmationFloor: capability.ConfirmationPolicy},
 		},
 		Handler: func(context.Context, contracts.RequestContext, json.RawMessage) (json.RawMessage, error) {
 			calls.Add(1)

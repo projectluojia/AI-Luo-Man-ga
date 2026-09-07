@@ -114,16 +114,12 @@ func (s *Service) ResolveIdentity(ctx context.Context, appID, platform, platform
 	return s.identityContextForActiveUser(ctx, appID, user.UserID)
 }
 
-// identityContextForActiveUser 组装身份上下文：成员关系、生效权限与绑定修订号
-// 全部来自查询时刻的持久化状态。
+// identityContextForActiveUser 组装身份上下文：成员关系与绑定修订号全部来自
+// 查询时刻的持久化状态；Capability Grant 不属于身份快照。
 func (s *Service) identityContextForActiveUser(ctx context.Context, appID, userID string) (IdentityContext, error) {
 	membership, err := s.store.GetMembership(ctx, appID, userID)
 	membershipMissing := errors.Is(err, ErrNotFound)
 	if err != nil && !membershipMissing {
-		return IdentityContext{}, err
-	}
-	permissions, err := s.store.EffectivePermissions(ctx, appID, userID)
-	if err != nil {
 		return IdentityContext{}, err
 	}
 	revision, err := s.store.BindingRevision(ctx, appID)
@@ -133,7 +129,6 @@ func (s *Service) identityContextForActiveUser(ctx context.Context, appID, userI
 	context := IdentityContext{
 		AppID:           appID,
 		UserID:          userID,
-		Permissions:     permissions,
 		BindingRevision: revision,
 	}
 	if !membershipMissing {

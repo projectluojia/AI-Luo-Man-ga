@@ -13,7 +13,6 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/capability"
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packagecontract"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/id"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
 )
 
@@ -22,7 +21,6 @@ var (
 	ErrInvalidSpec        = errors.New("invalid registry spec")
 	ErrCapabilityNotFound = errors.New("capability is not registered")
 	ErrSchemaValidation   = errors.New("payload does not satisfy registered JSON Schema")
-	ErrPermissionDenied   = errors.New("required permission is not granted")
 )
 
 type Handler func(context.Context, contracts.RequestContext, json.RawMessage) (json.RawMessage, error)
@@ -77,7 +75,6 @@ func (r *Registry) RegisterBatch(registrations []CapabilityRegistration) error {
 		if err != nil {
 			return fmt.Errorf("%w: capability %q input schema: %v", ErrInvalidSpec, registration.Spec.ID, err)
 		}
-		registration.Spec.RequiredPermissions = canonicalStrings(registration.Spec.RequiredPermissions)
 		prepared = append(prepared, struct {
 			registration CapabilityRegistration
 			schema       *jsonschema.Schema
@@ -112,12 +109,10 @@ func validateCapabilitySpec(spec capability.CapabilitySpec, handler Handler) err
 		return fmt.Errorf("%w: invalid capability version %q", ErrInvalidSpec, spec.Version)
 	case handler == nil:
 		return fmt.Errorf("%w: capability %q has no handler", ErrInvalidSpec, spec.ID)
-	case !validSideEffect(spec.SideEffect):
-		return fmt.Errorf("%w: capability %q has invalid side effect %q", ErrInvalidSpec, spec.ID, spec.SideEffect)
-	case spec.RequiresConfirmation && spec.SideEffect != capability.SideEffectWrite && spec.SideEffect != capability.SideEffectExternal:
-		return fmt.Errorf("%w: capability %q requires confirmation without a write or external side effect", ErrInvalidSpec, spec.ID)
-	case !validPermissionList(spec.RequiredPermissions):
-		return fmt.Errorf("%w: capability %q has invalid required permissions", ErrInvalidSpec, spec.ID)
+	case capability.ValidateAuthorizationSpec(spec.Authorization) != nil:
+		return fmt.Errorf("%w: capability %q has invalid authorization", ErrInvalidSpec, spec.ID)
+	case capability.ValidateExecutionSpec(spec.Execution) != nil:
+		return fmt.Errorf("%w: capability %q has invalid execution policy", ErrInvalidSpec, spec.ID)
 	default:
 		return nil
 	}
@@ -130,59 +125,6 @@ func validStableID(value string) bool {
 func validVersion(value string) bool {
 	_, err := packagecontract.ParseVersion(value)
 	return err == nil
-}
-
-func validSideEffect(value string) bool {
-	switch value {
-	case capability.SideEffectNone, capability.SideEffectRead, capability.SideEffectWrite, capability.SideEffectExternal:
-		return true
-	default:
-		return false
-	}
-}
-
-func validPermissionList(values []string) bool {
-	seen := make(map[string]struct{}, len(values))
-	for _, value := range values {
-		if !id.IsPermission(value) {
-			return false
-		}
-		if _, exists := seen[value]; exists {
-			return false
-		}
-		seen[value] = struct{}{}
-	}
-	return true
-}
-
-func canonicalStrings(values []string) []string {
-	copied := append([]string(nil), values...)
-	sort.Strings(copied)
-	return copied
-}
-
-func permissionSubset(required, granted []string) bool {
-	grantedSet := make(map[string]struct{}, len(granted))
-	for _, permission := range granted {
-		grantedSet[permission] = struct{}{}
-	}
-	for _, permission := range required {
-		if _, exists := grantedSet[permission]; !exists {
-			return false
-		}
-	}
-	return true
-}
-
-// NarrowPermissions 将调用者权限收窄到 Capability 声明的最小集合。
-func NarrowPermissions(granted, required []string) ([]string, error) {
-	if !validPermissionList(granted) || !validPermissionList(required) {
-		return nil, fmt.Errorf("%w: permission scope is invalid", ErrPermissionDenied)
-	}
-	if !permissionSubset(required, granted) {
-		return nil, ErrPermissionDenied
-	}
-	return canonicalStrings(required), nil
 }
 
 // ResolveCapability 解析已经完成 Schema 编译的 Capability。
@@ -218,6 +160,5 @@ func (r *Registry) Capabilities() []capability.CapabilitySpec {
 }
 
 func cloneCapabilitySpec(spec capability.CapabilitySpec) capability.CapabilitySpec {
-	spec.RequiredPermissions = append([]string(nil), spec.RequiredPermissions...)
 	return spec
 }

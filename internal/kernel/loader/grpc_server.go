@@ -299,7 +299,6 @@ func (s *RuntimeHostProtocolServer) decodeInvoke(request *runtimev1.InvokeReques
 		IdempotencyKey: request.Context.IdempotencyKey, ConfirmationID: request.Context.ConfirmationId,
 		ProtocolVersion: request.Context.ProtocolVersion,
 		CapabilityID:    request.Context.CapabilityId,
-		PermissionScope: append([]string(nil), request.Context.PermissionScope...),
 		CallChain:       append([]string(nil), request.Context.CallChain...),
 	}
 	payload := append(json.RawMessage(nil), request.PayloadJson...)

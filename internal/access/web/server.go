@@ -160,7 +160,7 @@ func (s *Server) capabilities(writer http.ResponseWriter, request *http.Request)
 	}
 	items := make([]capability.CapabilitySpec, 0)
 	for _, capability := range s.registry.Capabilities() {
-		if snapshot.CapabilityEnabled(capability.ID) {
+		if snapshot.HasCapability(capability.ID) {
 			items = append(items, capability)
 		}
 	}

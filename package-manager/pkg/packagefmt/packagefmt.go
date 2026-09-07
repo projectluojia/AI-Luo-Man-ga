@@ -84,13 +84,24 @@ type sourceDependency struct {
 
 // sourceCapability 是一个直接对外声明的 Capability；版本继承 package。
 type sourceCapability struct {
-	ID                   string   `toml:"id"`
-	Name                 string   `toml:"name"`
-	Description          string   `toml:"description"`
-	Schema               string   `toml:"schema"`
-	SideEffect           string   `toml:"side_effect"`
-	RequiresConfirmation bool     `toml:"requires_confirmation,omitempty"`
-	RequiredPermissions  []string `toml:"required_permissions,omitempty"`
+	ID            string              `toml:"id"`
+	Name          string              `toml:"name"`
+	Description   string              `toml:"description"`
+	Schema        string              `toml:"schema"`
+	Authorization sourceAuthorization `toml:"authorization"`
+	Execution     sourceExecution     `toml:"execution"`
+}
+
+type sourceAuthorization struct {
+	ResourceType   string `toml:"resource_type"`
+	ResourceIDFrom string `toml:"resource_id_from,omitempty"`
+	Principal      string `toml:"principal,omitempty"`
+}
+
+type sourceExecution struct {
+	EffectTarget      string `toml:"effect_target"`
+	Replay            string `toml:"replay"`
+	ConfirmationFloor string `toml:"confirmation_floor"`
 }
 
 // Parse 读取并解析 ailuo.toml：严格 TOML 解码（未知字段/重复键拒绝），转换为
@@ -204,8 +215,16 @@ func (s sourceManifest) buildCapabilities() ([]capability.CapabilitySpec, error)
 		capabilities = append(capabilities, capability.CapabilitySpec{
 			ID: declaration.ID, Version: s.Package.Version, Name: declaration.Name,
 			Description: declaration.Description, InputSchemaJSON: declaration.Schema,
-			SideEffect: declaration.SideEffect, RequiresConfirmation: declaration.RequiresConfirmation,
-			RequiredPermissions: append([]string(nil), declaration.RequiredPermissions...),
+			Authorization: capability.AuthorizationSpec{
+				ResourceType:   declaration.Authorization.ResourceType,
+				ResourceIDFrom: declaration.Authorization.ResourceIDFrom,
+				Principal:      declaration.Authorization.Principal,
+			},
+			Execution: capability.ExecutionSpec{
+				EffectTarget:      declaration.Execution.EffectTarget,
+				Replay:            declaration.Execution.Replay,
+				ConfirmationFloor: declaration.Execution.ConfirmationFloor,
+			},
 		})
 	}
 	return capabilities, nil

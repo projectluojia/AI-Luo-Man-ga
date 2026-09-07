@@ -245,7 +245,8 @@ func writeInstalledFixture(t *testing.T, root, pkgID, mode string, unknown bool)
 		Capabilities: []capability.CapabilitySpec{{
 			ID: "extension.query", Version: "1.0.0", Name: "扩展查询",
 			Description: "查询扩展", InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
-			SideEffect: capability.SideEffectRead,
+			Authorization: capability.AuthorizationSpec{ResourceType: "capability.resource"},
+			Execution:     capability.ExecutionSpec{EffectTarget: capability.EffectNone, Replay: capability.ReplaySafe, ConfirmationFloor: capability.ConfirmationPolicy},
 		}},
 		Components: []packagecontract.Component{{
 			ID: pkgID, Mode: mode, Role: packagecontract.RoleProvider, Entrypoint: "runtime-artifact",
@@ -332,7 +333,8 @@ func writeDeclaredFixture(t *testing.T, root, runtimeID string, decls []packagec
 		Capabilities: []capability.CapabilitySpec{{
 			ID: "extension.query", Version: "1.0.0", Name: "扩展查询",
 			Description: "查询扩展", InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
-			SideEffect: capability.SideEffectRead,
+			Authorization: capability.AuthorizationSpec{ResourceType: "capability.resource"},
+			Execution:     capability.ExecutionSpec{EffectTarget: capability.EffectNone, Replay: capability.ReplaySafe, ConfirmationFloor: capability.ConfirmationPolicy},
 		}},
 		Components: []packagecontract.Component{{
 			ID: runtimeID, Mode: loader.ModeHosted, Role: packagecontract.RoleProvider, Entrypoint: "runtime-artifact",
@@ -431,7 +433,8 @@ func TestInstalledCatalogRejectsInvalidDeclarations(t *testing.T) {
 					Capabilities: []capability.CapabilitySpec{{
 						ID: "extension.query", Version: "1.0.0", Name: "扩展查询",
 						Description: "查询扩展", InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
-						SideEffect: capability.SideEffectRead,
+						Authorization: capability.AuthorizationSpec{ResourceType: "capability.resource"},
+						Execution:     capability.ExecutionSpec{EffectTarget: capability.EffectNone, Replay: capability.ReplaySafe, ConfirmationFloor: capability.ConfirmationPolicy},
 					}},
 					Components: []packagecontract.Component{{
 						ID: "extension.bad", Mode: loader.ModeHosted, Role: packagecontract.RoleProvider, Entrypoint: "runtime-artifact",
@@ -486,7 +489,8 @@ func TestInstalledCatalogRejectsInvalidDeclarations(t *testing.T) {
 						ID: "extension.query", Version: "1.0.0", Name: "扩展查询",
 						Description:     "查询扩展",
 						InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
-						SideEffect:      capability.SideEffectRead,
+						Authorization:   capability.AuthorizationSpec{ResourceType: "capability.resource"},
+						Execution:       capability.ExecutionSpec{EffectTarget: capability.EffectNone, Replay: capability.ReplaySafe, ConfirmationFloor: capability.ConfirmationPolicy},
 					}},
 				},
 			}

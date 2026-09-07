@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/authorization"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/idempotency"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/identity"
@@ -84,16 +85,15 @@ func (s *Server) invokeCapability(writer http.ResponseWriter, request *http.Requ
 		echoID = requestID
 	}
 	invokeContext := contracts.RequestContext{
-		AppID:           s.appID,
-		EchoID:          echoID,
-		RequestID:       requestID,
-		TraceID:         observe.String(ctx, "trace_id"),
-		UserID:          resolved.UserID,
-		SessionID:       webIdentity.PlatformSessionID,
-		Deadline:        deadline,
-		IdempotencyKey:  request.Header.Get("Idempotency-Key"),
-		ConfirmationID:  request.Header.Get("X-Confirmation-ID"),
-		PermissionScope: append([]string(nil), resolved.Permissions...),
+		AppID:          s.appID,
+		EchoID:         echoID,
+		RequestID:      requestID,
+		TraceID:        observe.String(ctx, "trace_id"),
+		UserID:         resolved.UserID,
+		SessionID:      webIdentity.PlatformSessionID,
+		Deadline:       deadline,
+		IdempotencyKey: request.Header.Get("Idempotency-Key"),
+		ConfirmationID: request.Header.Get("X-Confirmation-ID"),
 	}
 	result, err := s.dispatcher.InvokeCapability(ctx, invokeContext, capabilityID, envelope.Input)
 	if err != nil {
@@ -140,7 +140,7 @@ func writeInvokeError(writer http.ResponseWriter, request *http.Request, capabil
 			observe.StringAttr("capability_id", capabilityID),
 		)
 		access.WriteJSON(writer, http.StatusConflict, map[string]string{"code": "confirmation_required", "message": "该 Capability 需要确认"})
-	case errors.Is(err, registry.ErrPermissionDenied):
+	case errors.Is(err, authorization.ErrDenied):
 		observe.Warn(request.Context(), "Capability 调用权限不足",
 			observe.StringAttr("capability_id", capabilityID),
 		)

@@ -32,8 +32,15 @@ id = "demo.text.cap"
 name = "字符串长度"
 description = "计算字符串长度"
 schema = """{"type":"object","properties":{"value":{"type":"string"}},"required":["value"],"additionalProperties":false}"""
-side_effect = "read"
-required_permissions = ["demo.read"]
+
+[capability.authorization]
+resource_type = "demo.text"
+resource_id_from = "/value"
+
+[capability.execution]
+effect_target = "none"
+replay = "safe"
+confirmation_floor = "policy"
 `)
 
 	manifest, _, _, err := Parse(path)
@@ -51,8 +58,8 @@ required_permissions = ["demo.read"]
 	}
 	spec := manifest.Capabilities[0]
 	if spec.ID != "demo.text.cap" || spec.Version != "1.0.0" || spec.Name != "字符串长度" ||
-		spec.Description != "计算字符串长度" || spec.SideEffect != "read" ||
-		len(spec.RequiredPermissions) != 1 || spec.RequiredPermissions[0] != "demo.read" {
+		spec.Description != "计算字符串长度" || spec.Authorization.ResourceType != "demo.text" ||
+		spec.Authorization.ResourceIDFrom != "/value" || spec.Execution.Replay != "safe" {
 		t.Fatalf("capability 解析错误: %+v", spec)
 	}
 	if len(manifest.Components[0].Exports) != 1 || manifest.Components[0].Exports[0] != spec.ID {
@@ -177,7 +184,14 @@ id = "demo.text.cap"
 name = "字符串长度"
 description = "计算字符串长度"
 schema = """{"type":"object","properties":{"value":{"type":"string"}},"required":["value"],"additionalProperties":false}"""
-side_effect = "read"
+
+[capability.authorization]
+resource_type = "demo.text"
+
+[capability.execution]
+effect_target = "none"
+replay = "safe"
+confirmation_floor = "policy"
 `)
 	artifact := []byte("wasm-bytes")
 	if err := os.WriteFile(filepath.Join(sourceDir, "demo.pkg.wasm"), artifact, 0o640); err != nil {

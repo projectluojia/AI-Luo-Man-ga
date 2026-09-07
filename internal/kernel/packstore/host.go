@@ -200,16 +200,16 @@ func authorizeStoreOperation(request contracts.RequestContext, operation string,
 	if !ok {
 		return ErrAccessDenied
 	}
-	switch spec.SideEffect {
-	case capability.SideEffectNone, capability.SideEffectRead, capability.SideEffectWrite, capability.SideEffectExternal:
-	default:
-		return ErrAccessDenied
-	}
-	if operation != OpPut && operation != OpDelete {
+	if spec.Execution.EffectTarget != capability.EffectState && spec.Execution.EffectTarget != capability.EffectExternal {
+		// EffectNone 承诺无副作用：读可以放行，写（Put/Delete）一律拒绝，
+		// 不因幂等键/确认满足而破例。
+		if operation == OpPut || operation == OpDelete {
+			return ErrAccessDenied
+		}
 		return nil
 	}
-	if (spec.SideEffect != capability.SideEffectWrite && spec.SideEffect != capability.SideEffectExternal) ||
-		request.IdempotencyKey == "" || (spec.RequiresConfirmation && request.ConfirmationID == "") {
+	if spec.Execution.Replay != capability.ReplayIdempotencyKey || request.IdempotencyKey == "" ||
+		(spec.Execution.ConfirmationFloor == capability.ConfirmationRequired && request.ConfirmationID == "") {
 		return ErrAccessDenied
 	}
 	return nil

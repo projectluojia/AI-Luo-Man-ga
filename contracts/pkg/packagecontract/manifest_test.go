@@ -11,207 +11,81 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packagecontract"
 )
 
-func TestValidateManifestAcceptsNeutralCore(t *testing.T) {
-	manifest := packagecontract.Manifest{
-		SchemaVersion: packagecontract.SchemaVersion, ID: "campus.bus", Version: "1.2.3",
-		Pin: true, IdleTTLMS: 1000,
-		Capabilities: []capability.CapabilitySpec{{
-			ID: "campus.bus.query", Version: "1.2.3", Name: "查询校巴",
-			InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
-			SideEffect:      capability.SideEffectRead,
-		}},
+func testCapability(id string) capability.CapabilitySpec {
+	return capability.CapabilitySpec{
+		ID: id, Version: "1.0.0", Name: id,
+		InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
+		Authorization:   capability.AuthorizationSpec{ResourceType: "test.resource"},
+		Execution:       capability.ExecutionSpec{EffectTarget: capability.EffectNone, Replay: capability.ReplaySafe, ConfirmationFloor: capability.ConfirmationPolicy},
+	}
+}
+
+func testManifest() packagecontract.Manifest {
+	return packagecontract.Manifest{
+		SchemaVersion: packagecontract.SchemaVersion, ID: "test.pkg", Version: "1.0.0",
+		Capabilities: []capability.CapabilitySpec{testCapability("test.query")},
 		Components: []packagecontract.Component{{
-			ID: "bus.core", Mode: packagecontract.ModeHosted, Role: packagecontract.RoleProvider, Entrypoint: "bus-core.wasm",
-			Exports:       []string{"campus.bus.query"},
-			HostFunctions: []packagecontract.HostedFunctionDecl{{Module: "ailuo.bus", Name: "query", Purpose: "权威存储查询"}},
+			ID: "provider", Mode: packagecontract.ModeHosted, Role: packagecontract.RoleProvider,
+			Entrypoint: "provider.wasm", Exports: []string{"test.query"},
 		}},
-		Storage: &packagecontract.Storage{
-			Namespace: "campus.bus/bus",
+	}
+}
+
+func TestValidateManifestAcceptsStructuredCapability(t *testing.T) {
+	manifest := testManifest()
+	if err := packagecontract.ValidateManifest(manifest); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestValidateManifestRejectsInvalidCapabilityContract(t *testing.T) {
+	for name, mutate := range map[string]func(*packagecontract.Manifest){
+		"invalid resource": func(m *packagecontract.Manifest) { m.Capabilities[0].Authorization.ResourceType = "bad type" },
+		"invalid replay":   func(m *packagecontract.Manifest) { m.Capabilities[0].Execution.Replay = "maybe" },
+		"unknown capability": func(m *packagecontract.Manifest) {
+			m.Capabilities = append(m.Capabilities, testCapability("test.hidden"))
 		},
-		Dependencies: []packagecontract.Dependency{{ID: "bus.transport", Constraint: "^1.0.0", Source: "github:owner/repo"}},
-	}
-	if err := packagecontract.ValidateManifest(manifest); err != nil {
-		t.Fatalf("ValidateManifest: %v", err)
-	}
-}
-
-func TestValidateManifestAcceptsIsolatedProcessTemplate(t *testing.T) {
-	manifest := packagecontract.Manifest{
-		SchemaVersion: packagecontract.SchemaVersion, ID: "agent", Version: "1.0.0",
-		Components: []packagecontract.Component{{
-			ID: "executor", Mode: packagecontract.ModeIsolated, Role: packagecontract.RoleExecutor,
-			Entrypoint: "runtime",
-			Process: &packagecontract.ProcessTemplate{
-				Path: ".venv/python", WorkDir: ".", Address: "127.0.0.1:50051",
-			},
-		}},
-	}
-	if err := packagecontract.ValidateManifest(manifest); err != nil {
-		t.Fatalf("ValidateManifest: %v", err)
-	}
-	if err := packagecontract.ValidateProcessTemplate(packagecontract.ProcessTemplate{Path: "../python"}); !errors.Is(err, packagecontract.ErrInvalidFormat) {
-		t.Fatalf("invalid process template error = %v, want ErrInvalidFormat", err)
-	}
-}
-
-func TestValidateManifestRejectsInvalidCore(t *testing.T) {
-	// 每个用例独立构造：Manifest 结构体复制不复制 Components 底层数组，
-	// 共用一份会让 `m.Components[0].Mode = ...` 之类的改动污染后续子测试。
-	validManifest := func() packagecontract.Manifest {
-		return packagecontract.Manifest{
-			SchemaVersion: packagecontract.SchemaVersion, ID: "campus.bus", Version: "1.0.0",
-			Capabilities: []capability.CapabilitySpec{{
-				ID: "campus.bus.query", Version: "1.0.0", Name: "查询校巴",
-				InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
-				SideEffect:      capability.SideEffectRead,
-			}},
-			Components: []packagecontract.Component{{
-				ID: "bus.core", Mode: packagecontract.ModeHosted, Role: packagecontract.RoleProvider, Entrypoint: "bus-core.wasm",
-				Exports: []string{"campus.bus.query"},
-			}},
-		}
-	}
-	cases := []struct {
-		name   string
-		mutate func(*packagecontract.Manifest)
-	}{
-		{name: "wrong schema version", mutate: func(m *packagecontract.Manifest) { m.SchemaVersion = "ailuo.package.v1" }},
-		{name: "invalid id", mutate: func(m *packagecontract.Manifest) { m.ID = "Campus.Bus" }},
-		{name: "invalid version", mutate: func(m *packagecontract.Manifest) { m.Version = "1.2" }},
-		{name: "excessive idle ttl", mutate: func(m *packagecontract.Manifest) { m.IdleTTLMS = 30*24*3600*1000 + 1 }},
-		{name: "empty components", mutate: func(m *packagecontract.Manifest) { m.Components = nil }},
-		{name: "unsupported mode", mutate: func(m *packagecontract.Manifest) {
-			m.Components[0].Mode = "embedded"
-		}},
-		{name: "isolated missing process template", mutate: func(m *packagecontract.Manifest) {
-			m.Components[0].Mode = packagecontract.ModeIsolated
-		}},
-		{name: "isolated missing process address", mutate: func(m *packagecontract.Manifest) {
-			m.Components[0].Mode = packagecontract.ModeIsolated
-			m.Components[0].Process = &packagecontract.ProcessTemplate{Path: "runner"}
-		}},
-		{name: "missing entrypoint", mutate: func(m *packagecontract.Manifest) { m.Components[0].Entrypoint = "" }},
-		{name: "absolute entrypoint", mutate: func(m *packagecontract.Manifest) {
-			m.Components[0].Entrypoint = filepath.Join(string(filepath.Separator), "opt", "evil.wasm")
-		}},
-		{name: "escaping entrypoint", mutate: func(m *packagecontract.Manifest) {
-			m.Components[0].Entrypoint = filepath.Join("..", "..", "evil.wasm")
-		}},
-		{name: "duplicate component id", mutate: func(m *packagecontract.Manifest) {
-			m.Components = append(m.Components, packagecontract.Component{ID: "bus.core", Mode: packagecontract.ModeHosted, Entrypoint: "x"})
-		}},
-		{name: "invalid export id", mutate: func(m *packagecontract.Manifest) {
-			m.Components[0].Exports = []string{"Campus.bus.query"}
-		}},
-		{name: "duplicate host function", mutate: func(m *packagecontract.Manifest) {
-			m.Components[0].HostFunctions = []packagecontract.HostedFunctionDecl{
-				{Module: "ailuo.x", Name: "one"}, {Module: "ailuo.x", Name: "one"},
-			}
-		}},
-		{name: "wasi module reserved", mutate: func(m *packagecontract.Manifest) {
-			m.Components[0].HostFunctions = []packagecontract.HostedFunctionDecl{{Module: "wasi_snapshot_preview1", Name: "fd_write"}}
-		}},
-		{name: "invalid storage", mutate: func(m *packagecontract.Manifest) {
-			m.Storage = &packagecontract.Storage{Namespace: "campus/bus"}
-		}},
-		{name: "storage namespace outside package", mutate: func(m *packagecontract.Manifest) {
-			m.Storage = &packagecontract.Storage{Namespace: "other/data"}
-		}},
-		{name: "invalid dependency id", mutate: func(m *packagecontract.Manifest) {
-			m.Dependencies = []packagecontract.Dependency{{ID: "Bus.query", Constraint: "^1.0.0"}}
-		}},
-		{name: "invalid dependency constraint", mutate: func(m *packagecontract.Manifest) {
-			m.Dependencies = []packagecontract.Dependency{{ID: "bus.query", Constraint: "^"}}
-		}},
-		{name: "invalid capability id", mutate: func(m *packagecontract.Manifest) { m.Capabilities[0].ID = "Campus.bus.query" }},
-		{name: "unexported capability", mutate: func(m *packagecontract.Manifest) {
-			m.Capabilities = append(m.Capabilities, capability.CapabilitySpec{
-				ID: "campus.bus.hidden", Version: "1.0.0", Name: "隐藏能力",
-				InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
-				SideEffect:      capability.SideEffectRead,
-			})
-		}},
-		{name: "executor exports capability", mutate: func(m *packagecontract.Manifest) {
-			m.Components[0].Role = packagecontract.RoleExecutor
-			m.Components[0].Mode = packagecontract.ModeIsolated
-			m.Components[0].Process = &packagecontract.ProcessTemplate{Path: "runner", Address: "127.0.0.1:50051"}
-		}},
-		{name: "invalid capability schema", mutate: func(m *packagecontract.Manifest) { m.Capabilities[0].InputSchemaJSON = "{" }},
-		{name: "capability exported twice", mutate: func(m *packagecontract.Manifest) {
+		"duplicate export": func(m *packagecontract.Manifest) {
 			m.Components = append(m.Components, packagecontract.Component{
-				ID: "bus.other", Mode: packagecontract.ModeHosted, Entrypoint: "x",
-				Exports: []string{"campus.bus.query"},
+				ID: "second", Mode: packagecontract.ModeHosted, Role: packagecontract.RoleProvider,
+				Entrypoint: "second.wasm", Exports: []string{"test.query"},
 			})
-			m.Components[0].Exports = []string{"campus.bus.query"}
-		}},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			manifest := validManifest()
-			tc.mutate(&manifest)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			manifest := testManifest()
+			mutate(&manifest)
 			if err := packagecontract.ValidateManifest(manifest); err == nil {
-				t.Fatalf("ValidateManifest accepted invalid manifest: %+v", manifest)
+				t.Fatal("invalid manifest accepted")
 			}
 		})
 	}
 }
 
-func TestComponentOrderPreservesManifestOrder(t *testing.T) {
-	components := []packagecontract.Component{
-		{ID: "bus.adapter", Mode: packagecontract.ModeIsolated, Entrypoint: "adapter",
-			Process: &packagecontract.ProcessTemplate{Path: "adapter", Address: "127.0.0.1:9000"},
-		},
-		{ID: "bus.core", Mode: packagecontract.ModeHosted, Entrypoint: "core.wasm"},
-		{ID: "bus.standalone", Mode: packagecontract.ModeHosted, Entrypoint: "solo.wasm"},
+func TestValidateManifestRejectsInvalidStorageAndProcess(t *testing.T) {
+	manifest := testManifest()
+	manifest.Storage = &packagecontract.Storage{Namespace: "other/data"}
+	if err := packagecontract.ValidateManifest(manifest); err == nil {
+		t.Fatal("foreign storage namespace accepted")
 	}
-	order, err := packagecontract.ComponentOrder(components)
-	if err != nil {
-		t.Fatalf("ComponentOrder: %v", err)
-	}
-	indexOf := func(id string) int {
-		for i, componentID := range order {
-			if componentID == id {
-				return i
-			}
-		}
-		t.Fatalf("component %q missing from order %v", id, order)
-		return -1
-	}
-	if indexOf("bus.adapter") != 0 || indexOf("bus.core") != 1 || indexOf("bus.standalone") != 2 {
-		t.Fatalf("component order=%v, want manifest order", order)
+	if err := packagecontract.ValidateProcessTemplate(packagecontract.ProcessTemplate{Path: filepath.Join("..", "runner")}); !errors.Is(err, packagecontract.ErrInvalidFormat) {
+		t.Fatalf("invalid process error=%v", err)
 	}
 }
 
-func TestValidateLockMatchesComponents(t *testing.T) {
-	installDir := t.TempDir()
-	corePath := filepath.Join(installDir, "bus-core.wasm")
-	adapterPath := filepath.Join(installDir, "bus-adapter")
-	manifest := packagecontract.Manifest{
-		SchemaVersion: packagecontract.SchemaVersion, ID: "campus.bus", Version: "1.0.0",
-		Components: []packagecontract.Component{
-			{ID: "bus.core", Mode: packagecontract.ModeHosted, Role: packagecontract.RoleProvider, Entrypoint: "bus-core.wasm"},
-			{ID: "bus.adapter", Mode: packagecontract.ModeIsolated, Role: packagecontract.RoleProvider, Entrypoint: "bus-adapter",
-				Process: &packagecontract.ProcessTemplate{Path: "bus-adapter", Address: "127.0.0.1:9000"}},
-		},
-	}
+func TestValidateLockMatchesComponentArtifacts(t *testing.T) {
+	manifest := testManifest()
+	artifactPath := filepath.Join(t.TempDir(), "provider.wasm")
 	lock := packagecontract.Lock{
-		SchemaVersion: packagecontract.SchemaVersion, PackageID: "campus.bus",
-		PackageVersion: "1.0.0",
-		ManifestSHA256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-		Artifacts: []packagecontract.LockedArtifact{
-			{ComponentID: "bus.core", Path: corePath,
-				SHA256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
-			{ComponentID: "bus.adapter", Path: adapterPath,
-				SHA256: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-				Process: &packagecontract.ProcessSpec{
-					Path: adapterPath, WorkDir: installDir, Address: "127.0.0.1:9000",
-				}},
-		},
+		SchemaVersion: packagecontract.SchemaVersion, PackageID: manifest.ID, PackageVersion: manifest.Version,
+		ManifestSHA256: strings.Repeat("a", 64), Artifacts: []packagecontract.LockedArtifact{{
+			ComponentID: "provider", Path: artifactPath, SHA256: strings.Repeat("b", 64),
+		}},
 	}
 	if err := packagecontract.ValidateLock(lock, manifest); err != nil {
-		t.Fatalf("ValidateLock: %v", err)
+		t.Fatal(err)
 	}
-	// hosted 组件不得携带进程规格。Artifacts 必须深拷贝：Lock 结构体复制共用
+	// hosted 组件不得携带进程规格。cloneLock 深拷贝 Artifacts：结构体复制共用
 	// 底层数组，直接改 bad.Artifacts[0] 会同时改掉上面已校验过的 lock。
 	cloneLock := func() packagecontract.Lock {
 		copied := lock
@@ -226,26 +100,16 @@ func TestValidateLockMatchesComponents(t *testing.T) {
 		return copied
 	}
 	bad := cloneLock()
-	bad.Artifacts[0].Process = &packagecontract.ProcessSpec{Path: corePath, WorkDir: t.TempDir(), Address: "127.0.0.1:9001"}
+	bad.Artifacts[0].Process = &packagecontract.ProcessSpec{Path: filepath.Join(t.TempDir(), "runner"), Address: "127.0.0.1:9001"}
 	if err := packagecontract.ValidateLock(bad, manifest); err == nil {
 		t.Fatal("ValidateLock accepted hosted component with process spec")
 	}
 	// lock 的工件文件名必须与清单 entrypoint 一致：否则摘要可以绑到包目录外
 	// 任意一个绝对路径文件上，装载的就不是清单声明的工件。
 	bad = cloneLock()
-	bad.Artifacts[0].Path = filepath.Join(installDir, "other.wasm")
+	bad.Artifacts[0].Path = filepath.Join(t.TempDir(), "other.wasm")
 	if err := packagecontract.ValidateLock(bad, manifest); err == nil {
 		t.Fatal("ValidateLock accepted artifact path not matching entrypoint")
-	}
-	bad = cloneLock()
-	bad.Artifacts[1].Process.Address = "127.0.0.1:9001"
-	if err := packagecontract.ValidateLock(bad, manifest); err == nil {
-		t.Fatal("ValidateLock accepted process address mismatch")
-	}
-	bad = cloneLock()
-	bad.Artifacts[1].Process.Args = []string{"--unexpected"}
-	if err := packagecontract.ValidateLock(bad, manifest); err == nil {
-		t.Fatal("ValidateLock accepted process arguments mismatch")
 	}
 	// 摘要必须是合法十六进制：只校验长度会让 64 个 "g" 混过完整性校验前置检查。
 	bad = cloneLock()

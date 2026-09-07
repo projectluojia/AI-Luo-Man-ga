@@ -31,18 +31,33 @@ id = "campus.bus.stops.search"
 name = "查询校巴站点"
 description = "Search authoritative campus bus stops by name or alias."
 schema = """{"type":"object","properties":{"query":{"type":"string","minLength":1},"limit":{"type":"integer","minimum":1,"maximum":50}},"required":["query"],"additionalProperties":false}"""
-side_effect = "read"
+[capability.authorization]
+resource_type = "campus.bus.catalog"
+[capability.execution]
+effect_target = "none"
+replay = "safe"
+confirmation_floor = "policy"
 
 [[capability]]
 id = "campus.bus.routes.list"
 name = "列出校巴线路"
 description = "List authoritative campus bus routes."
 schema = """{"type":"object","properties":{"limit":{"type":"integer","minimum":1,"maximum":50}},"additionalProperties":false}"""
-side_effect = "read"
+[capability.authorization]
+resource_type = "campus.bus.catalog"
+[capability.execution]
+effect_target = "none"
+replay = "safe"
+confirmation_floor = "policy"
 
 [[capability]]
 id = "campus.bus.journeys.search"
 name = "查询校巴行程"
 description = "Search authoritative campus bus journeys by stops and departure time."
 schema = """{"type":"object","properties":{"origin_stop_id":{"type":"string","minLength":1},"destination_stop_id":{"type":"string","minLength":1},"depart_after":{"type":"string","format":"date-time"},"limit":{"type":"integer","minimum":1,"maximum":50}},"required":["origin_stop_id","destination_stop_id"],"additionalProperties":false}"""
-side_effect = "read"
+[capability.authorization]
+resource_type = "campus.bus.network"
+[capability.execution]
+effect_target = "none"
+replay = "safe"
+confirmation_floor = "policy"

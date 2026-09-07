@@ -179,7 +179,7 @@ SELECT app_id,run_id,run_group_id,echo_id,parent_run_id,origin_call_id,attempt,s
        executor_id,config_revision,protocol_version,executor_config,input_payload,input_content_type,
        max_steps,max_capability_calls,max_execution_units,max_output_bytes,max_cost_microusd,
        execution_timeout_ms,used_execution_units,used_cost_microusd,used_retries,
-       available_at,capability_scope,permission_scope,result_payload,result_content_type,
+       available_at,capability_grants,result_payload,result_content_type,
        last_executor_sequence
 FROM runs LIMIT 0`
 	rows, err := db.QueryContext(ctx, runColumns)

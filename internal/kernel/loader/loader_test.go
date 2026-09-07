@@ -430,7 +430,8 @@ func TestLoaderHandlerRemainsBehindRegistryDispatcherGovernance(t *testing.T) {
 			ID: "lazy.capability", Version: "1.0.0", Name: "懒加载测试",
 			Description:     "验证统一 Dispatcher 治理",
 			InputSchemaJSON: `{"type":"object","properties":{"value":{"type":"integer"}},"required":["value"],"additionalProperties":false}`,
-			SideEffect:      capability.SideEffectRead,
+			Authorization:   capability.AuthorizationSpec{ResourceType: "capability.resource"},
+			Execution:       capability.ExecutionSpec{EffectTarget: capability.EffectNone, Replay: capability.ReplaySafe, ConfirmationFloor: capability.ConfirmationPolicy},
 		},
 		Handler: manager.Handler("runtime.capability"),
 	}); err != nil {

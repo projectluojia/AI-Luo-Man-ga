@@ -59,7 +59,7 @@ func TestCapabilityTrustBoundaryErrorsHaveStableSafeCodes(t *testing.T) {
 		code string
 	}{
 		{err: errors.Join(registry.ErrSchemaValidation, errors.New(`payload contains "private-value"`)), code: "invalid_arguments"},
-		{err: errors.Join(registry.ErrPermissionDenied, errors.New("permission=secret.admin")), code: "permission_denied"},
+		{err: errors.Join(runtime.ErrAuthorizationDenied, errors.New("resource=secret")), code: "permission_denied"},
 		{err: errors.Join(runtime.ErrIdempotencyKeyRequired, errors.New("target=private-write")), code: "idempotency_key_required"},
 		{err: errors.Join(runtime.ErrConfirmationRequired, errors.New("confirmation=private-token")), code: "confirmation_required"},
 	}

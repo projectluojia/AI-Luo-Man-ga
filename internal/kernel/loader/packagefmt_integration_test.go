@@ -89,7 +89,9 @@ func TestDeclaredCapabilityRunsThroughDispatcher(t *testing.T) {
 		}},
 		Capabilities: []capability.CapabilitySpec{{
 			ID: "autogen.test.hello", Version: "1.0.0", Name: "Hello",
-			Description: "Return a greeting", InputSchemaJSON: `{"type":"object","properties":{"name":{"type":"string"}},"additionalProperties":false}`, SideEffect: capability.SideEffectRead,
+			Description: "Return a greeting", InputSchemaJSON: `{"type":"object","properties":{"name":{"type":"string"}},"additionalProperties":false}`,
+			Authorization: capability.AuthorizationSpec{ResourceType: "package.resource"},
+			Execution:     capability.ExecutionSpec{EffectTarget: capability.EffectNone, Replay: capability.ReplaySafe, ConfirmationFloor: capability.ConfirmationPolicy},
 		}},
 	}
 	if err := packagecontract.ValidateManifest(manifest); err != nil {
@@ -132,8 +134,10 @@ func TestDeclaredCapabilityRunsThroughDispatcher(t *testing.T) {
 	extracted := manifest.Capabilities[0]
 	if err := reg.Register(registry.CapabilityRegistration{
 		Spec: capability.CapabilitySpec{
-			ID: extracted.ID, Version: extracted.Version,
-			InputSchemaJSON: extracted.InputSchemaJSON, SideEffect: extracted.SideEffect,
+			ID: extracted.ID, Version: manifest.Version,
+			InputSchemaJSON: extracted.InputSchemaJSON,
+			Authorization:   capability.AuthorizationSpec{ResourceType: "package.resource"},
+			Execution:       capability.ExecutionSpec{EffectTarget: capability.EffectNone, Replay: capability.ReplaySafe, ConfirmationFloor: capability.ConfirmationPolicy},
 		},
 		Handler: manager.Handler(runtimeID),
 	}); err != nil {

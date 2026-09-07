@@ -204,7 +204,10 @@ func (c *Catalog) ReadArtifact(ctx context.Context, manifest loader.Manifest) ([
 	if err != nil {
 		return nil, err
 	}
-	if !record.record.Runtime.SameIdentity(manifest) {
+	// Runtime Host 协议只携带运行时 ID、版本和模式；包 ID 已由 runtime ID
+	// 与本 Catalog 的唯一记录绑定，不能要求协议伪造未传输的 PackageID。
+	if record.record.Runtime.ID != manifest.ID || record.record.Runtime.Version != manifest.Version ||
+		record.record.Runtime.Mode != manifest.Mode {
 		return nil, ErrChanged
 	}
 	if record.record.Runtime.Mode != loader.ModeHosted {
@@ -360,6 +363,5 @@ func cloneStorage(storage *packagecontract.Storage) *packagecontract.Storage {
 }
 
 func cloneCapabilitySpec(spec capability.CapabilitySpec) capability.CapabilitySpec {
-	spec.RequiredPermissions = slices.Clone(spec.RequiredPermissions)
 	return spec
 }

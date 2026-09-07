@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/capability"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/appconfig"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/executor"
 
@@ -87,7 +88,12 @@ func TestExecutorAppCheckerUsesCurrentAppPolicy(t *testing.T) {
 	config, err := appconfig.Normalize(appconfig.Config{
 		AppID: "campus-services", Enabled: true, ExecutorID: "executor.test", ExecutorConfig: []byte(`{"strategy":"test"}`),
 		MaxSteps: 8, MaxCapabilityCalls: 8, MaxExecutionUnits: 40960, MaxOutputBytes: 65536, ExecutionTimeout: 30 * time.Second,
-		EnabledCapabilities: []string{"campus.bus.routes.list"},
+		CapabilityGrants: []capability.Grant{{
+			ID: "grant-routes", AppID: "campus-services", Principal: capability.PrincipalAny,
+			CapabilityID: "campus.bus.routes.list", Resource: capability.ResourceScope{Type: "campus.bus.catalog"},
+			ExpiresAt: time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC), MaxCalls: 100,
+			PolicyRevision: "test",
+		}},
 	})
 	if err != nil {
 		t.Fatal(err)

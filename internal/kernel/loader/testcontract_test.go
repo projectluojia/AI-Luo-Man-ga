@@ -14,8 +14,6 @@ const (
 	testInvokeCapabilityID = "runtime.test.echo"
 	// testCapabilityID 是测试包对外暴露的能力标识。
 	testCapabilityID = "runtime.test.echo.cap"
-	// testInvokeScope 是 hosted 测试包调用的权限范围。
-	testInvokeScope = "runtime.test.invoke"
 )
 
 // staticHostFunctions 返回对所有清单提供同一组宿主函数的配置助手。

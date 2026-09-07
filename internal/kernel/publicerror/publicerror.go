@@ -41,7 +41,7 @@ func Capability(err error) Error {
 		return capabilityCodeTable["cycle_detected"]
 	case errors.Is(err, registry.ErrSchemaValidation):
 		return capabilityCodeTable["invalid_arguments"]
-	case errors.Is(err, registry.ErrPermissionDenied):
+	case errors.Is(err, runtime.ErrAuthorizationDenied):
 		return capabilityCodeTable["permission_denied"]
 	case errors.Is(err, runtime.ErrIdempotencyKeyRequired):
 		return capabilityCodeTable["idempotency_key_required"]

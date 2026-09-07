@@ -53,12 +53,11 @@ message GovernedRequestContext {
   string idempotency_key = 11;
   string confirmation_id = 12;
   string protocol_version = 13;
-  repeated string permission_scope = 14;
   repeated string call_chain = 15;
   string call_id = 16;
   string capability_id = 18;
-  reserved 17, 19, 20;
-  reserved "target_type", "service_id", "tool_id";
+  reserved 14, 17, 19, 20;
+  reserved "permission_scope", "target_type", "service_id", "tool_id";
 }
 
 message InvokeRequest {

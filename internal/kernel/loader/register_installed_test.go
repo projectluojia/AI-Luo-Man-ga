@@ -59,7 +59,8 @@ func capabilityRecord(runtimeID, packageID, componentID string, order int, capab
 			Role: loader.RoleProvider, LockedDigest: digest, Capabilities: []capability.CapabilitySpec{{
 				ID: capabilityID, Version: "1.2.3", Name: capabilityID,
 				InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
-				SideEffect:      capability.SideEffectRead,
+				Authorization:   capability.AuthorizationSpec{ResourceType: "capability.resource"},
+				Execution:       capability.ExecutionSpec{EffectTarget: capability.EffectNone, Replay: capability.ReplaySafe, ConfirmationFloor: capability.ConfirmationPolicy},
 			}},
 		},
 		PackageID: packageID, ComponentID: componentID, ComponentOrder: order,

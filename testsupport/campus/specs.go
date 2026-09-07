@@ -32,17 +32,23 @@ func Capabilities() []capability.CapabilitySpec {
 		{
 			ID: BusStopSearchCapabilityID, Version: PackageVersion, Name: "查询校巴站点",
 			Description:     "Search campus bus stops by a user-provided stop name or alias.",
-			InputSchemaJSON: BusStopSearchInputSchemaJSON, SideEffect: capability.SideEffectRead,
+			InputSchemaJSON: BusStopSearchInputSchemaJSON,
+			Authorization:   capability.AuthorizationSpec{ResourceType: "campus.bus.catalog"},
+			Execution:       capability.ExecutionSpec{EffectTarget: capability.EffectNone, Replay: capability.ReplaySafe, ConfirmationFloor: capability.ConfirmationPolicy},
 		},
 		{
 			ID: BusRouteListCapabilityID, Version: PackageVersion, Name: "列出校巴线路",
 			Description:     "List currently available campus bus routes and directions.",
-			InputSchemaJSON: BusRouteListInputSchemaJSON, SideEffect: capability.SideEffectRead,
+			InputSchemaJSON: BusRouteListInputSchemaJSON,
+			Authorization:   capability.AuthorizationSpec{ResourceType: "campus.bus.catalog"},
+			Execution:       capability.ExecutionSpec{EffectTarget: capability.EffectNone, Replay: capability.ReplaySafe, ConfirmationFloor: capability.ConfirmationPolicy},
 		},
 		{
 			ID: BusJourneySearchCapabilityID, Version: PackageVersion, Name: "查询校巴行程",
 			Description:     "Find direct campus bus journeys for stable origin and destination stop IDs and a departure time.",
-			InputSchemaJSON: BusJourneySearchInputSchemaJSON, SideEffect: capability.SideEffectRead,
+			InputSchemaJSON: BusJourneySearchInputSchemaJSON,
+			Authorization:   capability.AuthorizationSpec{ResourceType: "campus.bus.network"},
+			Execution:       capability.ExecutionSpec{EffectTarget: capability.EffectNone, Replay: capability.ReplaySafe, ConfirmationFloor: capability.ConfirmationPolicy},
 		},
 	}
 }

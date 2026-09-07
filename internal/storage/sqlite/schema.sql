@@ -25,17 +25,6 @@ CREATE TABLE app_memberships (
   FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE RESTRICT
 );
 
-CREATE TABLE permission_grants (
-  app_id TEXT NOT NULL CHECK(length(app_id) BETWEEN 1 AND 128),
-  user_id TEXT CHECK(length(user_id) BETWEEN 1 AND 128),
-  role_id TEXT CHECK(length(role_id) BETWEEN 1 AND 128),
-  permission TEXT NOT NULL CHECK(length(permission) BETWEEN 1 AND 128),
-  granted_at TEXT NOT NULL,
-  CHECK((user_id IS NULL) <> (role_id IS NULL)),
-  FOREIGN KEY (app_id, user_id) REFERENCES app_memberships(app_id, user_id) ON DELETE CASCADE,
-  FOREIGN KEY (app_id, role_id) REFERENCES roles(app_id, role_id) ON DELETE CASCADE
-);
-
 CREATE TABLE identity_binding_revisions (
   app_id TEXT PRIMARY KEY CHECK(length(app_id) BETWEEN 1 AND 128),
   revision INTEGER NOT NULL CHECK(revision > 0),
@@ -149,8 +138,7 @@ CREATE TABLE app_config_revisions (
   max_output_bytes INTEGER NOT NULL CHECK(max_output_bytes BETWEEN 1 AND 262144),
   max_cost_microusd INTEGER NOT NULL CHECK(max_cost_microusd BETWEEN 0 AND 1000000000000000),
   execution_timeout_ms INTEGER NOT NULL CHECK(execution_timeout_ms BETWEEN 100 AND 300000),
-  enabled_capabilities TEXT NOT NULL CHECK(length(enabled_capabilities)<=65536 AND json_valid(enabled_capabilities) AND json_type(enabled_capabilities)='array'),
-  permission_scope TEXT NOT NULL CHECK(length(permission_scope)<=65536 AND json_valid(permission_scope) AND json_type(permission_scope)='array'),
+  capability_grants TEXT NOT NULL CHECK(length(capability_grants)<=65536 AND json_valid(capability_grants) AND json_type(capability_grants)='array'),
   created_at TEXT NOT NULL,
   PRIMARY KEY(app_id,revision)
 );
@@ -193,8 +181,7 @@ CREATE TABLE runs (
   lease_token TEXT,
   lease_expires_at TEXT,
   last_executor_sequence INTEGER NOT NULL DEFAULT 0 CHECK(last_executor_sequence>=0),
-  capability_scope TEXT NOT NULL DEFAULT '[]' CHECK(length(capability_scope)<=65536 AND json_valid(capability_scope) AND json_type(capability_scope)='array'),
-  permission_scope TEXT NOT NULL DEFAULT '[]' CHECK(length(permission_scope)<=65536 AND json_valid(permission_scope) AND json_type(permission_scope)='array'),
+  capability_grants TEXT NOT NULL DEFAULT '[]' CHECK(length(capability_grants)<=65536 AND json_valid(capability_grants) AND json_type(capability_grants)='array'),
   recoverable_state TEXT NOT NULL CHECK(json_valid(recoverable_state)),
   result_payload BLOB NOT NULL DEFAULT '' CHECK(length(result_payload)<=262144),
   result_content_type TEXT NOT NULL DEFAULT '' CHECK(length(result_content_type)<=128),
@@ -287,7 +274,7 @@ CREATE TABLE confirmations (
   run_id TEXT NOT NULL,
   call_id TEXT NOT NULL,
   capability_id TEXT NOT NULL DEFAULT '',
-  side_effect TEXT NOT NULL CHECK(side_effect IN ('write','external')),
+  effect_target TEXT NOT NULL CHECK(effect_target IN ('governed_state','external')),
   idempotency_key TEXT NOT NULL CHECK(length(idempotency_key) BETWEEN 1 AND 128),
   argument_digest TEXT NOT NULL CHECK(length(argument_digest)=64),
   status TEXT NOT NULL CHECK(status IN ('waiting','approved','rejected','expired','revoked')),
@@ -361,8 +348,6 @@ CREATE TABLE package_snapshots (
 
 CREATE INDEX external_identities_user_idx ON external_identities(app_id, user_id);
 CREATE INDEX app_memberships_user_idx ON app_memberships(user_id);
-CREATE UNIQUE INDEX permission_grants_user_idx ON permission_grants(app_id, user_id, permission) WHERE user_id IS NOT NULL;
-CREATE UNIQUE INDEX permission_grants_role_idx ON permission_grants(app_id, role_id, permission) WHERE role_id IS NOT NULL;
 CREATE INDEX messages_history_idx ON messages(app_id, session_id, created_at, message_id);
 CREATE INDEX messages_sender_idx ON messages(app_id, session_id, sender_user_id, created_at);
 CREATE UNIQUE INDEX messages_platform_dedup_idx ON messages(app_id, platform_message_id) WHERE platform_message_id <> '';

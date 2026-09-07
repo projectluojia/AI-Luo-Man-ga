@@ -153,13 +153,8 @@ func ValidateManifest(manifest Manifest) error {
 			!json.Valid([]byte(spec.InputSchemaJSON)) {
 			return ErrInvalidFormat
 		}
-		switch spec.SideEffect {
-		case capability.SideEffectNone, capability.SideEffectRead,
-			capability.SideEffectWrite, capability.SideEffectExternal:
-		default:
-			return ErrInvalidFormat
-		}
-		if spec.RequiresConfirmation && spec.SideEffect != capability.SideEffectWrite && spec.SideEffect != capability.SideEffectExternal {
+		if capability.ValidateAuthorizationSpec(spec.Authorization) != nil ||
+			capability.ValidateExecutionSpec(spec.Execution) != nil {
 			return ErrInvalidFormat
 		}
 	}

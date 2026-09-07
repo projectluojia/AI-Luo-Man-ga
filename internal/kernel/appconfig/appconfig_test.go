@@ -6,23 +6,24 @@ import (
 	"testing"
 	"time"
 
+	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/capability"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/appconfig"
 )
 
 func TestNormalizeProducesCanonicalContentRevision(t *testing.T) {
 	config := validConfig()
-	config.EnabledCapabilities = []string{"campus.bus.stops.search", "campus.bus.routes.list"}
+	config.CapabilityGrants = grants("campus.bus.stops.search", "campus.bus.routes.list")
 	first, err := appconfig.Normalize(config)
 	if err != nil {
 		t.Fatal(err)
 	}
-	config.EnabledCapabilities = []string{"campus.bus.routes.list", "campus.bus.stops.search"}
+	config.CapabilityGrants = grants("campus.bus.routes.list", "campus.bus.stops.search")
 	second, err := appconfig.Normalize(config)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if first.Revision != second.Revision || first.Revision == "" ||
-		first.EnabledCapabilities[0] != "campus.bus.routes.list" {
+		first.CapabilityGrants[0].CapabilityID != "campus.bus.routes.list" {
 		t.Fatalf("first=%#v second=%#v", first, second)
 	}
 	second.ExecutorConfig = json.RawMessage(`{"strategy":"other"}`)
@@ -34,13 +35,12 @@ func TestNormalizeProducesCanonicalContentRevision(t *testing.T) {
 		t.Fatal("different opaque executor configuration reused a revision")
 	}
 	config = validConfig()
-	config.EnabledCapabilities = nil
-	config.PermissionScope = []string{"institution:bus.read"}
+	config.CapabilityGrants = grants("institution.bus.read")
 	empty, err := appconfig.Normalize(config)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if empty.EnabledCapabilities == nil || empty.PermissionScope == nil {
+	if empty.CapabilityGrants == nil {
 		t.Fatalf("empty collections were not canonical JSON arrays: %#v", empty)
 	}
 }
@@ -59,12 +59,16 @@ func TestNormalizeRejectsUnsafeOrUnboundedConfiguration(t *testing.T) {
 		func() appconfig.Config { value := validConfig(); value.MaxExecutionUnits = 0; return value }(),
 		func() appconfig.Config {
 			value := validConfig()
-			value.PermissionScope = []string{"bus.read", "bus.read"}
+			value.CapabilityGrants = grants("a.capability", "a.capability")
 			return value
 		}(),
 		func() appconfig.Config {
 			value := validConfig()
-			value.PermissionScope = []string{strings.Repeat("a", 129)}
+			value.CapabilityGrants = []capability.Grant{{
+				ID: strings.Repeat("a", 129), AppID: "campus-services", Principal: capability.PrincipalAny,
+				CapabilityID: "a.capability", Resource: capability.ResourceScope{Type: "capability.resource"},
+				ExpiresAt: time.Now().Add(time.Hour), MaxCalls: 1,
+			}}
 			return value
 		}(),
 	}
@@ -125,7 +129,7 @@ func TestVerifyRejectsMismatchedIdentityAndRevisionContent(t *testing.T) {
 	}
 	snapshot = appconfig.PolicySnapshot{
 		AppID: "campus-services", Revision: "static", Generation: 1, Enabled: true,
-		EnabledCapabilities: []string{"z", "a"},
+		CapabilityGrants: []capability.Grant{grant("z"), grant("a")},
 	}
 	if err := snapshot.Verify("campus-services"); err == nil {
 		t.Fatal("non-canonical policy snapshot passed verification")
@@ -138,6 +142,23 @@ func validConfig() appconfig.Config {
 		ExecutorConfig: json.RawMessage(`{"strategy":"test"}`),
 		MaxSteps:       8, MaxCapabilityCalls: 8, MaxExecutionUnits: 40960,
 		MaxOutputBytes: 65536, ExecutionTimeout: 30 * time.Second,
-		EnabledCapabilities: []string{"campus.bus.routes.list"}, PermissionScope: []string{"bus.read"},
+		CapabilityGrants: grants("campus.bus.routes.list"),
 	}
+}
+
+func grant(capabilityID string) capability.Grant {
+	return capability.Grant{
+		ID: "grant-" + capabilityID, AppID: "campus-services", Principal: capability.PrincipalAny,
+		CapabilityID: capabilityID, Resource: capability.ResourceScope{Type: "capability.resource"},
+		ExpiresAt: time.Date(2026, 9, 6, 0, 0, 0, 0, time.UTC), MaxCalls: 100,
+		PolicyRevision: "test",
+	}
+}
+
+func grants(ids ...string) []capability.Grant {
+	result := make([]capability.Grant, 0, len(ids))
+	for _, id := range ids {
+		result = append(result, grant(id))
+	}
+	return result
 }
