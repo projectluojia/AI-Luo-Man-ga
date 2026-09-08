@@ -1,46 +1,38 @@
-name: Hosted packages
+name: Packages
 
-# packages/ 下全部 hosted provider 包共享一条矩阵流水线：module 校验 +
-# wasip1 vet + 单元测试 + pack + 冒烟安装。guestkit 是 guest 侧共享 ABI
-# 库（仓库根，非可安装包），由独立 job 校验。各包迁移到独立仓库时，把
-# 对应 job 复制为独立 workflow。
+# packages/ 下全部可安装包共享一条矩阵流水线：module 校验 + 单元测试 +
+# pack + 冒烟安装；hosted 包加 wasip1 vet，isolated 包加原生 vet/test。
+# guestkit（guest 侧共享 ABI 库，非可安装包）由独立 job 校验。
+# 各包迁移到独立仓库时，把对应 matrix 条目复制为独立 workflow。
 # 该流程不参与 Core 的 ci-required。
 
 on:
   push:
     branches: [main]
     paths:
+      - packages/**
       - guestkit/**
-      - packages/timetable/**
-      - packages/classroom/**
-      - packages/calendar/**
-      - packages/library/**
-      - packages/sports/**
-      - packages/ecard/**
+      - contracts/**
       - package-manager/**
       - go.work
       - go.work.sum
-      - .github/workflows/hosted-packages.yml
+      - .github/workflows/packages.yml
   pull_request:
     paths:
+      - packages/**
       - guestkit/**
-      - packages/timetable/**
-      - packages/classroom/**
-      - packages/calendar/**
-      - packages/library/**
-      - packages/sports/**
-      - packages/ecard/**
+      - contracts/**
       - package-manager/**
       - go.work
       - go.work.sum
-      - .github/workflows/hosted-packages.yml
+      - .github/workflows/packages.yml
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: hosted-packages-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: packages-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -73,13 +65,18 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        package:
-          - timetable
-          - classroom
-          - calendar
-          - library
-          - sports
-          - ecard
+        include:
+          # hosted（wasm guest，ABI 1）；id 为安装发布物中的包 ID（目录名可不同）
+          - { package: timetable,   id: timetable, kind: hosted }
+          - { package: classroom,   id: classroom, kind: hosted }
+          - { package: calendar,    id: calendar,  kind: hosted }
+          - { package: library,     id: library,   kind: hosted }
+          - { package: sports,      id: sports,    kind: hosted }
+          - { package: ecard,       id: ecard,     kind: hosted }
+          - { package: campus-bus,  id: campus,    kind: hosted }
+          # isolated（原生进程）
+          - { package: weather,     id: weather,   kind: isolated }
+          # agent 是 executor 包（isolated，Python runtime），由 agent-package.yml 校验
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -91,16 +88,21 @@ jobs:
           cache-dependency-path: |
             packages/${{ matrix.package }}/go.mod
             guestkit/go.mod
-            go.work.sum
-      - name: 校验 ${{ matrix.package }} Go module 与 WASM 构建
+            contracts/go.sum
+            package-manager/go.sum
+      - name: 校验 ${{ matrix.package }} Go module 与构建
         working-directory: packages/${{ matrix.package }}
         shell: bash
         run: |
           set -euo pipefail
           go mod verify
           go mod tidy -diff
-          go test ./...
-          GOOS=wasip1 GOARCH=wasm go vet ./src
+          if [ "${{ matrix.kind }}" = hosted ]; then
+            GOOS=wasip1 GOARCH=wasm go vet ./src
+          else
+            go vet ./src/...
+            go test ./src/...
+          fi
       - name: 构建 Package Manager CLI
         working-directory: package-manager
         run: |
@@ -112,7 +114,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          package_id="${{ matrix.package }}"
+          package_id="${{ matrix.id }}"
           mapfile -t package_tarballs < <(find "$RUNNER_TEMP/package-dist" -maxdepth 1 -type f -name "${package_id}-*.tgz" -print)
           test "${#package_tarballs[@]}" -eq 1
           package_tgz="${package_tarballs[0]}"
