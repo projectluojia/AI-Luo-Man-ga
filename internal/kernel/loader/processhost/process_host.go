@@ -170,14 +170,15 @@ func (h *ProcessHost) loadExecutor(ctx context.Context, manifest loader.Manifest
 	return runtime, nil
 }
 
-// loadCapability 启动 capability 进程并经 runtime_host 协议装载。
+// loadCapability 连接（或启动）runtime_host 协议的能力运行时进程。
 func (h *ProcessHost) loadCapability(ctx context.Context, manifest loader.Manifest, spec packagecontract.ProcessSpec) (loader.Runtime, error) {
-	if !h.shouldSpawn(manifest) {
-		return nil, ErrInvalidProcessSpec
-	}
-	process, err := StartProcess(ctx, spec, h.config.Stdout, h.config.Stderr)
-	if err != nil {
-		return nil, loader.ErrUnavailable
+	var process *Process
+	if h.shouldSpawn(manifest) {
+		var err error
+		process, err = StartProcess(ctx, spec, h.config.Stdout, h.config.Stderr)
+		if err != nil {
+			return nil, loader.ErrUnavailable
+		}
 	}
 	shared := &runtimeShared{
 		manifest: manifest, process: process,
@@ -200,7 +201,7 @@ func (h *ProcessHost) loadCapability(ctx context.Context, manifest loader.Manife
 	loaded, err := grpcHost.Load(watchContext, manifest)
 	stopWatch()
 	if err != nil {
-		if process.Exited() {
+		if process != nil && process.Exited() {
 			err = loader.ErrUnavailable
 		}
 		return nil, errors.Join(err, wrapped.releaseAfterLoad(ctx))
@@ -257,10 +258,10 @@ func (h *ProcessHost) Close(ctx context.Context) error {
 	return errors.Join(result...)
 }
 
-// validateSpec 校验解析出的进程规格：连接模式的 executor 只校验地址与限额，
-// 由本宿主启动的进程叠加文件系统与内容安全校验。
+// validateSpec 校验解析出的进程规格：由本宿主启动的进程叠加文件系统与内容
+// 安全校验；外部托管运行时（连接模式）只校验地址与限额。
 func (h *ProcessHost) validateSpec(manifest loader.Manifest, spec packagecontract.ProcessSpec) error {
-	if manifest.Role == loader.RoleExecutor && !h.shouldSpawn(manifest) {
+	if !h.shouldSpawn(manifest) {
 		if !packagecontract.IsLocalRuntimeAddress(spec.Address) || !packagecontract.ValidProcessLimits(spec.Limits) {
 			return ErrInvalidProcessSpec
 		}
