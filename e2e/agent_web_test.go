@@ -5,6 +5,9 @@ package e2e_test
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	cryptorand "crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -136,7 +139,11 @@ func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 		t.Fatalf("读取已安装 Executor 包失败: %v", err)
 	}
 	projectRoot := writeExecutorProject(t, installed)
-	catalog, err := packagesource.NewCatalog(executorInstallRoot)
+	trustedSigners, err := packagesource.ParseTrustedSigners(os.Getenv("AILUO_TRUSTED_SIGNERS"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := packagesource.NewCatalog(executorInstallRoot, trustedSigners)
 	if err != nil {
 		t.Fatalf("创建安装包目录: %v", err)
 	}
@@ -376,6 +383,10 @@ func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 // installedExecutorPackage 返回已经经过 Package Manager 安装的 Executor 包。
 // CI 可通过环境变量提供已安装目录；本地未提供时走同一 CLI 先打包再安装，
 // 不允许测试直接把源码目录当成运行时。
+//
+// e2e 部署自己的信任链：CI 路径的包由工作流一次性密钥签署，信任集合经
+// AILUO_TRUSTED_SIGNERS 环境变量传入；本地路径生成一次性密钥对——私钥给
+// 打包命令（AILUO_SIGNING_KEY），公钥给目录装载（AILUO_TRUSTED_SIGNERS）。
 func installedExecutorPackage(t *testing.T) string {
 	t.Helper()
 	if configured := strings.TrimSpace(os.Getenv("AILUO_EXECUTOR_PACKAGE_DIR")); configured != "" {
@@ -385,6 +396,12 @@ func installedExecutorPackage(t *testing.T) string {
 		}
 		return path
 	}
+	publicKey, privateKey, err := ed25519.GenerateKey(cryptorand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AILUO_SIGNING_KEY", hex.EncodeToString(privateKey.Seed()))
+	t.Setenv("AILUO_TRUSTED_SIGNERS", hex.EncodeToString(publicKey))
 	repositoryRoot := findRepositoryRoot(t)
 	source := filepath.Join(repositoryRoot, "packages", "agent")
 	distribution := t.TempDir()

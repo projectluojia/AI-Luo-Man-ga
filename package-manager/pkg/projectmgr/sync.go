@@ -4,6 +4,7 @@ package projectmgr
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -46,10 +47,15 @@ type SyncOptions struct {
 }
 
 // SyncWithOptions 解析项目 ailuo.toml 的完整依赖闭包并原子发布安装根与项目锁。
-// 解析失败、约束冲突、来源不一致或锁定内容漂移都会直接返回错误。
+// 解析失败、约束冲突、来源不一致或锁定内容漂移都会直接返回错误。签名密钥来自
+// AILUO_SIGNING_KEY：本地路径源打包时对 lock 签名；未配置则产出未签名安装。
 func SyncWithOptions(ctx context.Context, projectFile, installRoot string, client *packmgr.GitHubClient, options SyncOptions) (result projectcontract.Lock, err error) {
 	if installRoot == "" {
 		return projectcontract.Lock{}, packagecontract.ErrInvalidFormat
+	}
+	signingKey, err := packmgr.SigningKeyFromEnv()
+	if err != nil {
+		return projectcontract.Lock{}, err
 	}
 	projectFile, err = filepath.Abs(projectFile)
 	if err != nil {
@@ -107,6 +113,7 @@ func SyncWithOptions(ctx context.Context, projectFile, installRoot string, clien
 		resolvedProjectDir: resolvedProjectDir,
 		tempDir:            tempDir,
 		client:             client,
+		signingKey:         signingKey,
 		cache:              make(map[string]candidate),
 		locked:             previousLock,
 	}
@@ -258,6 +265,7 @@ type resolver struct {
 	resolvedProjectDir string
 	tempDir            string
 	client             *packmgr.GitHubClient
+	signingKey         ed25519.PrivateKey
 	cache              map[string]candidate
 	locked             map[string]projectcontract.LockedPackage
 }
@@ -390,7 +398,7 @@ func (r *resolver) load(ctx context.Context, id string, source sourceRef, constr
 		if err != nil {
 			return candidate{}, err
 		}
-		installSource, err = packmgr.PackFromSource(ctx, source.path, r.tempDir, manifest, manifestBytes)
+		installSource, err = packmgr.PackFromSource(ctx, source.path, r.tempDir, manifest, manifestBytes, r.signingKey)
 		if err != nil {
 			return candidate{}, err
 		}

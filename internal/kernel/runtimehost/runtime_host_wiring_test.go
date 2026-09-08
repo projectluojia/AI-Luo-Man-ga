@@ -118,7 +118,7 @@ func TestRuntimeHostProductionWiring(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	catalog, err := packagesource.NewCatalog(root)
+	catalog, err := packagesource.NewCatalog(root, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

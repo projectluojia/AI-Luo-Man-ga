@@ -4,6 +4,8 @@ package loader_test
 
 import (
 	"context"
+	"crypto/ed25519"
+	cryptorand "crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -23,10 +25,7 @@ import (
 func TestInstalledCatalogDiscoversVerifiesAndRegistersHostedRuntime(t *testing.T) {
 	root := t.TempDir()
 	artifact := writeInstalledFixture(t, root, "extension.test", loader.ModeHosted, false)
-	catalog, err := packagesource.NewCatalog(root)
-	if err != nil {
-		t.Fatal(err)
-	}
+	catalog := trustedSignerCatalog(t, root)
 	records, err := discoverCatalogLocked(t, catalog, root)
 	if err != nil || len(records) != 1 {
 		t.Fatalf("records=%#v err=%v", records, err)
@@ -67,10 +66,7 @@ func TestInstalledCatalogDiscoversVerifiesAndRegistersHostedRuntime(t *testing.T
 func TestInstalledCatalogReverificationRejectsUnexpectedRootEntry(t *testing.T) {
 	root := t.TempDir()
 	writeInstalledFixture(t, root, "extension.test", loader.ModeHosted, false)
-	catalog, err := packagesource.NewCatalog(root)
-	if err != nil {
-		t.Fatal(err)
-	}
+	catalog := trustedSignerCatalog(t, root)
 	records, err := discoverCatalogLocked(t, catalog, root)
 	if err != nil {
 		t.Fatal(err)
@@ -123,10 +119,7 @@ func TestRegisterInstalledKeepsExecutorOnlyPackageGroup(t *testing.T) {
 func TestInstalledCatalogResolvesIsolatedProcessAndRejectsCatalogTampering(t *testing.T) {
 	root := t.TempDir()
 	writeInstalledFixture(t, root, "isolated.test", loader.ModeIsolated, false)
-	catalog, err := packagesource.NewCatalog(root)
-	if err != nil {
-		t.Fatal(err)
-	}
+	catalog := trustedSignerCatalog(t, root)
 	projectLock := catalogProjectLock(t, root)
 	records, err := catalog.DiscoverLocked(t.Context(), projectLock)
 	if err != nil || len(records) != 1 {
@@ -160,7 +153,7 @@ func TestInstalledCatalogResolvesIsolatedProcessAndRejectsCatalogTampering(t *te
 func TestInstalledRegistrationRollsBackLoaderOnRegistryConflict(t *testing.T) {
 	root := t.TempDir()
 	writeInstalledFixture(t, root, "extension.test", loader.ModeHosted, false)
-	catalog, _ := packagesource.NewCatalog(root)
+	catalog := trustedSignerCatalog(t, root)
 	records, err := discoverCatalogLocked(t, catalog, root)
 	if err != nil {
 		t.Fatal(err)
@@ -200,7 +193,7 @@ func TestInstalledCatalogRejectsDuplicateJSONAndWritableDirectory(t *testing.T) 
 		t.Fatal(err)
 	}
 	rewriteManifestDigest(t, directory, duplicate)
-	catalog, _ := packagesource.NewCatalog(root)
+	catalog := trustedSignerCatalog(t, root)
 	if _, err := catalog.DiscoverLocked(t.Context(), projectLock); !errors.Is(err, packagesource.ErrInvalidCatalog) {
 		t.Fatalf("重复 JSON 键错误=%v", err)
 	}
@@ -211,7 +204,7 @@ func TestInstalledCatalogRejectsDuplicateJSONAndWritableDirectory(t *testing.T) 
 	if err := os.Chmod(filepath.Join(root, "extension.test"), 0o770); err != nil {
 		t.Fatal(err)
 	}
-	catalog, _ = packagesource.NewCatalog(root)
+	catalog = trustedSignerCatalog(t, root)
 	if _, err := catalog.DiscoverLocked(t.Context(), projectLock); !errors.Is(err, packagesource.ErrInvalidCatalog) {
 		t.Fatalf("可写安装目录错误=%v", err)
 	}
@@ -283,6 +276,24 @@ func writeInstalledFixture(t *testing.T, root, pkgID, mode string, unknown bool)
 		PackageVersion: "1.0.0",
 		ManifestSHA256: hex.EncodeToString(manifestDigest[:]),
 		Artifacts:      []packagecontract.LockedArtifact{lockedArtifact},
+	}
+	if mode == loader.ModeIsolated {
+		// 含 isolated 组件的包在装载期强制签名执法：fixture 用一次性密钥
+		// 签署 lock，目录目录源按同一密钥的公钥装载。
+		publicKey, privateKey, err := ed25519.GenerateKey(cryptorand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		signature, err := packagecontract.Sign(lock, privateKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lock.Signature = &signature
+		signers, err := packagesource.ParseTrustedSigners(hex.EncodeToString(publicKey))
+		if err != nil {
+			t.Fatal(err)
+		}
+		setFixtureTrustedSigners(t, signers)
 	}
 	lockBytes, err := json.Marshal(lock)
 	if err != nil {
@@ -369,10 +380,7 @@ func writeDeclaredFixture(t *testing.T, root, runtimeID string, decls []packagec
 	if err := os.WriteFile(filepath.Join(directory, "lock.json"), lockBytes, 0o640); err != nil {
 		t.Fatal(err)
 	}
-	catalog, err := packagesource.NewCatalog(root)
-	if err != nil {
-		t.Fatal(err)
-	}
+	catalog := trustedSignerCatalog(t, root)
 	records, err := discoverCatalogLocked(t, catalog, root)
 	if err != nil {
 		t.Fatal(err)
@@ -392,10 +400,7 @@ func TestInstalledCatalogAcceptsHostFunctionDeclarations(t *testing.T) {
 		record.Runtime.HostFunctions[0].Module != "ailuo.extension" || record.Runtime.HostFunctions[0].Name != "query" {
 		t.Fatalf("record host functions = %+v, want ailuo.extension.query", record.Runtime.HostFunctions)
 	}
-	catalog, err := packagesource.NewCatalog(root)
-	if err != nil {
-		t.Fatal(err)
-	}
+	catalog := trustedSignerCatalog(t, root)
 	if err := catalog.VerifyRuntime(t.Context(), record.Runtime); err != nil {
 		t.Fatalf("VerifyRuntime: %v", err)
 	}
@@ -420,7 +425,7 @@ func TestInstalledCatalogRejectsInvalidDeclarations(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
-			if _, err := packagesource.NewCatalog(root); err != nil {
+			if _, err := packagesource.NewCatalog(root, nil); err != nil {
 				t.Fatal(err)
 			}
 			if tc.hostedOK {
@@ -469,10 +474,7 @@ func TestInstalledCatalogRejectsInvalidDeclarations(t *testing.T) {
 				if err := os.WriteFile(filepath.Join(directory, "lock.json"), lockBytes, 0o640); err != nil {
 					t.Fatal(err)
 				}
-				catalog, err := packagesource.NewCatalog(root)
-				if err != nil {
-					t.Fatal(err)
-				}
+				catalog := trustedSignerCatalog(t, root)
 				if _, err := catalog.DiscoverLocked(t.Context(), catalogProjectLockForIDs(t, root, "extension.bad")); !errors.Is(err, packagesource.ErrInvalidCatalog) {
 					t.Fatalf("Discover with invalid declarations error = %v, want ErrInvalidCatalog", err)
 				}

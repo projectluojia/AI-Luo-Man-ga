@@ -22,7 +22,10 @@ func newGitHubTestClient(t *testing.T, apiHandler, uploadsHandler http.HandlerFu
 	api := httptest.NewServer(apiHandler)
 	uploads := httptest.NewServer(uploadsHandler)
 	t.Cleanup(func() { api.Close(); uploads.Close() })
-	client := packmgr.NewGitHubClient()
+	client, err := packmgr.NewGitHubClient()
+	if err != nil {
+		t.Fatal(err)
+	}
 	client.APIBase = api.URL
 	client.UploadBase = uploads.URL
 	client.Token = "test-token"
@@ -185,7 +188,7 @@ func TestInstallFromReleaseEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tarballPath, err := packmgr.PackFromSource(context.Background(), source, t.TempDir(), manifest, manifestBytes)
+	tarballPath, err := packmgr.PackFromSource(context.Background(), source, t.TempDir(), manifest, manifestBytes, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -232,7 +235,7 @@ func TestInstallFromReleaseRejectsManifestVersionBeforeInstall(t *testing.T) {
 	if err := packagecontract.DecodeStrictJSON(manifestBytes, &manifest); err != nil {
 		t.Fatal(err)
 	}
-	tarballPath, err := packmgr.PackFromSource(context.Background(), source, t.TempDir(), manifest, manifestBytes)
+	tarballPath, err := packmgr.PackFromSource(context.Background(), source, t.TempDir(), manifest, manifestBytes, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -299,7 +302,7 @@ func TestPublishTarballCreatesReleaseAndUploadsAsset(t *testing.T) {
 	writeSourcePackage(t, source, "demo.pkg", "1.0.0", packagecontract.ModeHosted, "app.wasm", []packagecontract.Dependency{{ID: "dependency.pkg", Constraint: "^1.0.0", Source: "github:owner/dependency"}})
 	manifest, manifestBytes := readSourceManifest(t, source)
 	var err error
-	tarball, err := packmgr.PackFromSource(context.Background(), source, t.TempDir(), manifest, manifestBytes)
+	tarball, err := packmgr.PackFromSource(context.Background(), source, t.TempDir(), manifest, manifestBytes, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -368,7 +371,10 @@ func TestPublishRequiresToken(t *testing.T) {
 	source := filepath.Join(t.TempDir(), "pkg")
 	writeSourcePackage(t, source, "demo.pkg", "1.0.0", packagecontract.ModeHosted, "app.wasm", nil)
 	manifest, manifestBytes := readSourceManifest(t, source)
-	client := packmgr.NewGitHubClient()
+	client, err := packmgr.NewGitHubClient()
+	if err != nil {
+		t.Fatal(err)
+	}
 	client.Token = ""
 	if _, err := client.PublishFromSource(context.Background(), "owner", "repo", source, manifest, manifestBytes); err == nil {
 		t.Fatal("Publish without token = nil, want error")
