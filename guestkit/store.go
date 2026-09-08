@@ -92,12 +92,6 @@ type storeListRequest struct {
 	AfterID    string `json:"after_id,omitempty"`
 }
 
-type storeListResponse struct {
-	Docs      []Document   `json:"docs"`
-	Meta      SnapshotMeta `json:"meta"`
-	MetaFound bool         `json:"meta_found"`
-}
-
 // put 请求（宿主函数 ailuo.store put 的 ABI 信封）。
 type storePutRequest struct {
 	Scope      Scope           `json:"scope,omitempty"`
@@ -172,14 +166,14 @@ func (c *StoreClient) List(scope Scope, collection string, limit int, afterID st
 	if response == nil {
 		return ListPage{}, errors.New("store list call failed")
 	}
-	var decoded storeListResponse
-	if err := json.Unmarshal(response, &decoded); err != nil {
+	var page ListPage
+	if err := json.Unmarshal(response, &page); err != nil {
 		return ListPage{}, err
 	}
-	if decoded.Docs == nil {
-		decoded.Docs = []Document{}
+	if page.Docs == nil {
+		page.Docs = []Document{}
 	}
-	return ListPage{Docs: decoded.Docs, Meta: decoded.Meta, MetaFound: decoded.MetaFound}, nil
+	return page, nil
 }
 
 // Put 以 upsert 语义写个人作用域文档。系统作用域写入没有 guest 路径，
