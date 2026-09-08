@@ -77,7 +77,7 @@ func TestPackFromSourceRoundTripsThroughInstall(t *testing.T) {
 		t.Fatal(err)
 	}
 	outputDir := t.TempDir()
-	tarball, err := packmgr.PackFromSource(ctx, source, outputDir, manifest, manifestBytes)
+	tarball, err := packmgr.PackFromSource(ctx, source, outputDir, manifest, manifestBytes, nil)
 	if err != nil {
 		t.Fatalf("PackFromSource: %v", err)
 	}
@@ -108,7 +108,7 @@ func TestPackFromSourceRejectsMismatchedManifestBytes(t *testing.T) {
 	}
 	mismatched := append([]byte(nil), manifestBytes...)
 	mismatched = bytes.Replace(mismatched, []byte(`"demo.pkg"`), []byte(`"other.pkg"`), 1)
-	if _, err := packmgr.PackFromSource(context.Background(), source, t.TempDir(), manifest, mismatched); err == nil {
+	if _, err := packmgr.PackFromSource(context.Background(), source, t.TempDir(), manifest, mismatched, nil); err == nil {
 		t.Fatal("PackFromSource accepted mismatched manifest bytes")
 	}
 }

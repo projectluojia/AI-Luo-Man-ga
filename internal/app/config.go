@@ -40,7 +40,10 @@ type config struct {
 	executorTimeout time.Duration
 	// externalRuntimes 是部署方自行启动并托管的运行时 ID 集合：这些运行时
 	// 不由内核进程宿主启动，只按安装 lock 连接。
-	externalRuntimes    map[string]struct{}
+	externalRuntimes map[string]struct{}
+	// trustedSigners 是部署方信任的发布方 Ed25519 公钥（十六进制）：含 isolated
+	// 组件的包必须由其中之一签署才能装载；纯 hosted 沙箱包不要求签名。
+	trustedSigners      map[string]struct{}
 	environment         string
 	logLevel            slog.Level
 	logFormat           string
@@ -94,12 +97,17 @@ func loadConfig() (config, error) {
 	if err != nil {
 		return config{}, err
 	}
+	trustedSigners, err := packagesource.ParseTrustedSigners(os.Getenv("AILUO_TRUSTED_SIGNERS"))
+	if err != nil {
+		return config{}, err
+	}
 	result := config{
 		httpAddress:        envOr("AILUO_HTTP_ADDRESS", "127.0.0.1:8080"),
 		configUIAddress:    envOr("AILUO_CONFIG_UI_ADDRESS", configui.DefaultAddress),
 		localConfigRoot:    envOr("AILUO_CONFIG_DIR", "var"),
 		databasePath:       envOr("AILUO_DATABASE_PATH", "var/ailuo.db"),
 		externalRuntimes:   externalRuntimes,
+		trustedSigners:     trustedSigners,
 		environment:        envOr("AILUO_ENVIRONMENT", "development"),
 		logLevel:           logLevel,
 		logFormat:          envOr("AILUO_LOG_FORMAT", "console"),
@@ -227,7 +235,7 @@ func configureInstalledRuntimes(ctx context.Context, cfg config, packageStore pa
 	if err != nil {
 		return nil, nil, err
 	}
-	catalog, err := packagesource.NewCatalog(cfg.runtimeInstallRoot)
+	catalog, err := packagesource.NewCatalog(cfg.runtimeInstallRoot, cfg.trustedSigners)
 	if err != nil {
 		return nil, nil, fmt.Errorf("create installed runtime catalog: %w", err)
 	}

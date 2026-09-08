@@ -16,6 +16,28 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
 )
 
+// fixtureTrustedSigners 是 writeInstalledFixture 为最近签署的 isolated fixture
+// 记录的部署信任集合：fixture 构造与目录源构造不在同一函数，用测试局部变量
+// 传递，不引入全局态。
+var fixtureTrustedSigners map[string]struct{}
+
+// setFixtureTrustedSigners 记录当前测试的信任集合，并在测试结束时清空。
+func setFixtureTrustedSigners(t testing.TB, signers map[string]struct{}) {
+	t.Helper()
+	fixtureTrustedSigners = signers
+	t.Cleanup(func() { fixtureTrustedSigners = nil })
+}
+
+// trustedSignerCatalog 构造装载当前 fixture 所需的目录源。
+func trustedSignerCatalog(t testing.TB, root string) *packagesource.Catalog {
+	t.Helper()
+	catalog, err := packagesource.NewCatalog(root, fixtureTrustedSigners)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return catalog
+}
+
 func discoverCatalogLocked(t testing.TB, catalog *packagesource.Catalog, root string) ([]loader.InstalledRecord, error) {
 	t.Helper()
 	return catalog.DiscoverLocked(t.Context(), catalogProjectLock(t, root))

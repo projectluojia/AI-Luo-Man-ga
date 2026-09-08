@@ -283,7 +283,7 @@ func TestInstallAndPackDirectoryArtifact(t *testing.T) {
 	}
 	install(packageiotest.TempDir(t), source)
 
-	tarball, err := packmgr.PackFromSource(ctx, source, t.TempDir(), manifest, manifestBytes)
+	tarball, err := packmgr.PackFromSource(ctx, source, t.TempDir(), manifest, manifestBytes, nil)
 	if err != nil {
 		t.Fatalf("PackFromSource: %v", err)
 	}
@@ -505,7 +505,7 @@ func TestUpgradeAcceptsPackagedTarball(t *testing.T) {
 	v2 := filepath.Join(t.TempDir(), "v2")
 	writeSourcePackage(t, v2, "demo.upgrade", "2.0.0", packagecontract.ModeHosted, "app.wasm", nil)
 	manifest, manifestBytes := readSourceManifest(t, v2)
-	tarball, err := packmgr.PackFromSource(ctx, v2, t.TempDir(), manifest, manifestBytes)
+	tarball, err := packmgr.PackFromSource(ctx, v2, t.TempDir(), manifest, manifestBytes, nil)
 	if err != nil {
 		t.Fatalf("PackFromSource: %v", err)
 	}

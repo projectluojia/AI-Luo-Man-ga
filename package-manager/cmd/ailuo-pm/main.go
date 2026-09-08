@@ -2,6 +2,9 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
+	cryptorand "crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -42,6 +45,20 @@ func run(arguments []string, output io.Writer) error {
 	return runPackageCommand(ctx, arguments, output)
 }
 
+// runKeygen 生成 Ed25519 发布密钥对并输出两侧配置值：私钥种子进发布方的
+// AILUO_SIGNING_KEY，公钥进部署方的 AILUO_TRUSTED_SIGNERS。信任链的两个
+// 根都在这里一次性产出，避免手工构造十六进制密钥。
+func runKeygen(output io.Writer) error {
+	publicKey, privateKey, err := ed25519.GenerateKey(cryptorand.Reader)
+	if err != nil {
+		return fmt.Errorf("生成发布密钥失败: %w", err)
+	}
+	_, err = fmt.Fprintf(output,
+		"publisher signing key (AILUO_SIGNING_KEY):\n%s\ntrusted public key (AILUO_TRUSTED_SIGNERS):\n%s\n",
+		hex.EncodeToString(privateKey.Seed()), hex.EncodeToString(publicKey))
+	return err
+}
+
 // runPackageCommand 执行包管理 CLI：sync/install 支持项目或本地包，install 还
 // 支持 GitHub Release 源（owner/repo[@约束]），upgrade/uninstall/list/unlock/pack/publish
 // 见各分支。
@@ -72,6 +89,15 @@ func runPackageCommand(parent context.Context, arguments []string, output io.Wri
 	if *force && command != "unlock" {
 		return fmt.Errorf("configuration error: --force 只适用于 unlock")
 	}
+	// keygen 不消费任何密钥环境：它是信任链的引导入口。
+	if command == "keygen" {
+		return runKeygen(output)
+	}
+	// 签名密钥在命令入口统一解析：配置了但非法直接失败，不降级为未签名发布。
+	signingKey, err := packmgr.SigningKeyFromEnv()
+	if err != nil {
+		return err
+	}
 	ctx, cancel := context.WithTimeout(parent, 2*time.Minute)
 	defer cancel()
 	switch command {
@@ -83,7 +109,11 @@ func runPackageCommand(parent context.Context, arguments []string, output io.Wri
 		if err != nil {
 			return err
 		}
-		lock, err := projectmgr.SyncWithOptions(ctx, projectFile, *root, packmgr.NewGitHubClient(), projectmgr.SyncOptions{Update: *update})
+		client, err := packmgr.NewGitHubClient()
+		if err != nil {
+			return err
+		}
+		lock, err := projectmgr.SyncWithOptions(ctx, projectFile, *root, client, projectmgr.SyncOptions{Update: *update})
 		if err != nil {
 			return err
 		}
@@ -99,7 +129,11 @@ func runPackageCommand(parent context.Context, arguments []string, output io.Wri
 		var err error
 		_, sourceErr := os.Stat(source)
 		if errors.Is(sourceErr, fs.ErrNotExist) && isRegistry {
-			record, err = packmgr.InstallFromRelease(ctx, *root, packmgr.NewGitHubClient(), owner, name, constraint)
+			client, clientErr := packmgr.NewGitHubClient()
+			if clientErr != nil {
+				return clientErr
+			}
+			record, err = packmgr.InstallFromRelease(ctx, *root, client, owner, name, constraint)
 		} else if sourceErr != nil {
 			return sourceErr
 		} else {
@@ -119,7 +153,7 @@ func runPackageCommand(parent context.Context, arguments []string, output io.Wri
 					return stageErr
 				}
 				defer func() { _ = os.RemoveAll(stage) }()
-				archive, packErr := packmgr.PackFromSource(ctx, source, stage, manifest, manifestBytes)
+				archive, packErr := packmgr.PackFromSource(ctx, source, stage, manifest, manifestBytes, signingKey)
 				if packErr != nil {
 					return packErr
 				}
@@ -181,7 +215,7 @@ func runPackageCommand(parent context.Context, arguments []string, output io.Wri
 		if err != nil {
 			return err
 		}
-		tarballPath, err := packmgr.PackFromSource(ctx, flags.Arg(0), outputDir, manifest, manifestBytes)
+		tarballPath, err := packmgr.PackFromSource(ctx, flags.Arg(0), outputDir, manifest, manifestBytes, signingKey)
 		if err != nil {
 			return err
 		}
@@ -195,9 +229,11 @@ func runPackageCommand(parent context.Context, arguments []string, output io.Wri
 		if !ok || owner == "" || name == "" {
 			return fmt.Errorf("configuration error: publish requires --repo owner/repo")
 		}
-		client := packmgr.NewGitHubClient()
+		client, err := packmgr.NewGitHubClient()
+		if err != nil {
+			return err
+		}
 		var htmlURL string
-		var err error
 		if strings.HasSuffix(strings.ToLower(flags.Arg(0)), ".tgz") {
 			htmlURL, err = client.PublishTarball(ctx, owner, name, flags.Arg(0))
 		} else {

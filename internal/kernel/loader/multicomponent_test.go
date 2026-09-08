@@ -15,7 +15,6 @@ import (
 
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/capability"
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packagecontract"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/adapters/packagesource"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
@@ -150,10 +149,7 @@ func TestMultiComponentPackageRoutesCapabilitiesAndUpgradesGroup(t *testing.T) {
 	root := t.TempDir()
 	writeMultiComponentFixture(t, root, "1.0.0")
 
-	catalog, err := packagesource.NewCatalog(root)
-	if err != nil {
-		t.Fatal(err)
-	}
+	catalog := trustedSignerCatalog(t, root)
 	records, err := discoverCatalogLocked(t, catalog, root)
 	if err != nil {
 		t.Fatalf("Discover: %v", err)

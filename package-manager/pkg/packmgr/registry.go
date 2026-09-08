@@ -3,6 +3,7 @@ package packmgr
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -33,18 +34,26 @@ type GitHubClient struct {
 	HTTP       *http.Client
 	APIBase    string // 默认 githubAPI，测试注入 httptest 地址
 	UploadBase string // 默认 githubUploads
+	// signingKey 是发布签名密钥（来自 AILUO_SIGNING_KEY，可为 nil）：
+	// PublishFromSource 打包时对 lock 签名。
+	signingKey ed25519.PrivateKey
 }
 
-// NewGitHubClient 从环境变量读取 token；公开安装无需 token。
-func NewGitHubClient() *GitHubClient {
+// NewGitHubClient 从环境变量读取 token 与发布签名密钥；公开安装无需 token。
+// 签名密钥非法时返回显式错误——静默降级为未签名发布违反 fail-closed。
+func NewGitHubClient() (*GitHubClient, error) {
 	token := os.Getenv("GITHUB_TOKEN")
 	if token == "" {
 		token = os.Getenv("GH_TOKEN")
 	}
+	signingKey, err := SigningKeyFromEnv()
+	if err != nil {
+		return nil, err
+	}
 	return &GitHubClient{
 		Token: token, HTTP: &http.Client{Timeout: 60 * time.Second},
-		APIBase: githubAPI, UploadBase: githubUploads,
-	}
+		APIBase: githubAPI, UploadBase: githubUploads, signingKey: signingKey,
+	}, nil
 }
 
 func (c *GitHubClient) validatePublishArgs(owner, repo string) error {
@@ -68,7 +77,7 @@ func (c *GitHubClient) PublishFromSource(ctx context.Context, owner, repo, sourc
 		return "", err
 	}
 	defer func() { _ = os.RemoveAll(tempDir) }()
-	tarballPath, err := PackFromSource(ctx, sourceDir, tempDir, manifest, manifestBytes)
+	tarballPath, err := PackFromSource(ctx, sourceDir, tempDir, manifest, manifestBytes, c.signingKey)
 	if err != nil {
 		return "", err
 	}
@@ -105,7 +114,7 @@ func validateTarball(ctx context.Context, tarballPath string) (packagecontract.M
 	if _, err := readSourceArtifacts(ctx, sourceDir, source.Manifest); err != nil {
 		return packagecontract.Manifest{}, err
 	}
-	if err := validatePackagedSource(ctx, sourceDir, source, true); err != nil {
+	if err := validatePackagedSource(ctx, sourceDir, &source, true); err != nil {
 		return packagecontract.Manifest{}, err
 	}
 	return source.Manifest, nil
