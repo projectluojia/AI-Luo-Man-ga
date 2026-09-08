@@ -2,8 +2,8 @@
 // 清单（ailuo.toml）与源码，由 packagefmt go-wasm 构建器现场编译，ailuo.store
 // 宿主函数绑定到 packstore 端口——清单与 guest 的测试即生产形态。
 //
-// 各包测试辅助（campustest/timetabletest/campustoolstest/...）只声明自己的
-// 标识常量并调用 Register；装配机制不重复。
+// 测试通过 Packages 注册表按包目录取装配规格；能力标识、包 ID 等身份信息
+// 一律从真实清单派生（ManifestOf/CapabilityIDs），不手工复述。
 package hostedtest
 
 import (
@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packagecontract"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/idempotency"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
@@ -38,6 +39,73 @@ type Spec struct {
 	ComponentID string
 	// StorageNamespace 是清单 [storage] namespace 的期望值（防清单漂移）。
 	StorageNamespace string
+}
+
+// Packages 是全部 hosted 包的装配规格（测试统一从这里取标识，与各包
+// ailuo.toml 的漂移由 Register 的清单比对兜底）。
+var Packages = map[string]Spec{
+	"timetable":  {Dir: "timetable", ComponentID: "provider", StorageNamespace: "timetable/tables"},
+	"classroom":  {Dir: "classroom", ComponentID: "provider", StorageNamespace: "classroom/rooms"},
+	"calendar":   {Dir: "calendar", ComponentID: "provider", StorageNamespace: "calendar/events"},
+	"library":    {Dir: "library", ComponentID: "provider", StorageNamespace: "library/seats"},
+	"sports":     {Dir: "sports", ComponentID: "provider", StorageNamespace: "sports/venues"},
+	"ecard":      {Dir: "ecard", ComponentID: "provider", StorageNamespace: "ecard/credentials"},
+	"campus-bus": {Dir: "campus-bus", ComponentID: "bus", StorageNamespace: "campus/bus"},
+}
+
+// parsedManifests 缓存各包解析后的清单（进程内每包只解析一次）。
+var parsedManifests sync.Map // dir -> manifestResult
+
+type manifestResult struct {
+	once     sync.Once
+	manifest packagecontract.Manifest
+	err      error
+}
+
+// ManifestOf 返回包的真实清单（ailuo.toml，进程内只解析一次）：能力规格、
+// 包 ID、版本全部来自作者侧声明，测试与生产使用同一来源。
+func ManifestOf(t testing.TB, dir string) packagecontract.Manifest {
+	t.Helper()
+	loaded, _ := parsedManifests.LoadOrStore(dir, &manifestResult{})
+	entry := loaded.(*manifestResult)
+	entry.onceParse(dir)
+	if entry.err != nil {
+		t.Fatalf("parse %s ailuo.toml: %v", dir, entry.err)
+	}
+	return entry.manifest
+}
+
+func (m *manifestResult) onceParse(dir string) {
+	m.once.Do(func() {
+		spec, ok := Packages[dir]
+		if !ok {
+			m.err = fmt.Errorf("unknown hosted package dir %q", dir)
+			return
+		}
+		root, err := spec.PackageRoot()
+		if err != nil {
+			m.err = err
+			return
+		}
+		m.manifest, _, _, m.err = packagefmt.Parse(filepath.Join(root, "ailuo.toml"))
+	})
+}
+
+// CapabilityIDs 返回包清单 exports 的全部能力标识（测试批量启用策略用）。
+func CapabilityIDs(t testing.TB, dir string) []string {
+	manifest := ManifestOf(t, dir)
+	ids := make([]string, 0, len(manifest.Capabilities))
+	for _, spec := range manifest.Capabilities {
+		ids = append(ids, spec.ID)
+	}
+	return ids
+}
+
+// RegisterHosted 以 hosted 包形态装配 packages/<dir>：真实清单 + 真实 guest
+// 源码，ailuo.store 宿主函数绑定到 packstore 端口，与生产安装包链路一致。
+func RegisterHosted(t testing.TB, target *registry.Registry, store packstore.Store, dir string) {
+	t.Helper()
+	Register(t, target, store, Packages[dir])
 }
 
 // PackageRoot 返回仓库内包目录（testsupport/hostedtest → 上溯两级到仓库根，

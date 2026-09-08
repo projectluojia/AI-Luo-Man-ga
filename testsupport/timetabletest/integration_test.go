@@ -13,20 +13,24 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime"
 	"github.com/projectluojia/AI-Luo-Man-ga/testsupport/hostedtest"
-	"github.com/projectluojia/AI-Luo-Man-ga/testsupport/timetable/timetabletest"
 )
+
+// packageID 返回 timetable 包的真实包 ID（来自 ailuo.toml 清单）。
+func packageID(t *testing.T) string {
+	return hostedtest.ManifestOf(t, "timetable").ID
+}
 
 func newTimetableDispatcher(t *testing.T) *runtime.Dispatcher {
 	t.Helper()
 	reg := registry.New()
 	store := hostedtest.MemoryStore()
-	timetabletest.RegisterHosted(t, reg, store)
-	return hostedtest.NewDispatcher(t, reg, timetabletest.PackageID, timetabletest.CapabilityIDs())
+	hostedtest.RegisterHosted(t, reg, store, "timetable")
+	return hostedtest.NewDispatcher(t, reg, packageID(t), hostedtest.CapabilityIDs(t, "timetable"))
 }
 
 func invoke(t *testing.T, d *runtime.Dispatcher, capabilityID, payload, idempotencyKey, confirmationID string) (bool, json.RawMessage, string) {
 	t.Helper()
-	return hostedtest.Invoke(t, d, timetabletest.PackageID, capabilityID, payload, idempotencyKey, confirmationID)
+	return hostedtest.Invoke(t, d, packageID(t), capabilityID, payload, idempotencyKey, confirmationID)
 }
 
 // TestHostedTimetableLifecycle 经真实 wasm guest 走通课表生命周期：
@@ -34,7 +38,7 @@ func invoke(t *testing.T, d *runtime.Dispatcher, capabilityID, payload, idempote
 func TestHostedTimetableLifecycle(t *testing.T) {
 	d := newTimetableDispatcher(t)
 
-	ok, result, errText := invoke(t, d, timetabletest.CapabilityTimetableCreate,
+	ok, result, errText := invoke(t, d, "timetable.create",
 		`{"name":"期中","active":true}`, "idem-create", "")
 	if !ok {
 		t.Fatalf("create failed: %s", errText)
@@ -55,7 +59,7 @@ func TestHostedTimetableLifecycle(t *testing.T) {
 	}
 	tableID := created.Timetable.ID
 
-	ok, result, errText = invoke(t, d, timetabletest.CapabilityCourseCreate,
+	ok, result, errText = invoke(t, d, "timetable.course.create",
 		`{"timetable_id":"`+tableID+`","title":"高数","weekday":1,"class_from":1,"class_to":2,"weeks":[1,2,3]}`, "idem-course", "")
 	if !ok {
 		t.Fatalf("course create failed: %s", errText)
@@ -73,7 +77,7 @@ func TestHostedTimetableLifecycle(t *testing.T) {
 		t.Fatalf("course = %#v", courseResult.Course)
 	}
 
-	ok, result, errText = invoke(t, d, timetabletest.CapabilityCourseList,
+	ok, result, errText = invoke(t, d, "timetable.course.list",
 		`{"timetable_id":"`+tableID+`"}`, "", "")
 	if !ok {
 		t.Fatalf("course list failed: %s", errText)
@@ -90,7 +94,7 @@ func TestHostedTimetableLifecycle(t *testing.T) {
 		t.Fatalf("courses = %#v", listResult.Courses)
 	}
 
-	ok, _, errText = invoke(t, d, timetabletest.CapabilityTimetableDelete,
+	ok, _, errText = invoke(t, d, "timetable.delete",
 		`{"timetable_id":"`+tableID+`"}`, "idem-delete", "")
 	if ok {
 		t.Fatalf("delete without confirmation should fail, got success")
@@ -99,14 +103,14 @@ func TestHostedTimetableLifecycle(t *testing.T) {
 		t.Fatalf("delete error = %q, want confirmation required", errText)
 	}
 
-	ok, _, errText = invoke(t, d, timetabletest.CapabilityTimetableDelete,
+	ok, _, errText = invoke(t, d, "timetable.delete",
 		`{"timetable_id":"`+tableID+`"}`, "idem-delete", "confirm-1")
 	if !ok {
 		t.Fatalf("delete with confirmation failed: %s", errText)
 	}
 
 	// 删除后读取按带内 not-found 应答。
-	ok, result, errText = invoke(t, d, timetabletest.CapabilityTimetableGet,
+	ok, result, errText = invoke(t, d, "timetable.get",
 		`{"timetable_id":"`+tableID+`"}`, "", "")
 	if !ok {
 		t.Fatalf("get after delete failed: %s", errText)
@@ -126,7 +130,7 @@ func TestHostedTimetableLifecycle(t *testing.T) {
 func TestHostedTimetableImportAcademic(t *testing.T) {
 	d := newTimetableDispatcher(t)
 	payload := `{"format":"wuda","content":"{\"kbList\":[{\"kcmc\":\"高数\",\"xqjmc\":\"星期三\",\"jcs\":\"3-4\",\"zcd\":\"1-4周\",\"xm\":\"张老师\",\"cdmc\":\"教一101\"}]}","fileName":"教务.csv"}`
-	ok, result, errText := invoke(t, d, timetabletest.CapabilityImport, payload, "idem-import", "")
+	ok, result, errText := invoke(t, d, "timetable.import", payload, "idem-import", "")
 	if !ok {
 		t.Fatalf("import failed: %s", errText)
 	}
@@ -156,7 +160,7 @@ func TestHostedTimetableImportAcademic(t *testing.T) {
 // 门槛在端到端链路生效：无幂等键的写经 packstore 宿主函数被拒绝。
 func TestHostedTimetableWriteRequiresIdempotencyKey(t *testing.T) {
 	d := newTimetableDispatcher(t)
-	_, _, createErr := invoke(t, d, timetabletest.CapabilityTimetableCreate, `{"name":"期中"}`, "", "")
+	_, _, createErr := invoke(t, d, "timetable.create", `{"name":"期中"}`, "", "")
 	if createErr == "" {
 		t.Fatal("write without idempotency key should fail")
 	}
