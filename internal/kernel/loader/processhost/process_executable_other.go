@@ -1,6 +1,6 @@
 //go:build !unix && !windows
 
-package loader
+package processhost
 
 import "os"
 

@@ -1,4 +1,4 @@
-package loader
+package processhost
 
 import (
 	"context"
@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packagecontract"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
 )
 
 var reapHelper = flag.Bool("ailuo-test-reap-helper", false, "测试 Reap 辅助进程")
@@ -123,7 +124,7 @@ func TestValidProcessLimits(t *testing.T) {
 
 func TestProcessHostValidatesConfigurationAndMode(t *testing.T) {
 	t.Parallel()
-	resolve := func(context.Context, Manifest) (packagecontract.ProcessSpec, error) {
+	resolve := func(context.Context, loader.Manifest) (packagecontract.ProcessSpec, error) {
 		return packagecontract.ProcessSpec{}, nil
 	}
 	for _, config := range []ProcessHostConfig{
@@ -138,7 +139,7 @@ func TestProcessHostValidatesConfigurationAndMode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := host.Verify(context.Background(), Manifest{Mode: ModeHosted, ABIVersion: packagecontract.GuestABI1}); err != ErrUnsupportedMode {
+	if err := host.Verify(context.Background(), loader.Manifest{Mode: loader.ModeHosted, ABIVersion: packagecontract.GuestABI1}); err != loader.ErrUnsupportedMode {
 		t.Fatalf("mode error=%v", err)
 	}
 }

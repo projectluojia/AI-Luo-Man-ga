@@ -20,6 +20,8 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/app"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/identity"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader/wasmhost"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtimehost"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite"
 	"google.golang.org/grpc"
@@ -237,11 +239,11 @@ func serveRuntimeHost(installRoot, projectRoot, address string, output io.Writer
 		return fmt.Errorf("discover installed runtimes: %w", err)
 	}
 	hostedCount := 0
-	allowedRuntimes := make([]loader.BackendIdentity, 0, len(records))
+	allowedRuntimes := make([]runtimehost.BackendIdentity, 0, len(records))
 	for _, record := range records {
 		if record.Runtime.Mode == loader.ModeHosted {
 			hostedCount++
-			allowedRuntimes = append(allowedRuntimes, loader.BackendIdentity{
+			allowedRuntimes = append(allowedRuntimes, runtimehost.BackendIdentity{
 				ID: record.Runtime.ID, Version: record.Runtime.Version,
 			})
 		}
@@ -249,18 +251,18 @@ func serveRuntimeHost(installRoot, projectRoot, address string, output io.Writer
 	if hostedCount == 0 {
 		return fmt.Errorf("runtime host: install root contains no hosted runtimes")
 	}
-	backend, err := loader.NewHostedRuntimeBackend(loader.WasmHostConfig{ReadArtifact: catalog.ReadArtifact})
+	backend, err := runtimehost.NewHostedRuntimeBackend(wasmhost.WasmHostConfig{ReadArtifact: catalog.ReadArtifact})
 	if err != nil {
 		return fmt.Errorf("create hosted backend: %w", err)
 	}
-	protocolServer, err := loader.NewRuntimeHostProtocolServer(loader.RuntimeHostServerConfig{
+	protocolServer, err := runtimehost.NewRuntimeHostProtocolServer(runtimehost.RuntimeHostServerConfig{
 		Mode: loader.ModeHosted, Backend: backend, AllowedRuntimes: allowedRuntimes,
 		MaxRuntimes: hostedCount, MaxConcurrent: 64,
 	})
 	if err != nil {
 		return fmt.Errorf("create runtime host protocol server: %w", err)
 	}
-	grpcServer := grpc.NewServer(loader.RuntimeHostGRPCServerOptions()...)
+	grpcServer := grpc.NewServer(runtimehost.RuntimeHostGRPCServerOptions()...)
 	runtimev1.RegisterRuntimeHostServer(grpcServer, protocolServer)
 	listener, err := listenRuntimeHost(address)
 	if err != nil {

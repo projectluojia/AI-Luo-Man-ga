@@ -1,4 +1,4 @@
-package loader
+package runtimehost
 
 import (
 	"context"
@@ -10,10 +10,12 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packagecontract"
 	runtimev1 "github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/runtimev1"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
 
 const maxRuntimeDeadline = 24 * time.Hour
@@ -25,7 +27,7 @@ type BackendIdentity struct {
 
 // RuntimeHostBackend 实现扩展宿主内的实际装载；它不得绕过 Go 内核访问外部系统或权威存储。
 type RuntimeHostBackend interface {
-	Describe(context.Context, BackendIdentity) (Description, error)
+	Describe(context.Context, BackendIdentity) (loader.Description, error)
 	Start(context.Context, BackendIdentity) error
 	Health(context.Context, BackendIdentity) error
 	Invoke(context.Context, BackendIdentity, contracts.RequestContext, json.RawMessage) (json.RawMessage, error)
@@ -59,19 +61,19 @@ type RuntimeHostProtocolServer struct {
 }
 
 func NewRuntimeHostProtocolServer(config RuntimeHostServerConfig) (*RuntimeHostProtocolServer, error) {
-	if (config.Mode != ModeHosted && config.Mode != ModeIsolated) || config.Backend == nil || len(config.AllowedRuntimes) == 0 {
-		return nil, ErrInvalidManifest
+	if (config.Mode != loader.ModeHosted && config.Mode != loader.ModeIsolated) || config.Backend == nil || len(config.AllowedRuntimes) == 0 {
+		return nil, loader.ErrInvalidManifest
 	}
 	allowed := make(map[BackendIdentity]struct{}, len(config.AllowedRuntimes))
 	for _, identity := range config.AllowedRuntimes {
-		if !stableIDPattern.MatchString(identity.ID) {
-			return nil, ErrInvalidManifest
+		if !loader.StableIDPattern.MatchString(identity.ID) {
+			return nil, loader.ErrInvalidManifest
 		}
 		if _, err := packagecontract.ParseVersion(identity.Version); err != nil {
-			return nil, ErrInvalidManifest
+			return nil, loader.ErrInvalidManifest
 		}
 		if _, exists := allowed[identity]; exists {
-			return nil, ErrDuplicateID
+			return nil, loader.ErrDuplicateID
 		}
 		allowed[identity] = struct{}{}
 	}
@@ -83,7 +85,7 @@ func NewRuntimeHostProtocolServer(config RuntimeHostServerConfig) (*RuntimeHostP
 	}
 	if config.MaxRuntimes < 1 || config.MaxRuntimes > 4096 ||
 		config.MaxConcurrent < 1 || config.MaxConcurrent > 4096 {
-		return nil, ErrInvalidManifest
+		return nil, loader.ErrInvalidManifest
 	}
 	if config.Now == nil {
 		config.Now = time.Now
@@ -96,14 +98,14 @@ func NewRuntimeHostProtocolServer(config RuntimeHostServerConfig) (*RuntimeHostP
 
 func RuntimeHostGRPCServerOptions() []grpc.ServerOption {
 	return []grpc.ServerOption{
-		grpc.MaxRecvMsgSize(maxRuntimeMessageBytes),
-		grpc.MaxSendMsgSize(maxRuntimeMessageBytes),
+		grpc.MaxRecvMsgSize(loader.MaxRuntimeMessageBytes),
+		grpc.MaxSendMsgSize(loader.MaxRuntimeMessageBytes),
 	}
 }
 
 func (s *RuntimeHostProtocolServer) Describe(ctx context.Context, request *runtimev1.DescribeRequest) (*runtimev1.RuntimeDescription, error) {
 	identity, err := decodeRuntimeIdentity(request.GetIdentity())
-	if request == nil || hasUnknown(request) || err != nil {
+	if request == nil || hasUnknownProto(request) || err != nil {
 		return nil, safeRuntimeStatus(codes.InvalidArgument)
 	}
 	if !s.isAllowed(identity) {
@@ -118,7 +120,7 @@ func (s *RuntimeHostProtocolServer) Describe(ctx context.Context, request *runti
 	}
 	return &runtimev1.RuntimeDescription{
 		RuntimeId: description.ID, Version: description.Version, Mode: description.Mode,
-		SupportedProtocolVersions: []string{RuntimeHostProtocolVersion},
+		SupportedProtocolVersions: []string{loader.RuntimeHostProtocolVersion},
 	}, nil
 }
 
@@ -132,7 +134,7 @@ func (s *RuntimeHostProtocolServer) Start(ctx context.Context, request *runtimev
 	}
 	s.mu.Lock()
 	if entry := s.entries[identity]; entry != nil {
-		if entry.state == StateReady {
+		if entry.state == loader.StateReady {
 			s.mu.Unlock()
 			return serverLifecycleResponse(identity, true, "ready"), nil
 		}
@@ -143,16 +145,16 @@ func (s *RuntimeHostProtocolServer) Start(ctx context.Context, request *runtimev
 		s.mu.Unlock()
 		return nil, safeRuntimeStatus(codes.ResourceExhausted)
 	}
-	entry := &runtimeHostServerEntry{state: StateLoading}
+	entry := &runtimeHostServerEntry{state: loader.StateLoading}
 	s.entries[identity] = entry
 	s.mu.Unlock()
 
 	startErr := s.config.Backend.Start(ctx, identity)
 	s.mu.Lock()
 	if startErr != nil {
-		entry.state = StateFailed
+		entry.state = loader.StateFailed
 	} else {
-		entry.state = StateReady
+		entry.state = loader.StateReady
 	}
 	s.mu.Unlock()
 	if startErr != nil {
@@ -171,7 +173,7 @@ func (s *RuntimeHostProtocolServer) Health(ctx context.Context, request *runtime
 	}
 	s.mu.Lock()
 	entry := s.entries[identity]
-	ready := entry != nil && entry.state == StateReady
+	ready := entry != nil && entry.state == loader.StateReady
 	s.mu.Unlock()
 	if !ready {
 		return nil, safeRuntimeStatus(codes.FailedPrecondition)
@@ -214,8 +216,8 @@ func (s *RuntimeHostProtocolServer) Invoke(ctx context.Context, request *runtime
 	defer cancel()
 	result, invokeErr := s.config.Backend.Invoke(invokeContext, identity, governed, payload)
 	if invokeErr != nil {
-		var failure InvocationError
-		if errors.As(invokeErr, &failure) && stableIDPattern.MatchString(failure.Code) {
+		var failure loader.InvocationError
+		if errors.As(invokeErr, &failure) && loader.StableIDPattern.MatchString(failure.Code) {
 			return &runtimev1.InvokeResponse{
 				Identity: encodeRuntimeIdentity(identity), ErrorCode: failure.Code, Retryable: failure.Retryable,
 			}, nil
@@ -227,7 +229,7 @@ func (s *RuntimeHostProtocolServer) Invoke(ctx context.Context, request *runtime
 			Identity: encodeRuntimeIdentity(identity), ErrorCode: "capability_failed",
 		}, nil
 	}
-	if len(result) == 0 || len(result) > maxInvokeResultBytes || !json.Valid(result) {
+	if len(result) == 0 || len(result) > loader.MaxInvokeResultBytes || !json.Valid(result) {
 		s.markFailed(identity)
 		return nil, safeRuntimeStatus(codes.Internal)
 	}
@@ -250,16 +252,16 @@ func (s *RuntimeHostProtocolServer) Stop(ctx context.Context, request *runtimev1
 		s.mu.Unlock()
 		return serverLifecycleResponse(identity, false, "stopped"), nil
 	}
-	if entry.inFlight != 0 || (entry.state != StateReady && entry.state != StateFailed) {
+	if entry.inFlight != 0 || (entry.state != loader.StateReady && entry.state != loader.StateFailed) {
 		s.mu.Unlock()
 		return nil, safeRuntimeStatus(codes.FailedPrecondition)
 	}
-	entry.state = StateUnloading
+	entry.state = loader.StateUnloading
 	s.mu.Unlock()
 
 	if err := s.config.Backend.Stop(ctx, identity); err != nil {
 		s.mu.Lock()
-		entry.state = StateFailed
+		entry.state = loader.StateFailed
 		s.mu.Unlock()
 		return nil, mapRuntimeBackendStatus(err)
 	}
@@ -270,7 +272,7 @@ func (s *RuntimeHostProtocolServer) Stop(ctx context.Context, request *runtimev1
 }
 
 func (s *RuntimeHostProtocolServer) decodeInvoke(request *runtimev1.InvokeRequest) (BackendIdentity, contracts.RequestContext, json.RawMessage, error) {
-	if request == nil || hasUnknown(request) || request.Context == nil || hasUnknown(request.Context) {
+	if request == nil || hasUnknownProto(request) || request.Context == nil || hasUnknownProto(request.Context) {
 		return BackendIdentity{}, contracts.RequestContext{}, nil, safeRuntimeStatus(codes.InvalidArgument)
 	}
 	identity, err := decodeRuntimeIdentity(request.Identity)
@@ -302,7 +304,7 @@ func (s *RuntimeHostProtocolServer) decodeInvoke(request *runtimev1.InvokeReques
 		CallChain:       append([]string(nil), request.Context.CallChain...),
 	}
 	payload := append(json.RawMessage(nil), request.PayloadJson...)
-	if err := validateRuntimeInvoke(governed, payload, now); err != nil {
+	if err := loader.ValidateRuntimeInvoke(governed, payload, now); err != nil {
 		return BackendIdentity{}, contracts.RequestContext{}, nil, safeRuntimeStatus(codes.InvalidArgument)
 	}
 	return identity, governed, payload, nil
@@ -312,7 +314,7 @@ func (s *RuntimeHostProtocolServer) beginInvoke(identity BackendIdentity) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	entry := s.entries[identity]
-	if entry == nil || entry.state != StateReady {
+	if entry == nil || entry.state != loader.StateReady {
 		return false
 	}
 	entry.inFlight++
@@ -335,13 +337,13 @@ func (s *RuntimeHostProtocolServer) endInvoke(identity BackendIdentity) {
 func (s *RuntimeHostProtocolServer) markFailed(identity BackendIdentity) {
 	s.mu.Lock()
 	if entry := s.entries[identity]; entry != nil {
-		entry.state = StateFailed
+		entry.state = loader.StateFailed
 	}
 	s.mu.Unlock()
 }
 
 func decodeLifecycleRequest(request *runtimev1.LifecycleRequest) (BackendIdentity, error) {
-	if request == nil || hasUnknown(request) {
+	if request == nil || hasUnknownProto(request) {
 		return BackendIdentity{}, safeRuntimeStatus(codes.InvalidArgument)
 	}
 	identity, err := decodeRuntimeIdentity(request.Identity)
@@ -352,19 +354,19 @@ func decodeLifecycleRequest(request *runtimev1.LifecycleRequest) (BackendIdentit
 }
 
 func decodeRuntimeIdentity(identity *runtimev1.RuntimeIdentity) (BackendIdentity, error) {
-	if identity == nil || hasUnknown(identity) || !stableIDPattern.MatchString(identity.RuntimeId) ||
-		identity.ProtocolVersion != RuntimeHostProtocolVersion {
-		return BackendIdentity{}, ErrRuntimeProtocol
+	if identity == nil || hasUnknownProto(identity) || !loader.StableIDPattern.MatchString(identity.RuntimeId) ||
+		identity.ProtocolVersion != loader.RuntimeHostProtocolVersion {
+		return BackendIdentity{}, loader.ErrRuntimeProtocol
 	}
 	if _, err := packagecontract.ParseVersion(identity.Version); err != nil {
-		return BackendIdentity{}, ErrRuntimeProtocol
+		return BackendIdentity{}, loader.ErrRuntimeProtocol
 	}
 	return BackendIdentity{ID: identity.RuntimeId, Version: identity.Version}, nil
 }
 
 func encodeRuntimeIdentity(identity BackendIdentity) *runtimev1.RuntimeIdentity {
 	return &runtimev1.RuntimeIdentity{
-		RuntimeId: identity.ID, Version: identity.Version, ProtocolVersion: RuntimeHostProtocolVersion,
+		RuntimeId: identity.ID, Version: identity.Version, ProtocolVersion: loader.RuntimeHostProtocolVersion,
 	}
 }
 
@@ -380,7 +382,7 @@ func mapRuntimeBackendStatus(err error) error {
 		return safeRuntimeStatus(codes.Canceled)
 	case errors.Is(err, context.DeadlineExceeded):
 		return safeRuntimeStatus(codes.DeadlineExceeded)
-	case errors.Is(err, ErrRuntimeBusy):
+	case errors.Is(err, loader.ErrRuntimeBusy):
 		return safeRuntimeStatus(codes.ResourceExhausted)
 	default:
 		return safeRuntimeStatus(codes.Unavailable)
@@ -389,4 +391,9 @@ func mapRuntimeBackendStatus(err error) error {
 
 func safeRuntimeStatus(code codes.Code) error {
 	return status.Error(code, "runtime host request failed")
+}
+
+// hasUnknownProto 拒绝带未知字段的协议消息（协议漂移即失败，fail-closed）。
+func hasUnknownProto(message proto.Message) bool {
+	return message == nil || len(message.ProtoReflect().GetUnknown()) != 0
 }

@@ -1,6 +1,6 @@
 //go:build unix
 
-package loader_test
+package runtimehost_test
 
 import (
 	"context"
@@ -16,6 +16,7 @@ import (
 	runtimev1 "github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/runtimev1"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/adapters/packagesource"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtimehost"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -126,7 +127,7 @@ func TestRuntimeHostProductionWiring(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	protocolServer, err := loader.NewRuntimeHostProtocolServer(loader.RuntimeHostServerConfig{
+	protocolServer, err := runtimehost.NewRuntimeHostProtocolServer(runtimehost.RuntimeHostServerConfig{
 		Mode: loader.ModeHosted, ABIVersion: packagecontract.GuestABI1, Backend: backend,
 		AllowedRuntimes: []loader.BackendIdentity{{ID: records[0].Runtime.ID, Version: records[0].Runtime.Version}},
 		MaxRuntimes:     1, MaxConcurrent: 1,

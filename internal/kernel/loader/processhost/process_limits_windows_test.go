@@ -1,6 +1,6 @@
 //go:build integration && windows
 
-package loader
+package processhost
 
 import (
 	"os"

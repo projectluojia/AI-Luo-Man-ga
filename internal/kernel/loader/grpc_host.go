@@ -27,11 +27,13 @@ import (
 const RuntimeHostProtocolVersion = "3.0"
 
 const (
-	maxRuntimeMessageBytes = 512 << 10
+	// MaxRuntimeMessageBytes 是 runtime host 协议单条消息上限（客户端与服务端共用）。
+	MaxRuntimeMessageBytes = 512 << 10
 	maxInvokePayloadBytes  = 64 << 10
-	maxInvokeResultBytes   = 256 << 10
-	maxContextItems        = 64
-	maxContextValueBytes   = 256
+	// MaxInvokeResultBytes 是调用结果载荷上限（客户端与服务端共用）。
+	MaxInvokeResultBytes = 256 << 10
+	maxContextItems      = 64
+	maxContextValueBytes = 256
 )
 
 var ErrRuntimeProtocol = errors.New("runtime host protocol violation")
@@ -234,8 +236,8 @@ func (h *GRPCHost) dial(ctx context.Context) (*grpc.ClientConn, error) {
 			MinConnectTimeout: 250 * time.Millisecond,
 		}),
 		grpc.WithDefaultCallOptions(
-			grpc.MaxCallRecvMsgSize(maxRuntimeMessageBytes),
-			grpc.MaxCallSendMsgSize(maxRuntimeMessageBytes),
+			grpc.MaxCallRecvMsgSize(MaxRuntimeMessageBytes),
+			grpc.MaxCallSendMsgSize(MaxRuntimeMessageBytes),
 		),
 	}
 	if h.config.Dialer != nil {
@@ -340,7 +342,7 @@ func (r *grpcRuntime) Invoke(ctx context.Context, request contracts.RequestConte
 		return nil, ErrRuntimeProtocol
 	}
 	if response.Success {
-		if len(response.PayloadJson) == 0 || len(response.PayloadJson) > maxInvokeResultBytes ||
+		if len(response.PayloadJson) == 0 || len(response.PayloadJson) > MaxInvokeResultBytes ||
 			!json.Valid(response.PayloadJson) || response.ErrorCode != "" || response.Retryable {
 			return nil, ErrRuntimeProtocol
 		}
@@ -383,6 +385,12 @@ func (r *grpcRuntime) closeTransport() error {
 	return r.closeTransportLocked()
 }
 
+// CloseTransport 实现 loader.TransportCloser：不经生命周期 RPC 直接关闭
+// 底层 gRPC 连接，供宿主强制清理路径回收（进程已死时 Stop 必然失败）。
+func (r *grpcRuntime) CloseTransport() error {
+	return r.closeTransport()
+}
+
 func (r *grpcRuntime) closeTransportLocked() error {
 	if !r.owned || r.connection == nil {
 		return nil
@@ -401,6 +409,12 @@ func (r *grpcRuntime) identity() *runtimev1.RuntimeIdentity {
 func (r *grpcRuntime) validIdentity(identity *runtimev1.RuntimeIdentity) bool {
 	return !hasUnknown(identity) && identity.RuntimeId == r.manifest.ID &&
 		identity.Version == r.manifest.Version && identity.ProtocolVersion == RuntimeHostProtocolVersion
+}
+
+// ValidateRuntimeInvoke 是 provider 调用上下文与载荷的协议校验（调用方客户端与
+// runtime host 服务端共用，两端校验必须一致，协议漂移即失败）。
+func ValidateRuntimeInvoke(request contracts.RequestContext, payload json.RawMessage, now time.Time) error {
+	return validateRuntimeInvoke(request, payload, now)
 }
 
 func validateRuntimeInvoke(request contracts.RequestContext, payload json.RawMessage, now time.Time) error {

@@ -1,4 +1,4 @@
-package loader
+package wasmhost
 
 import (
 	"bytes"
@@ -6,6 +6,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
 )
 
 func TestLimitedBufferStopsAtLimit(t *testing.T) {
@@ -71,7 +73,7 @@ func TestParseHostedEnvelopeReturnsGenericInvocationErrors(t *testing.T) {
 			if !errors.Is(err, ErrHostedCallRejected) {
 				t.Fatalf("error = %v, want ErrHostedCallRejected", err)
 			}
-			var invocation InvocationError
+			var invocation loader.InvocationError
 			if !errors.As(err, &invocation) || invocation.Code != tc.want {
 				t.Fatalf("invocation error = %#v, want code %q", invocation, tc.want)
 			}
@@ -83,8 +85,8 @@ func TestParseHostedEnvelopeReturnsGenericInvocationErrors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := parseHostedEnvelope("test.runtime", unknown); !errors.Is(err, ErrRuntimeProtocol) {
-		t.Fatalf("unknown hosted error code = %v, want ErrRuntimeProtocol", err)
+	if _, err := parseHostedEnvelope("test.runtime", unknown); !errors.Is(err, loader.ErrRuntimeProtocol) {
+		t.Fatalf("unknown hosted error code = %v, want loader.ErrRuntimeProtocol", err)
 	}
 }
 
@@ -107,8 +109,8 @@ func TestParseHostedEnvelopeRejectsNonCanonicalOrIncompleteResults(t *testing.T)
 		`{"ok":false,"code":"internal","message":null}`,
 		`{"ok":false}`,
 	} {
-		if _, err := parseHostedEnvelope("test.runtime", []byte(payload)); !errors.Is(err, ErrRuntimeProtocol) {
-			t.Errorf("payload %q error=%v, want ErrRuntimeProtocol", payload, err)
+		if _, err := parseHostedEnvelope("test.runtime", []byte(payload)); !errors.Is(err, loader.ErrRuntimeProtocol) {
+			t.Errorf("payload %q error=%v, want loader.ErrRuntimeProtocol", payload, err)
 		}
 	}
 }
