@@ -138,7 +138,7 @@ func TestProcessHostValidatesConfigurationAndMode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := host.Verify(context.Background(), Manifest{Mode: ModeHosted}); err != ErrUnsupportedMode {
+	if err := host.Verify(context.Background(), Manifest{Mode: ModeHosted, ABIVersion: packagecontract.GuestABI1}); err != ErrUnsupportedMode {
 		t.Fatalf("mode error=%v", err)
 	}
 }

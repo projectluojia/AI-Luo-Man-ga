@@ -23,6 +23,7 @@ description = "字符串能力"
 [[component]]
 id = "core"
 mode = "hosted"
+abi_version = "1"
 role = "provider"
 entrypoint = "demo.pkg.wasm"
 exports = ["demo.text.cap"]
@@ -113,6 +114,7 @@ version = "1.0.0"
 [[component]]
 id = "core"
 mode = "hosted"
+abi_version = "1"
 role = "provider"
 entrypoint = "demo.wasm"
 
@@ -139,6 +141,7 @@ unknown_field = true
 [[component]]
 id = "core"
 mode = "hosted"
+abi_version = "1"
 role = "provider"
 entrypoint = "demo.wasm"
 `)
@@ -175,6 +178,7 @@ description = "字符串能力"
 [[component]]
 id = "core"
 mode = "hosted"
+abi_version = "1"
 role = "provider"
 entrypoint = "demo.pkg.wasm"
 exports = ["demo.text.cap"]

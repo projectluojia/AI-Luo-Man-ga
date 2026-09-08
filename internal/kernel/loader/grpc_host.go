@@ -53,6 +53,10 @@ type GRPCHostConfig struct {
 	DialTimeout     time.Duration
 	MaxRuntimes     int
 	MaxConcurrent   int
+	// SupportedABIs 是本宿主能承载的 guest ABI 版本闭集：跨进程 guest 讲同一
+	// 调用协议，声明不在闭集内的 hosted 清单在 Verify 期 fail-closed。默认为
+	// 宿主编译期契约模块的闭集。
+	SupportedABIs []string
 }
 
 type GRPCHost struct {
@@ -102,6 +106,19 @@ func (h *GRPCHost) Verify(ctx context.Context, manifest Manifest) error {
 	// 工件必须由内核进程内 WasmHost 装载（fail-closed，避免外部进程丢失投影）。
 	if len(manifest.HostFunctions) > 0 {
 		return fmt.Errorf("%w: host functions cannot be projected across the process boundary (must load in-kernel)", ErrUnsupportedMode)
+	}
+	// 跨进程 guest 的调用协议按 guest ABI 闭集校验（isolated 组件无 guest ABI，
+	// 进程契约由 lock 锁定）；hosted 清单的 ABI 已由 loader.ValidateManifest
+	// 保证非空，这里按本宿主的能力闭集做二次 fail-closed。
+	if manifest.Mode == ModeHosted {
+		supported := h.config.SupportedABIs
+		if supported == nil {
+			supported = packagecontract.SupportedGuestABIs
+		}
+		if manifest.ABIVersion == "" || !slices.Contains(supported, manifest.ABIVersion) {
+			return fmt.Errorf("%w: guest abi_version %q is not supported by this host",
+				ErrInvalidManifest, manifest.ABIVersion)
+		}
 	}
 	return h.config.VerifyInstalled(ctx, manifest)
 }

@@ -81,7 +81,7 @@ func writeMultiComponentFixture(t *testing.T, root, version string) string {
 			{ID: "multi.adapter", Mode: loader.ModeIsolated, Role: packagecontract.RoleProvider, Entrypoint: "multi-adapter",
 				Process: &packagecontract.ProcessTemplate{Path: "multi-adapter", Address: "127.0.0.1:50051"},
 				Exports: []string{"test.multi.transport"}},
-			{ID: "multi.core", Mode: loader.ModeHosted, Role: packagecontract.RoleProvider, Entrypoint: "multi-core.wasm",
+			{ID: "multi.core", Mode: loader.ModeHosted, ABIVersion: packagecontract.GuestABI1, Role: packagecontract.RoleProvider, Entrypoint: "multi-core.wasm",
 				Exports: []string{"test.multi.query"}},
 		},
 	}
@@ -236,7 +236,7 @@ func TestMultiComponentPackageRoutesCapabilitiesAndUpgradesGroup(t *testing.T) {
 		Components: []loader.ComponentSpec{
 			{Runtime: loader.Manifest{ID: multiAdapterRuntimeID, Version: "2.0.0", Mode: loader.ModeIsolated,
 				Role: loader.RoleProvider, LockedDigest: digest}},
-			{Runtime: loader.Manifest{ID: multiCoreRuntimeID, Version: "2.0.0", Mode: loader.ModeHosted,
+			{Runtime: loader.Manifest{ID: multiCoreRuntimeID, Version: "2.0.0", Mode: loader.ModeHosted, ABIVersion: packagecontract.GuestABI1,
 				Role: loader.RoleProvider, LockedDigest: digest}},
 		},
 	}); err != nil {

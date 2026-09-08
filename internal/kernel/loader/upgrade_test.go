@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packagecontract"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
 )
 
@@ -67,7 +68,7 @@ func (h *versionedHost) Load(_ context.Context, manifest loader.Manifest) (loade
 
 func upgradeManifest(id, version string) loader.Manifest {
 	return loader.Manifest{
-		ID: id, Version: version, Mode: loader.ModeHosted,
+		ID: id, Version: version, Mode: loader.ModeHosted, ABIVersion: packagecontract.GuestABI1,
 		Role: loader.RoleProvider, LockedDigest: digest,
 	}
 }

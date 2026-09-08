@@ -27,12 +27,6 @@ const (
 	capScheduleCancel = "classroom.schedule.cancel"
 )
 
-// NewDispatcher 构造分发器：以 guestkit 共享 Dispatcher 分发（唯一实现，
-// 包内只声明能力分发表）。store 为 guestkit.StoreClient（wasip1 内）或测试替身。
-func NewDispatcher(client guestkit.Store) *guestkit.Dispatcher {
-	return guestkit.NewDispatcher(Handlers(client))
-}
-
 // capacityResult 是配额超限的带内业务失败结果。
 type capacityResult struct {
 	CapacityExceeded bool `json:"capacity_exceeded"`
