@@ -54,7 +54,7 @@ type Config struct {
 }
 
 type Orchestrator struct {
-	executor    executor.Client
+	executor    executor.RunDriver
 	registry    *registry.Registry
 	dispatcher  *runtime.Dispatcher
 	policy      runtime.AppPolicy
@@ -66,7 +66,7 @@ type Orchestrator struct {
 }
 
 func NewOrchestrator(
-	executorClient executor.Client,
+	executorDriver executor.RunDriver,
 	reg *registry.Registry,
 	dispatcher *runtime.Dispatcher,
 	policy runtime.AppPolicy,
@@ -108,7 +108,7 @@ func NewOrchestrator(
 		panic(fmt.Sprintf("orchestrator context assembly misconfigured: %v", err))
 	}
 	return &Orchestrator{
-		executor:    executorClient,
+		executor:    executorDriver,
 		registry:    reg,
 		dispatcher:  dispatcher,
 		policy:      policy,

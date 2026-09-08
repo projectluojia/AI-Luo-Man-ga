@@ -23,7 +23,6 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/confirmation"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contextasm"
 	kernelecho "github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/executor"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/health"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/identity"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
@@ -245,20 +244,19 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 	if err := runtimeLoader.Warmup(ctx, pinnedRuntimes, min(len(pinnedRuntimes), 4)); err != nil {
 		return fmt.Errorf("warm pinned runtimes: %w", err)
 	}
-	executorLease, err := runtimeLoader.Executor(ctx)
+	// 执行者按部署配置的路由键（App 配置的 ExecutorID）从 Loader 取面：
+	// ExecutorID 不再是"恰好一个"的断言，而是指向具体执行者运行时的标识。
+	executorLease, err := runtimeLoader.Acquire(ctx, config.executorID)
 	if err != nil {
-		return fmt.Errorf("resolve executor runtime: %w", err)
+		return fmt.Errorf("resolve executor runtime %q: %w", config.executorID, err)
 	}
 	lifecycle.executorLease = executorLease
-	executorRuntime := executorLease.Runtime()
-	clientProvider, ok := executorRuntime.(executor.ClientProvider)
-	if !ok {
-		return fmt.Errorf("executor runtime does not expose an executor client")
+	executorClient := executorLease.Faces().Client
+	if executorClient == nil {
+		return fmt.Errorf("runtime %q is not an executor: no executor client", config.executorID)
 	}
-	executorClient := clientProvider.Client()
 	observe.Info(ctx, "执行者已经就绪",
 		observe.StringAttr("runtime_id", executorLease.ID()),
-		observe.BoolAttr("managed_process", config.manageExecutor),
 	)
 
 	orchestrator := kernelecho.NewOrchestrator(executorClient, reg, dispatcher, policy, kernelecho.StorePorts{
