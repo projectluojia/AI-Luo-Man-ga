@@ -19,13 +19,17 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime"
 	"github.com/projectluojia/AI-Luo-Man-ga/testsupport/hostedtest"
-	"github.com/projectluojia/AI-Luo-Man-ga/testsupport/library/librarytest"
 )
+
+// packageID 返回 library 包的真实包 ID（来自 ailuo.toml 清单）。
+func packageID(t *testing.T) string {
+	return hostedtest.ManifestOf(t, "library").ID
+}
 
 func seedLibrary(t *testing.T, store packstore.Store) {
 	t.Helper()
 	now := time.Now().UTC()
-	scope := packstore.Scope{AppID: librarytest.PackageID, PackageID: librarytest.PackageID, Namespace: librarytest.StorageNamespace}
+	scope := packstore.Scope{AppID: packageID(t), PackageID: packageID(t), Namespace: hostedtest.Packages["library"].StorageNamespace}
 	seatDate := futureDate(30)
 	if err := store.ReplaceSnapshot(context.Background(), scope, hostedtest.AuthoritativeMeta(now), map[string][]packstore.Document{
 		"spaces": {hostedtest.MustDoc(t, "space-1", map[string]any{"id": "space-1", "name": "总馆三楼", "campus": "文理学部", "building": "总图书馆", "floor": "3F", "source_revision": "rev-1"})},
@@ -48,13 +52,13 @@ func newLibraryDispatcher(t *testing.T) *runtime.Dispatcher {
 	reg := registry.New()
 	store := hostedtest.MemoryStore()
 	seedLibrary(t, store)
-	librarytest.RegisterHosted(t, reg, store)
-	return hostedtest.NewDispatcher(t, reg, librarytest.PackageID, librarytest.CapabilityIDs())
+	hostedtest.RegisterHosted(t, reg, store, "library")
+	return hostedtest.NewDispatcher(t, reg, packageID(t), hostedtest.CapabilityIDs(t, "library"))
 }
 
 func invoke(t *testing.T, d *runtime.Dispatcher, capabilityID, payload, idempotencyKey, confirmationID string) (bool, json.RawMessage, string) {
 	t.Helper()
-	return hostedtest.Invoke(t, d, librarytest.PackageID, capabilityID, payload, idempotencyKey, confirmationID)
+	return hostedtest.Invoke(t, d, packageID(t), capabilityID, payload, idempotencyKey, confirmationID)
 }
 
 // futureDate 返回 days 天后的学术日期（上海日历日）。
@@ -66,7 +70,7 @@ func futureDate(days int) string {
 // authoritative_fresh。
 func TestHostedLibrarySpacesList(t *testing.T) {
 	d := newLibraryDispatcher(t)
-	ok, result, errText := invoke(t, d, librarytest.SpacesListCapabilityID, `{}`, "", "")
+	ok, result, errText := invoke(t, d, "library.spaces.list", `{}`, "", "")
 	if !ok {
 		t.Fatalf("spaces.list failed: %s", errText)
 	}
@@ -94,7 +98,7 @@ func TestHostedLibrarySpacesList(t *testing.T) {
 // reserved，空闲座位 available。
 func TestHostedLibrarySlotsSearch(t *testing.T) {
 	d := newLibraryDispatcher(t)
-	ok, result, errText := invoke(t, d, librarytest.SlotsSearchCapabilityID,
+	ok, result, errText := invoke(t, d, "library.slots.search",
 		`{"space_id":"space-1","date":"`+futureDate(30)+`"}`, "", "")
 	if !ok {
 		t.Fatalf("slots.search failed: %s", errText)
@@ -148,7 +152,7 @@ func TestHostedLibraryReservationLifecycle(t *testing.T) {
 	d := newLibraryDispatcher(t)
 	date := futureDate(30)
 
-	ok, result, errText := invoke(t, d, librarytest.ReservationsCreateCapabilityID,
+	ok, result, errText := invoke(t, d, "library.reservations.create",
 		`{"space_id":"space-1","seat_id":"seat-a2","slot_id":"slot-morning","date":"`+date+`"}`, "idem-create", "confirm-create")
 	if !ok {
 		t.Fatalf("reservations.create failed: %s", errText)
@@ -169,7 +173,7 @@ func TestHostedLibraryReservationLifecycle(t *testing.T) {
 	reservationID := created.Reservation.ReservationID
 
 	// 重复预约同一座位带内冲突。
-	ok, result, errText = invoke(t, d, librarytest.ReservationsCreateCapabilityID,
+	ok, result, errText = invoke(t, d, "library.reservations.create",
 		`{"space_id":"space-1","seat_id":"seat-a2","slot_id":"slot-morning","date":"`+date+`"}`, "idem-conflict", "confirm-create")
 	if !ok {
 		t.Fatalf("double-book failed: %s", errText)
@@ -185,7 +189,7 @@ func TestHostedLibraryReservationLifecycle(t *testing.T) {
 	}
 
 	// 我的预约列表含已创建项。
-	ok, result, errText = invoke(t, d, librarytest.ReservationsMineCapabilityID, `{}`, "", "")
+	ok, result, errText = invoke(t, d, "library.reservations.mine", `{}`, "", "")
 	if !ok {
 		t.Fatalf("reservations.mine failed: %s", errText)
 	}
@@ -202,7 +206,7 @@ func TestHostedLibraryReservationLifecycle(t *testing.T) {
 	}
 
 	// 取消是确认门槛能力：无确认被 dispatcher 前置拒绝。
-	ok, _, errText = invoke(t, d, librarytest.ReservationsCancelCapabilityID,
+	ok, _, errText = invoke(t, d, "library.reservations.cancel",
 		`{"reservation_id":"`+reservationID+`"}`, "idem-cancel", "")
 	if ok {
 		t.Fatal("cancel without confirmation should fail")
@@ -211,7 +215,7 @@ func TestHostedLibraryReservationLifecycle(t *testing.T) {
 		t.Fatalf("cancel error = %q, want confirmation required", errText)
 	}
 
-	ok, result, errText = invoke(t, d, librarytest.ReservationsCancelCapabilityID,
+	ok, result, errText = invoke(t, d, "library.reservations.cancel",
 		`{"reservation_id":"`+reservationID+`"}`, "idem-cancel", "confirm-cancel")
 	if !ok {
 		t.Fatalf("reservations.cancel failed: %s", errText)
@@ -229,7 +233,7 @@ func TestHostedLibraryReservationLifecycle(t *testing.T) {
 	}
 
 	// 重复取消带内冲突。
-	ok, result, errText = invoke(t, d, librarytest.ReservationsCancelCapabilityID,
+	ok, result, errText = invoke(t, d, "library.reservations.cancel",
 		`{"reservation_id":"`+reservationID+`"}`, "idem-cancel-2", "confirm-cancel")
 	if !ok {
 		t.Fatalf("double cancel failed: %s", errText)
@@ -248,15 +252,15 @@ func TestHostedLibraryReservationQuota(t *testing.T) {
 	d := newLibraryDispatcher(t)
 	date := futureDate(30)
 	// 配额上限 2：slot-morning × seat-a2 与 slot-evening × seat-a1。
-	if ok, _, errText := invoke(t, d, librarytest.ReservationsCreateCapabilityID,
+	if ok, _, errText := invoke(t, d, "library.reservations.create",
 		`{"space_id":"space-1","seat_id":"seat-a2","slot_id":"slot-morning","date":"`+date+`"}`, "idem-first", "confirm-first"); !ok {
 		t.Fatalf("first create failed: %s", errText)
 	}
-	if ok, _, errText := invoke(t, d, librarytest.ReservationsCreateCapabilityID,
+	if ok, _, errText := invoke(t, d, "library.reservations.create",
 		`{"space_id":"space-1","seat_id":"seat-a1","slot_id":"slot-evening","date":"`+date+`"}`, "idem-second", "confirm-second"); !ok {
 		t.Fatalf("second create failed: %s", errText)
 	}
-	ok, result, errText := invoke(t, d, librarytest.ReservationsCreateCapabilityID,
+	ok, result, errText := invoke(t, d, "library.reservations.create",
 		`{"space_id":"space-1","seat_id":"seat-a2","slot_id":"slot-evening","date":"`+date+`"}`, "idem-third", "confirm-third")
 	if !ok {
 		t.Fatalf("over-quota should be in-band: %s", errText)
@@ -273,7 +277,7 @@ func TestHostedLibraryReservationQuota(t *testing.T) {
 // 错误码拒绝（fail-closed；错误码只进 InvocationError，消息不外泄）。
 func TestHostedLibraryCreatePastSlotFailClosed(t *testing.T) {
 	d := newLibraryDispatcher(t)
-	_, _, errText := invoke(t, d, librarytest.ReservationsCreateCapabilityID,
+	_, _, errText := invoke(t, d, "library.reservations.create",
 		`{"space_id":"space-1","seat_id":"seat-a2","slot_id":"slot-morning","date":"2020-01-01"}`, "idem-past", "confirm-past")
 	if errText == "" {
 		t.Fatal("past slot create should fail")
@@ -290,7 +294,7 @@ func TestHostedLibraryGovernedSnapshotRejection(t *testing.T) {
 	reg := registry.New()
 	store := hostedtest.MemoryStore()
 	now := time.Now().UTC()
-	scope := packstore.Scope{AppID: librarytest.PackageID, PackageID: librarytest.PackageID, Namespace: librarytest.StorageNamespace}
+	scope := packstore.Scope{AppID: packageID(t), PackageID: packageID(t), Namespace: hostedtest.Packages["library"].StorageNamespace}
 	demo := hostedtest.AuthoritativeMeta(now)
 	demo.Authoritative = false
 	demo.Source = "demo-fixture"
@@ -299,10 +303,10 @@ func TestHostedLibraryGovernedSnapshotRejection(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	librarytest.RegisterHosted(t, reg, store)
-	d := hostedtest.NewDispatcher(t, reg, librarytest.PackageID, librarytest.CapabilityIDs())
-	request := hostedtest.RequestContext(librarytest.PackageID, "request-governed-rejection")
-	_, invokeErr := d.InvokeCapability(t.Context(), request, librarytest.SpacesListCapabilityID, json.RawMessage(`{}`))
+	hostedtest.RegisterHosted(t, reg, store, "library")
+	d := hostedtest.NewDispatcher(t, reg, packageID(t), hostedtest.CapabilityIDs(t, "library"))
+	request := hostedtest.RequestContext(packageID(t), "request-governed-rejection")
+	_, invokeErr := d.InvokeCapability(t.Context(), request, "library.spaces.list", json.RawMessage(`{}`))
 	if invokeErr == nil || !strings.Contains(invokeErr.Error(), "hosted package rejected the call") {
 		t.Fatalf("err = %v", invokeErr)
 	}
