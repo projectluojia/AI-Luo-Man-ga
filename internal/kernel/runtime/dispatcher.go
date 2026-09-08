@@ -87,8 +87,8 @@ func (d *Dispatcher) InvokeCapability(ctx context.Context, request contracts.Req
 	return d.route(ctx, request, capabilityID, payload)
 }
 
-// route 是 Capability 的统一治理序列：上下文 → App 策略 → Registry → 权限与副作用
-// → Schema → 调用链 → 幂等/确认 → 实现。
+// route 是 Capability 的统一治理序列：上下文 → App 策略 → Registry → Run 范围
+// → 权限与副作用 → Schema → 调用链 → 幂等/确认 → 实现。
 func (d *Dispatcher) route(
 	ctx context.Context,
 	request contracts.RequestContext,
@@ -111,6 +111,12 @@ func (d *Dispatcher) route(
 	}
 	policy, err := d.policySnapshot(ctx, request)
 	if err != nil {
+		return nil, err
+	}
+	if err := requireRunGrant(request, capabilityID); err != nil {
+		observe.Warn(ctx, "Capability 不在 Run 冻结的授权范围内",
+			observe.StringAttr("error_class", "governance"),
+		)
 		return nil, err
 	}
 	spec, handler, err := d.registry.ResolveCapability(capabilityID)
@@ -191,6 +197,22 @@ func (d *Dispatcher) policySnapshot(ctx context.Context, request contracts.Reque
 		return appconfig.PolicySnapshot{}, ErrCapabilityDisabled
 	}
 	return snapshot, nil
+}
+
+// requireRunGrant 强制“已接受 Run 的授权范围不可扩张”：Run 介导的调用
+// （RunID 非空）只能触达 Run 接受时冻结投影内的 Capability，Run 内新增授权
+// 不能扩张既有 Run 的范围；当前策略是否仍然有效由后续授权链路判断，撤权
+// 在那里立即生效。非 Run 调用（如 Web 直连）不携带 Run 范围，不受此约束。
+func requireRunGrant(request contracts.RequestContext, capabilityID string) error {
+	if request.RunID == "" {
+		return nil
+	}
+	for _, grant := range request.RunCapabilityGrants {
+		if grant.CapabilityID == capabilityID {
+			return nil
+		}
+	}
+	return fmt.Errorf("%w: target=%q", ErrCapabilityDisabled, capabilityID)
 }
 
 func requestLogContext(ctx context.Context, request contracts.RequestContext, attrs ...slog.Attr) context.Context {
