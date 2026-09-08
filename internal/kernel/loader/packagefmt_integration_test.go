@@ -14,6 +14,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packagecontract"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader/wasmhost"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime/runtimetest"
@@ -106,7 +107,7 @@ func TestDeclaredCapabilityRunsThroughDispatcher(t *testing.T) {
 		t.Fatal(err)
 	}
 	digest := sha256.Sum256(artifact)
-	host, err := loader.NewWasmHost(loader.WasmHostConfig{
+	host, err := wasmhost.NewWasmHost(wasmhost.WasmHostConfig{
 		ReadArtifact: func(context.Context, loader.Manifest) ([]byte, error) {
 			return os.ReadFile(artifactPath)
 		},

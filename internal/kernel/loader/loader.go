@@ -52,7 +52,11 @@ var (
 	ErrRuntimeBusy      = errors.New("runtime host capacity is exhausted")
 )
 
-var stableIDPattern = id.AppID
+// StableIDPattern 是内核各面共享的稳定标识约束（应用/包/能力/错误码共用）。
+var StableIDPattern = id.AppID
+
+// unexported 别名保持包内既有用法不变。
+var stableIDPattern = StableIDPattern
 
 // Manifest 是运行时的注册与装载清单。ID/PackageID/Version/Mode 是身份字段；
 // Role、Pin、IdleTTL、LockedDigest、HostFunctions 和 Capabilities 是声明字段——
@@ -127,6 +131,12 @@ type Runtime interface {
 // Invoker 是能力提供者角色的执行面：以治理上下文执行一次调用。
 type Invoker interface {
 	Invoke(context.Context, contracts.RequestContext, json.RawMessage) (json.RawMessage, error)
+}
+
+// TransportCloser 是可选的连接释放面：不经生命周期 RPC 直接关闭底层传输，
+// 供宿主在进程死亡或强制清理时回收连接（生命周期 RPC 已不可用时）。
+type TransportCloser interface {
+	CloseTransport() error
 }
 
 // Host 只从已经安装并锁定的本地单元加载实现；校验失败时不得执行 Load。

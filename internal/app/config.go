@@ -21,6 +21,8 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/adapters/packagesource"
 	controlconfig "github.com/projectluojia/AI-Luo-Man-ga/internal/controlplane/config"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader/processhost"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader/wasmhost"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/packstore"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
@@ -234,9 +236,9 @@ func configureInstalledRuntimes(ctx context.Context, cfg config, packageStore pa
 	}
 	hosts = make([]loader.Host, 0, 3)
 	if hostedWithFunctions > 0 {
-		host, hostErr := loader.NewWasmHost(loader.WasmHostConfig{
+		host, hostErr := wasmhost.NewWasmHost(wasmhost.WasmHostConfig{
 			ReadArtifact: catalog.ReadArtifact,
-			HostFunctionsFor: func(manifest loader.Manifest) ([]loader.HostedFunction, error) {
+			HostFunctionsFor: func(manifest loader.Manifest) ([]wasmhost.HostedFunction, error) {
 				return packstore.ManifestFunctions(packageStore, manifest)
 			},
 			RequireHostFunctions: true,
@@ -260,7 +262,7 @@ func configureInstalledRuntimes(ctx context.Context, cfg config, packageStore pa
 		hosts = append(hosts, host)
 	}
 	if isolatedCount > 0 {
-		host, hostErr := loader.NewProcessHost(loader.ProcessHostConfig{
+		host, hostErr := processhost.NewProcessHost(processhost.ProcessHostConfig{
 			Resolve: catalog.ResolveProcess, Verify: catalog.VerifyProcess, Spawn: true,
 			SpawnFor: func(manifest loader.Manifest) bool {
 				return manifest.Role != loader.RoleExecutor || cfg.manageExecutor
