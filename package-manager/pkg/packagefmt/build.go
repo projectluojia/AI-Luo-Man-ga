@@ -51,9 +51,8 @@ type BuildSpec struct {
 const BuildToolPythonUV = "python-uv"
 
 // BuildToolGoNative 是内置的 Go isolated 执行形态构建器：以当前平台
-// （host GOOS/GOARCH）编译独立进程可执行文件，产物为包根目录下的
-// entrypoint 文件。entrypoint 由作者声明为实际工件名（如 "weather.exe"），
-// pack/install/lock 全链按文件名平铺处理，无平台分支。
+// （host GOOS/GOARCH）编译独立进程可执行文件。清单 entrypoint 是平台中立名；
+// Windows 由构建器补 .exe，pack/install/lock 按实际文件名平铺。
 const BuildToolGoNative = "go-native"
 
 // Build 执行 component 级构建计划：为包生成声明的 hosted 工件或 isolated 运行环境。
@@ -155,12 +154,14 @@ func buildGoWasm(ctx context.Context, sourceDir string, manifest packagecontract
 }
 
 // buildGoNative 用 Go 工具链按当前平台编译每个 isolated 组件为独立进程
-// 可执行文件：go build -trimpath -o <entrypoint> .，在源码目录内执行。
-// entrypoint 由作者声明为实际工件名（如 "weather.exe"）：Windows 可执行文件
-// 必须带 .exe 后缀才能被启动，Linux 不解析扩展名，因此直接写死平台工件名，
-// pack/install/lock 全链零平台分支（与 campus.wasm 同一命名逻辑）。
+// 可执行文件：go build -trimpath -o <实际工件名> .。清单入口是平台中立名，
+// Windows 输出后缀 .exe（与 NativeEntrypoint 一致）。
 func buildGoNative(ctx context.Context, sourceDir string, manifest packagecontract.Manifest, spec BuildSpec) error {
-	return buildComponents(ctx, sourceDir, manifest, spec, packagecontract.ModeIsolated, "",
+	suffix := ""
+	if runtime.GOOS == "windows" {
+		suffix = ".exe"
+	}
+	return buildComponents(ctx, sourceDir, manifest, spec, packagecontract.ModeIsolated, suffix,
 		func(ctx context.Context, workDir string, _ packagecontract.Component, output string) ([]byte, error) {
 			command := exec.CommandContext(ctx, "go", "build", "-trimpath", "-o", output, ".")
 			command.Dir = workDir

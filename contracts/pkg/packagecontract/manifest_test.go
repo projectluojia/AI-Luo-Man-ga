@@ -136,9 +136,54 @@ func TestValidateProcessTemplateRejectsUnixAddressOnWindows(t *testing.T) {
 		t.Skip("仅 Windows 使用该进程地址策略")
 	}
 	if err := packagecontract.ValidateProcessTemplate(packagecontract.ProcessTemplate{
-		Path: "runner", Address: "unix:/runtime.sock",
+		Path: "runner", Args: []string{"${address}"}, Address: "unix:/runtime.sock",
 	}); err == nil {
 		t.Fatal("ValidateProcessTemplate accepted Unix address on Windows")
+	}
+}
+
+func TestValidateProcessTemplateRequiresAddressPlaceholder(t *testing.T) {
+	if err := packagecontract.ValidateProcessTemplate(packagecontract.ProcessTemplate{
+		Path: "runner", Address: "127.0.0.1:50051",
+	}); err == nil {
+		t.Fatal("process template without ${address} was accepted")
+	}
+	if err := packagecontract.ValidateProcessTemplate(packagecontract.ProcessTemplate{
+		Path: "runner", Args: []string{"--listen", "${address}"}, Address: "127.0.0.1:50051",
+	}); err != nil {
+		t.Fatalf("valid process template rejected: %v", err)
+	}
+}
+
+func TestValidateManifestRejectsWindowsExeEntrypoint(t *testing.T) {
+	manifest := packagecontract.Manifest{
+		SchemaVersion: packagecontract.SchemaVersion, ID: "weather", Version: "1.0.0",
+		Capabilities: []capability.CapabilitySpec{testCapability("weather.current")},
+		Components: []packagecontract.Component{{
+			ID: "provider", Mode: packagecontract.ModeIsolated, Role: packagecontract.RoleProvider,
+			Entrypoint: "weather.exe", Exports: []string{"weather.current"},
+			Process: &packagecontract.ProcessTemplate{
+				Path: "weather.exe", Args: []string{"${address}"}, Address: "127.0.0.1:50071",
+			},
+		}},
+	}
+	if err := packagecontract.ValidateManifest(manifest); err == nil {
+		t.Fatal("isolated file entrypoint with .exe was accepted")
+	}
+}
+
+func TestArtifactNameUsesNativeEntrypoint(t *testing.T) {
+	component := packagecontract.Component{
+		ID: "provider", Mode: packagecontract.ModeIsolated, Role: packagecontract.RoleProvider,
+		Entrypoint: "weather",
+		Process:    &packagecontract.ProcessTemplate{Path: "weather", Args: []string{"${address}"}, Address: "127.0.0.1:50071"},
+	}
+	want := "weather"
+	if runtime.GOOS == "windows" {
+		want = "weather.exe"
+	}
+	if got := packagecontract.ArtifactName(component); got != want {
+		t.Fatalf("ArtifactName = %q, want %q", got, want)
 	}
 }
 

@@ -1,6 +1,6 @@
 # weather 作者侧源清单（ailuo.toml）。
-# 构建：`ailuo-pm pack . dist` 经 component.build 在当前平台编译 isolated 进程
-# 可执行文件（entrypoint 即实际工件名，Windows 必须带 .exe 才能被启动）。
+# 构建：`ailuo-pm pack . dist` 经 component.build 在当前平台编译 isolated 进程。
+# entrypoint 是平台中立名；Windows 由构建器/安装器补 .exe。监听地址只来自 --listen ${address}。
 
 [package]
 id = "weather"
@@ -12,11 +12,12 @@ pin = true
 id = "provider"
 mode = "isolated"
 role = "provider"
-entrypoint = "weather.exe"
+entrypoint = "weather"
 exports = ["weather.current", "weather.hourly", "weather.aqi", "weather.alerts"]
 
 [component.process]
-path = "weather.exe"
+path = "weather"
+args = ["--listen", "${address}"]
 address = "127.0.0.1:50071"
 
 [component.build]

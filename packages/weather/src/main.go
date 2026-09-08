@@ -14,10 +14,10 @@ import (
 )
 
 func main() {
-	// 地址与身份由安装锁（ailuo.toml [component.process]）决定，经环境传入或用默认。
-	listenAddress := os.Getenv("AILUO_LISTEN_ADDRESS")
-	if listenAddress == "" {
-		listenAddress = "127.0.0.1:50071"
+	listenAddress, err := listenAddressFromArgs(os.Args[1:])
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
 	}
 	service := wx.NewService(wx.NewClient(wx.ClientConfig{}))
 	server := grpc.NewServer(
@@ -27,11 +27,25 @@ func main() {
 	runtimev1.RegisterRuntimeHostServer(server, newHostServer(service))
 	listener, err := net.Listen("tcp", listenAddress)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "weather provider listen failed:", err)
+		fmt.Fprintln(os.Stderr, "weather provider 监听失败:", err)
 		os.Exit(1)
 	}
 	if err := server.Serve(listener); err != nil {
-		fmt.Fprintln(os.Stderr, "weather provider serve failed:", err)
+		fmt.Fprintln(os.Stderr, "weather provider 服务失败:", err)
 		os.Exit(1)
 	}
+}
+
+// listenAddressFromArgs 只接受安装锁展开后的 --listen <地址>，没有环境变量或默认端口。
+func listenAddressFromArgs(args []string) (string, error) {
+	for index := 0; index < len(args); index++ {
+		if args[index] != "--listen" {
+			continue
+		}
+		if index+1 >= len(args) || args[index+1] == "" {
+			return "", fmt.Errorf("缺少 --listen 地址")
+		}
+		return args[index+1], nil
+	}
+	return "", fmt.Errorf("缺少 --listen 地址")
 }

@@ -4,7 +4,7 @@
 
 ## 品牌与升级契约
 
-项目统一使用产品名 **AI珞（爱珞）** 和技术命名空间 `ailuo`。部署环境变量统一使用 `AILUO_*`，Prometheus 指标统一使用 `ailuo_*`，默认数据库文件为 `var/ailuo.db`。Agent gRPC 与 Runtime Host gRPC 均使用 `ailuo.*.v1` 包名并协商协议版本 `2.0`；扩展安装目录使用 `ailuo.package.v2`。这是一次有意的破坏性品牌迁移：部署配置、监控查询、Agent/Runtime Host 构建产物和扩展安装清单必须原子升级，旧版本不会被误判为兼容。
+项目统一使用产品名 **AI珞（爱珞）** 和技术命名空间 `ailuo`。部署环境变量统一使用 `AILUO_*`，Prometheus 指标统一使用 `ailuo_*`，默认数据库文件为 `var/ailuo.db`。Agent gRPC 与 Runtime Host gRPC 均使用 `ailuo.*.v1` 包名并协商协议版本 `3.0`；安装清单使用 `ailuo.package.v3`。部署配置、监控查询、Agent/Runtime Host 构建产物和安装清单必须原子升级，旧版本不会被误判为兼容。
 
 ## 已实现链路
 
@@ -14,8 +14,8 @@ Web Access API
   → Python AI Agent（gRPC 双向流）
   → OpenAI-compatible 模型原生 ToolCall
   → Capability 鉴权与路由（Go）
-  → campus Service
-  → 校巴 Tool
+  → Dispatcher / Capability
+  → 已锁定 Provider 包（hosted WASM 或 isolated 进程）
   → Go 托管统一数据库
   → SSE 流式回复
 ```

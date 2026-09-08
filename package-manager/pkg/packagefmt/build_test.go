@@ -80,6 +80,7 @@ entrypoint = "brain"
 
 [component.process]
 path = "python"
+args = ["${address}"]
 address = "127.0.0.1:50051"
 
 [component.build]
@@ -115,7 +116,7 @@ func TestBuildRejectsInvalidComponentTargets(t *testing.T) {
 		Version:       "1.0.0",
 		Components: []packagecontract.Component{
 			{ID: "brain", Mode: packagecontract.ModeIsolated, Role: packagecontract.RoleExecutor, Entrypoint: "brain",
-				Process: &packagecontract.ProcessTemplate{Path: "brain", Address: "127.0.0.1:50051"}},
+				Process: &packagecontract.ProcessTemplate{Path: "brain", Args: []string{"${address}"}, Address: "127.0.0.1:50051"}},
 			{ID: "prefs", Mode: packagecontract.ModeHosted, Role: packagecontract.RoleProvider, Entrypoint: "prefs.wasm"},
 		},
 	}
@@ -266,10 +267,6 @@ func main() {}
 `)
 	// 包目录内 go.mod：源码自包含，构建器不依赖仓库根模块。
 	writeSource(t, filepath.Join(sourceDir, "go.mod"), "module demo.pkg\n\ngo 1.24\n")
-	entrypoint := "weather.exe"
-	if runtime.GOOS != "windows" {
-		entrypoint = "weather"
-	}
 	path := filepath.Join(sourceDir, SourceFileName)
 	writeSource(t, path, `
 [package]
@@ -280,9 +277,10 @@ version = "1.0.0"
 id = "core"
 mode = "isolated"
 role = "provider"
-entrypoint = "`+entrypoint+`"
+entrypoint = "weather"
 [component.process]
-path = "`+entrypoint+`"
+path = "weather"
+args = ["--listen", "${address}"]
 address = "127.0.0.1:50051"
 
 [component.build]
@@ -299,7 +297,7 @@ source = "server"
 	if err := Build(context.Background(), sourceDir, manifest, builds); err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	info, err := os.Stat(filepath.Join(sourceDir, entrypoint))
+	info, err := os.Stat(filepath.Join(sourceDir, packagecontract.NativeEntrypoint("weather")))
 	if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 {
 		t.Fatalf("编译产物缺失或非法: %v size=%d", err, info.Size())
 	}
