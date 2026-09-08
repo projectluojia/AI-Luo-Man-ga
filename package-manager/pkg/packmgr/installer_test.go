@@ -45,8 +45,9 @@ func writeSourcePackage(t *testing.T, dir, id, version, mode, artifactName strin
 		}},
 		Components: []packagecontract.Component{{
 			ID: "core", Mode: mode, Role: packagecontract.RoleProvider, Entrypoint: artifactName,
-			Exports: []string{id + ".capability"},
-			Process: process,
+			ABIVersion: abiVersionFor(mode),
+			Exports:    []string{id + ".capability"},
+			Process:    process,
 		}},
 	})
 	if err != nil {
@@ -55,6 +56,14 @@ func writeSourcePackage(t *testing.T, dir, id, version, mode, artifactName strin
 	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), manifest, 0o640); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// abiVersionFor 返回 hosted 组件的 guest ABI 声明；isolated 组件不带 ABI 版本。
+func abiVersionFor(mode string) string {
+	if mode == packagecontract.ModeHosted {
+		return packagecontract.GuestABI1
+	}
+	return ""
 }
 
 func TestInstallReplacesVersionsAndVerifiesIntegrity(t *testing.T) {
@@ -518,8 +527,8 @@ func TestInstallRejectsEntrypointBasenameCollision(t *testing.T) {
 	manifest, err := json.Marshal(packagecontract.Manifest{
 		SchemaVersion: packagecontract.SchemaVersion, ID: "demo.pkg", Version: "1.0.0",
 		Components: []packagecontract.Component{
-			{ID: "one", Mode: packagecontract.ModeHosted, Role: packagecontract.RoleProvider, Entrypoint: "mod.wasm"},
-			{ID: "two", Mode: packagecontract.ModeHosted, Role: packagecontract.RoleProvider, Entrypoint: "mod.wasm"},
+			{ID: "one", Mode: packagecontract.ModeHosted, ABIVersion: packagecontract.GuestABI1, Role: packagecontract.RoleProvider, Entrypoint: "mod.wasm"},
+			{ID: "two", Mode: packagecontract.ModeHosted, ABIVersion: packagecontract.GuestABI1, Role: packagecontract.RoleProvider, Entrypoint: "mod.wasm"},
 		},
 	})
 	if err != nil {
@@ -651,7 +660,7 @@ func TestListInstalledDoesNotPromoteInvalidBackup(t *testing.T) {
 	}
 	manifest, err := json.Marshal(packagecontract.Manifest{
 		SchemaVersion: packagecontract.SchemaVersion, ID: "demo.pkg", Version: "1.0.0",
-		Components: []packagecontract.Component{{ID: "core", Mode: packagecontract.ModeHosted, Entrypoint: "app.wasm"}},
+		Components: []packagecontract.Component{{ID: "core", Mode: packagecontract.ModeHosted, ABIVersion: packagecontract.GuestABI1, Entrypoint: "app.wasm"}},
 	})
 	if err != nil {
 		t.Fatal(err)

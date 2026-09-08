@@ -70,6 +70,9 @@ type Manifest struct {
 	// HostFunctions 是包声明的宿主函数依赖（仅 hosted 有意义）：guest 只可
 	// 调用清单声明且宿主提供的宿主函数，未声明调用在加载期被拒绝。
 	HostFunctions []packagecontract.HostedFunctionDecl
+	// ABIVersion 是 hosted 组件声明的 guest ABI 版本（仅 hosted 有意义，来自
+	// 已校验包清单）：宿主据此判断能否承载该 guest 的调用协议。
+	ABIVersion string
 	// Storage 是包声明的持久化契约（namespace 等）。声明了存储宿主函数的包
 	// 必须同时声明该段；存储函数的 namespace 绑定取自此处，guest 不可选择。
 	Storage *packagecontract.Storage
@@ -82,7 +85,8 @@ type Manifest struct {
 func (m Manifest) Equal(other Manifest) bool {
 	return m.ID == other.ID && m.PackageID == other.PackageID && m.Version == other.Version && m.Mode == other.Mode &&
 		m.Role == other.Role && m.LockedDigest == other.LockedDigest && m.Pin == other.Pin &&
-		m.IdleTTL == other.IdleTTL && packagecontract.EqualHostedFunctions(m.HostFunctions, other.HostFunctions) &&
+		m.IdleTTL == other.IdleTTL && m.ABIVersion == other.ABIVersion &&
+		packagecontract.EqualHostedFunctions(m.HostFunctions, other.HostFunctions) &&
 		packagecontract.EqualStorage(m.Storage, other.Storage) && equalCapabilitySpecs(m.Capabilities, other.Capabilities)
 }
 
@@ -933,6 +937,14 @@ func ValidateManifest(manifest Manifest) error {
 		return ErrInvalidManifest
 	}
 	if _, err := packagecontract.ParseVersion(manifest.Version); err != nil {
+		return ErrInvalidManifest
+	}
+	// ABIVersion 与 mode 的组合闭式：hosted 必须声明宿主支持的 guest ABI，
+	// isolated 不经此字段（进程契约由包依赖与 lock 锁定）。
+	if manifest.Mode == ModeHosted && !packagecontract.SupportedABI(manifest.ABIVersion) {
+		return ErrInvalidManifest
+	}
+	if manifest.Mode != ModeHosted && manifest.ABIVersion != "" {
 		return ErrInvalidManifest
 	}
 	if err := packagecontract.ValidateHostedFunctions(manifest.HostFunctions); err != nil {

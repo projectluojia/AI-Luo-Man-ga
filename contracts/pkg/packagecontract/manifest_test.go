@@ -25,7 +25,7 @@ func testManifest() packagecontract.Manifest {
 		SchemaVersion: packagecontract.SchemaVersion, ID: "test.pkg", Version: "1.0.0",
 		Capabilities: []capability.CapabilitySpec{testCapability("test.query")},
 		Components: []packagecontract.Component{{
-			ID: "provider", Mode: packagecontract.ModeHosted, Role: packagecontract.RoleProvider,
+			ID: "provider", Mode: packagecontract.ModeHosted, ABIVersion: packagecontract.GuestABI1, Role: packagecontract.RoleProvider,
 			Entrypoint: "provider.wasm", Exports: []string{"test.query"},
 		}},
 	}
@@ -47,7 +47,7 @@ func TestValidateManifestRejectsInvalidCapabilityContract(t *testing.T) {
 		},
 		"duplicate export": func(m *packagecontract.Manifest) {
 			m.Components = append(m.Components, packagecontract.Component{
-				ID: "second", Mode: packagecontract.ModeHosted, Role: packagecontract.RoleProvider,
+				ID: "second", Mode: packagecontract.ModeHosted, ABIVersion: packagecontract.GuestABI1, Role: packagecontract.RoleProvider,
 				Entrypoint: "second.wasm", Exports: []string{"test.query"},
 			})
 		},

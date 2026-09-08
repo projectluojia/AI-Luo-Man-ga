@@ -337,7 +337,7 @@ func writeDeclaredFixture(t *testing.T, root, runtimeID string, decls []packagec
 			Execution:     capability.ExecutionSpec{EffectTarget: capability.EffectNone, Replay: capability.ReplaySafe, ConfirmationFloor: capability.ConfirmationPolicy},
 		}},
 		Components: []packagecontract.Component{{
-			ID: runtimeID, Mode: loader.ModeHosted, Role: packagecontract.RoleProvider, Entrypoint: "runtime-artifact",
+			ID: runtimeID, Mode: loader.ModeHosted, ABIVersion: packagecontract.GuestABI1, Role: packagecontract.RoleProvider, Entrypoint: "runtime-artifact",
 			Exports: []string{"extension.query"}, HostFunctions: decls,
 		}},
 	}
@@ -437,7 +437,7 @@ func TestInstalledCatalogRejectsInvalidDeclarations(t *testing.T) {
 						Execution:     capability.ExecutionSpec{EffectTarget: capability.EffectNone, Replay: capability.ReplaySafe, ConfirmationFloor: capability.ConfirmationPolicy},
 					}},
 					Components: []packagecontract.Component{{
-						ID: "extension.bad", Mode: loader.ModeHosted, Role: packagecontract.RoleProvider, Entrypoint: "runtime-artifact",
+						ID: "extension.bad", Mode: loader.ModeHosted, ABIVersion: packagecontract.GuestABI1, Role: packagecontract.RoleProvider, Entrypoint: "runtime-artifact",
 						Exports: []string{"extension.query"}, HostFunctions: tc.decls,
 					}},
 				}
@@ -482,7 +482,7 @@ func TestInstalledCatalogRejectsInvalidDeclarations(t *testing.T) {
 			reg := registry.New()
 			record := loader.InstalledRecord{
 				Runtime: loader.Manifest{
-					ID: "extension.local", Version: "1.0.0", Mode: loader.ModeHosted,
+					ID: "extension.local", Version: "1.0.0", Mode: loader.ModeHosted, ABIVersion: packagecontract.GuestABI1,
 					Role: loader.RoleProvider, LockedDigest: digest,
 					HostFunctions: tc.decls,
 					Capabilities: []capability.CapabilitySpec{{

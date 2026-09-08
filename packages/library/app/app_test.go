@@ -136,7 +136,7 @@ func dispatch(t *testing.T, store guestkit.Store, capabilityID string, payload a
 	if err != nil {
 		t.Fatal(err)
 	}
-	return NewDispatcher(store).Dispatch(capabilityID, body)
+	return guestkit.NewDispatcher(Handlers(store)).Dispatch(capabilityID, body)
 }
 
 func decodeResult(t *testing.T, envelope guestkit.ResultEnvelope, target any) {
@@ -215,7 +215,7 @@ func TestSlotsSearchMarksOccupiedSeat(t *testing.T) {
 
 func TestReservationLifecycleCreateCancelReplayConflict(t *testing.T) {
 	store := fixtureStore(t)
-	dispatcher := NewDispatcher(store)
+	dispatcher := guestkit.NewDispatcher(Handlers(store))
 
 	// 创建预约。
 	created := dispatcher.Dispatch(capReservationsCreate, payload(t, library.ReservationCreateRequest{
@@ -284,7 +284,7 @@ func TestReservationLifecycleCreateCancelReplayConflict(t *testing.T) {
 
 func TestReservationQuotaExceeded(t *testing.T) {
 	store := fixtureStore(t)
-	dispatcher := NewDispatcher(store)
+	dispatcher := guestkit.NewDispatcher(Handlers(store))
 	// 配额上限 2：先创建 slot-morning（seat-a2），再创建 slot-evening（seat-a1）。
 	first := dispatcher.Dispatch(capReservationsCreate, payload(t, library.ReservationCreateRequest{
 		SpaceID: "space-1", SeatID: "seat-a2", SlotID: "slot-morning", Date: futureDate(),
@@ -312,7 +312,7 @@ func TestReservationQuotaExceeded(t *testing.T) {
 
 func TestReservationCreateUnknownSpaceInBandNotFound(t *testing.T) {
 	store := fixtureStore(t)
-	result := NewDispatcher(store).Dispatch(capReservationsCreate, payload(t, library.ReservationCreateRequest{
+	result := guestkit.NewDispatcher(Handlers(store)).Dispatch(capReservationsCreate, payload(t, library.ReservationCreateRequest{
 		SpaceID: "space-missing", SeatID: "seat-a2", SlotID: "slot-morning", Date: futureDate(),
 	}))
 	if !result.OK {
@@ -327,7 +327,7 @@ func TestReservationCreateUnknownSpaceInBandNotFound(t *testing.T) {
 func TestReservationCreateRejectsPastSlot(t *testing.T) {
 	store := fixtureStore(t)
 	// 已过去的学术日期 → 时段已结束，fail-closed data_expired。
-	result := NewDispatcher(store).Dispatch(capReservationsCreate, payload(t, library.ReservationCreateRequest{
+	result := guestkit.NewDispatcher(Handlers(store)).Dispatch(capReservationsCreate, payload(t, library.ReservationCreateRequest{
 		SpaceID: "space-1", SeatID: "seat-a2", SlotID: "slot-morning", Date: "2020-01-01",
 	}))
 	if result.OK || result.Code != guestkit.CodeDataExpired {
@@ -337,7 +337,7 @@ func TestReservationCreateRejectsPastSlot(t *testing.T) {
 
 func TestReservationsMineSortsAndLists(t *testing.T) {
 	store := fixtureStore(t)
-	dispatcher := NewDispatcher(store)
+	dispatcher := guestkit.NewDispatcher(Handlers(store))
 	// 两个不同未来日期，验证列表按日期升序。
 	laterDate := futureDateLater()
 	if ok := dispatcher.Dispatch(capReservationsCreate, payload(t, library.ReservationCreateRequest{
@@ -398,13 +398,13 @@ func TestRevisionMismatchFailsClosed(t *testing.T) {
 
 func TestUnknownCapabilityAndInvalidPayloads(t *testing.T) {
 	store := fixtureStore(t)
-	if envelope := NewDispatcher(store).Dispatch("library.missing", nil); envelope.OK || envelope.Code != guestkit.CodeInvalidArgument {
+	if envelope := guestkit.NewDispatcher(Handlers(store)).Dispatch("library.missing", nil); envelope.OK || envelope.Code != guestkit.CodeInvalidArgument {
 		t.Fatalf("envelope=%+v", envelope)
 	}
-	if envelope := NewDispatcher(store).Dispatch(capSpacesList, json.RawMessage(`{"extra":1}`)); envelope.OK || envelope.Code != guestkit.CodeInvalidArgument {
+	if envelope := guestkit.NewDispatcher(Handlers(store)).Dispatch(capSpacesList, json.RawMessage(`{"extra":1}`)); envelope.OK || envelope.Code != guestkit.CodeInvalidArgument {
 		t.Fatalf("unknown field envelope=%+v", envelope)
 	}
-	if envelope := NewDispatcher(store).Dispatch(capSlotsSearch, json.RawMessage(`{"date":"2026-09-02"}`)); envelope.OK || envelope.Code != guestkit.CodeInvalidArgument {
+	if envelope := guestkit.NewDispatcher(Handlers(store)).Dispatch(capSlotsSearch, json.RawMessage(`{"date":"2026-09-02"}`)); envelope.OK || envelope.Code != guestkit.CodeInvalidArgument {
 		t.Fatalf("missing space_id envelope=%+v", envelope)
 	}
 }

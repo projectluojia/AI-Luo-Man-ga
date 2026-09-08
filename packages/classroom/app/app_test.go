@@ -130,7 +130,7 @@ func dispatch(t *testing.T, store guestkit.Store, capabilityID string, payload a
 	if err != nil {
 		t.Fatal(err)
 	}
-	return NewDispatcher(store).Dispatch(capabilityID, body)
+	return guestkit.NewDispatcher(Handlers(store)).Dispatch(capabilityID, body)
 }
 
 func decodeResult(t *testing.T, envelope guestkit.ResultEnvelope, target any) {
@@ -178,7 +178,7 @@ func TestRoomsSearchRejectsInvalidPayloads(t *testing.T) {
 		}
 	}
 	// 未知字段是协议违例。
-	envelope := NewDispatcher(store).Dispatch("classroom.rooms.search", json.RawMessage(`{"date":"2026-09-07","campus_id":"c","period":1,"extra":true}`))
+	envelope := guestkit.NewDispatcher(Handlers(store)).Dispatch("classroom.rooms.search", json.RawMessage(`{"date":"2026-09-07","campus_id":"c","period":1,"extra":true}`))
 	if envelope.OK || envelope.Code != guestkit.CodeInvalidArgument {
 		t.Fatalf("envelope=%+v", envelope)
 	}
@@ -287,7 +287,7 @@ func TestSnapshotRevisionMismatchFailsClosed(t *testing.T) {
 
 func TestUnknownCapabilityIsInvalidArgument(t *testing.T) {
 	store := fixtureStore(t)
-	if envelope := NewDispatcher(store).Dispatch("classroom.missing", nil); envelope.OK || envelope.Code != guestkit.CodeInvalidArgument {
+	if envelope := guestkit.NewDispatcher(Handlers(store)).Dispatch("classroom.missing", nil); envelope.OK || envelope.Code != guestkit.CodeInvalidArgument {
 		t.Fatalf("envelope=%+v", envelope)
 	}
 }

@@ -55,7 +55,7 @@ func dispatch(t *testing.T, store guestkit.Store, capabilityID string, payload a
 	if err != nil {
 		t.Fatal(err)
 	}
-	return NewDispatcher(store).Dispatch(capabilityID, body)
+	return guestkit.NewDispatcher(Handlers(store)).Dispatch(capabilityID, body)
 }
 
 func decodeResult(t *testing.T, envelope guestkit.ResultEnvelope, target any) {
@@ -84,7 +84,7 @@ func TestEntriesListReturnsDemoCatalog(t *testing.T) {
 
 func TestCredentialLifecyclePutPrepareRevoke(t *testing.T) {
 	store := newMemStore()
-	dispatcher := NewDispatcher(store)
+	dispatcher := guestkit.NewDispatcher(Handlers(store))
 
 	put := dispatcher.Dispatch(capCredentialsPut, marshal(t, ecard.CredentialsPutRequest{
 		Kind: ecard.KindDemoHandle, Material: "demo:handle-1", TTLHours: 2,
@@ -165,7 +165,7 @@ func TestCredentialLifecyclePutPrepareRevoke(t *testing.T) {
 
 func TestCredentialStatusReflectsLifecycle(t *testing.T) {
 	store := newMemStore()
-	dispatcher := NewDispatcher(store)
+	dispatcher := guestkit.NewDispatcher(Handlers(store))
 	put := dispatcher.Dispatch(capCredentialsPut, marshal(t, ecard.CredentialsPutRequest{
 		Kind: ecard.KindDemoHandle, Material: "demo:handle-2",
 	}))
@@ -187,17 +187,17 @@ func TestCredentialStatusReflectsLifecycle(t *testing.T) {
 
 func TestInvalidPayloadsMapToStableCode(t *testing.T) {
 	store := newMemStore()
-	if envelope := NewDispatcher(store).Dispatch("ecard.missing", nil); envelope.OK || envelope.Code != guestkit.CodeInvalidArgument {
+	if envelope := guestkit.NewDispatcher(Handlers(store)).Dispatch("ecard.missing", nil); envelope.OK || envelope.Code != guestkit.CodeInvalidArgument {
 		t.Fatalf("envelope=%+v", envelope)
 	}
 	// 真实凭据材料（无 demo: 前缀）按 invalid_argument 拒绝。
-	if envelope := NewDispatcher(store).Dispatch(capCredentialsPut, marshal(t, ecard.CredentialsPutRequest{
+	if envelope := guestkit.NewDispatcher(Handlers(store)).Dispatch(capCredentialsPut, marshal(t, ecard.CredentialsPutRequest{
 		Kind: ecard.KindDemoHandle, Material: "CASTGC-real-secret",
 	})); envelope.OK || envelope.Code != guestkit.CodeInvalidArgument {
 		t.Fatalf("real material envelope=%+v", envelope)
 	}
 	// 未知字段是协议违例。
-	if envelope := NewDispatcher(store).Dispatch(capEntriesList, json.RawMessage(`{"extra":1}`)); envelope.OK || envelope.Code != guestkit.CodeInvalidArgument {
+	if envelope := guestkit.NewDispatcher(Handlers(store)).Dispatch(capEntriesList, json.RawMessage(`{"extra":1}`)); envelope.OK || envelope.Code != guestkit.CodeInvalidArgument {
 		t.Fatalf("unknown field envelope=%+v", envelope)
 	}
 }

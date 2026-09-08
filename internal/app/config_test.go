@@ -229,7 +229,7 @@ func writeInstalledPackage(t *testing.T, root, packageID string) {
 			Authorization:   capability.AuthorizationSpec{ResourceType: "main.extension.resource"},
 			Execution:       capability.ExecutionSpec{EffectTarget: capability.EffectNone, Replay: capability.ReplaySafe, ConfirmationFloor: capability.ConfirmationPolicy},
 		}},
-		Components: []packagecontract.Component{{ID: "main.extension", Mode: loader.ModeHosted, Role: packagecontract.RoleProvider, Entrypoint: "runtime-artifact", Exports: []string{"main.extension.query"}}},
+		Components: []packagecontract.Component{{ID: "main.extension", Mode: loader.ModeHosted, ABIVersion: packagecontract.GuestABI1, Role: packagecontract.RoleProvider, Entrypoint: "runtime-artifact", Exports: []string{"main.extension.query"}}},
 	})
 	if err != nil {
 		t.Fatal(err)
