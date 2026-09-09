@@ -5,4 +5,5 @@ use (
 	./contracts
 	./package-manager
 	./packages/campus-bus
+	./packages/weather
 )

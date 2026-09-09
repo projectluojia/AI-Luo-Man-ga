@@ -248,3 +248,76 @@ source = "../outside"
 		t.Fatal("escaping source = nil, want error")
 	}
 }
+
+// TestBuildGoNativeCompilesIsolatedBinary 验证 go-native 构建器按当前平台编译
+// isolated 进程可执行文件（entrypoint 即实际工件名；跳过无 Go 工具链环境）。
+func TestBuildGoNativeCompilesIsolatedBinary(t *testing.T) {
+	if runtime.GOARCH == "wasm" {
+		t.Skip("当前平台自身是 wasm")
+	}
+	sourceDir := t.TempDir()
+	guestDir := filepath.Join(sourceDir, "server")
+	if err := os.MkdirAll(guestDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	writeSource(t, filepath.Join(guestDir, "main.go"), `package main
+
+func main() {}
+`)
+	// 包目录内 go.mod：源码自包含，构建器不依赖仓库根模块。
+	writeSource(t, filepath.Join(sourceDir, "go.mod"), "module demo.pkg\n\ngo 1.24\n")
+	entrypoint := "weather.exe"
+	if runtime.GOOS != "windows" {
+		entrypoint = "weather"
+	}
+	path := filepath.Join(sourceDir, SourceFileName)
+	writeSource(t, path, `
+[package]
+id = "demo.isolated"
+version = "1.0.0"
+
+[[component]]
+id = "core"
+mode = "isolated"
+role = "provider"
+entrypoint = "`+entrypoint+`"
+[component.process]
+path = "`+entrypoint+`"
+address = "127.0.0.1:50051"
+
+[component.build]
+tool = "go-native"
+source = "server"
+`)
+	manifest, _, builds, err := Parse(path)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(builds) != 1 || builds[0].Tool != BuildToolGoNative {
+		t.Fatalf("builds = %+v, want one go-native plan", builds)
+	}
+	if err := Build(context.Background(), sourceDir, manifest, builds); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	info, err := os.Stat(filepath.Join(sourceDir, entrypoint))
+	if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 {
+		t.Fatalf("编译产物缺失或非法: %v size=%d", err, info.Size())
+	}
+}
+
+// TestBuildGoNativeRejectsHostedComponents 验证 go-native 只接受 isolated 组件。
+func TestBuildGoNativeRejectsHostedComponents(t *testing.T) {
+	manifest := packagecontract.Manifest{
+		SchemaVersion: packagecontract.SchemaVersion,
+		ID:            "mixed.pkg",
+		Version:       "1.0.0",
+		Components: []packagecontract.Component{
+			{ID: "prefs", Mode: packagecontract.ModeHosted, Role: packagecontract.RoleProvider, Entrypoint: "prefs.wasm"},
+		},
+	}
+	if err := Build(context.Background(), t.TempDir(), manifest, []BuildSpec{
+		{Tool: BuildToolGoNative, Components: []string{"prefs"}},
+	}); err == nil {
+		t.Fatal("go-native on hosted component was accepted")
+	}
+}
