@@ -325,12 +325,13 @@ CREATE TABLE qq_access_settings (
 
 CREATE TABLE package_documents (
   app_id TEXT NOT NULL,
+  user_id TEXT NOT NULL DEFAULT '' CHECK(user_id = '' OR length(user_id) <= 128),
   namespace TEXT NOT NULL,
   collection TEXT NOT NULL,
   doc_id TEXT NOT NULL,
   payload TEXT NOT NULL CHECK(json_valid(payload) AND length(payload) <= 65536),
   updated_at TEXT NOT NULL,
-  PRIMARY KEY (app_id, namespace, collection, doc_id)
+  PRIMARY KEY (app_id, user_id, namespace, collection, doc_id)
 );
 
 CREATE TABLE package_snapshots (
@@ -366,7 +367,7 @@ CREATE INDEX confirmations_status_expiry_idx ON confirmations(app_id, status, ex
 CREATE INDEX tasks_queue_idx ON tasks(app_id, status, available_at);
 CREATE INDEX tasks_lease_idx ON tasks(status, lease_expires_at);
 CREATE INDEX tasks_app_lease_idx ON tasks(app_id, status, lease_expires_at);
-CREATE INDEX package_documents_scope_idx ON package_documents(app_id, namespace, collection, doc_id);
+CREATE INDEX package_documents_scope_idx ON package_documents(app_id, user_id, namespace, collection, doc_id);
 CREATE UNIQUE INDEX package_snapshots_current_idx ON package_snapshots(app_id, namespace) WHERE is_current = 1;
 
 CREATE TRIGGER runs_budget_insert_guard

@@ -25,7 +25,31 @@ const (
 	OpDelete = "delete"
 )
 
+// ScopeRequest 是 ailuo.store 请求信封的作用域选择：guest 只能声明要访问
+// 系统数据还是个人数据，具体 UserID 由宿主从治理上下文注入，guest 不可见、
+// 不可伪造。缺省是 system（公共快照数据）。
+type ScopeRequest struct {
+	Scope ScopeKind `json:"scope,omitempty"`
+}
+
+// scopeFor 解析请求声明的作用域种类并绑定归属用户：system 固定空 UserID，
+// user 取治理上下文的 UserID（缺失即拒绝——匿名调用没有个人数据）。
+func scopeFor(request contracts.RequestContext, declared ScopeKind) (Scope, error) {
+	switch declared {
+	case ScopeSystem, "":
+		return Scope{AppID: request.AppID, UserID: ""}, nil
+	case ScopeUser:
+		if request.UserID == "" {
+			return Scope{}, fmt.Errorf("%w: user scope requires an authenticated caller", ErrInvalidScope)
+		}
+		return Scope{AppID: request.AppID, UserID: request.UserID}, nil
+	default:
+		return Scope{}, fmt.Errorf("%w: unknown storage scope kind %q", ErrInvalidScope, declared)
+	}
+}
+
 type getRequest struct {
+	ScopeRequest
 	Collection string `json:"collection"`
 	ID         string `json:"id"`
 }
@@ -40,6 +64,7 @@ type getResponse struct {
 }
 
 type listRequest struct {
+	ScopeRequest
 	Collection string `json:"collection"`
 	Limit      int    `json:"limit"`
 	AfterID    string `json:"after_id,omitempty"`
@@ -52,12 +77,14 @@ type listResponse struct {
 }
 
 type putRequest struct {
+	ScopeRequest
 	Collection string          `json:"collection"`
 	ID         string          `json:"id"`
 	Doc        json.RawMessage `json:"doc"`
 }
 
 type deleteRequest struct {
+	ScopeRequest
 	Collection string `json:"collection"`
 	ID         string `json:"id"`
 }
@@ -67,34 +94,46 @@ type deleteResponse struct {
 }
 
 // HostFunctions 返回绑定到固定 Package namespace 的通用存储宿主函数。
-// AppID 取自每次调用的治理上下文（宿主侧注入，guest 不可伪造），PackageID
-// 与 namespace 由装配方固定；写操作还必须对应声明为 write/external 的
-// Capability，并携带幂等键。
+// AppID 与 UserID 取自每次调用的治理上下文（宿主侧注入，guest 不可伪造），
+// PackageID 与 namespace 由装配方固定；guest 只能声明作用域种类（system/user）。
+// 写操作必须对应声明为 write/external 的 Capability、携带幂等键，且只能写
+// 个人作用域——公共数据只经可信 Go 侧快照导入，guest 无系统级写入路径。
 func HostFunctions(store Store, packageID, namespace string, capabilities []capability.CapabilitySpec) []loader.HostedFunction {
 	capabilityByID := make(map[string]capability.CapabilitySpec, len(capabilities))
 	for _, spec := range capabilities {
 		capabilityByID[spec.ID] = spec
 	}
-	binding := func(call func(context.Context, Scope, []byte) (any, error)) func(context.Context, contracts.RequestContext, []byte) ([]byte, error) {
+	storeBinding := func(operation string, handler func(context.Context, contracts.RequestContext, []byte) (any, error)) func(context.Context, contracts.RequestContext, []byte) ([]byte, error) {
 		return func(ctx context.Context, request contracts.RequestContext, body []byte) ([]byte, error) {
-			scope := Scope{AppID: request.AppID, PackageID: packageID, Namespace: namespace}
-			if err := ValidateScope(scope); err != nil {
+			if err := authorizeStoreOperation(request, operation, capabilityByID); err != nil {
 				return nil, err
 			}
-			response, err := call(ctx, scope, body)
+			response, err := handler(ctx, request, body)
 			if err != nil {
 				return nil, err
 			}
 			return json.Marshal(response)
 		}
 	}
-	storeBinding := func(operation string, call func(context.Context, Scope, []byte) (any, error)) func(context.Context, contracts.RequestContext, []byte) ([]byte, error) {
-		return func(ctx context.Context, request contracts.RequestContext, body []byte) ([]byte, error) {
-			if err := authorizeStoreOperation(request, operation, capabilityByID); err != nil {
-				return nil, err
-			}
-			return binding(call)(ctx, request, body)
+	// bindScope 从请求声明的作用域种类与治理上下文装配完整作用域：UserID
+	// 只能来自治理上下文；写操作只能落个人作用域（防止任一用户经 guest 路径
+	// 污染全体用户共享的系统数据）。
+	bindScope := func(request contracts.RequestContext, operation string, declared ScopeKind) (Scope, error) {
+		partial, err := scopeFor(request, declared)
+		if err != nil {
+			return Scope{}, err
 		}
+		if (operation == OpPut || operation == OpDelete) && partial.Kind() != ScopeUser {
+			return Scope{}, fmt.Errorf("%w: %s requires user scope", ErrAccessDenied, operation)
+		}
+		scope := Scope{
+			AppID: partial.AppID, UserID: partial.UserID,
+			PackageID: packageID, Namespace: namespace,
+		}
+		if err := ValidateScope(scope); err != nil {
+			return Scope{}, err
+		}
+		return scope, nil
 	}
 	decode := func(body []byte, target any) error {
 		if err := packagecontract.DecodeStrictJSON(body, target); err != nil {
@@ -105,18 +144,22 @@ func HostFunctions(store Store, packageID, namespace string, capabilities []capa
 	return []loader.HostedFunction{
 		{
 			Module: StoreModule, Name: OpGet,
-			Call: storeBinding(OpGet, func(ctx context.Context, scope Scope, body []byte) (any, error) {
-				var request getRequest
-				if err := decode(body, &request); err != nil {
+			Call: storeBinding(OpGet, func(ctx context.Context, request contracts.RequestContext, body []byte) (any, error) {
+				var req getRequest
+				if err := decode(body, &req); err != nil {
 					return nil, err
 				}
-				if err := ValidateCollection(request.Collection); err != nil {
+				scope, err := bindScope(request, OpGet, req.Scope)
+				if err != nil {
 					return nil, err
 				}
-				if err := ValidateDocID(request.ID); err != nil {
+				if err := ValidateCollection(req.Collection); err != nil {
 					return nil, err
 				}
-				read, err := store.Get(ctx, scope, request.Collection, request.ID)
+				if err := ValidateDocID(req.ID); err != nil {
+					return nil, err
+				}
+				read, err := store.Get(ctx, scope, req.Collection, req.ID)
 				if err != nil {
 					return nil, err
 				}
@@ -125,23 +168,27 @@ func HostFunctions(store Store, packageID, namespace string, capabilities []capa
 		},
 		{
 			Module: StoreModule, Name: OpList,
-			Call: storeBinding(OpList, func(ctx context.Context, scope Scope, body []byte) (any, error) {
-				var request listRequest
-				if err := decode(body, &request); err != nil {
+			Call: storeBinding(OpList, func(ctx context.Context, request contracts.RequestContext, body []byte) (any, error) {
+				var req listRequest
+				if err := decode(body, &req); err != nil {
 					return nil, err
 				}
-				if err := ValidateCollection(request.Collection); err != nil {
+				scope, err := bindScope(request, OpList, req.Scope)
+				if err != nil {
 					return nil, err
 				}
-				if request.Limit < 1 || request.Limit > MaxListLimit {
+				if err := ValidateCollection(req.Collection); err != nil {
+					return nil, err
+				}
+				if req.Limit < 1 || req.Limit > MaxListLimit {
 					return nil, ErrInvalidKey
 				}
-				if request.AfterID != "" {
-					if err := ValidateDocID(request.AfterID); err != nil {
+				if req.AfterID != "" {
+					if err := ValidateDocID(req.AfterID); err != nil {
 						return nil, err
 					}
 				}
-				read, err := store.List(ctx, scope, request.Collection, request.Limit, request.AfterID)
+				read, err := store.List(ctx, scope, req.Collection, req.Limit, req.AfterID)
 				if err != nil {
 					return nil, err
 				}
@@ -153,37 +200,45 @@ func HostFunctions(store Store, packageID, namespace string, capabilities []capa
 		},
 		{
 			Module: StoreModule, Name: OpPut,
-			Call: storeBinding(OpPut, func(ctx context.Context, scope Scope, body []byte) (any, error) {
-				var request putRequest
-				if err := decode(body, &request); err != nil {
+			Call: storeBinding(OpPut, func(ctx context.Context, request contracts.RequestContext, body []byte) (any, error) {
+				var req putRequest
+				if err := decode(body, &req); err != nil {
 					return nil, err
 				}
-				if err := ValidateCollection(request.Collection); err != nil {
+				scope, err := bindScope(request, OpPut, req.Scope)
+				if err != nil {
 					return nil, err
 				}
-				if err := ValidateDocID(request.ID); err != nil {
+				if err := ValidateCollection(req.Collection); err != nil {
 					return nil, err
 				}
-				if err := ValidatePayload(request.Doc); err != nil {
+				if err := ValidateDocID(req.ID); err != nil {
 					return nil, err
 				}
-				return struct{}{}, store.Put(ctx, scope, request.Collection, request.ID, request.Doc)
+				if err := ValidatePayload(req.Doc); err != nil {
+					return nil, err
+				}
+				return struct{}{}, store.Put(ctx, scope, req.Collection, req.ID, req.Doc)
 			}),
 		},
 		{
 			Module: StoreModule, Name: OpDelete,
-			Call: storeBinding(OpDelete, func(ctx context.Context, scope Scope, body []byte) (any, error) {
-				var request deleteRequest
-				if err := decode(body, &request); err != nil {
+			Call: storeBinding(OpDelete, func(ctx context.Context, request contracts.RequestContext, body []byte) (any, error) {
+				var req deleteRequest
+				if err := decode(body, &req); err != nil {
 					return nil, err
 				}
-				if err := ValidateCollection(request.Collection); err != nil {
+				scope, err := bindScope(request, OpDelete, req.Scope)
+				if err != nil {
 					return nil, err
 				}
-				if err := ValidateDocID(request.ID); err != nil {
+				if err := ValidateCollection(req.Collection); err != nil {
 					return nil, err
 				}
-				if err := store.Delete(ctx, scope, request.Collection, request.ID); err != nil {
+				if err := ValidateDocID(req.ID); err != nil {
+					return nil, err
+				}
+				if err := store.Delete(ctx, scope, req.Collection, req.ID); err != nil {
 					if errors.Is(err, ErrNotFound) {
 						return deleteResponse{Deleted: false}, nil
 					}

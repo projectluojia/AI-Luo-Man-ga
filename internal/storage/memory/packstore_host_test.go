@@ -114,21 +114,28 @@ func TestHostWriteRequiresWriteCapabilityAndIdempotency(t *testing.T) {
 	}
 	functions := packstore.HostFunctions(docs, "test", "test/pkg", append(read, write))
 	putFn := hostFunctionByName(functions, packstore.OpPut)
-	payload := []byte(`{"collection":"routes","id":"route-a","doc":{"name":"A"}}`)
+	payload := []byte(`{"scope":"user","collection":"routes","id":"route-a","doc":{"name":"A"}}`)
 	if _, err := putFn.Call(context.Background(), contracts.RequestContext{
 		AppID: "app-a", CapabilityID: "test.capability", IdempotencyKey: "call-1",
 	}, payload); !errors.Is(err, packstore.ErrAccessDenied) {
 		t.Fatalf("read Capability write error=%v, want ErrAccessDenied", err)
 	}
-	if _, err := putFn.Call(context.Background(), contracts.RequestContext{
-		AppID: "app-a", CapabilityID: "test.write",
-	}, payload); !errors.Is(err, packstore.ErrAccessDenied) {
-		t.Fatalf("write without idempotency error=%v, want ErrAccessDenied", err)
-	}
+	// 治理上下文没有 UserID 时，声明 user 作用域也写不进去。
 	if _, err := putFn.Call(context.Background(), contracts.RequestContext{
 		AppID: "app-a", CapabilityID: "test.write", IdempotencyKey: "call-1",
+	}, payload); !errors.Is(err, packstore.ErrInvalidScope) {
+		t.Fatalf("anonymous user-scope write error=%v, want ErrInvalidScope", err)
+	}
+	// 系统作用域写入没有 guest 路径。
+	if _, err := putFn.Call(context.Background(), contracts.RequestContext{
+		AppID: "app-a", CapabilityID: "test.write", UserID: "user-a", IdempotencyKey: "call-1",
+	}, []byte(`{"collection":"routes","id":"route-a","doc":{"name":"A"}}`)); !errors.Is(err, packstore.ErrAccessDenied) {
+		t.Fatalf("system-scope write error=%v, want ErrAccessDenied（guest 写只落个人作用域）", err)
+	}
+	if _, err := putFn.Call(context.Background(), contracts.RequestContext{
+		AppID: "app-a", CapabilityID: "test.write", UserID: "user-a", IdempotencyKey: "call-1",
 	}, payload); err != nil {
-		t.Fatalf("write Capability error=%v", err)
+		t.Fatalf("user-scope write Capability error=%v", err)
 	}
 }
 
@@ -181,5 +188,106 @@ func TestHostCallRejectsNonCanonicalRequestJSON(t *testing.T) {
 		if !errors.Is(err, packstore.ErrInvalidKey) {
 			t.Errorf("payload %q error=%v, want strict request rejection", payload, err)
 		}
+	}
+}
+
+// TestHostUserScopeIsolationBetweenUsers 验证个人作用域按治理上下文注入的
+// UserID 物理隔离：guest 只能声明作用域种类，不同用户互不可见，个人数据
+// 与系统快照数据不混合，个人读取不携带快照元数据。
+func TestHostUserScopeIsolationBetweenUsers(t *testing.T) {
+	docs := memory.NewDocuments()
+	// 播种系统快照数据（可信 Go 侧路径）。
+	scope := packstore.Scope{AppID: "app-a", PackageID: "test", Namespace: "test/pkg"}
+	importedAt := time.Now().UTC().Add(-time.Hour)
+	meta := packstore.SnapshotMeta{
+		Revision: "rev-1", Source: "test-source", Authoritative: true,
+		Complete: true, ImportedAt: importedAt, ValidUntil: importedAt.Add(time.Hour),
+	}
+	if err := docs.ReplaceSnapshot(context.Background(), scope, meta, map[string][]packstore.Document{
+		"routes": {{ID: "route-system", Payload: []byte(`{"id":"route-system"}`)}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	write := capability.CapabilitySpec{
+		ID: "test.write", Version: "1.0.0", Name: "写入能力",
+		InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
+		Authorization:   capability.AuthorizationSpec{ResourceType: "capability.resource"},
+		Execution:       capability.ExecutionSpec{EffectTarget: capability.EffectState, Replay: capability.ReplayIdempotencyKey, ConfirmationFloor: capability.ConfirmationPolicy},
+	}
+	functions := packstore.HostFunctions(docs, "test", "test/pkg", append(testCapabilities(), write))
+	putFn := hostFunctionByName(functions, packstore.OpPut)
+	getFn := hostFunctionByName(functions, packstore.OpGet)
+	listFn := hostFunctionByName(functions, packstore.OpList)
+
+	userPayload := func(user, id string) []byte {
+		return []byte(`{"scope":"user","collection":"routes","id":"` + id + `","doc":{"id":"` + id + `"}}`)
+	}
+	for _, user := range []string{"user-a", "user-b"} {
+		if _, err := putFn.Call(context.Background(), contracts.RequestContext{
+			AppID: "app-a", CapabilityID: "test.write", UserID: user, IdempotencyKey: "call-" + user,
+		}, userPayload(user, "route-"+user)); err != nil {
+			t.Fatalf("write as %s: %v", user, err)
+		}
+	}
+	// user-a 只能读到自己的文档与系统数据，看不到 user-b 的文档。
+	read, err := getFn.Call(context.Background(), contracts.RequestContext{
+		AppID: "app-a", UserID: "user-a", CapabilityID: "test.capability",
+	}, []byte(`{"scope":"user","collection":"routes","id":"route-user-b"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded struct {
+		Found bool `json:"found"`
+	}
+	if err := json.Unmarshal(read, &decoded); err != nil || decoded.Found {
+		t.Fatalf("user-a read user-b doc: found=%v err=%v", decoded.Found, err)
+	}
+	if _, err := getFn.Call(context.Background(), contracts.RequestContext{
+		AppID: "app-a", UserID: "user-a", CapabilityID: "test.capability",
+	}, []byte(`{"scope":"user","collection":"routes","id":"route-user-a"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(read, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	// 个人 list 不含系统文档，也不携带快照元数据。
+	listed, err := listFn.Call(context.Background(), contracts.RequestContext{
+		AppID: "app-a", UserID: "user-a", CapabilityID: "test.capability",
+	}, []byte(`{"scope":"user","collection":"routes","limit":10}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var listDecoded struct {
+		Docs      []struct{ ID string } `json:"docs"`
+		MetaFound bool                  `json:"meta_found"`
+	}
+	if err := json.Unmarshal(listed, &listDecoded); err != nil {
+		t.Fatal(err)
+	}
+	if len(listDecoded.Docs) != 1 || listDecoded.Docs[0].ID != "route-user-a" || listDecoded.MetaFound {
+		t.Fatalf("user list docs=%#v metaFound=%v", listDecoded.Docs, listDecoded.MetaFound)
+	}
+	// 系统读取只含快照文档，不含任何个人文档。
+	systemListed, err := listFn.Call(context.Background(), contracts.RequestContext{
+		AppID: "app-a", CapabilityID: "test.capability",
+	}, []byte(`{"collection":"routes","limit":10}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var systemDecoded struct {
+		Docs      []struct{ ID string } `json:"docs"`
+		MetaFound bool                  `json:"meta_found"`
+	}
+	if err := json.Unmarshal(systemListed, &systemDecoded); err != nil {
+		t.Fatal(err)
+	}
+	if len(systemDecoded.Docs) != 1 || systemDecoded.Docs[0].ID != "route-system" || !systemDecoded.MetaFound {
+		t.Fatalf("system list docs=%#v metaFound=%v", systemDecoded.Docs, systemDecoded.MetaFound)
+	}
+	// 未知作用域种类 fail-closed。
+	if _, err := getFn.Call(context.Background(), contracts.RequestContext{
+		AppID: "app-a", UserID: "user-a", CapabilityID: "test.capability",
+	}, []byte(`{"scope":"global","collection":"routes","id":"x"}`)); !errors.Is(err, packstore.ErrInvalidScope) {
+		t.Fatalf("unknown scope kind error=%v, want ErrInvalidScope", err)
 	}
 }
