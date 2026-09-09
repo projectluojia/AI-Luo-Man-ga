@@ -50,17 +50,23 @@ type BuildSpec struct {
 // .venv/Scripts/python.exe），写进安装期生成的 lock 进程规格。
 const BuildToolPythonUV = "python-uv"
 
+// BuildToolGoNative 是内置的 Go isolated 执行形态构建器：以当前平台
+// （host GOOS/GOARCH）编译独立进程可执行文件，产物为包根目录下的
+// entrypoint 文件。entrypoint 由作者声明为实际工件名（如 "weather.exe"），
+// pack/install/lock 全链按文件名平铺处理，无平台分支。
+const BuildToolGoNative = "go-native"
+
 // Build 执行 component 级构建计划：为包生成声明的 hosted 工件或 isolated 运行环境。
-// 支持 go-wasm（Go，内置）、python-uv（Python，内置）与 ts-as（TypeScript，
-// AssemblyScript 编译器）；未知工具 fail-closed。源码目录相对包目录解析，
-// 校验不逃逸包目录。
+// 支持 go-wasm（Go，内置）、python-uv（Python，内置）、go-native（Go isolated
+// 进程，内置）与 ts-as（TypeScript，AssemblyScript 编译器）；未知工具
+// fail-closed。源码目录相对包目录解析，校验不逃逸包目录。
 func Build(ctx context.Context, sourceDir string, manifest packagecontract.Manifest, specs []BuildSpec) error {
 	plannedComponents := make(map[string]struct{})
 	for _, spec := range specs {
 		switch spec.Tool {
-		case BuildToolGoWasm, BuildToolPythonUV, BuildToolAssemblyScript:
+		case BuildToolGoWasm, BuildToolPythonUV, BuildToolGoNative, BuildToolAssemblyScript:
 		default:
-			return fmt.Errorf("%w: %q（支持：go-wasm、python-uv、ts-as）", ErrBuildUnsupported, spec.Tool)
+			return fmt.Errorf("%w: %q（支持：go-wasm、python-uv、go-native、ts-as）", ErrBuildUnsupported, spec.Tool)
 		}
 		if err := validateBuildTargets(manifest, spec, plannedComponents); err != nil {
 			return err
@@ -87,12 +93,16 @@ func Build(ctx context.Context, sourceDir string, manifest packagecontract.Manif
 				return err
 			}
 			builtPythonSources[source] = struct{}{}
+		case BuildToolGoNative:
+			if err := buildGoNative(ctx, sourceDir, manifest, spec); err != nil {
+				return err
+			}
 		case BuildToolAssemblyScript:
 			if err := buildAssemblyScript(ctx, sourceDir, manifest, spec); err != nil {
 				return err
 			}
 		default:
-			return fmt.Errorf("%w: %q（支持：go-wasm、python-uv、ts-as）", ErrBuildUnsupported, spec.Tool)
+			return fmt.Errorf("%w: %q（支持：go-wasm、python-uv、go-native、ts-as）", ErrBuildUnsupported, spec.Tool)
 		}
 	}
 	return nil
@@ -102,7 +112,7 @@ func validateBuildTargets(manifest packagecontract.Manifest, spec BuildSpec, pla
 	targets := spec.Components
 	if len(targets) == 0 {
 		targetMode := packagecontract.ModeHosted
-		if spec.Tool == BuildToolPythonUV {
+		if spec.Tool == BuildToolPythonUV || spec.Tool == BuildToolGoNative {
 			targetMode = packagecontract.ModeIsolated
 		}
 		for _, component := range manifest.Components {
@@ -114,8 +124,8 @@ func validateBuildTargets(manifest packagecontract.Manifest, spec BuildSpec, pla
 	for _, componentID := range targets {
 		component, ok := packagecontract.FindComponent(manifest, componentID)
 		if !ok ||
-			(spec.Tool == BuildToolPythonUV && component.Mode != packagecontract.ModeIsolated) ||
-			(spec.Tool != BuildToolPythonUV && component.Mode != packagecontract.ModeHosted) {
+			((spec.Tool == BuildToolPythonUV || spec.Tool == BuildToolGoNative) && component.Mode != packagecontract.ModeIsolated) ||
+			(spec.Tool != BuildToolPythonUV && spec.Tool != BuildToolGoNative && component.Mode != packagecontract.ModeHosted) {
 			return fmt.Errorf("%w: 构建计划引用了不适用的组件 %q", ErrBuildFailed, componentID)
 		}
 		if _, duplicate := planned[componentID]; duplicate {
@@ -135,11 +145,26 @@ func buildGoWasm(ctx context.Context, sourceDir string, manifest packagecontract
 	if runtime.GOARCH == "wasm" {
 		return fmt.Errorf("%w: 当前平台自身是 wasm，无法交叉编译", ErrBuildFailed)
 	}
-	return buildHostedComponents(ctx, sourceDir, manifest, spec,
+	return buildComponents(ctx, sourceDir, manifest, spec, packagecontract.ModeHosted, "",
 		func(ctx context.Context, workDir string, _ packagecontract.Component, output string) ([]byte, error) {
 			command := exec.CommandContext(ctx, "go", "build", "-trimpath", "-o", output, ".")
 			command.Dir = workDir
 			command.Env = append(os.Environ(), "GOOS=wasip1", "GOARCH=wasm")
+			return command.CombinedOutput()
+		})
+}
+
+// buildGoNative 用 Go 工具链按当前平台编译每个 isolated 组件为独立进程
+// 可执行文件：go build -trimpath -o <entrypoint> .，在源码目录内执行。
+// entrypoint 由作者声明为实际工件名（如 "weather.exe"）：Windows 可执行文件
+// 必须带 .exe 后缀才能被启动，Linux 不解析扩展名，因此直接写死平台工件名，
+// pack/install/lock 全链零平台分支（与 campus.wasm 同一命名逻辑）。
+func buildGoNative(ctx context.Context, sourceDir string, manifest packagecontract.Manifest, spec BuildSpec) error {
+	return buildComponents(ctx, sourceDir, manifest, spec, packagecontract.ModeIsolated, "",
+		func(ctx context.Context, workDir string, _ packagecontract.Component, output string) ([]byte, error) {
+			command := exec.CommandContext(ctx, "go", "build", "-trimpath", "-o", output, ".")
+			command.Dir = workDir
+			command.Env = os.Environ()
 			return command.CombinedOutput()
 		})
 }
@@ -358,7 +383,7 @@ func pathWithinDirectory(root, candidate string) bool {
 // 在源码目录内执行（需 node/npx 环境）。入口约定：entrypoint 声明为
 // <名>.wasm，对应源码 <名>.ts（与 schemaextract 的 main.ts 约定一致）。
 func buildAssemblyScript(ctx context.Context, sourceDir string, manifest packagecontract.Manifest, spec BuildSpec) error {
-	return buildHostedComponents(ctx, sourceDir, manifest, spec,
+	return buildComponents(ctx, sourceDir, manifest, spec, packagecontract.ModeHosted, "",
 		func(ctx context.Context, workDir string, component packagecontract.Component, output string) ([]byte, error) {
 			// 源码名 = entrypoint 去 .wasm 后缀 + .ts（main.wasm → main.ts）。
 			input := filepath.Join(workDir, strings.TrimSuffix(filepath.Base(component.Entrypoint), ".wasm")+".ts")
@@ -368,12 +393,16 @@ func buildAssemblyScript(ctx context.Context, sourceDir string, manifest package
 		})
 }
 
-// buildHostedComponents 统一校验包路径、输出目录并逐个构建 hosted 组件。
-func buildHostedComponents(
+// buildComponents 统一校验包路径、输出目录并逐个构建目标模式的组件。
+// outputSuffix 是平台输出后缀（go-native 的 ".exe"，其余工具为空）：
+// 构建产物名 = entrypoint + 后缀，Windows 平台可执行文件因此带 .exe。
+func buildComponents(
 	ctx context.Context,
 	sourceDir string,
 	manifest packagecontract.Manifest,
 	spec BuildSpec,
+	mode string,
+	outputSuffix string,
 	build func(context.Context, string, packagecontract.Component, string) ([]byte, error),
 ) error {
 	absoluteSourceDir, err := filepath.Abs(sourceDir)
@@ -389,7 +418,7 @@ func buildHostedComponents(
 	}
 	workDir := filepath.Join(absoluteSourceDir, source)
 	for _, component := range manifest.Components {
-		if component.Mode != packagecontract.ModeHosted {
+		if component.Mode != mode {
 			continue
 		}
 		if len(spec.Components) > 0 && !slices.Contains(spec.Components, component.ID) {
@@ -398,7 +427,7 @@ func buildHostedComponents(
 		if component.Entrypoint == "" || !packagecontract.IsPackagePath(component.Entrypoint) {
 			return fmt.Errorf("%w: 组件 %s entrypoint 非法 %q", ErrBuildFailed, component.ID, component.Entrypoint)
 		}
-		output := filepath.Join(absoluteSourceDir, component.Entrypoint)
+		output := filepath.Join(absoluteSourceDir, component.Entrypoint+outputSuffix)
 		if err := os.MkdirAll(filepath.Dir(output), 0o750); err != nil {
 			return fmt.Errorf("%w: 创建输出目录: %v", ErrBuildFailed, err)
 		}

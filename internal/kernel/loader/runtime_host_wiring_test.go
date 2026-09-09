@@ -13,7 +13,7 @@ import (
 
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/capability"
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packagecontract"
-	runtimev1 "github.com/projectluojia/AI-Luo-Man-ga/gen/runtimev1"
+	runtimev1 "github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/runtimev1"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/adapters/packagesource"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
 	"google.golang.org/grpc/codes"
