@@ -1,0 +1,98 @@
+# ecard 作者侧源清单（ailuo.toml）。
+# 构建：`ailuo-pm pack . dist` 经 component.build 自动交叉编译（源码在包目录内）。
+# 业务层在 ecard/ 与 app/（原生可测），src/main.go 只装配 guestkit.Run。
+# 安全边界：hosted guest 永不持有真实凭据与密钥——真实 CAS 凭据留给阶段 2c
+# 的签名学校认证包；本包只承载演示材料（demo: 前缀）与不含秘密的会话描述。
+
+[package]
+id = "ecard"
+version = "1.0.0"
+description = "LuoJia e-card and payment-code WebView entry catalog with demo delegated handles."
+pin = true
+
+[[component]]
+id = "provider"
+mode = "hosted"
+role = "provider"
+entrypoint = "ecard.wasm"
+exports = [
+  "ecard.entries.list", "ecard.session.prepare",
+  "ecard.credentials.put", "ecard.credentials.revoke", "ecard.credentials.status",
+]
+
+[[component.host_function]]
+module = "ailuo.store"
+name = "get"
+purpose = "读取个人作用域演示凭据文档（宿主从治理上下文注入 UserID）"
+
+[[component.host_function]]
+module = "ailuo.store"
+name = "put"
+purpose = "写入个人作用域演示凭据文档"
+
+[component.build]
+tool = "go-wasm"
+source = "src"
+
+[storage]
+namespace = "ecard/credentials"
+
+[[capability]]
+id = "ecard.entries.list"
+name = "列出E卡入口"
+description = "List the demo e-card and payment-code WebView entries (explicitly non-authoritative)."
+schema = """{"type":"object","additionalProperties":false}"""
+[capability.authorization]
+resource_type = "ecard.entries"
+[capability.execution]
+effect_target = "none"
+replay = "safe"
+confirmation_floor = "policy"
+
+[[capability]]
+id = "ecard.session.prepare"
+name = "准备E卡会话"
+description = "Prepare a WebView session plan after a demo delegated credential handle is stored."
+schema = """{"type":"object","properties":{"entry_id":{"type":"string","enum":["luojia_ecard","ecard_paycode"]},"credential_id":{"type":"string","minLength":1,"maxLength":128}},"required":["entry_id","credential_id"],"additionalProperties":false}"""
+[capability.authorization]
+resource_type = "ecard.entries"
+[capability.execution]
+effect_target = "none"
+replay = "safe"
+confirmation_floor = "policy"
+
+[[capability]]
+id = "ecard.credentials.put"
+name = "存入演示凭据"
+description = "Store a demo delegated handle for the current user (demo: prefix only; real credentials are rejected)."
+schema = """{"type":"object","properties":{"kind":{"type":"string","enum":["demo_handle"]},"material":{"type":"string","minLength":1,"maxLength":1024},"ttl_hours":{"type":"integer","minimum":1,"maximum":168}},"required":["kind","material"],"additionalProperties":false}"""
+[capability.authorization]
+resource_type = "ecard.credential"
+[capability.execution]
+effect_target = "governed_state"
+replay = "idempotency_key"
+confirmation_floor = "required"
+
+[[capability]]
+id = "ecard.credentials.revoke"
+name = "撤销E卡凭据"
+description = "Revoke a personal demo delegated credential."
+schema = """{"type":"object","properties":{"credential_id":{"type":"string","minLength":1,"maxLength":128}},"required":["credential_id"],"additionalProperties":false}"""
+[capability.authorization]
+resource_type = "ecard.credential"
+[capability.execution]
+effect_target = "governed_state"
+replay = "idempotency_key"
+confirmation_floor = "required"
+
+[[capability]]
+id = "ecard.credentials.status"
+name = "查询E卡凭据状态"
+description = "Return whether a demo delegated credential exists, without secret values."
+schema = """{"type":"object","properties":{"credential_id":{"type":"string","minLength":1,"maxLength":128}},"required":["credential_id"],"additionalProperties":false}"""
+[capability.authorization]
+resource_type = "ecard.credential"
+[capability.execution]
+effect_target = "none"
+replay = "safe"
+confirmation_floor = "policy"
