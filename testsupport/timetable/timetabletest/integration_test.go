@@ -6,106 +6,27 @@
 package timetabletest_test
 
 import (
-	"context"
 	"encoding/json"
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/idempotency"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime/runtimetest"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/memory"
+	"github.com/projectluojia/AI-Luo-Man-ga/testsupport/hostedtest"
 	"github.com/projectluojia/AI-Luo-Man-ga/testsupport/timetable/timetabletest"
 )
-
-// memIdempotencyStore 是集成测试用的最小内存幂等存储：单进程、无并发争用，
-// 只维护 Manager.Execute 所需的 claim/complete/replay 语义。
-type memIdempotencyStore struct {
-	records map[string]*idempotency.Record
-}
-
-func newMemIdempotencyStore() *memIdempotencyStore {
-	return &memIdempotencyStore{records: map[string]*idempotency.Record{}}
-}
-
-func recordKey(appID, scope, key string) string {
-	return appID + "\x00" + scope + "\x00" + key
-}
-
-func (s *memIdempotencyStore) BeginIdempotent(_ context.Context, claim idempotency.Claim, now time.Time) (idempotency.Record, bool, error) {
-	k := recordKey(claim.AppID, claim.Scope, claim.Key)
-	if existing, ok := s.records[k]; ok {
-		return *existing, false, nil
-	}
-	record := idempotency.Record{
-		Operation:      claim.Operation,
-		Status:         idempotency.StatusExecuting,
-		LeaseToken:     claim.LeaseToken,
-		LeaseExpiresAt: claim.LeaseExpiresAt,
-		CreatedAt:      now,
-	}
-	s.records[k] = &record
-	return record, true, nil
-}
-
-func (s *memIdempotencyStore) GetIdempotent(_ context.Context, appID, scope, key string) (idempotency.Record, error) {
-	if existing, ok := s.records[recordKey(appID, scope, key)]; ok {
-		return *existing, nil
-	}
-	return idempotency.Record{}, idempotency.ErrRecordNotFound
-}
-
-func (s *memIdempotencyStore) CompleteIdempotent(_ context.Context, claim idempotency.Claim, status string, result []byte, errorCode string, completedAt time.Time, expiresAt time.Time) error {
-	k := recordKey(claim.AppID, claim.Scope, claim.Key)
-	record, ok := s.records[k]
-	if !ok {
-		return idempotency.ErrRecordNotFound
-	}
-	record.Status = status
-	record.Result = result
-	record.ErrorCode = errorCode
-	record.CompletedAt = &completedAt
-	record.ExpiresAt = &expiresAt
-	return nil
-}
-
-// acceptAllConfirmations 是测试确认验证器：非空 ConfirmationID 的调用放行。
-type acceptAllConfirmations struct{}
-
-func (acceptAllConfirmations) VerifyConfirmation(context.Context, runtime.ConfirmationRequest) error {
-	return nil
-}
 
 func newTimetableDispatcher(t *testing.T) *runtime.Dispatcher {
 	t.Helper()
 	reg := registry.New()
-	store := memory.NewDocuments()
+	store := hostedtest.MemoryStore()
 	timetabletest.RegisterHosted(t, reg, store)
-	policy := runtimetest.NewStaticAppPolicy()
-	for _, capabilityID := range timetabletest.CapabilityIDs() {
-		policy.Enable(timetabletest.PackageID, capabilityID)
-	}
-	return runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{
-		IdempotencyStore:     newMemIdempotencyStore(),
-		ConfirmationVerifier: acceptAllConfirmations{},
-	})
+	return hostedtest.NewDispatcher(t, reg, timetabletest.PackageID, timetabletest.CapabilityIDs())
 }
 
 func invoke(t *testing.T, d *runtime.Dispatcher, capabilityID, payload, idempotencyKey, confirmationID string) (bool, json.RawMessage, string) {
 	t.Helper()
-	request := contracts.RequestContext{
-		AppID: timetabletest.PackageID, EchoID: "echo-1", RequestID: "request-" + capabilityID,
-		UserID: "user-1", IdempotencyKey: idempotencyKey, ConfirmationID: confirmationID,
-		Deadline: time.Now().Add(time.Minute),
-	}
-	result, err := d.InvokeCapability(t.Context(), request, capabilityID, json.RawMessage(payload))
-	if err != nil {
-		return false, nil, err.Error()
-	}
-	return true, result, ""
+	return hostedtest.Invoke(t, d, timetabletest.PackageID, capabilityID, payload, idempotencyKey, confirmationID)
 }
 
 // TestHostedTimetableLifecycle 经真实 wasm guest 走通课表生命周期：
