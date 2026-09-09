@@ -1,4 +1,4 @@
-module github.com/projectluojia/campus-bus
+module github.com/projectluojia/classroom
 
 go 1.26
 
