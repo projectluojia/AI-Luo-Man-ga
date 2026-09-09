@@ -22,7 +22,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          # 类型白名单对齐 AGENTS.md「提交与工程规范」。
+          # 类型白名单对齐 CONTRIBUTING.md「分支与提交」。
           types: |
             feat
             fix
@@ -53,6 +53,14 @@ jobs:
 
           types = r"feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert"
           header_pattern = re.compile(rf"^({types})(?:\([^()\r\n]+\))?(!)?:\s+\S.*$")
+          merge_header_pattern = re.compile(
+              r"^Merge (?:"
+              r"(?:remote-tracking )?branch '[^'\r\n]+'(?: (?:into|of) \S.*)?"
+              r"|(?:remote-tracking )?branches '[^'\r\n]+'(?:, '[^'\r\n]+')* and '[^'\r\n]+'(?: (?:into|of) \S.*)?"
+              r"|pull request #[1-9]\d* from \S+"
+              r")$"
+          )
+          breaking_marker_pattern = re.compile(r"^[ \t]*(?:BREAKING CHANGE|BREAKING-CHANGE)[ \t]*:", re.MULTILINE)
 
           footer_key_pattern = re.compile(r"^(?:BREAKING CHANGE|[A-Za-z0-9-]+)(?:\s+#\d+)?\s*:")
 
@@ -108,6 +116,13 @@ jobs:
               header = lines[0] if lines else ""
               match = header_pattern.fullmatch(header)
               if match is None:
+                  # 真实合并的标准自动消息保留原样；普通提交不能用相似标题绕过检查。
+                  if (
+                      len(commit.get("parents", [])) >= 2
+                      and merge_header_pattern.fullmatch(header)
+                      and not breaking_marker_pattern.search(message)
+                  ):
+                      continue
                   errors.append(f"提交 {commit_id} 的标题不符合 Conventional Commits")
                   continue
               has_bang = bool(match.group(2))

@@ -28,6 +28,7 @@ make test-e2e      # Executor e2e（源包，Unix 平台）
 
 - 分支命名使用前缀：`feat/`、`fix/`、`chore/`、`docs/`、`refactor/`。
 - 提交信息和 PR 标题遵循 Conventional Commits：`<type>[optional scope][!]: <描述>`，类型为 `feat`、`fix`、`docs`、`style`、`refactor`、`perf`、`test`、`build`、`ci`、`chore`、`revert`。破坏性变更在标题使用 `!`，并在 footer 写明 `BREAKING CHANGE: <说明>`。标题检查见 [pr-title.yml](.github/workflows/pr-title.yml)。
+- 有至少两个真实父提交的标准 Git 自动合并消息可以原样保留，无需为标题格式重写原 SHA；普通提交或带破坏性声明的提交仍按上述格式校验，PR 标题不适用该例外。
 - 一个 commit 是一个自洽的逻辑单元：可独立构建、独立回滚（例如迁移 + 存取代码 + 测试同处一个 commit）。
 - 独立工作从最新 `dev` 开始；更新个人分支时保留待保全的原始 SHA。不得未经约定 force-push、rebase 或 restack 他人的分支；共享历史重写先记录范围、参与者同意及旧 ref 备份。
 - 新开发采用 merge commit，`dev → main` 也保留 merge ancestry。纯整理工作若确需 squash，先确认没有需要保留的原始 SHA、作者或来源证据；恢复历史的分支不适用该例外。
