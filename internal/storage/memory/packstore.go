@@ -11,7 +11,8 @@ import (
 )
 
 // Documents 是 packstore.Store 的内存实现：仅用于测试装配。
-// 校验路径与生产实现一致（复用 packstore.Validate*），隔离按 Scope 精确匹配；
+// 校验路径与生产实现一致（复用 packstore.Validate*），隔离按 Scope 精确匹配
+// （含 UserID：系统作用域与个人作用域、不同用户之间互不可见）；
 // 读取与生产实现一样返回当前快照元数据视图（内存锁下天然一致）。
 type Documents struct {
 	mu        sync.Mutex
@@ -28,7 +29,7 @@ func NewDocuments() *Documents {
 }
 
 func scopeKey(scope packstore.Scope) string {
-	return scope.AppID + "\x00" + scope.Namespace
+	return scope.AppID + "\x00" + scope.UserID + "\x00" + scope.Namespace
 }
 
 func (m *Documents) collection(scope packstore.Scope, name string) map[string]json.RawMessage {
@@ -46,6 +47,10 @@ func (m *Documents) collection(scope packstore.Scope, name string) map[string]js
 }
 
 func (m *Documents) readMeta(scope packstore.Scope) (packstore.SnapshotMeta, bool) {
+	// 快照元数据是系统作用域概念：个人作用域读取不携带快照元数据。
+	if scope.Kind() == packstore.ScopeUser {
+		return packstore.SnapshotMeta{}, false
+	}
 	meta, ok := m.snapshots[scopeKey(scope)]
 	return meta, ok
 }
@@ -119,6 +124,10 @@ func (m *Documents) List(_ context.Context, scope packstore.Scope, collection st
 }
 
 func (m *Documents) ReplaceSnapshot(_ context.Context, scope packstore.Scope, meta packstore.SnapshotMeta, collections map[string][]packstore.Document) error {
+	// 快照替换是系统级操作：仅系统作用域（user_id=''）合法，个人文档不受影响。
+	if scope.Kind() != packstore.ScopeSystem {
+		return packstore.ErrInvalidScope
+	}
 	if err := packstore.ValidateScope(scope); err != nil {
 		return err
 	}

@@ -1,0 +1,191 @@
+# timetable 作者侧源清单（ailuo.toml）。
+# 构建：`ailuo-pm pack . dist` 经 component.build 自动交叉编译（源码在包目录内）。
+
+[package]
+id = "timetable"
+version = "1.0.0"
+description = "User-owned campus timetables with governed imports (WuDa academic, WakeUp)."
+pin = true
+
+[[component]]
+id = "provider"
+mode = "hosted"
+role = "provider"
+entrypoint = "timetable.wasm"
+exports = [
+  "timetable.list", "timetable.get", "timetable.create", "timetable.update",
+  "timetable.delete", "timetable.activate",
+  "timetable.course.list", "timetable.course.get", "timetable.course.create",
+  "timetable.course.update", "timetable.course.delete", "timetable.import",
+]
+
+[[component.host_function]]
+module = "ailuo.store"
+name = "list"
+purpose = "分页读取包命名空间内的集合文档并携带一致的快照治理元数据"
+
+[[component.host_function]]
+module = "ailuo.store"
+name = "get"
+purpose = "读取单个文档（系统或个人作用域）"
+
+[[component.host_function]]
+module = "ailuo.store"
+name = "put"
+purpose = "upsert 个人作用域文档"
+
+[[component.host_function]]
+module = "ailuo.store"
+name = "delete"
+purpose = "删除个人作用域文档"
+
+[component.build]
+tool = "go-wasm"
+source = "src"
+
+[storage]
+namespace = "timetable/tables"
+
+[[capability]]
+id = "timetable.list"
+name = "查看我的课表"
+description = "List all timetables owned by the current user."
+schema = """{"type":"object","additionalProperties":false}"""
+[capability.authorization]
+resource_type = "timetable.table"
+[capability.execution]
+effect_target = "none"
+replay = "safe"
+confirmation_floor = "policy"
+
+[[capability]]
+id = "timetable.get"
+name = "查看一份课表"
+description = "Get a timetable owned by the current user."
+schema = """{"type":"object","properties":{"timetable_id":{"type":"string","minLength":1,"maxLength":128}},"required":["timetable_id"],"additionalProperties":false}"""
+[capability.authorization]
+resource_type = "timetable.table"
+[capability.execution]
+effect_target = "none"
+replay = "safe"
+confirmation_floor = "policy"
+
+[[capability]]
+id = "timetable.create"
+name = "创建本地课表"
+description = "Create a local timetable."
+schema = """{"type":"object","properties":{"timetable_id":{"type":"string","minLength":1,"maxLength":128},"name":{"type":"string","minLength":1,"maxLength":512},"active":{"type":"boolean"}},"required":["name"],"additionalProperties":false}"""
+[capability.authorization]
+resource_type = "timetable.table"
+[capability.execution]
+effect_target = "governed_state"
+replay = "idempotency_key"
+confirmation_floor = "policy"
+
+[[capability]]
+id = "timetable.update"
+name = "编辑课表"
+description = "Rename or activate a timetable."
+schema = """{"type":"object","properties":{"timetable_id":{"type":"string","minLength":1,"maxLength":128},"name":{"type":"string","minLength":1,"maxLength":512},"active":{"type":"boolean"}},"required":["timetable_id","name"],"additionalProperties":false}"""
+[capability.authorization]
+resource_type = "timetable.table"
+[capability.execution]
+effect_target = "governed_state"
+replay = "idempotency_key"
+confirmation_floor = "policy"
+
+[[capability]]
+id = "timetable.delete"
+name = "删除课表"
+description = "Delete a timetable and all its courses."
+schema = """{"type":"object","properties":{"timetable_id":{"type":"string","minLength":1,"maxLength":128}},"required":["timetable_id"],"additionalProperties":false}"""
+[capability.authorization]
+resource_type = "timetable.table"
+[capability.execution]
+effect_target = "governed_state"
+replay = "idempotency_key"
+confirmation_floor = "required"
+
+[[capability]]
+id = "timetable.activate"
+name = "切换当前课表"
+description = "Make one timetable active for the current user."
+schema = """{"type":"object","properties":{"timetable_id":{"type":"string","minLength":1,"maxLength":128}},"required":["timetable_id"],"additionalProperties":false}"""
+[capability.authorization]
+resource_type = "timetable.table"
+[capability.execution]
+effect_target = "governed_state"
+replay = "idempotency_key"
+confirmation_floor = "policy"
+
+[[capability]]
+id = "timetable.course.list"
+name = "查看课程"
+description = "List courses in a timetable."
+schema = """{"type":"object","properties":{"timetable_id":{"type":"string","minLength":1,"maxLength":128}},"required":["timetable_id"],"additionalProperties":false}"""
+[capability.authorization]
+resource_type = "timetable.table"
+[capability.execution]
+effect_target = "none"
+replay = "safe"
+confirmation_floor = "policy"
+
+[[capability]]
+id = "timetable.course.get"
+name = "查看一门课程"
+description = "Get one course."
+schema = """{"type":"object","properties":{"timetable_id":{"type":"string","minLength":1,"maxLength":128},"course_id":{"type":"string","minLength":1,"maxLength":128}},"required":["timetable_id","course_id"],"additionalProperties":false}"""
+[capability.authorization]
+resource_type = "timetable.table"
+[capability.execution]
+effect_target = "none"
+replay = "safe"
+confirmation_floor = "policy"
+
+[[capability]]
+id = "timetable.course.create"
+name = "新增课程"
+description = "Create a locally edited course."
+schema = """{"type":"object","properties":{"timetable_id":{"type":"string","minLength":1,"maxLength":128},"course_id":{"type":"string","minLength":1,"maxLength":128},"title":{"type":"string","minLength":1,"maxLength":256},"weekday":{"type":"integer","minimum":1,"maximum":7},"class_from":{"type":"integer","minimum":1,"maximum":64},"class_to":{"type":"integer","minimum":1,"maximum":64},"weeks":{"type":"array","minItems":1,"maxItems":64,"items":{"type":"integer","minimum":1,"maximum":64}},"course_nature":{"type":"string","maxLength":512},"instructor":{"type":"string","maxLength":512},"location":{"type":"string","maxLength":512},"week_meta":{"type":"string","maxLength":512},"start_text":{"type":"string","maxLength":512},"end_text":{"type":"string","maxLength":512},"external_id":{"type":"string","maxLength":512}},"required":["timetable_id","title","weekday","class_from","class_to","weeks"],"additionalProperties":false}"""
+[capability.authorization]
+resource_type = "timetable.table"
+[capability.execution]
+effect_target = "governed_state"
+replay = "idempotency_key"
+confirmation_floor = "policy"
+
+[[capability]]
+id = "timetable.course.update"
+name = "编辑课程"
+description = "Replace a course."
+schema = """{"type":"object","properties":{"timetable_id":{"type":"string","minLength":1,"maxLength":128},"course_id":{"type":"string","minLength":1,"maxLength":128},"title":{"type":"string","minLength":1,"maxLength":256},"weekday":{"type":"integer","minimum":1,"maximum":7},"class_from":{"type":"integer","minimum":1,"maximum":64},"class_to":{"type":"integer","minimum":1,"maximum":64},"weeks":{"type":"array","minItems":1,"maxItems":64,"items":{"type":"integer","minimum":1,"maximum":64}},"course_nature":{"type":"string","maxLength":512},"instructor":{"type":"string","maxLength":512},"location":{"type":"string","maxLength":512},"week_meta":{"type":"string","maxLength":512},"start_text":{"type":"string","maxLength":512},"end_text":{"type":"string","maxLength":512},"external_id":{"type":"string","maxLength":512}},"required":["timetable_id","course_id","title","weekday","class_from","class_to","weeks"],"additionalProperties":false}"""
+[capability.authorization]
+resource_type = "timetable.table"
+[capability.execution]
+effect_target = "governed_state"
+replay = "idempotency_key"
+confirmation_floor = "policy"
+
+[[capability]]
+id = "timetable.course.delete"
+name = "删除课程"
+description = "Delete a course."
+schema = """{"type":"object","properties":{"timetable_id":{"type":"string","minLength":1,"maxLength":128},"course_id":{"type":"string","minLength":1,"maxLength":128}},"required":["timetable_id","course_id"],"additionalProperties":false}"""
+[capability.authorization]
+resource_type = "timetable.table"
+[capability.execution]
+effect_target = "governed_state"
+replay = "idempotency_key"
+confirmation_floor = "required"
+
+[[capability]]
+id = "timetable.import"
+name = "导入课表"
+description = "Import WuDa academic or WakeUp timetable content supplied by the user."
+schema = """{"type":"object","properties":{"format":{"type":"string","enum":["wuda","academic","whu","wakeup","csv","legacy"]},"content":{"type":"string","minLength":1,"maxLength":65536},"fileName":{"type":"string","maxLength":512},"name":{"type":"string","maxLength":512},"timetable_id":{"type":"string","maxLength":128},"active":{"type":"boolean"}},"required":["format","content"],"additionalProperties":false}"""
+[capability.authorization]
+resource_type = "timetable.table"
+[capability.execution]
+effect_target = "governed_state"
+replay = "idempotency_key"
+confirmation_floor = "policy"

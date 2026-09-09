@@ -1,8 +1,11 @@
 // Package packstore 是包持久化契约的内核窄端口：沙箱 guest 经通用宿主函数
-// ailuo.store 读写宿主统一存储，作用域强制为（App × 包 namespace）。
+// ailuo.store 读写宿主统一存储，作用域强制为（App × 包 namespace × 用户）。
 //
 // 内核只实现一次该端口与 ABI；任何包需要持久化时在清单 [storage] 段声明
 // namespace 并声明 ailuo.store 宿主函数，装载期 fail-closed 校验"声明 ⊆ 授权"。
+// 作用域分系统与个人两类：系统作用域是包命名空间内的公共快照数据（guest 只读，
+// 快照替换仅可信 Go 侧），个人作用域按治理上下文注入的 UserID 物理隔离——
+// guest 只能选择作用域种类，不能指定具体用户。
 // 快照原子替换（ReplaceSnapshot）只对可信 Go 侧开放，不进入 guest ABI：
 // 快照导入校验与原子性是内核特权，guest 只做读取期的新鲜度/权威性治理。
 package packstore
@@ -18,6 +21,7 @@ import (
 
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/capability"
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packagecontract"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/id"
 )
 
 // 通用存储的闭式资源上限：guest 侧每次调用与可信侧快照导入共用，
@@ -48,13 +52,42 @@ var (
 	ErrAccessDenied = errors.New("package storage access denied")
 )
 
-// Scope 是一次包存储访问的强制作用域：AppID 来自治理上下文（guest 不可见、
-// 不可伪造），PackageID 与 Namespace 由宿主侧装配。Namespace 必须带有
-// PackageID 前缀，避免两个包通过声明相同裸 namespace 隐式共享数据。
+// ScopeKind 是一次存储访问的作用域种类：系统快照数据或个人数据。
+type ScopeKind string
+
+const (
+	// ScopeSystem 是系统作用域：包命名空间内全体用户共享的公共数据
+	// （校巴线路、课表导入模板等快照）。guest 只读，写入仅限可信 Go 侧。
+	ScopeSystem ScopeKind = "system"
+	// ScopeUser 是个人作用域：以治理上下文注入的 UserID 隔离的用户数据。
+	ScopeUser ScopeKind = "user"
+)
+
+// Scope 是一次包存储访问的强制作用域：AppID 与 UserID 均来自治理上下文
+// （guest 不可见、不可伪造），PackageID 与 Namespace 由宿主侧装配。
+// Namespace 必须带有 PackageID 前缀，避免两个包通过声明相同裸 namespace
+// 隐式共享数据。UserID 为空的 Scope 是系统作用域，非空是个人作用域；
+// 个人数据与系统数据在存储层按 user_id 列物理隔离。
 type Scope struct {
 	AppID     string
 	PackageID string
 	Namespace string
+	// UserID 是数据归属用户；空值表示系统作用域。注入只能来自治理上下文。
+	UserID string
+}
+
+// Kind 返回作用域种类：UserID 为空即系统作用域。
+func (s Scope) Kind() ScopeKind {
+	if s.UserID == "" {
+		return ScopeSystem
+	}
+	return ScopeUser
+}
+
+// UserScope 返回同一 App/包/命名空间下指定用户的个人作用域视图。
+func (s Scope) UserScope(userID string) Scope {
+	s.UserID = userID
+	return s
 }
 
 // Document 是一条包文档：稳定 ID + JSON 载荷。JSON 标签是 ailuo.store ABI
@@ -93,9 +126,10 @@ type DocumentRead struct {
 	Document  Document
 }
 
-// Store 是包文档存储的窄端口。实现负责按 Scope 强制 App 隔离、参数化查询
-// 与闭式资源上限；具体引擎（SQLite/内存）位于本端口之后。读取方法必须在
-// 单个读取事务内同时取回文档与其快照元数据。
+// Store 是包文档存储的窄端口。实现负责按 Scope 强制 App 与用户隔离、
+// 参数化查询与闭式资源上限；具体引擎（SQLite/内存）位于本端口之后。
+// 读取方法必须在单个读取事务内同时取回文档与其快照元数据。快照元数据
+// 是系统作用域概念：个人作用域的读写不携带快照元数据（MetaFound 恒 false）。
 type Store interface {
 	// Get 返回单文档读取视图；不存在时 Found 为 false。
 	Get(ctx context.Context, scope Scope, collection, id string) (DocumentRead, error)
@@ -106,15 +140,21 @@ type Store interface {
 	// List 按 doc_id 升序返回集合文档，afterID 为空表示从头开始；limit 必须在
 	// 1..MaxListLimit。返回数量可能小于 limit，但不做跨调用游标语义。
 	List(ctx context.Context, scope Scope, collection string, limit int, afterID string) (CollectionRead, error)
-	// ReplaceSnapshot 原子替换 namespace 的全部集合并激活新快照元数据：
-	// 任一校验失败保留上一完整版本（AGENTS.md 快照导入规则）。仅可信 Go 侧调用。
+	// ReplaceSnapshot 原子替换 namespace 系统作用域的全部集合并激活新快照
+	// 元数据：任一校验失败保留上一完整版本（AGENTS.md 快照导入规则）。
+	// 个人作用域文档不受影响。仅可信 Go 侧调用。
 	ReplaceSnapshot(ctx context.Context, scope Scope, meta SnapshotMeta, collections map[string][]Document) error
 }
 
-// ValidateScope 校验作用域：App、Package 与 namespace 均为闭式标识，且
-// namespace 必须属于当前 Package。
+// ValidateScope 校验作用域：App、Package、namespace 与个人作用域的 UserID
+// 均为闭式标识，且 namespace 必须属于当前 Package。
 func ValidateScope(scope Scope) error {
 	if !capability.IsStableID(scope.AppID) || !capability.IsStableID(scope.PackageID) {
+		return ErrInvalidScope
+	}
+	// UserID 是内核身份层的混合大小写内部标识（identity.ValidateUserID），
+	// 不属于包格式的全小写稳定标识类；用错类别会把合法用户整域拒绝。
+	if scope.Kind() == ScopeUser && !id.StableMixed.MatchString(scope.UserID) {
 		return ErrInvalidScope
 	}
 	if packagecontract.ValidateStorage(packagecontract.Storage{

@@ -77,6 +77,81 @@ func TestPackageDocumentsCRUDIsAppScoped(t *testing.T) {
 	}
 }
 
+func TestPackageDocumentsUserScopeIsolation(t *testing.T) {
+	store, err := sqlite.Open(filepath.Join(t.TempDir(), "user-scope.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	docs := store.PackageDocuments()
+	systemScope := testScope("app-a")
+	userA := systemScope.UserScope("user-a")
+	userB := systemScope.UserScope("user-b")
+
+	// 播种系统快照与两个用户的个人文档。
+	if err := docs.ReplaceSnapshot(ctx, systemScope, testSnapshotMeta("revision-1"), map[string][]packstore.Document{
+		"routes": {{ID: "route-system", Payload: []byte(`{"id":"route-system"}`)}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := docs.Put(ctx, userA, "routes", "route-a", []byte(`{"id":"route-a"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := docs.Put(ctx, userB, "routes", "route-b", []byte(`{"id":"route-b"}`)); err != nil {
+		t.Fatal(err)
+	}
+	// 用户看不到彼此的文档。
+	if missing, err := docs.Get(ctx, userA, "routes", "route-b"); err != nil || missing.Found {
+		t.Fatalf("user-a read user-b doc=%#v err=%v, want not found", missing, err)
+	}
+	// 系统作用域看不到任何个人文档。
+	systemListed, err := docs.List(ctx, systemScope, "routes", 10, "")
+	if err != nil || len(systemListed.Documents) != 1 || systemListed.Documents[0].ID != "route-system" {
+		t.Fatalf("system listed=%#v err=%v", systemListed, err)
+	}
+	// 个人作用域看不到系统文档，也不携带快照元数据。
+	userListed, err := docs.List(ctx, userA, "routes", 10, "")
+	if err != nil || len(userListed.Documents) != 1 || userListed.Documents[0].ID != "route-a" {
+		t.Fatalf("user listed=%#v err=%v", userListed, err)
+	}
+	if userListed.MetaFound {
+		t.Fatalf("个人读取不应携带快照元数据：%#v", userListed)
+	}
+	// 个人 Put 是 upsert，且不污染系统作用域。
+	if err := docs.Put(ctx, userA, "routes", "route-a", []byte(`{"id":"route-a","v":2}`)); err != nil {
+		t.Fatal(err)
+	}
+	if updated, err := docs.Get(ctx, userA, "routes", "route-a"); err != nil || string(updated.Document.Payload) != `{"id":"route-a","v":2}` {
+		t.Fatalf("user-a upsert=%#v err=%v", updated, err)
+	}
+	if systemRead, err := docs.Get(ctx, systemScope, "routes", "route-a"); err != nil || systemRead.Found {
+		t.Fatalf("user write leaked into system scope: %#v err=%v", systemRead, err)
+	}
+	// 快照替换只清系统文档：个人文档原样保留。
+	if err := docs.ReplaceSnapshot(ctx, systemScope, testSnapshotMeta("revision-2"), map[string][]packstore.Document{
+		"routes": {{ID: "route-system-2", Payload: []byte(`{"id":"route-system-2"}`)}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if missing, err := docs.Get(ctx, systemScope, "routes", "route-system"); err != nil || missing.Found {
+		t.Fatalf("old system doc=%#v err=%v, want replaced", missing, err)
+	}
+	if kept, err := docs.Get(ctx, userA, "routes", "route-a"); err != nil || !kept.Found {
+		t.Fatalf("user doc after snapshot replace=%#v err=%v, want preserved", kept, err)
+	}
+	// 个人作用域的快照替换被拒绝。
+	if err := docs.ReplaceSnapshot(ctx, userA, testSnapshotMeta("revision-user"), map[string][]packstore.Document{
+		"routes": {{ID: "x", Payload: []byte(`{}`)}},
+	}); !errors.Is(err, packstore.ErrInvalidScope) {
+		t.Fatalf("user snapshot replace err=%v, want ErrInvalidScope", err)
+	}
+	// 个人删除只影响本人文档。
+	if err := docs.Delete(ctx, userA, "routes", "route-b"); !errors.Is(err, packstore.ErrNotFound) {
+		t.Fatalf("user-a delete user-b doc err=%v, want ErrNotFound", err)
+	}
+}
+
 func TestReplaceSnapshotIsAtomicAndPreservesLastCompleteVersion(t *testing.T) {
 	store, err := sqlite.Open(filepath.Join(t.TempDir(), "snapshot.db"))
 	if err != nil {
