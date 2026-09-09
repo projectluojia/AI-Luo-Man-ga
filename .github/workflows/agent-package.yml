@@ -74,12 +74,14 @@ jobs:
       - name: 打包 Agent Executor
         run: |
           # isolated Executor 在装载期强制签名信任链：生成一次性发布密钥对，
-          # 私钥进打包环境，公钥进后续安装与 e2e 的部署信任集合。
+          # 私钥进打包环境，公钥进后续安装与 e2e 的部署信任集合。GITHUB_ENV
+          # 只对后续步骤生效，本步骤的 pack 需要显式 export。
           keygen_output="$("$RUNNER_TEMP/ailuo" keygen)"
           signing_key="$(sed -n '2p' <<<"$keygen_output")"
           trusted_signer="$(sed -n '4p' <<<"$keygen_output")"
           echo "AILUO_SIGNING_KEY=$signing_key" >> "$GITHUB_ENV"
           echo "AILUO_TRUSTED_SIGNERS=$trusted_signer" >> "$GITHUB_ENV"
+          export AILUO_SIGNING_KEY="$signing_key"
           "$RUNNER_TEMP/ailuo" pack packages/agent "$RUNNER_TEMP/agent-package-dist"
       - name: 同步 Executor 包测试环境
         run: uv sync --project packages/agent/runtime --locked
