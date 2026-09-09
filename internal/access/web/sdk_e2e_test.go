@@ -195,6 +195,7 @@ func newCampusE2E(t *testing.T) (*httptest.Server, json.RawMessage) {
 	policy := runtimetest.NewStaticAppPolicy()
 	for _, capabilityID := range []string{
 		campus.BusStopSearchCapabilityID, campus.BusRouteListCapabilityID, campus.BusJourneySearchCapabilityID,
+		campus.BusRealtimeCapabilityID,
 	} {
 		policy.Enable(campus.AppID, capabilityID)
 	}
