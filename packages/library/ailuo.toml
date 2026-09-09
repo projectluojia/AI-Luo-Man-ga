@@ -1,0 +1,106 @@
+# library 作者侧源清单（ailuo.toml）。
+# 构建：`ailuo-pm pack . dist` 经 component.build 自动交叉编译（源码在包目录内）。
+# 业务层在 library/ 与 app/（原生可测），src/main.go 只装配 guestkit.Run。
+
+[package]
+id = "library"
+version = "1.0.0"
+description = "Library seat availability and personal seat reservations."
+pin = true
+
+[[component]]
+id = "provider"
+mode = "hosted"
+role = "provider"
+entrypoint = "library.wasm"
+exports = [
+  "library.spaces.list", "library.slots.search",
+  "library.reservations.create", "library.reservations.cancel", "library.reservations.mine",
+]
+
+[[component.host_function]]
+module = "ailuo.store"
+name = "list"
+purpose = "分页读取包命名空间内的集合文档并携带一致的快照治理元数据"
+
+[[component.host_function]]
+module = "ailuo.store"
+name = "get"
+purpose = "读取单个文档（个人作用域预约）"
+
+[[component.host_function]]
+module = "ailuo.store"
+name = "put"
+purpose = "写入个人作用域预约文档"
+
+[[component.host_function]]
+module = "ailuo.store"
+name = "delete"
+purpose = "删除个人作用域预约文档"
+
+[component.build]
+tool = "go-wasm"
+source = "src"
+
+[storage]
+namespace = "library/seats"
+
+[[capability]]
+id = "library.spaces.list"
+name = "列出图书馆空间"
+description = "List library spaces from the current governed catalog snapshot."
+schema = """{"type":"object","properties":{"limit":{"type":"integer","minimum":1,"maximum":50}},"additionalProperties":false}"""
+[capability.authorization]
+resource_type = "library.snapshot"
+[capability.execution]
+effect_target = "none"
+replay = "safe"
+confirmation_floor = "policy"
+
+[[capability]]
+id = "library.slots.search"
+name = "查询座位时段"
+description = "Search seat availability by space, Asia/Shanghai date and optional slot."
+schema = """{"type":"object","properties":{"space_id":{"type":"string","minLength":1,"maxLength":128},"date":{"type":"string","pattern":"^[0-9]{4}-[0-9]{2}-[0-9]{2}$"},"slot_id":{"type":"string","minLength":1,"maxLength":128},"limit":{"type":"integer","minimum":1,"maximum":200}},"required":["space_id","date"],"additionalProperties":false}"""
+[capability.authorization]
+resource_type = "library.snapshot"
+[capability.execution]
+effect_target = "none"
+replay = "safe"
+confirmation_floor = "policy"
+
+[[capability]]
+id = "library.reservations.create"
+name = "创建座位预约"
+description = "Create a personal library seat reservation for the current user."
+schema = """{"type":"object","properties":{"space_id":{"type":"string","minLength":1,"maxLength":128},"seat_id":{"type":"string","minLength":1,"maxLength":128},"slot_id":{"type":"string","minLength":1,"maxLength":128},"date":{"type":"string","pattern":"^[0-9]{4}-[0-9]{2}-[0-9]{2}$"}},"required":["space_id","seat_id","slot_id","date"],"additionalProperties":false}"""
+[capability.authorization]
+resource_type = "library.reservation"
+[capability.execution]
+effect_target = "governed_state"
+replay = "idempotency_key"
+confirmation_floor = "required"
+
+[[capability]]
+id = "library.reservations.cancel"
+name = "取消座位预约"
+description = "Cancel a personal library seat reservation owned by the current user."
+schema = """{"type":"object","properties":{"reservation_id":{"type":"string","minLength":1,"maxLength":128}},"required":["reservation_id"],"additionalProperties":false}"""
+[capability.authorization]
+resource_type = "library.reservation"
+[capability.execution]
+effect_target = "governed_state"
+replay = "idempotency_key"
+confirmation_floor = "required"
+
+[[capability]]
+id = "library.reservations.mine"
+name = "查看我的座位预约"
+description = "List personal library seat reservations owned by the current user."
+schema = """{"type":"object","properties":{"limit":{"type":"integer","minimum":1,"maximum":50}},"additionalProperties":false}"""
+[capability.authorization]
+resource_type = "library.reservation"
+[capability.execution]
+effect_target = "none"
+replay = "safe"
+confirmation_floor = "policy"
