@@ -1,0 +1,143 @@
+# sports 作者侧源清单（ailuo.toml）。
+# 构建：`ailuo-pm pack . dist` 经 component.build 自动交叉编译（源码在包目录内）。
+# 业务层在 sports/ 与 app/（原生可测），src/main.go 只装配 guestkit.Run。
+
+[package]
+id = "sports"
+version = "1.0.0"
+description = "Sports venue catalog, reservation slots and personal reservations."
+pin = true
+
+[[component]]
+id = "provider"
+mode = "hosted"
+role = "provider"
+entrypoint = "sports.wasm"
+exports = [
+  "sports.venues.list", "sports.projects.list", "sports.slots.search",
+  "sports.reservations.create", "sports.reservations.cancel", "sports.reservations.mine",
+  "sports.orders.webview", "sports.schedule.add",
+]
+
+[[component.host_function]]
+module = "ailuo.store"
+name = "list"
+purpose = "分页读取包命名空间内的集合文档并携带一致的快照治理元数据"
+
+[[component.host_function]]
+module = "ailuo.store"
+name = "get"
+purpose = "读取单个文档（个人作用域预约与日程）"
+
+[[component.host_function]]
+module = "ailuo.store"
+name = "put"
+purpose = "写入个人作用域预约与日程文档"
+
+[[component.host_function]]
+module = "ailuo.store"
+name = "delete"
+purpose = "删除个人作用域预约与日程文档"
+
+[component.build]
+tool = "go-wasm"
+source = "src"
+
+[storage]
+namespace = "sports/venues"
+
+[[capability]]
+id = "sports.venues.list"
+name = "列出运动场馆"
+description = "List sports venues from the current governed catalog snapshot."
+schema = """{"type":"object","properties":{"limit":{"type":"integer","minimum":1,"maximum":50}},"additionalProperties":false}"""
+[capability.authorization]
+resource_type = "sports.snapshot"
+[capability.execution]
+effect_target = "none"
+replay = "safe"
+confirmation_floor = "policy"
+
+[[capability]]
+id = "sports.projects.list"
+name = "列出运动项目"
+description = "List sports projects under a venue from the current governed snapshot."
+schema = """{"type":"object","properties":{"venue_id":{"type":"string","minLength":1,"maxLength":128},"limit":{"type":"integer","minimum":1,"maximum":50}},"required":["venue_id"],"additionalProperties":false}"""
+[capability.authorization]
+resource_type = "sports.snapshot"
+[capability.execution]
+effect_target = "none"
+replay = "safe"
+confirmation_floor = "policy"
+
+[[capability]]
+id = "sports.slots.search"
+name = "查询预约时段"
+description = "Search reservation slots by venue, project and Asia/Shanghai date."
+schema = """{"type":"object","properties":{"venue_id":{"type":"string","minLength":1,"maxLength":128},"project_id":{"type":"string","minLength":1,"maxLength":128},"date":{"type":"string","pattern":"^[0-9]{4}-[0-9]{2}-[0-9]{2}$"},"limit":{"type":"integer","minimum":1,"maximum":100}},"required":["venue_id","project_id","date"],"additionalProperties":false}"""
+[capability.authorization]
+resource_type = "sports.snapshot"
+[capability.execution]
+effect_target = "none"
+replay = "safe"
+confirmation_floor = "policy"
+
+[[capability]]
+id = "sports.reservations.create"
+name = "创建运动预约"
+description = "Create a personal sports venue reservation for the current user."
+schema = """{"type":"object","properties":{"venue_id":{"type":"string","minLength":1,"maxLength":128},"project_id":{"type":"string","minLength":1,"maxLength":128},"slot_id":{"type":"string","minLength":1,"maxLength":128},"count":{"type":"integer","minimum":1,"maximum":16}},"required":["venue_id","project_id","slot_id"],"additionalProperties":false}"""
+[capability.authorization]
+resource_type = "sports.reservation"
+[capability.execution]
+effect_target = "governed_state"
+replay = "idempotency_key"
+confirmation_floor = "required"
+
+[[capability]]
+id = "sports.reservations.cancel"
+name = "取消运动预约"
+description = "Cancel a personal sports venue reservation owned by the current user."
+schema = """{"type":"object","properties":{"reservation_id":{"type":"string","minLength":1,"maxLength":128}},"required":["reservation_id"],"additionalProperties":false}"""
+[capability.authorization]
+resource_type = "sports.reservation"
+[capability.execution]
+effect_target = "governed_state"
+replay = "idempotency_key"
+confirmation_floor = "required"
+
+[[capability]]
+id = "sports.reservations.mine"
+name = "查看我的运动预约"
+description = "List personal sports reservations owned by the current user."
+schema = """{"type":"object","properties":{"limit":{"type":"integer","minimum":1,"maximum":50}},"additionalProperties":false}"""
+[capability.authorization]
+resource_type = "sports.reservation"
+[capability.execution]
+effect_target = "none"
+replay = "safe"
+confirmation_floor = "policy"
+
+[[capability]]
+id = "sports.orders.webview"
+name = "获取订单 WebView 会话"
+description = "Return a governed sports order WebView session descriptor without secrets."
+schema = """{"type":"object","additionalProperties":false}"""
+[capability.authorization]
+resource_type = "sports.webview"
+[capability.execution]
+effect_target = "none"
+replay = "safe"
+confirmation_floor = "policy"
+
+[[capability]]
+id = "sports.schedule.add"
+name = "加入本地日程"
+description = "Add a local schedule item for a personal sports reservation."
+schema = """{"type":"object","properties":{"reservation_id":{"type":"string","minLength":1,"maxLength":128}},"required":["reservation_id"],"additionalProperties":false}"""
+[capability.authorization]
+resource_type = "sports.schedule"
+[capability.execution]
+effect_target = "governed_state"
+replay = "idempotency_key"
+confirmation_floor = "required"
