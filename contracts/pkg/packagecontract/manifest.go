@@ -194,6 +194,10 @@ func ValidateManifest(manifest Manifest) error {
 		if component.Mode == ModeIsolated && component.Process == nil {
 			return ErrInvalidFormat
 		}
+		if IsolatedFileEntrypoint(component) &&
+			strings.HasSuffix(strings.ToLower(component.Entrypoint), nativeWindowsExt) {
+			return ErrInvalidFormat
+		}
 		if component.Process != nil {
 			if err := ValidateProcessTemplate(*component.Process); err != nil {
 				return ErrInvalidFormat
@@ -244,10 +248,17 @@ func ValidateProcessTemplate(template ProcessTemplate) error {
 	if runtime.GOOS == "windows" && strings.HasPrefix(template.Address, "unix:") {
 		return ErrInvalidFormat
 	}
+	hasAddress := false
 	for _, argument := range template.Args {
 		if len(argument) > 4096 || strings.ContainsRune(argument, '\x00') {
 			return ErrInvalidFormat
 		}
+		if strings.Contains(argument, addressPlaceholder) {
+			hasAddress = true
+		}
+	}
+	if !hasAddress {
+		return ErrInvalidFormat
 	}
 	return nil
 }
@@ -304,7 +315,7 @@ func ValidateLock(lock Lock, manifest Manifest) error {
 		}
 		// 工件按 basename 平铺安装，lock 的根路径必须与清单声明的 entrypoint 一致：
 		// 否则 lock 可以把摘要绑到包目录外任意一个绝对路径文件上。
-		if filepath.Base(artifact.Path) != filepath.Base(component.Entrypoint) {
+		if filepath.Base(artifact.Path) != ArtifactName(component) {
 			return ErrInvalidFormat
 		}
 		switch component.Mode {
@@ -345,6 +356,8 @@ func processSpecMatchesTemplate(component Component, artifactPath string, spec P
 		} else {
 			executable = filepath.Join(".venv", "bin", "python")
 		}
+	} else if IsolatedFileEntrypoint(component) {
+		executable = NativeEntrypoint(executable)
 	}
 	expectedPath := filepath.Join(root, filepath.FromSlash(executable))
 	expectedWorkDir := root
@@ -371,6 +384,35 @@ func pathWithin(root, candidate string) bool {
 	relative, err := filepath.Rel(root, candidate)
 	return err == nil && relative != ".." &&
 		!strings.HasPrefix(relative, ".."+string(filepath.Separator))
+}
+
+const (
+	nativeWindowsExt   = ".exe"
+	addressPlaceholder = "${address}"
+)
+
+// IsolatedFileEntrypoint 判断组件是否是「入口即进程文件」的 isolated 二进制
+// （相对 Python venv 那种目录入口 + 解释器路径）。只看进程模板，不看 Mode：
+// 发布物 lock 校验会把 isolated 临时视为 hosted 以跳过安装期 ProcessSpec。
+func IsolatedFileEntrypoint(component Component) bool {
+	return component.Process != nil && component.Process.Path == component.Entrypoint
+}
+
+// NativeEntrypoint 把平台中立的 isolated 文件入口映射为当前 OS 上的实际文件名。
+// 清单不得带 .exe；Windows 由本函数补后缀。
+func NativeEntrypoint(name string) string {
+	if runtime.GOOS == "windows" {
+		return name + nativeWindowsExt
+	}
+	return name
+}
+
+// ArtifactName 是安装与打包时组件工件的实际 basename。
+func ArtifactName(component Component) string {
+	if IsolatedFileEntrypoint(component) {
+		return NativeEntrypoint(component.Entrypoint)
+	}
+	return component.Entrypoint
 }
 
 // IsPackageEntrypoint 校验包根目录下的扁平工件路径。

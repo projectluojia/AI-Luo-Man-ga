@@ -290,7 +290,11 @@ func resolveProcessSpec(component packagecontract.Component, artifactPath, packa
 	if !artifactDirectory && component.Process.Path != component.Entrypoint {
 		return nil, packagecontract.ErrInvalidFormat
 	}
-	executable, err := resolveProcessPath(artifactRoot, component.Process.Path)
+	relative := component.Process.Path
+	if packagecontract.IsolatedFileEntrypoint(component) {
+		relative = packagecontract.NativeEntrypoint(relative)
+	}
+	executable, err := resolveProcessPath(artifactRoot, relative)
 	if err != nil {
 		return nil, err
 	}
@@ -462,7 +466,7 @@ func readSourceArtifacts(ctx context.Context, sourceDir string, manifest package
 	artifacts := make([]sourceArtifact, 0, len(manifest.Components))
 	ownerByName := make(map[string]string, len(manifest.Components))
 	for _, component := range manifest.Components {
-		artifactPath := filepath.Join(sourceDir, component.Entrypoint)
+		artifactPath := filepath.Join(sourceDir, packagecontract.ArtifactName(component))
 		info, err := os.Lstat(artifactPath)
 		if err != nil {
 			return nil, fmt.Errorf("组件 %s entrypoint 工件不可读: %w", component.ID, err)

@@ -8,6 +8,34 @@ id = "ailuo"
 version = "1.0.0"
 path = "packages/agent"
 
+[dependencies."calendar"]
+version = "1.0.0"
+path = "packages/calendar"
+
 [dependencies."campus"]
 version = "1.0.0"
 path = "packages/campus-bus"
+
+[dependencies."classroom"]
+version = "1.0.0"
+path = "packages/classroom"
+
+[dependencies."ecard"]
+version = "1.0.0"
+path = "packages/ecard"
+
+[dependencies."library"]
+version = "1.0.0"
+path = "packages/library"
+
+[dependencies."sports"]
+version = "1.0.0"
+path = "packages/sports"
+
+[dependencies."timetable"]
+version = "1.0.0"
+path = "packages/timetable"
+
+[dependencies."weather"]
+version = "1.0.0"
+path = "packages/weather"

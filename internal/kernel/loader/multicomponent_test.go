@@ -79,7 +79,7 @@ func writeMultiComponentFixture(t *testing.T, root, version string) string {
 		},
 		Components: []packagecontract.Component{
 			{ID: "multi.adapter", Mode: loader.ModeIsolated, Role: packagecontract.RoleProvider, Entrypoint: "multi-adapter",
-				Process: &packagecontract.ProcessTemplate{Path: "multi-adapter", Address: "127.0.0.1:50051"},
+				Process: &packagecontract.ProcessTemplate{Path: "multi-adapter", Args: []string{"${address}"}, Address: "127.0.0.1:50051"},
 				Exports: []string{"test.multi.transport"}},
 			{ID: "multi.core", Mode: loader.ModeHosted, Role: packagecontract.RoleProvider, Entrypoint: "multi-core.wasm",
 				Exports: []string{"test.multi.query"}},
@@ -107,7 +107,7 @@ func writeMultiComponentFixture(t *testing.T, root, version string) string {
 		if componentID == "multi.adapter" {
 			// 地址必须与组件声明的 ProcessTemplate 一致：安装器原样保留模板地址。
 			artifact.Process = &packagecontract.ProcessSpec{
-				Path: path, WorkDir: directory, Address: "127.0.0.1:50051",
+				Path: path, Args: []string{"127.0.0.1:50051"}, WorkDir: directory, Address: "127.0.0.1:50051",
 			}
 		}
 		locked = append(locked, artifact)

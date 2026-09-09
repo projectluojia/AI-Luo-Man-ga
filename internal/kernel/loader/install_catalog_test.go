@@ -223,7 +223,11 @@ func writeInstalledFixture(t *testing.T, root, pkgID, mode string, unknown bool)
 	if err := os.Mkdir(directory, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	artifact := filepath.Join(directory, "runtime-artifact")
+	artifactName := "runtime-artifact"
+	if mode == loader.ModeIsolated {
+		artifactName = packagecontract.NativeEntrypoint("runtime-artifact")
+	}
+	artifact := filepath.Join(directory, artifactName)
 	artifactMode := os.FileMode(0o640)
 	artifactBody := []byte("hosted artifact")
 	if mode == loader.ModeIsolated {
@@ -234,10 +238,11 @@ func writeInstalledFixture(t *testing.T, root, pkgID, mode string, unknown bool)
 		t.Fatal(err)
 	}
 	var process *packagecontract.ProcessTemplate
+	listen := "unix:" + filepath.Join(root, pkgID, "runtime.sock")
 	if mode == loader.ModeIsolated {
 		// 模板地址必须与 lock 中固化的 ProcessSpec 地址一致：安装器原样保留
 		// 模板地址，ValidateLock 会拒绝两者不一致的目录。
-		process = &packagecontract.ProcessTemplate{Path: "runtime-artifact", Address: "unix:" + filepath.Join(root, pkgID, "runtime.sock")}
+		process = &packagecontract.ProcessTemplate{Path: "runtime-artifact", Args: []string{"${address}"}, Address: listen}
 	}
 	installed := packagecontract.Manifest{
 		SchemaVersion: packagecontract.SchemaVersion, ID: pkgID, Version: "1.0.0",
@@ -271,7 +276,7 @@ func writeInstalledFixture(t *testing.T, root, pkgID, mode string, unknown bool)
 	}
 	if mode == loader.ModeIsolated {
 		lockedArtifact.Process = &packagecontract.ProcessSpec{
-			Path: artifact, WorkDir: directory, Address: "unix:" + filepath.Join(directory, "runtime.sock"),
+			Path: artifact, Args: []string{listen}, WorkDir: directory, Address: listen,
 		}
 	}
 	lock := packagecontract.Lock{

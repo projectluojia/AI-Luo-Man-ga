@@ -27,12 +27,16 @@ func writeSourcePackage(t *testing.T, dir, id, version, mode, artifactName strin
 		t.Fatal(err)
 	}
 	artifact := []byte("artifact-bytes-" + id + "-" + version)
-	if err := os.WriteFile(filepath.Join(dir, artifactName), artifact, 0o640); err != nil {
-		t.Fatal(err)
-	}
+	diskName := artifactName
 	var process *packagecontract.ProcessTemplate
 	if mode == packagecontract.ModeIsolated {
-		process = &packagecontract.ProcessTemplate{Path: artifactName, Address: "127.0.0.1:50051"}
+		process = &packagecontract.ProcessTemplate{
+			Path: artifactName, Args: []string{"${address}"}, Address: "127.0.0.1:50051",
+		}
+		diskName = packagecontract.NativeEntrypoint(artifactName)
+	}
+	if err := os.WriteFile(filepath.Join(dir, diskName), artifact, 0o640); err != nil {
+		t.Fatal(err)
 	}
 	manifest, err := json.Marshal(packagecontract.Manifest{
 		SchemaVersion: packagecontract.SchemaVersion, ID: id, Version: version,
@@ -142,7 +146,7 @@ func TestInstallIsolatedWritesProcessSpec(t *testing.T) {
 		t.Fatalf("Install isolated: %v", err)
 	}
 	if len(record.Lock.Artifacts) != 1 || record.Lock.Artifacts[0].Process == nil ||
-		record.Lock.Artifacts[0].Process.Path != filepath.Join(root, "demo.isolated", "app") {
+		record.Lock.Artifacts[0].Process.Path != filepath.Join(root, "demo.isolated", packagecontract.NativeEntrypoint("app")) {
 		t.Fatalf("locked artifact = %+v, want installed process spec", record.Lock.Artifacts)
 	}
 }
@@ -150,6 +154,12 @@ func TestInstallIsolatedWritesProcessSpec(t *testing.T) {
 func TestInstallRejectsFileProcessPathOutsideArtifact(t *testing.T) {
 	source := filepath.Join(t.TempDir(), "isolated")
 	writeSourcePackage(t, source, "demo.isolated", "1.0.0", packagecontract.ModeIsolated, "app", nil)
+	native := packagecontract.NativeEntrypoint("app")
+	if native != "app" {
+		if err := os.Rename(filepath.Join(source, native), filepath.Join(source, "app")); err != nil {
+			t.Fatal(err)
+		}
+	}
 	manifestPath := filepath.Join(source, "manifest.json")
 	manifestBytes, err := os.ReadFile(manifestPath)
 	if err != nil {
@@ -200,14 +210,14 @@ func TestInstallRejectsImplicitUnixAddressOnWindows(t *testing.T) {
 	for _, address := range []string{"", "unix:/runtime.sock"} {
 		t.Run(address, func(t *testing.T) {
 			source := t.TempDir()
-			if err := os.WriteFile(filepath.Join(source, "app"), []byte("executable"), 0o750); err != nil {
+			if err := os.WriteFile(filepath.Join(source, packagecontract.NativeEntrypoint("app")), []byte("executable"), 0o750); err != nil {
 				t.Fatal(err)
 			}
 			manifest, err := json.Marshal(packagecontract.Manifest{
 				SchemaVersion: packagecontract.SchemaVersion, ID: "demo.windows", Version: "1.0.0",
 				Components: []packagecontract.Component{{
 					ID: "core", Mode: packagecontract.ModeIsolated, Entrypoint: "app",
-					Process: &packagecontract.ProcessTemplate{Path: "app", Address: address},
+					Process: &packagecontract.ProcessTemplate{Path: "app", Args: []string{"${address}"}, Address: address},
 				}},
 			})
 			if err != nil {
@@ -243,7 +253,7 @@ func TestInstallAndPackDirectoryArtifact(t *testing.T) {
 		Components: []packagecontract.Component{{
 			ID: "executor", Mode: packagecontract.ModeIsolated, Role: packagecontract.RoleExecutor,
 			Entrypoint: "runtime", Process: &packagecontract.ProcessTemplate{
-				Path: "bin/runner", WorkDir: ".", Address: "127.0.0.1:50051",
+				Path: "bin/runner", Args: []string{"${address}"}, WorkDir: ".", Address: "127.0.0.1:50051",
 			},
 		}},
 	}
@@ -553,12 +563,27 @@ func TestInstallLocksProcessSpecForIsolatedComponent(t *testing.T) {
 		t.Fatal("isolated 组件缺少进程规格")
 	}
 	targetDir := filepath.Join(root, "demo.svc")
-	if artifact.Process.Path != filepath.Join(targetDir, "svc-bin") ||
+	if artifact.Process.Path != filepath.Join(targetDir, packagecontract.NativeEntrypoint("svc-bin")) ||
 		artifact.Process.WorkDir != targetDir {
 		t.Fatalf("process spec = %+v, want path/workdir 位于 %s", artifact.Process, targetDir)
 	}
 	if !packagecontract.IsLocalRuntimeAddress(artifact.Process.Address) {
 		t.Fatalf("process address = %q, want 本机地址", artifact.Process.Address)
+	}
+	manifestBytes, err := os.ReadFile(filepath.Join(source, "manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest packagecontract.Manifest
+	if err := packagecontract.DecodeStrictJSON(manifestBytes, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	tarball, err := packmgr.PackFromSource(ctx, source, t.TempDir(), manifest, manifestBytes)
+	if err != nil {
+		t.Fatalf("PackFromSource isolated file: %v", err)
+	}
+	if _, err := packmgr.Install(ctx, packageiotest.TempDir(t), tarball); err != nil {
+		t.Fatalf("Install isolated file tarball: %v", err)
 	}
 }
 
