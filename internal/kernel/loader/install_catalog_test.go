@@ -234,10 +234,14 @@ func writeInstalledFixture(t *testing.T, root, pkgID, mode string, unknown bool)
 		t.Fatal(err)
 	}
 	var process *packagecontract.ProcessTemplate
+	abiVersion := ""
 	if mode == loader.ModeIsolated {
 		// 模板地址必须与 lock 中固化的 ProcessSpec 地址一致：安装器原样保留
 		// 模板地址，ValidateLock 会拒绝两者不一致的目录。
 		process = &packagecontract.ProcessTemplate{Path: "runtime-artifact", Address: "unix:" + filepath.Join(root, pkgID, "runtime.sock")}
+	} else {
+		// hosted 组件的 guest ABI 是显式版本契约：缺失声明在清单校验期拒绝。
+		abiVersion = packagecontract.GuestABI1
 	}
 	installed := packagecontract.Manifest{
 		SchemaVersion: packagecontract.SchemaVersion, ID: pkgID, Version: "1.0.0",
@@ -249,7 +253,7 @@ func writeInstalledFixture(t *testing.T, root, pkgID, mode string, unknown bool)
 			Execution:     capability.ExecutionSpec{EffectTarget: capability.EffectNone, Replay: capability.ReplaySafe, ConfirmationFloor: capability.ConfirmationPolicy},
 		}},
 		Components: []packagecontract.Component{{
-			ID: pkgID, Mode: mode, Role: packagecontract.RoleProvider, Entrypoint: "runtime-artifact",
+			ID: pkgID, Mode: mode, ABIVersion: abiVersion, Role: packagecontract.RoleProvider, Entrypoint: "runtime-artifact",
 			Process: process,
 			Exports: []string{"extension.query"},
 		}},
