@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	runtimev1 "github.com/projectluojia/AI-Luo-Man-ga/gen/runtimev1"
+	runtimev1 "github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/runtimev1"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
 

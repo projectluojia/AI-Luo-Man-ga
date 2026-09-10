@@ -1,0 +1,72 @@
+# weather 作者侧源清单（ailuo.toml）。
+# 构建：`ailuo-pm pack . dist` 经 component.build 在当前平台编译 isolated 进程
+# 可执行文件（entrypoint 即实际工件名，Windows 必须带 .exe 才能被启动）。
+
+[package]
+id = "weather"
+version = "1.0.0"
+description = "Campus weather lookups over Open-Meteo, Xiaomi Weather and AccuWeather."
+pin = true
+
+[[component]]
+id = "provider"
+mode = "isolated"
+role = "provider"
+entrypoint = "weather.exe"
+exports = ["weather.current", "weather.hourly", "weather.aqi", "weather.alerts"]
+
+[component.process]
+path = "weather.exe"
+address = "127.0.0.1:50071"
+
+[component.build]
+tool = "go-native"
+source = "src"
+
+[[capability]]
+id = "weather.current"
+name = "查询当前天气"
+description = "Get current weather for a place or coordinates. Defaults to Wuhan University Luojia Hill when no location is given."
+schema = """{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","additionalProperties":false,"properties":{"place":{"type":"string","minLength":1,"maxLength":128},"latitude":{"type":"number","minimum":-90,"maximum":90},"longitude":{"type":"number","minimum":-180,"maximum":180},"hours":{"type":"integer","minimum":1,"maximum":48},"source":{"type":"string","enum":["auto","openmeteo","xiaomi","accuweather"]}},"dependentRequired":{"latitude":["longitude"],"longitude":["latitude"]}}"""
+[capability.authorization]
+resource_type = "weather.catalog"
+[capability.execution]
+effect_target = "none"
+replay = "safe"
+confirmation_floor = "policy"
+
+[[capability]]
+id = "weather.hourly"
+name = "查询逐小时天气"
+description = "Get hourly weather forecast for up to 48 hours. Defaults to Wuhan University Luojia Hill when no location is given."
+schema = """{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","additionalProperties":false,"properties":{"place":{"type":"string","minLength":1,"maxLength":128},"latitude":{"type":"number","minimum":-90,"maximum":90},"longitude":{"type":"number","minimum":-180,"maximum":180},"hours":{"type":"integer","minimum":1,"maximum":48},"source":{"type":"string","enum":["auto","openmeteo","xiaomi","accuweather"]}},"dependentRequired":{"latitude":["longitude"],"longitude":["latitude"]}}"""
+[capability.authorization]
+resource_type = "weather.catalog"
+[capability.execution]
+effect_target = "none"
+replay = "safe"
+confirmation_floor = "policy"
+
+[[capability]]
+id = "weather.aqi"
+name = "查询空气质量"
+description = "Get air quality index for a place or coordinates. Defaults to Wuhan University Luojia Hill when no location is given."
+schema = """{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","additionalProperties":false,"properties":{"place":{"type":"string","minLength":1,"maxLength":128},"latitude":{"type":"number","minimum":-90,"maximum":90},"longitude":{"type":"number","minimum":-180,"maximum":180},"source":{"type":"string","enum":["auto","openmeteo","xiaomi"]}},"dependentRequired":{"latitude":["longitude"],"longitude":["latitude"]}}"""
+[capability.authorization]
+resource_type = "weather.catalog"
+[capability.execution]
+effect_target = "none"
+replay = "safe"
+confirmation_floor = "policy"
+
+[[capability]]
+id = "weather.alerts"
+name = "查询天气预警"
+description = "Get weather alerts for a place or coordinates. Empty alerts mean the provider currently reports none; missing providers return a governed unavailable error."
+schema = """{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","additionalProperties":false,"properties":{"place":{"type":"string","minLength":1,"maxLength":128},"latitude":{"type":"number","minimum":-90,"maximum":90},"longitude":{"type":"number","minimum":-180,"maximum":180},"source":{"type":"string","enum":["auto","xiaomi","accuweather"]}},"dependentRequired":{"latitude":["longitude"],"longitude":["latitude"]}}"""
+[capability.authorization]
+resource_type = "weather.catalog"
+[capability.execution]
+effect_target = "none"
+replay = "safe"
+confirmation_floor = "policy"

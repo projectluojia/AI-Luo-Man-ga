@@ -194,11 +194,12 @@ func writePrivateFile(path string, data []byte) error {
 	if err := temporary.Close(); err != nil {
 		return fmt.Errorf("close private file: %w", err)
 	}
+	// 发布前收紧 ACL：rename 之后才限制会让临时文件短暂地按继承 ACL 暴露。
+	if err := restrictPrivateFileACL(temporaryPath); err != nil {
+		return err
+	}
 	if err := os.Rename(temporaryPath, path); err != nil {
 		return fmt.Errorf("publish private file: %w", err)
-	}
-	if err := restrictPrivateFileACL(path); err != nil {
-		return err
 	}
 	return nil
 }

@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package ailuo.runtime.v1;
 
-option go_package = "github.com/projectluojia/AI-Luo-Man-ga/gen/runtimev1;runtimev1";
+option go_package = "github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/runtimev1;runtimev1";
 
 service RuntimeHost {
   rpc Describe(DescribeRequest) returns (RuntimeDescription);

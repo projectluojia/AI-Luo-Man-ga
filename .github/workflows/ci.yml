@@ -122,7 +122,7 @@ jobs:
           go_bin="$(go env GOPATH)/bin"
           export PATH="$go_bin:$PATH"
           uv run --project packages/agent/runtime --locked python -m grpc_tools.protoc -I proto --go_out=contracts --go_opt=module=github.com/projectluojia/AI-Luo-Man-ga/contracts --go-grpc_out=contracts --go-grpc_opt=module=github.com/projectluojia/AI-Luo-Man-ga/contracts proto/executor.proto
-          uv run --project packages/agent/runtime --locked python -m grpc_tools.protoc -I proto --go_out=. --go_opt=module=github.com/projectluojia/AI-Luo-Man-ga --go-grpc_out=. --go-grpc_opt=module=github.com/projectluojia/AI-Luo-Man-ga proto/runtime_host.proto
+          uv run --project packages/agent/runtime --locked python -m grpc_tools.protoc -I proto --go_out=contracts --go_opt=module=github.com/projectluojia/AI-Luo-Man-ga/contracts --go-grpc_out=contracts --go-grpc_opt=module=github.com/projectluojia/AI-Luo-Man-ga/contracts proto/runtime_host.proto
           uv run --project packages/agent/runtime --locked python -m grpc_tools.protoc -I proto --python_out=packages/agent/runtime/agent/generated --grpc_python_out=packages/agent/runtime/agent/generated proto/executor.proto
           git diff --exit-code
 

@@ -661,7 +661,7 @@ const file_runtime_host_proto_rawDesc = "" +
 	"\x05Start\x12\".ailuo.runtime.v1.LifecycleRequest\x1a#.ailuo.runtime.v1.LifecycleResponse\x12Q\n" +
 	"\x06Health\x12\".ailuo.runtime.v1.LifecycleRequest\x1a#.ailuo.runtime.v1.LifecycleResponse\x12K\n" +
 	"\x06Invoke\x12\x1f.ailuo.runtime.v1.InvokeRequest\x1a .ailuo.runtime.v1.InvokeResponse\x12O\n" +
-	"\x04Stop\x12\".ailuo.runtime.v1.LifecycleRequest\x1a#.ailuo.runtime.v1.LifecycleResponseB@Z>github.com/projectluojia/AI-Luo-Man-ga/gen/runtimev1;runtimev1b\x06proto3"
+	"\x04Stop\x12\".ailuo.runtime.v1.LifecycleRequest\x1a#.ailuo.runtime.v1.LifecycleResponseBJZHgithub.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/runtimev1;runtimev1b\x06proto3"
 
 var (
 	file_runtime_host_proto_rawDescOnce sync.Once
