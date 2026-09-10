@@ -4,9 +4,11 @@
 
 ## 配置状态与待落地项
 
-2026-09-09 核验的远端规则是：`dev` 人工批准数为 0，`main` 为 1，`dev` merge queue 的合并方式仍为 `SQUASH`。本次只调整文档，没有修改 CI 或 GitHub 配置。
+2026-09-10 核验的远端规则是：`dev` 人工批准数为 0，`main` 为 1；[`dev` 规则集](https://github.com/projectluojia/AI-Luo-Man-ga/rules/22379240)中的 merge queue 已从 `SQUASH` 改为 `MERGE`，其他规则字段不变，`main` 保护未修改。
 
-本指南的历史保留方案要求新开发 PR、`dev → main` 和启用的 merge queue 均采用 merge commit。**队列仍为 `SQUASH` 时不能完成原始 SHA 进入主线的目标；仅开放普通 merge 按钮也不够。** 管理员需在约定的落地步骤中将队列设为 `MERGE`，核对 `main` 的允许合并方式，并用测试 PR 验证最终 ancestry；完成前不得宣称这些设置已经生效，也不绕过现有门禁。
+本指南的历史保留方案要求新开发 PR、`dev → main` 和启用的 merge queue 均采用 merge commit。恢复链不得使用 squash 或 rebase；规则配置已更新不代表历史已进入主线，正常合并后仍须逐项验证实际 `main` 的原始 SHA 可达性，不绕过现有门禁。
+
+[`pull_request_target` 工作流](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#pull_request_target)从默认分支读取。标题兼容修复的默认分支入口是 [#126](https://github.com/projectluojia/AI-Luo-Man-ga/pull/126)；该草案须经过审查合入 `main`，并由新 PR 事件触发后核实生效，不能用工作分支内存在修复或旧检查成功代替。
 
 ## 快速开始
 
