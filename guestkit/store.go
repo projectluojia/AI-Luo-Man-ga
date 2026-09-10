@@ -150,10 +150,11 @@ func (c *StoreClient) Get(scope Scope, collection, id string) (payload json.RawM
 }
 
 // ListPage 是一次分页读取：文档与快照元数据同源（宿主单事务读出）。
+// JSON 标签是 ailuo.store list 宿主函数响应的 ABI wire 格式，不得漂移。
 type ListPage struct {
-	Docs      []Document
-	Meta      SnapshotMeta
-	MetaFound bool
+	Docs      []Document   `json:"docs"`
+	Meta      SnapshotMeta `json:"meta"`
+	MetaFound bool         `json:"meta_found"`
 }
 
 // List 读取一页文档（默认系统作用域）。
