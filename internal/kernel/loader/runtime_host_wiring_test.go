@@ -127,7 +127,7 @@ func TestRuntimeHostProductionWiring(t *testing.T) {
 		t.Fatal(err)
 	}
 	protocolServer, err := loader.NewRuntimeHostProtocolServer(loader.RuntimeHostServerConfig{
-		Mode: loader.ModeHosted, ABIVersion: packagecontract.GuestABI1, Backend: backend,
+		Mode: loader.ModeHosted, Backend: backend,
 		AllowedRuntimes: []loader.BackendIdentity{{ID: records[0].Runtime.ID, Version: records[0].Runtime.Version}},
 		MaxRuntimes:     1, MaxConcurrent: 1,
 	})
@@ -136,7 +136,7 @@ func TestRuntimeHostProductionWiring(t *testing.T) {
 	}
 	dialer, _ := startRuntimeHost(t, protocolServer)
 	host, err := loader.NewGRPCHost(loader.GRPCHostConfig{
-		Mode: loader.ModeHosted, ABIVersion: packagecontract.GuestABI1, Address: "unix:/runtime-host-wiring.sock", Dialer: dialer,
+		Mode: loader.ModeHosted, Address: "unix:/runtime-host-wiring.sock", Dialer: dialer,
 		VerifyInstalled: catalog.VerifyRuntime,
 	})
 	if err != nil {
