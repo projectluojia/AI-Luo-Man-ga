@@ -320,6 +320,7 @@ func (c *Catalog) readPackage(ctx context.Context, directory string) ([]installe
 			ID: runtimeID, PackageID: neutral.Manifest.ID, Version: neutral.Manifest.Version, Mode: component.Mode,
 			Role: role, LockedDigest: artifact.SHA256,
 			Pin: neutral.Manifest.Pin, IdleTTL: time.Duration(neutral.Manifest.IdleTTLMS) * time.Millisecond,
+			ABIVersion:    component.ABIVersion,
 			HostFunctions: slices.Clone(component.HostFunctions),
 			Storage:       cloneStorage(neutral.Manifest.Storage), Capabilities: capabilities,
 		}

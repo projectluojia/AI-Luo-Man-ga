@@ -7,6 +7,7 @@ package packagecontract
 import (
 	"errors"
 	"regexp"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -29,6 +30,22 @@ const (
 	ModeHosted   = "hosted"
 	ModeIsolated = "isolated"
 )
+
+// GuestABI1 是第一代 guest ABI：stdin/stdout 调用信封协议、ok=false 的闭式错误
+// 码集合与 ailuo.store 四个宿主函数的线性内存签名。guestkit 是其参考实现，
+// 清单里 hosted 组件的 abi_version 声明取自本闭集。
+const GuestABI1 = "1"
+
+// SupportedGuestABIs 是宿主装载 hosted 组件时支持的 guest ABI 版本闭集，随
+// 契约模块的编译期版本固定。guest 契约不兼容演进时引入新版本号，guestkit
+// 升级为新一代参考实现后把新版本加入本集；撤回支持同样显式改本集，装载期
+// fail-closed，不存在隐式回退。
+var SupportedGuestABIs = []string{GuestABI1}
+
+// SupportedABI 判断版本是否在宿主支持的 guest ABI 闭集内。
+func SupportedABI(version string) bool {
+	return slices.Contains(SupportedGuestABIs, version)
+}
 
 var (
 	// ErrInvalidFormat 表示包格式（清单/lock/声明）非法。

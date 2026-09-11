@@ -11,6 +11,7 @@ pin = true
 [[component]]
 id = "provider"
 mode = "hosted"
+abi_version = "1"
 role = "provider"
 entrypoint = "library.wasm"
 exports = [

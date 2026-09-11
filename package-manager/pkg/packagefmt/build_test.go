@@ -22,6 +22,7 @@ version = "1.0.0"
 [[component]]
 id = "core"
 mode = "hosted"
+abi_version = "1"
 role = "provider"
 entrypoint = "demo.wasm"
 
@@ -52,6 +53,7 @@ version = "1.0.0"
 [[component]]
 id = "core"
 mode = "hosted"
+abi_version = "1"
 role = "provider"
 entrypoint = "plain.wasm"
 `)
@@ -89,6 +91,7 @@ source = "python"
 [[component]]
 id = "prefs"
 mode = "hosted"
+abi_version = "1"
 role = "provider"
 entrypoint = "prefs.wasm"
 
@@ -116,7 +119,7 @@ func TestBuildRejectsInvalidComponentTargets(t *testing.T) {
 		Components: []packagecontract.Component{
 			{ID: "brain", Mode: packagecontract.ModeIsolated, Role: packagecontract.RoleExecutor, Entrypoint: "brain",
 				Process: &packagecontract.ProcessTemplate{Path: "brain", Address: "127.0.0.1:50051"}},
-			{ID: "prefs", Mode: packagecontract.ModeHosted, Role: packagecontract.RoleProvider, Entrypoint: "prefs.wasm"},
+			{ID: "prefs", Mode: packagecontract.ModeHosted, ABIVersion: packagecontract.GuestABI1, Role: packagecontract.RoleProvider, Entrypoint: "prefs.wasm"},
 		},
 	}
 	for _, test := range []struct {
@@ -156,6 +159,7 @@ version = "1.0.0"
 [[component]]
 id = "core"
 mode = "hosted"
+abi_version = "1"
 role = "provider"
 entrypoint = "demo.wasm"
 
@@ -201,6 +205,7 @@ version = "1.0.0"
 [[component]]
 id = "core"
 mode = "hosted"
+abi_version = "1"
 role = "provider"
 entrypoint = "demo.wasm"
 
@@ -233,6 +238,7 @@ version = "1.0.0"
 [[component]]
 id = "core"
 mode = "hosted"
+abi_version = "1"
 role = "provider"
 entrypoint = "demo.wasm"
 
@@ -312,7 +318,7 @@ func TestBuildGoNativeRejectsHostedComponents(t *testing.T) {
 		ID:            "mixed.pkg",
 		Version:       "1.0.0",
 		Components: []packagecontract.Component{
-			{ID: "prefs", Mode: packagecontract.ModeHosted, Role: packagecontract.RoleProvider, Entrypoint: "prefs.wasm"},
+			{ID: "prefs", Mode: packagecontract.ModeHosted, ABIVersion: packagecontract.GuestABI1, Role: packagecontract.RoleProvider, Entrypoint: "prefs.wasm"},
 		},
 	}
 	if err := Build(context.Background(), t.TempDir(), manifest, []BuildSpec{

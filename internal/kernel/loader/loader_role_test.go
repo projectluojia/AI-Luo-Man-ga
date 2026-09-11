@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packagecontract"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/executor"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
 
@@ -73,7 +74,7 @@ func TestLoaderRejectsManifestWithoutRole(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manifest := loader.Manifest{ID: "norole.test", Version: "1.0.0", Mode: loader.ModeHosted, LockedDigest: digest}
+	manifest := loader.Manifest{ID: "norole.test", Version: "1.0.0", Mode: loader.ModeHosted, ABIVersion: packagecontract.GuestABI1, LockedDigest: digest}
 	if err := manager.Register(context.Background(), manifest); !errors.Is(err, loader.ErrInvalidManifest) {
 		t.Fatalf("register without role error=%v, want ErrInvalidManifest", err)
 	}
@@ -87,7 +88,7 @@ func TestLoaderRejectsCapabilityRoleWithoutInvoker(t *testing.T) {
 	}
 	if err := manager.Register(context.Background(), loader.Manifest{
 		ID: description.ID, Version: description.Version, Mode: description.Mode,
-		Role: loader.RoleProvider, LockedDigest: digest,
+		Role: loader.RoleProvider, LockedDigest: digest, ABIVersion: packagecontract.GuestABI1,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -148,7 +149,7 @@ func TestManagerExecutorFailsClosedWithoutConfiguredExecutor(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := manager.Register(context.Background(), loader.Manifest{
-		ID: "cap.test", Version: "1.0.0", Mode: loader.ModeHosted,
+		ID: "cap.test", Version: "1.0.0", Mode: loader.ModeHosted, ABIVersion: packagecontract.GuestABI1,
 		Role: loader.RoleProvider, LockedDigest: digest,
 	}); err != nil {
 		t.Fatal(err)
@@ -190,7 +191,7 @@ func TestLoaderRoleConsistencyEnforcedAtLoad(t *testing.T) {
 		t.Fatal(err)
 	}
 	capability := loader.Manifest{
-		ID: description.ID, Version: "1.0.0", Mode: loader.ModeHosted,
+		ID: description.ID, Version: "1.0.0", Mode: loader.ModeHosted, ABIVersion: packagecontract.GuestABI1,
 		Role: loader.RoleProvider, LockedDigest: digest,
 	}
 	if err := manager.Register(context.Background(), capability); err != nil {

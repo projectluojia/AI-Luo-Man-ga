@@ -24,6 +24,7 @@ version = "1.0.0"
 [[component]]
 id = "main"
 mode = "hosted"
+abi_version = "1"
 role = "provider"
 entrypoint = "main.wasm"
 exports = ["explicit.test.hello"]

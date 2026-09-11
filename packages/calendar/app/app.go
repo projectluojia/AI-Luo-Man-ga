@@ -14,12 +14,6 @@ import (
 // Capability 常量与清单 ailuo.toml 的 exports 一一对应。
 const EventsListCapabilityID = "calendar.events.list"
 
-// NewDispatcher 构造分发器：以 guestkit 共享 Dispatcher 分发（唯一实现，
-// 包内只声明能力分发表）。store 为 guestkit.StoreClient（wasip1 内）或测试替身。
-func NewDispatcher(client guestkit.Store) *guestkit.Dispatcher {
-	return guestkit.NewDispatcher(Handlers(client))
-}
-
 // dispatcher 持有存储端口；处理函数由 Handlers 注册到 guestkit.Dispatcher。
 type dispatcher struct {
 	store guestkit.Store

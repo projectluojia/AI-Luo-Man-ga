@@ -35,10 +35,11 @@ test-campus:
 test-weather:
 	cd packages/weather && go mod verify && go mod tidy -diff && go vet ./src/... && go test ./src/...
 
-# hosted provider 包（guestkit 共享库 + 业务包）：module 校验 + 单元测试 +
-# wasip1 vet + 现场构建。集成测试（真实 wasm guest）在 testsupport 各套件。
+# hosted provider 包：module 校验 + 单元测试 + wasip1 vet + 现场构建。
+# guestkit（仓库根 guest 侧共享 ABI 库，非可安装包）与集成测试（真实
+# wasm guest，testsupport 各套件）单独跑。
 test-hosted:
-	cd packages/guestkit && go vet ./... && go test ./...
+	cd guestkit && go vet ./... && go test ./...
 	for pkg in timetable classroom calendar library sports ecard; do ( 		cd packages/$$pkg && go mod verify && go mod tidy -diff && go test ./... && GOOS=wasip1 GOARCH=wasm go vet ./src 	); done
 
 test-e2e:

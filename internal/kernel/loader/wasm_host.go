@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"sync"
 	"time"
 
@@ -71,6 +72,10 @@ type WasmHostConfig struct {
 	// RequireHostFunctions 为 true 时只接受声明了宿主函数的清单（安装目录 hosted
 	// 包专用宿主）：无宿主函数声明的包交给外部 GRPCHost 执行，避免双宿主歧义。
 	RequireHostFunctions bool
+	// SupportedABIs 是本宿主能承载的 guest ABI 版本闭集；nil 表示宿主配置的
+	// 契约模块编译期闭集（packagecontract.SupportedGuestABIs）。声明不在闭集内
+	// 的 hosted 清单在 Verify 期 fail-closed，旧 guest 不做隐式兼容装载。
+	SupportedABIs []string
 }
 
 // WasmHost 以 wazero 沙箱执行 hosted 包：进程内线性内存隔离 + WASI 能力裁剪。
@@ -94,6 +99,15 @@ func NewWasmHost(config WasmHostConfig) (*WasmHost, error) {
 		config.CallTimeout = hostedDefaultCallTimeout
 	}
 	return &WasmHost{config: config}, nil
+}
+
+// supportedABIs 返回本宿主支持的 guest ABI 闭集：显式配置优先，缺省为宿主
+// 编译期契约模块的闭集。
+func (h *WasmHost) supportedABIs() []string {
+	if h.config.SupportedABIs != nil {
+		return h.config.SupportedABIs
+	}
+	return packagecontract.SupportedGuestABIs
 }
 
 // manifestHostFunctions 解析按清单提供的宿主函数并校验：函数字段完整、模块名
@@ -134,6 +148,12 @@ func (h *WasmHost) Mode() string { return ModeHosted }
 func (h *WasmHost) Verify(ctx context.Context, manifest Manifest) error {
 	if h.config.RequireHostFunctions && len(manifest.HostFunctions) == 0 {
 		return fmt.Errorf("%w: host requires host_functions declarations", ErrUnsupportedMode)
+	}
+	// guest ABI 闭集校验：声明版本必须落在宿主支持的集合内，否则本宿主无法
+	// 承载该 guest 的调用协议（注册期 fail-closed）。
+	if manifest.ABIVersion == "" || !slices.Contains(h.supportedABIs(), manifest.ABIVersion) {
+		return fmt.Errorf("%w: guest abi_version %q is not supported by this host",
+			ErrInvalidManifest, manifest.ABIVersion)
 	}
 	functions, err := h.manifestHostFunctions(manifest)
 	if err != nil {

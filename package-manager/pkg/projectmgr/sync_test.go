@@ -216,7 +216,7 @@ func writePackage(t *testing.T, dir, id, version, artifact, dependency string) {
 	if err := os.WriteFile(filepath.Join(dir, artifact), []byte(id+"-"+version), 0o640); err != nil {
 		t.Fatal(err)
 	}
-	body := "[package]\nid = \"" + id + "\"\nversion = \"" + version + "\"\n\n[[component]]\nid = \"main\"\nmode = \"hosted\"\nrole = \"provider\"\nentrypoint = \"" + artifact + "\"\nexports = [\"" + id + ".capability\"]\n\n[[capability]]\nid = \"" + id + ".capability\"\nname = \"测试能力\"\ndescription = \"测试能力\"\nschema = \"\"\"" + `{"type":"object","additionalProperties":false}` + "\"\"\"\n[capability.authorization]\nresource_type = \"test.resource\"\n[capability.execution]\neffect_target = \"none\"\nreplay = \"safe\"\nconfirmation_floor = \"policy\"\n" + dependency
+	body := "[package]\nid = \"" + id + "\"\nversion = \"" + version + "\"\n\n[[component]]\nid = \"main\"\nmode = \"hosted\"\nabi_version = \"1\"\nrole = \"provider\"\nentrypoint = \"" + artifact + "\"\nexports = [\"" + id + ".capability\"]\n\n[[capability]]\nid = \"" + id + ".capability\"\nname = \"测试能力\"\ndescription = \"测试能力\"\nschema = \"\"\"" + `{"type":"object","additionalProperties":false}` + "\"\"\"\n[capability.authorization]\nresource_type = \"test.resource\"\n[capability.execution]\neffect_target = \"none\"\nreplay = \"safe\"\nconfirmation_floor = \"policy\"\n" + dependency
 	if err := os.WriteFile(filepath.Join(dir, "ailuo.toml"), []byte(body), 0o640); err != nil {
 		t.Fatal(err)
 	}

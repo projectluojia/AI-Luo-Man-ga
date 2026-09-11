@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/capability"
+	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packagecontract"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
@@ -20,7 +21,7 @@ import (
 const digest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
 func TestManifestSameIdentityIgnoresPackageID(t *testing.T) {
-	left := loader.Manifest{ID: "pkg.component", PackageID: "pkg-a", Version: "1.0.0", Mode: loader.ModeHosted}
+	left := loader.Manifest{ID: "pkg.component", PackageID: "pkg-a", Version: "1.0.0", Mode: loader.ModeHosted, ABIVersion: packagecontract.GuestABI1}
 	right := left
 	right.PackageID = "pkg-b"
 	if !left.SameIdentity(right) {
@@ -114,7 +115,7 @@ func TestLoaderSingleFlightsFirstUseAndDrainsBeforeShutdown(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := manager.Register(context.Background(), loader.Manifest{
-		ID: "extension.test", Version: "1.2.3", Mode: loader.ModeHosted,
+		ID: "extension.test", Version: "1.2.3", Mode: loader.ModeHosted, ABIVersion: packagecontract.GuestABI1,
 		Role: loader.RoleProvider, LockedDigest: digest, IdleTTL: time.Minute,
 	}); err != nil {
 		t.Fatal(err)
@@ -219,8 +220,8 @@ func TestLoaderBindsManifestToTheOnlyVerifyingHost(t *testing.T) {
 	}
 	ctx := context.Background()
 	for _, manifest := range []loader.Manifest{
-		{ID: "hosted.first", Version: "1.0.0", Mode: loader.ModeHosted, Role: loader.RoleProvider, LockedDigest: digest},
-		{ID: "hosted.second", Version: "1.0.0", Mode: loader.ModeHosted, Role: loader.RoleProvider, LockedDigest: digest},
+		{ID: "hosted.first", Version: "1.0.0", Mode: loader.ModeHosted, ABIVersion: packagecontract.GuestABI1, Role: loader.RoleProvider, LockedDigest: digest},
+		{ID: "hosted.second", Version: "1.0.0", Mode: loader.ModeHosted, ABIVersion: packagecontract.GuestABI1, Role: loader.RoleProvider, LockedDigest: digest},
 	} {
 		if err := manager.Register(ctx, manifest); err != nil {
 			t.Fatal(err)
@@ -250,11 +251,11 @@ func TestLoaderRejectsAmbiguousAndUnservedManifests(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	ambiguous := loader.Manifest{ID: "shared", Version: "1.0.0", Mode: loader.ModeHosted, Role: loader.RoleProvider, LockedDigest: digest}
+	ambiguous := loader.Manifest{ID: "shared", Version: "1.0.0", Mode: loader.ModeHosted, ABIVersion: packagecontract.GuestABI1, Role: loader.RoleProvider, LockedDigest: digest}
 	if err := manager.Register(ctx, ambiguous); !errors.Is(err, loader.ErrInvalidManifest) {
 		t.Fatalf("ambiguous manifest error=%v, want ErrInvalidManifest", err)
 	}
-	unserved := loader.Manifest{ID: "nobody", Version: "1.0.0", Mode: loader.ModeHosted, Role: loader.RoleProvider, LockedDigest: digest}
+	unserved := loader.Manifest{ID: "nobody", Version: "1.0.0", Mode: loader.ModeHosted, ABIVersion: packagecontract.GuestABI1, Role: loader.RoleProvider, LockedDigest: digest}
 	if err := manager.Register(ctx, unserved); !errors.Is(err, loader.ErrUnsupportedMode) {
 		t.Fatalf("unserved manifest error=%v, want ErrUnsupportedMode", err)
 	}
@@ -308,10 +309,10 @@ func TestLoaderRegisterBatchIsAtomic(t *testing.T) {
 		t.Fatal(err)
 	}
 	valid := loader.Manifest{
-		ID: "batch.one", Version: "1.0.0", Mode: loader.ModeHosted, Role: loader.RoleProvider, LockedDigest: digest,
+		ID: "batch.one", Version: "1.0.0", Mode: loader.ModeHosted, ABIVersion: packagecontract.GuestABI1, Role: loader.RoleProvider, LockedDigest: digest,
 	}
 	invalid := loader.Manifest{
-		ID: "batch.two", Version: "not-semver", Mode: loader.ModeHosted, Role: loader.RoleProvider, LockedDigest: digest,
+		ID: "batch.two", Version: "not-semver", Mode: loader.ModeHosted, ABIVersion: packagecontract.GuestABI1, Role: loader.RoleProvider, LockedDigest: digest,
 	}
 	if err := manager.RegisterBatch(context.Background(), []loader.Manifest{valid, invalid}); !errors.Is(err, loader.ErrInvalidManifest) {
 		t.Fatalf("无效批次错误=%v", err)
@@ -320,7 +321,7 @@ func TestLoaderRegisterBatchIsAtomic(t *testing.T) {
 		t.Fatalf("失败批次部分发布：%v", err)
 	}
 	if err := manager.RegisterBatch(context.Background(), []loader.Manifest{valid, {
-		ID: "batch.two", Version: "1.0.0", Mode: loader.ModeHosted, Role: loader.RoleProvider, LockedDigest: digest,
+		ID: "batch.two", Version: "1.0.0", Mode: loader.ModeHosted, ABIVersion: packagecontract.GuestABI1, Role: loader.RoleProvider, LockedDigest: digest,
 	}}); err != nil {
 		t.Fatal(err)
 	}
@@ -338,7 +339,7 @@ func TestLoaderRejectsDescriptionMismatchAndStopsLoadedRuntime(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := manager.Register(context.Background(), loader.Manifest{
-		ID: "expected", Version: "1.0.0", Mode: loader.ModeHosted, Role: loader.RoleProvider, LockedDigest: digest,
+		ID: "expected", Version: "1.0.0", Mode: loader.ModeHosted, ABIVersion: packagecontract.GuestABI1, Role: loader.RoleProvider, LockedDigest: digest,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -360,7 +361,7 @@ func TestLoaderRetainsHandleWhenFailedLoadCannotStop(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := manager.Register(context.Background(), loader.Manifest{
-		ID: "cleanup.test", Version: "1.0.0", Mode: loader.ModeHosted, Role: loader.RoleProvider, LockedDigest: digest,
+		ID: "cleanup.test", Version: "1.0.0", Mode: loader.ModeHosted, ABIVersion: packagecontract.GuestABI1, Role: loader.RoleProvider, LockedDigest: digest,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -390,7 +391,7 @@ func TestLoaderHandlerPreservesGovernedContextAndPin(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := manager.Register(context.Background(), loader.Manifest{
-		ID: "hosted.test", Version: "1.0.0", Mode: loader.ModeHosted,
+		ID: "hosted.test", Version: "1.0.0", Mode: loader.ModeHosted, ABIVersion: packagecontract.GuestABI1,
 		Role: loader.RoleProvider, LockedDigest: digest, Pin: true,
 	}); err != nil {
 		t.Fatal(err)
@@ -418,7 +419,7 @@ func TestLoaderHandlerRemainsBehindRegistryDispatcherGovernance(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := manager.Register(context.Background(), loader.Manifest{
-		ID: "runtime.capability", Version: "1.0.0", Mode: loader.ModeHosted, Role: loader.RoleProvider, LockedDigest: digest,
+		ID: "runtime.capability", Version: "1.0.0", Mode: loader.ModeHosted, ABIVersion: packagecontract.GuestABI1, Role: loader.RoleProvider, LockedDigest: digest,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -495,9 +496,9 @@ func TestLoaderRejectsRemoteAndMalformedLocks(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, manifest := range []loader.Manifest{
-		{ID: "Bad ID", Version: "1.0.0", Mode: loader.ModeHosted, Role: loader.RoleProvider, LockedDigest: digest},
-		{ID: "valid", Version: "latest", Mode: loader.ModeHosted, Role: loader.RoleProvider, LockedDigest: digest},
-		{ID: "valid", Version: "1.0.0", Mode: loader.ModeHosted, Role: loader.RoleProvider, LockedDigest: "not-a-digest"},
+		{ID: "Bad ID", Version: "1.0.0", Mode: loader.ModeHosted, ABIVersion: packagecontract.GuestABI1, Role: loader.RoleProvider, LockedDigest: digest},
+		{ID: "valid", Version: "latest", Mode: loader.ModeHosted, ABIVersion: packagecontract.GuestABI1, Role: loader.RoleProvider, LockedDigest: digest},
+		{ID: "valid", Version: "1.0.0", Mode: loader.ModeHosted, ABIVersion: packagecontract.GuestABI1, Role: loader.RoleProvider, LockedDigest: "not-a-digest"},
 		{ID: "valid", Version: "1.0.0", Mode: "remote", LockedDigest: digest},
 	} {
 		if err := manager.Register(context.Background(), manifest); !errors.Is(err, loader.ErrInvalidManifest) {
@@ -517,7 +518,7 @@ func TestLoaderMarksFatalRuntimeFailureAndRecoversExplicitly(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := manager.Register(context.Background(), loader.Manifest{
-		ID: "recover.test", Version: "1.0.0", Mode: loader.ModeHosted, Role: loader.RoleProvider, LockedDigest: digest,
+		ID: "recover.test", Version: "1.0.0", Mode: loader.ModeHosted, ABIVersion: packagecontract.GuestABI1, Role: loader.RoleProvider, LockedDigest: digest,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -550,8 +551,8 @@ func TestManagerPinnedDerivesFromManifests(t *testing.T) {
 	}
 	ctx := context.Background()
 	for _, manifest := range []loader.Manifest{
-		{ID: "pinned.test", Version: "1.0.0", Mode: loader.ModeHosted, Role: loader.RoleProvider, LockedDigest: digest, Pin: true},
-		{ID: "lazy.test", Version: "1.0.0", Mode: loader.ModeHosted, Role: loader.RoleProvider, LockedDigest: digest, IdleTTL: time.Minute},
+		{ID: "pinned.test", Version: "1.0.0", Mode: loader.ModeHosted, ABIVersion: packagecontract.GuestABI1, Role: loader.RoleProvider, LockedDigest: digest, Pin: true},
+		{ID: "lazy.test", Version: "1.0.0", Mode: loader.ModeHosted, ABIVersion: packagecontract.GuestABI1, Role: loader.RoleProvider, LockedDigest: digest, IdleTTL: time.Minute},
 	} {
 		if err := manager.Register(ctx, manifest); err != nil {
 			t.Fatal(err)

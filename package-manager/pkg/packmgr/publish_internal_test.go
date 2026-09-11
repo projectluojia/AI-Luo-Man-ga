@@ -48,7 +48,7 @@ func TestPublishStageRestoresPreviousInstallOnVerifyFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	manifest := `{"schema_version":"` + packagecontract.SchemaVersion + `","id":"demo.pkg","version":"1.0.0",` +
-		`"components":[{"id":"core","mode":"hosted","role":"provider","entrypoint":"app.wasm"}]}`
+		`"components":[{"id":"core","mode":"hosted","abi_version":"1","role":"provider","entrypoint":"app.wasm"}]}`
 	if err := os.WriteFile(filepath.Join(source, "manifest.json"), []byte(manifest), 0o640); err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +96,7 @@ func TestListInstalledRecoversInterruptedPublication(t *testing.T) {
 		t.Fatal(err)
 	}
 	manifest := `{"schema_version":"` + packagecontract.SchemaVersion + `","id":"demo.pkg","version":"1.0.0",` +
-		`"components":[{"id":"core","mode":"hosted","role":"provider","entrypoint":"app.wasm"}]}`
+		`"components":[{"id":"core","mode":"hosted","abi_version":"1","role":"provider","entrypoint":"app.wasm"}]}`
 	if err := os.WriteFile(filepath.Join(source, "manifest.json"), []byte(manifest), 0o640); err != nil {
 		t.Fatal(err)
 	}
@@ -128,7 +128,7 @@ func TestPublishStageRestoresPreviousInstallOnRenameFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	manifest := `{"schema_version":"` + packagecontract.SchemaVersion + `","id":"demo.pkg","version":"1.0.0",` +
-		`"components":[{"id":"core","mode":"hosted","role":"provider","entrypoint":"app.wasm"}]}`
+		`"components":[{"id":"core","mode":"hosted","abi_version":"1","role":"provider","entrypoint":"app.wasm"}]}`
 	if err := os.WriteFile(filepath.Join(source, "manifest.json"), []byte(manifest), 0o640); err != nil {
 		t.Fatal(err)
 	}

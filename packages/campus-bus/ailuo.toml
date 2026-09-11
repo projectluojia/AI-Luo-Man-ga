@@ -11,6 +11,7 @@ pin = true
 [[component]]
 id = "bus"
 mode = "hosted"
+abi_version = "1"
 role = "provider"
 entrypoint = "campus.wasm"
 exports = ["campus.bus.stops.search", "campus.bus.routes.list", "campus.bus.journeys.search", "campus.bus.vehicles.realtime"]
