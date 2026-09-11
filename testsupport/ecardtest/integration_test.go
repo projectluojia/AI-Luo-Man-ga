@@ -13,28 +13,32 @@ import (
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime"
-	"github.com/projectluojia/AI-Luo-Man-ga/testsupport/ecard/ecardtest"
 	"github.com/projectluojia/AI-Luo-Man-ga/testsupport/hostedtest"
 )
+
+// packageID 返回 ecard 包的真实包 ID（来自 ailuo.toml 清单）。
+func packageID(t *testing.T) string {
+	return hostedtest.ManifestOf(t, "ecard").ID
+}
 
 func newEcardDispatcher(t *testing.T) *runtime.Dispatcher {
 	t.Helper()
 	reg := registry.New()
 	store := hostedtest.MemoryStore()
-	ecardtest.RegisterHosted(t, reg, store)
-	return hostedtest.NewDispatcher(t, reg, ecardtest.PackageID, ecardtest.CapabilityIDs())
+	hostedtest.RegisterHosted(t, reg, store, "ecard")
+	return hostedtest.NewDispatcher(t, reg, packageID(t), hostedtest.CapabilityIDs(t, "ecard"))
 }
 
 func invoke(t *testing.T, d *runtime.Dispatcher, capabilityID, payload, idempotencyKey, confirmationID string) (bool, json.RawMessage, string) {
 	t.Helper()
-	return hostedtest.Invoke(t, d, ecardtest.PackageID, capabilityID, payload, idempotencyKey, confirmationID)
+	return hostedtest.Invoke(t, d, packageID(t), capabilityID, payload, idempotencyKey, confirmationID)
 }
 
 // TestHostedEcardEntriesList 经真实 wasm guest 列出双入口目录：显式
 // non_authoritative（演示形态，不是治理失败）。
 func TestHostedEcardEntriesList(t *testing.T) {
 	d := newEcardDispatcher(t)
-	ok, result, errText := invoke(t, d, ecardtest.EntriesListCapabilityID, `{}`, "", "")
+	ok, result, errText := invoke(t, d, "ecard.entries.list", `{}`, "", "")
 	if !ok {
 		t.Fatalf("entries.list failed: %s", errText)
 	}
@@ -72,7 +76,7 @@ func TestHostedEcardCredentialLifecycle(t *testing.T) {
 	d := newEcardDispatcher(t)
 
 	// 存入是确认门槛能力：无确认被 dispatcher 前置拒绝。
-	ok, _, errText := invoke(t, d, ecardtest.CredentialsPutCapabilityID,
+	ok, _, errText := invoke(t, d, "ecard.credentials.put",
 		`{"kind":"demo_handle","material":"demo:handle-1"}`, "idem-put", "")
 	if ok {
 		t.Fatal("credentials.put without confirmation should fail")
@@ -81,7 +85,7 @@ func TestHostedEcardCredentialLifecycle(t *testing.T) {
 		t.Fatalf("put error = %q, want confirmation required", errText)
 	}
 
-	ok, result, errText := invoke(t, d, ecardtest.CredentialsPutCapabilityID,
+	ok, result, errText := invoke(t, d, "ecard.credentials.put",
 		`{"kind":"demo_handle","material":"demo:handle-1","ttl_hours":2}`, "idem-put", "confirm-put")
 	if !ok {
 		t.Fatalf("credentials.put failed: %s", errText)
@@ -105,7 +109,7 @@ func TestHostedEcardCredentialLifecycle(t *testing.T) {
 	credentialID := created.Credential.CredentialID
 
 	// 会话准备：入口 URL 与 UA/头要求来自目录，含凭据指纹不含秘密。
-	ok, result, errText = invoke(t, d, ecardtest.SessionPrepareCapabilityID,
+	ok, result, errText = invoke(t, d, "ecard.session.prepare",
 		`{"entry_id":"luojia_ecard","credential_id":"`+credentialID+`"}`, "", "")
 	if !ok {
 		t.Fatalf("session.prepare failed: %s", errText)
@@ -130,7 +134,7 @@ func TestHostedEcardCredentialLifecycle(t *testing.T) {
 	}
 
 	// 状态查询：active。
-	ok, result, errText = invoke(t, d, ecardtest.CredentialsStatusCapabilityID,
+	ok, result, errText = invoke(t, d, "ecard.credentials.status",
 		`{"credential_id":"`+credentialID+`"}`, "", "")
 	if !ok {
 		t.Fatalf("credentials.status failed: %s", errText)
@@ -143,7 +147,7 @@ func TestHostedEcardCredentialLifecycle(t *testing.T) {
 	}
 
 	// 撤销是确认门槛能力。
-	ok, result, errText = invoke(t, d, ecardtest.CredentialsRevokeCapabilityID,
+	ok, result, errText = invoke(t, d, "ecard.credentials.revoke",
 		`{"credential_id":"`+credentialID+`"}`, "idem-revoke", "confirm-revoke")
 	if !ok {
 		t.Fatalf("credentials.revoke failed: %s", errText)
@@ -158,7 +162,7 @@ func TestHostedEcardCredentialLifecycle(t *testing.T) {
 	}
 
 	// 重复撤销带内冲突。
-	ok, result, errText = invoke(t, d, ecardtest.CredentialsRevokeCapabilityID,
+	ok, result, errText = invoke(t, d, "ecard.credentials.revoke",
 		`{"credential_id":"`+credentialID+`"}`, "idem-revoke-2", "confirm-revoke")
 	if !ok {
 		t.Fatalf("double revoke should be in-band: %s", errText)
@@ -171,7 +175,7 @@ func TestHostedEcardCredentialLifecycle(t *testing.T) {
 	}
 
 	// 已撤销凭据的会话准备按带内冲突拒绝。
-	ok, result, errText = invoke(t, d, ecardtest.SessionPrepareCapabilityID,
+	ok, result, errText = invoke(t, d, "ecard.session.prepare",
 		`{"entry_id":"luojia_ecard","credential_id":"`+credentialID+`"}`, "", "")
 	if !ok {
 		t.Fatalf("blocked session should be in-band: %s", errText)
@@ -195,7 +199,7 @@ func TestHostedEcardRejectsRealMaterial(t *testing.T) {
 		"st_ticket":    `{"kind":"demo_handle","material":"demo:ST-12345-abc"}`,
 	} {
 		t.Run(name, func(t *testing.T) {
-			_, _, errText := invoke(t, d, ecardtest.CredentialsPutCapabilityID, payload, "idem-"+name, "confirm-put")
+			_, _, errText := invoke(t, d, "ecard.credentials.put", payload, "idem-"+name, "confirm-put")
 			if errText == "" {
 				t.Fatal("real material should be rejected")
 			}
@@ -207,7 +211,7 @@ func TestHostedEcardRejectsRealMaterial(t *testing.T) {
 		})
 	}
 	// 状态查询不泄漏：未知凭据返回 not_found 状态（不是错误）。
-	ok, result, errText := invoke(t, d, ecardtest.CredentialsStatusCapabilityID, `{"credential_id":"missing"}`, "", "")
+	ok, result, errText := invoke(t, d, "ecard.credentials.status", `{"credential_id":"missing"}`, "", "")
 	if !ok {
 		t.Fatalf("missing status should be in-band: %s", errText)
 	}

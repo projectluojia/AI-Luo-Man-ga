@@ -20,9 +20,11 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime/runtimetest"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/memory"
-	"github.com/projectluojia/AI-Luo-Man-ga/testsupport/campus"
-	"github.com/projectluojia/AI-Luo-Man-ga/testsupport/campus/campustest"
+	"github.com/projectluojia/AI-Luo-Man-ga/testsupport/hostedtest"
 )
+
+// testAppID 是 campus e2e 装配的 App 标识（App 是宿主侧概念，不在包清单内）。
+const testAppID = "campus-services"
 
 type sdkTestWebAuthenticator struct{}
 
@@ -118,7 +120,7 @@ func TestInvokeEndpointRejectsUnknownCapability(t *testing.T) {
 	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{})
 	server := web.NewServer(
 		newEchoAdmission(&fakeOrchestrator{}, testController{}), nil, nil,
-		reg, policy, campus.AppID, nil, testController{}, access.NewEventHub(),
+		reg, policy, testAppID, nil, testController{}, access.NewEventHub(),
 		web.WithWebAuthenticator(testWebAuthenticator{}),
 		web.WithIdentityResolver(testWebResolver{}),
 		web.WithDispatcher(dispatcher),
@@ -169,7 +171,7 @@ func newCampusE2E(t *testing.T) (*httptest.Server, json.RawMessage) {
 	// 权威数据播种：快照元数据与行程文档经 packstore 一次性原子写入。
 	docs := memory.NewDocuments()
 	now := time.Now().UTC()
-	scope := packstore.Scope{AppID: campus.AppID, PackageID: campus.PackageID, Namespace: campus.StorageNamespace}
+	scope := packstore.Scope{AppID: testAppID, PackageID: hostedtest.ManifestOf(t, "campus-bus").ID, Namespace: hostedtest.Packages["campus-bus"].StorageNamespace}
 	baseTime := time.Date(2026, time.July, 24, 8, 0, 0, 0, time.FixedZone("Asia/Shanghai", 8*60*60))
 	revision := "e2e-revision"
 	journeys := []journeyDoc{
@@ -191,24 +193,21 @@ func newCampusE2E(t *testing.T) (*httptest.Server, json.RawMessage) {
 		t.Fatal(err)
 	}
 	reg := registry.New()
-	campustest.RegisterHosted(t, reg, docs)
+	hostedtest.RegisterHosted(t, reg, docs, "campus-bus")
 	policy := runtimetest.NewStaticAppPolicy()
-	for _, capabilityID := range []string{
-		campus.BusStopSearchCapabilityID, campus.BusRouteListCapabilityID, campus.BusJourneySearchCapabilityID,
-		campus.BusRealtimeCapabilityID,
-	} {
-		policy.Enable(campus.AppID, capabilityID)
+	for _, capabilityID := range hostedtest.CapabilityIDs(t, "campus-bus") {
+		policy.Enable(testAppID, capabilityID)
 	}
 	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{})
 	server := web.NewServer(
 		newEchoAdmission(&fakeOrchestrator{}, testController{}), nil, nil,
-		reg, policy, campus.AppID, nil, testController{}, access.NewEventHub(),
+		reg, policy, testAppID, nil, testController{}, access.NewEventHub(),
 		web.WithWebAuthenticator(sdkTestWebAuthenticator{}),
 		web.WithIdentityResolver(testWebResolver{}),
 		web.WithDispatcher(dispatcher),
 	)
 	testServer := httptest.NewServer(server.Handler())
-	extensions, err := campus.CapabilitiesJSON()
+	extensions, err := json.Marshal(hostedtest.ManifestOf(t, "campus-bus").Capabilities)
 	if err != nil {
 		testServer.Close()
 		t.Fatalf("构造 extensions: %v", err)
