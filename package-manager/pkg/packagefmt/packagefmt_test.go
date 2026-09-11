@@ -206,7 +206,7 @@ confirmation_floor = "policy"
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
-	tarballPath, err := packmgr.PackFromSource(ctx, sourceDir, t.TempDir(), manifest, manifestBytes)
+	tarballPath, err := packmgr.PackFromSource(ctx, sourceDir, t.TempDir(), manifest, manifestBytes, nil)
 	if err != nil {
 		t.Fatalf("PackFromSource: %v", err)
 	}

@@ -2,7 +2,10 @@ package packagesource
 
 import (
 	"context"
+	"crypto/ed25519"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -28,8 +31,47 @@ var (
 	ErrChanged        = errors.New("installed package changed after discovery")
 )
 
+// ParseTrustedSigners 解析部署方信任的发布方公钥集合（逗号分隔的 Ed25519 公钥
+// 十六进制编码）。每个公钥必须是合法十六进制且长度为 Ed25519 公钥长度，重复
+// 声明 fail-closed。空集合意味着拒绝所有含 isolated 组件的包。解析与签名
+// 执法同属本包：信任根就在 Catalog 装载 isolated 包的位置生效。
+func ParseTrustedSigners(value string) (map[string]struct{}, error) {
+	if value == "" {
+		return nil, nil
+	}
+	signers := make(map[string]struct{})
+	for _, signer := range strings.Split(value, ",") {
+		signer = strings.TrimSpace(signer)
+		if signer == "" {
+			continue
+		}
+		raw, err := hex.DecodeString(signer)
+		if err != nil || len(raw) != ed25519.PublicKeySize {
+			return nil, fmt.Errorf("configuration error: trusted signers contains invalid Ed25519 public key %q", signer)
+		}
+		if _, exists := signers[signer]; exists {
+			return nil, fmt.Errorf("configuration error: trusted signers declares public key %q twice", signer)
+		}
+		signers[signer] = struct{}{}
+	}
+	return signers, nil
+}
+
 type Catalog struct {
 	root string
+	// trustedSigners 是部署方信任的发布方 Ed25519 公钥（十六进制）。含 isolated
+	// 组件的包必须由其中之一签署才能通过发现；纯 hosted 沙箱包不要求签名。
+	trustedSigners map[string]struct{}
+}
+
+// NewCatalog 构造安装目录目录源。trustedSigners 为空表示部署不信任任何签名者：
+// 任何含 isolated 组件的包都会在装载期被拒绝（fail-closed），纯 hosted 沙箱包
+// 仍可按 SHA-256 锁定装载。
+func NewCatalog(root string, trustedSigners map[string]struct{}) (*Catalog, error) {
+	if !filepath.IsAbs(root) || filepath.Clean(root) != root {
+		return nil, ErrInvalidCatalog
+	}
+	return &Catalog{root: root, trustedSigners: trustedSigners}, nil
 }
 
 // ReadProjectLock 读取并校验项目级 ailuo.lock，同时用 ailuo.toml 的文件摘要
@@ -66,13 +108,6 @@ type installedRecord struct {
 	record       loader.InstalledRecord
 	artifactPath string
 	process      *packagecontract.ProcessSpec
-}
-
-func NewCatalog(root string) (*Catalog, error) {
-	if !filepath.IsAbs(root) || filepath.Clean(root) != root {
-		return nil, ErrInvalidCatalog
-	}
-	return &Catalog{root: root}, nil
 }
 
 // DiscoverLocked 按项目锁定结果读取运行时。未出现在 projectLock 中的安装包
@@ -119,6 +154,14 @@ func (c *Catalog) DiscoverLocked(ctx context.Context, projectLock projectcontrac
 		}
 		if installed.Manifest.ID != id || installed.Manifest.Version != locked.Version {
 			return nil, ErrInvalidCatalog
+		}
+		// 签名信任执法点：含 isolated 组件的包必须由部署信任的签名者签署。
+		// isolated 组件以独立进程执行且可出站（进程规格直接驱动宿主执行），
+		// 摘要只保证完整性；信任判定在这里按部署策略完成。
+		if packagecontract.HasIsolatedComponent(installed.Manifest) {
+			if err := packagecontract.Verify(installed.Lock, c.trustedSigners); err != nil {
+				return nil, errors.Join(ErrInvalidCatalog, err)
+			}
 		}
 		manifestSHA, err := packageio.HashFile(ctx, filepath.Join(directory, installManifestName), packagecontract.MaxManifestBytes)
 		if err != nil || manifestSHA != locked.ManifestSHA256 {

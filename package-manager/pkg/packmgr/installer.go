@@ -37,7 +37,7 @@ func Inspect(ctx context.Context, sourcePath string) (packagecontract.Manifest, 
 	if err != nil {
 		return packagecontract.Manifest{}, nil, err
 	}
-	if err := validatePackagedSource(ctx, sourceDir, source, packaged); err != nil {
+	if err := validatePackagedSource(ctx, sourceDir, &source, packaged); err != nil {
 		return packagecontract.Manifest{}, nil, err
 	}
 	if _, err := readSourceArtifacts(ctx, sourceDir, source.Manifest); err != nil {
@@ -91,7 +91,7 @@ func install(ctx context.Context, root, sourcePath, expectedID, expectedVersion 
 	if err != nil {
 		return InstalledRecord{}, err
 	}
-	if err := validatePackagedSource(ctx, sourceDir, source, packaged); err != nil {
+	if err := validatePackagedSource(ctx, sourceDir, &source, packaged); err != nil {
 		return InstalledRecord{}, err
 	}
 	if (expectedID != "" && source.Manifest.ID != expectedID) ||
@@ -176,14 +176,17 @@ func install(ctx context.Context, root, sourcePath, expectedID, expectedVersion 
 		}
 		lockedArtifacts = append(lockedArtifacts, locked)
 	}
-	// 写入 lock。
+	// 写入 lock。发布方签名（若有）原样带入：签名载荷只含清单与工件摘要，
+	// 路径改写不影响签名有效性。
 	manifestDigest := sha256.Sum256(source.manifestBytes)
-	lockBytes, err := json.Marshal(packagecontract.Lock{
+	lock := packagecontract.Lock{
 		SchemaVersion: packagecontract.SchemaVersion, PackageID: source.Manifest.ID,
 		PackageVersion: source.Manifest.Version,
 		ManifestSHA256: hex.EncodeToString(manifestDigest[:]),
 		Artifacts:      lockedArtifacts,
-	})
+		Signature:      source.signature,
+	}
+	lockBytes, err := json.Marshal(lock)
 	if err != nil {
 		return InstalledRecord{}, err
 	}
@@ -430,6 +433,9 @@ func Uninstall(ctx context.Context, root, id string) (err error) {
 type manifestFile struct {
 	Manifest      packagecontract.Manifest
 	manifestBytes []byte
+	// signature 是源 lock 携带的发布方签名：安装器重写路径后原样带入安装 lock，
+	// 消费方（Core）按部署信任集合验证。
+	signature *packagecontract.Signature
 }
 
 // sourceArtifact 是源包中单个组件的工件。
@@ -440,7 +446,9 @@ type sourceArtifact struct {
 	digest      string
 }
 
-// readManifest 读取包目录的 manifest.json 并校验。
+// readManifest 读取包目录的 manifest.json 并校验。源 lock 的发布方签名由
+// validatePackagedSource 在读取 lock 的同一次遍历中提取（源 lock 是打包期
+// 派生的记录，安装期只取签名不做校验）。
 func readManifest(directory string) (manifestFile, error) {
 	manifestBytes, err := packageio.ReadFileLimited(filepath.Join(directory, "manifest.json"), packagecontract.MaxManifestBytes)
 	if err != nil {
@@ -543,7 +551,10 @@ func unpackSource(source string) (string, func(), bool, error) {
 	return temp, func() { _ = os.RemoveAll(temp) }, true, nil
 }
 
-func validatePackagedSource(ctx context.Context, sourceDir string, source manifestFile, packaged bool) error {
+// validatePackagedSource 校验打包源（tarball 或含 lock.json 的目录）：lock 的
+// manifest 摘要必须与清单字节一致，工件哈希必须复核。未打包的目录源没有 lock，
+// 签名自然为空。
+func validatePackagedSource(ctx context.Context, sourceDir string, source *manifestFile, packaged bool) error {
 	lockPath := filepath.Join(sourceDir, "lock.json")
 	if _, err := os.Stat(lockPath); errors.Is(err, os.ErrNotExist) {
 		if packaged {
@@ -565,6 +576,9 @@ func validatePackagedSource(ctx context.Context, sourceDir string, source manife
 	if lock.ManifestSHA256 != hex.EncodeToString(manifestDigest[:]) {
 		return packagecontract.ErrInvalidFormat
 	}
+	// 发布方签名原样带入安装 lock：签名载荷只含清单与工件摘要，安装期路径
+	// 改写不影响其有效性；信任判定在 Core 装载期按部署策略完成。
+	source.signature = lock.Signature
 	for index := range lock.Artifacts {
 		if !packagecontract.IsPackagePath(lock.Artifacts[index].Path) || lock.Artifacts[index].Path == "." {
 			return packagecontract.ErrInvalidFormat

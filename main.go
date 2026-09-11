@@ -214,11 +214,15 @@ func runRuntimeHostCommand(arguments []string, output io.Writer) (bool, error) {
 	if !packagecontract.IsLocalRuntimeAddress(*address) {
 		return true, fmt.Errorf("configuration error: --address must be loopback or an absolute unix socket")
 	}
-	return true, serveRuntimeHost(*installRoot, *projectRoot, *address, output)
+	trustedSigners, err := packagesource.ParseTrustedSigners(os.Getenv("AILUO_TRUSTED_SIGNERS"))
+	if err != nil {
+		return true, err
+	}
+	return true, serveRuntimeHost(*installRoot, *projectRoot, *address, trustedSigners, output)
 }
 
 // serveRuntimeHost 装载 hosted 后端并监听 RuntimeHost 协议，直到信号停止。
-func serveRuntimeHost(installRoot, projectRoot, address string, output io.Writer) error {
+func serveRuntimeHost(installRoot, projectRoot, address string, trustedSigners map[string]struct{}, output io.Writer) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	ctx = observe.With(ctx, observe.Component("runtime_host"))
@@ -226,7 +230,7 @@ func serveRuntimeHost(installRoot, projectRoot, address string, output io.Writer
 		observe.StringAttr("install_root", installRoot),
 		observe.StringAttr("address", address),
 	)
-	catalog, err := packagesource.NewCatalog(installRoot)
+	catalog, err := packagesource.NewCatalog(installRoot, trustedSigners)
 	if err != nil {
 		return err
 	}
