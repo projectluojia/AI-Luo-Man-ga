@@ -30,10 +30,11 @@ var (
 	ErrProcessCleanup = errors.New("isolated runtime process cleanup failed")
 )
 
-// ProcessHostConfig 是统一进程宿主的配置：服务 mode=isolated 的全部组件，
-// role 决定装载后的协议面——provider 走 runtime_host 协议（Invoker），
-// executor 走 executor.v1 协议（ClientProvider + ProcessLifecycle）。内核不
-// 感知任何具体运行时的名字：进程规格由组合根聚合的包源按清单解析。
+// ProcessHostConfig 是统一进程宿主的配置：服务 mode=isolated 的全部组件。
+// 进程监督（启动、存活、优雅/强制回收、意外退出上报）与传输（runtime_host /
+// executor.v1 协议连接）在装载时组合：监督策略与清理序列由 runtimeShared
+// 统一持有，role 只决定传输面。内核不感知任何具体运行时的名字：进程规格由
+// 组合根聚合的包源按清单解析。
 type ProcessHostConfig struct {
 	// Resolve 按清单返回锁定的进程规格；解析失败的清单即该宿主不服务的
 	// 清单（Verify fail-closed）。
@@ -42,24 +43,32 @@ type ProcessHostConfig struct {
 	Verify func(context.Context, loader.Manifest, packagecontract.ProcessSpec) error
 	// Spawn 是没有 SpawnFor 时的默认进程管理策略。
 	Spawn bool
-	// SpawnFor 按运行角色决定是否由本宿主启动进程；未设置时使用 Spawn。
-	// capability 角色若返回 false 会在加载期 fail-closed。
+	// SpawnFor 按清单决定是否由本宿主启动进程；未设置时使用 Spawn。返回
+	// false 即连接模式：只拨号 spec.Address（本地回环），进程不由本宿主管理。
 	SpawnFor func(loader.Manifest) bool
 	// Stdout/Stderr 决定子进程输出去向；nil 默认丢弃。
 	Stdout io.Writer
 	Stderr io.Writer
+	// OnRuntimeExit 在受监督进程于停止流程之外退出时被调用（恰一次，连接
+	// 模式不通知）。反应策略由组合根决定（如执行者退出时停止内核）；回调
+	// 在监督锁外异步触发，不得同步等待运行时操作。
+	OnRuntimeExit func(manifest loader.Manifest, processErr error)
 
 	DialTimeout    time.Duration
 	StopGrace      time.Duration
 	TerminateGrace time.Duration
 }
 
-// ProcessHost 是统一进程宿主：按清单解析并监督本机子进程，role 决定协议面。
+// ProcessHost 是统一进程宿主：按清单解析进程规格并统一监督（两种 role 与
+// 连接/启动两种装配共用同一套清理序列与意外退出上报），role 决定传输面
+// （runtime_host / executor.v1 协议）。监督与传输在运行时内分离：
+// runtimeShared 持有进程与回收序列，providerRuntime / executorRuntime 只做
+// 协议委派。
 type ProcessHost struct {
 	config ProcessHostConfig
 
 	mu       sync.Mutex
-	runtimes map[hostManagedRuntime]struct{}
+	runtimes map[*runtimeShared]struct{}
 	closed   bool
 }
 
@@ -67,8 +76,7 @@ func NewProcessHost(config ProcessHostConfig) (*ProcessHost, error) {
 	if config.Resolve == nil {
 		return nil, loader.ErrInvalidManifest
 	}
-	// capability 组件必须由本宿主启动（Load 期校验）；executor 组件允许连接
-	// 外部已启动进程（Spawn=false）。
+	// Spawn=false 时进入连接模式：进程由部署方管理，本宿主只拨号本地地址。
 	if config.DialTimeout == 0 {
 		config.DialTimeout = 10 * time.Second
 	}
@@ -89,7 +97,7 @@ func NewProcessHost(config ProcessHostConfig) (*ProcessHost, error) {
 		config.Stderr = io.Discard
 	}
 	return &ProcessHost{
-		config: config, runtimes: make(map[hostManagedRuntime]struct{}),
+		config: config, runtimes: make(map[*runtimeShared]struct{}),
 	}, nil
 }
 
@@ -140,6 +148,14 @@ func (h *ProcessHost) loadExecutor(ctx context.Context, manifest loader.Manifest
 			return nil, loader.ErrUnavailable
 		}
 	}
+	shared := &runtimeShared{
+		manifest: manifest, process: process,
+		socketPath: unixSocketPath(spec.Address), stopGrace: h.config.StopGrace,
+		terminateGrace: h.config.TerminateGrace, host: h,
+	}
+	runtime := &executorRuntime{transportRuntime: transportRuntime{runtimeShared: shared}}
+	runtime.transportClose = runtime.closeTransport
+
 	connection, client, err := dialExecutor(ctx, spec.Address, process, h.config.DialTimeout)
 	if err != nil {
 		if process != nil {
@@ -147,12 +163,10 @@ func (h *ProcessHost) loadExecutor(ctx context.Context, manifest loader.Manifest
 		}
 		return nil, errors.Join(loader.ErrUnavailable, err)
 	}
-	runtime := &executorRuntime{
-		id: manifest.ID, version: manifest.Version, mode: manifest.Mode,
-		process: process, connection: connection, client: client, host: h,
-		stopGrace: h.config.StopGrace, terminateGrace: h.config.TerminateGrace,
-	}
-	h.track(runtime)
+	runtime.transport = &executorTransport{connection: connection}
+	runtime.client = client
+	h.track(shared)
+	shared.watchProcessExit()
 	return runtime, nil
 }
 
@@ -165,20 +179,21 @@ func (h *ProcessHost) loadCapability(ctx context.Context, manifest loader.Manife
 	if err != nil {
 		return nil, loader.ErrUnavailable
 	}
-	wrapped := &processRuntime{
-		process: process, host: h, socketPath: strings.TrimPrefix(spec.Address, "unix:"),
-		stopGrace: h.config.StopGrace, terminateGrace: h.config.TerminateGrace,
+	shared := &runtimeShared{
+		manifest: manifest, process: process,
+		socketPath: unixSocketPath(spec.Address), stopGrace: h.config.StopGrace,
+		terminateGrace: h.config.TerminateGrace, host: h,
 	}
-	h.track(wrapped)
+	wrapped := &providerRuntime{transportRuntime: transportRuntime{runtimeShared: shared}}
+	wrapped.transportClose = wrapped.closeTransport
+	h.track(shared)
 
 	grpcHost, err := loader.NewGRPCHost(loader.GRPCHostConfig{
 		Mode: loader.ModeIsolated, Address: spec.Address, DialTimeout: h.config.DialTimeout,
 		VerifyInstalled: func(context.Context, loader.Manifest) error { return nil },
 	})
 	if err != nil {
-		cleanupErr := wrapped.cleanupAfterLoad(ctx)
-		h.remove(wrapped)
-		return nil, errors.Join(err, cleanupErr)
+		return nil, errors.Join(err, wrapped.releaseAfterLoad(ctx))
 	}
 	// 进程在加载完成前退出（启动失败）时取消加载，避免拨号/生命周期调用永不返回。
 	watchContext, stopWatch := ProcessWatchContext(ctx, process)
@@ -188,37 +203,41 @@ func (h *ProcessHost) loadCapability(ctx context.Context, manifest loader.Manife
 		if process.Exited() {
 			err = loader.ErrUnavailable
 		}
-		cleanupErr := wrapped.cleanupAfterLoad(ctx)
-		h.remove(wrapped)
-		return nil, errors.Join(err, cleanupErr)
+		return nil, errors.Join(err, wrapped.releaseAfterLoad(ctx))
 	}
-	runtime, ok := loaded.(processRuntimeCore)
+	core, ok := loaded.(processRuntimeCore)
 	if !ok {
-		cleanupErr := wrapped.cleanupAfterLoad(ctx)
-		h.remove(wrapped)
-		return nil, errors.Join(loader.ErrUnavailable, cleanupErr)
+		return nil, errors.Join(loader.ErrUnavailable, wrapped.releaseAfterLoad(ctx))
 	}
-	wrapped.runtime = runtime
+	wrapped.core = core
+	if closer, ok := core.(loader.TransportCloser); ok {
+		wrapped.transport = closer
+	}
+	wrapped.start = core.Start
+	wrapped.health = core.Health
+	wrapped.invoke = core.Invoke
+	wrapped.stopTransport = core.Stop
+	shared.watchProcessExit()
 	return wrapped, nil
 }
 
-func (h *ProcessHost) track(runtime hostManagedRuntime) {
+func (h *ProcessHost) track(runtime *runtimeShared) {
 	h.mu.Lock()
 	h.runtimes[runtime] = struct{}{}
 	h.mu.Unlock()
 }
 
-func (h *ProcessHost) remove(runtime hostManagedRuntime) {
+func (h *ProcessHost) remove(runtime *runtimeShared) {
 	h.mu.Lock()
 	delete(h.runtimes, runtime)
 	h.mu.Unlock()
 }
 
-// Close 强制清理本宿主监督的全部运行时（进程回收 + 连接关闭 + socket 清理）。
+// Close 强制清理本宿主监督的全部运行时（连接关闭 + 进程回收 + socket 清理）。
 func (h *ProcessHost) Close(ctx context.Context) error {
 	h.mu.Lock()
 	h.closed = true
-	runtimes := make([]hostManagedRuntime, 0, len(h.runtimes))
+	runtimes := make([]*runtimeShared, 0, len(h.runtimes))
 	for runtime := range h.runtimes {
 		runtimes = append(runtimes, runtime)
 	}
@@ -230,6 +249,10 @@ func (h *ProcessHost) Close(ctx context.Context) error {
 		} else {
 			h.remove(runtime)
 		}
+	}
+	// 停止进程退出监视（避免向已注销运行的订阅者发送意外退出通知）。
+	for _, runtime := range runtimes {
+		runtime.stopExitWatch()
 	}
 	return errors.Join(result...)
 }
@@ -278,13 +301,6 @@ type processRuntimeCore interface {
 	loader.Invoker
 }
 
-// hostManagedRuntime 是进程宿主可强制清理的运行时统一面。
-type hostManagedRuntime interface {
-	loader.Runtime
-	// hostClose 强制回收进程与连接（宿主 Close 与装载失败清理用）。
-	hostClose(ctx context.Context) error
-}
-
 // ProcessWatchContext 派生一个在受监督进程退出时自动取消的上下文，供 Spawn
 // 模式加载使用：进程在拨号/加载完成前退出（启动即失败）时立即失败，避免
 // 连接或加载永不返回。stop 停止监控并释放派生上下文（幂等），调用方须在
@@ -312,8 +328,7 @@ func ProcessWatchContext(ctx context.Context, process *Process) (derived context
 }
 
 // Process 是受监督子进程：启动时应用资源限额，退出经 done channel 通知，
-// 清理（优雅终止 → 强制终止）与限额释放封装为原语，供 isolated 形态的
-// 所有 isolated Runtime 共用。
+// 清理（优雅终止 → 强制终止）与限额释放封装为原语，供监督面复用。
 type Process struct {
 	command *exec.Cmd
 	done    chan struct{}
@@ -435,66 +450,88 @@ func (p *Process) Release() {
 	}
 }
 
-type processRuntime struct {
-	runtime        processRuntimeCore
+// runtimeShared 是进程监督面：静态身份、存活门控、优雅停止与强制清理
+// （传输释放 → 进程回收 → socket 清理 → 限额释放）。process 为 nil 表示
+// 连接模式（进程不由本宿主管理，监督只剩传输与 socket 回收）；
+// stopTransport / transportClose 是装配时接线的传输面释放口。
+type runtimeShared struct {
+	manifest       loader.Manifest
 	process        *Process
-	host           *ProcessHost
 	socketPath     string
 	stopGrace      time.Duration
 	terminateGrace time.Duration
+	host           *ProcessHost
+	stopTransport  func(context.Context) error
+	transportClose func() error
 
 	mu      sync.Mutex
 	stopped bool
+	// exitNotified 保证意外退出通知恰好一次（即使进程被监督清理回收）。
+	exitNotified bool
 }
 
-// transportCloserOf 断言运行时可选实现 loader.TransportCloser（连接模式运行
-// 时持有底层传输；非连接实现天然缺席，清理时跳过传输释放）。
-func transportCloserOf(runtime loader.Runtime) (loader.TransportCloser, bool) {
-	closer, ok := runtime.(loader.TransportCloser)
-	return closer, ok
-}
-
-func (r *processRuntime) Describe(ctx context.Context) (loader.Description, error) {
-	if r.process.Exited() {
-		return loader.Description{}, loader.ErrUnavailable
+// watchProcessExit 在进程退出时回调宿主的 OnRuntimeExit；已进入停止流程
+// （stopped）或退出原因已知为监督清理时静默。由 Load 在登记后启动，hostClose
+// 注销时停止。
+func (r *runtimeShared) watchProcessExit() {
+	if r.process == nil || r.host == nil || r.host.config.OnRuntimeExit == nil {
+		return
 	}
-	return r.runtime.Describe(ctx)
+	go func() {
+		<-r.process.Done()
+		r.mu.Lock()
+		notified := r.stopped || r.exitNotified
+		r.exitNotified = true
+		r.mu.Unlock()
+		if notified {
+			return
+		}
+		r.host.config.OnRuntimeExit(r.manifest, r.process.Err())
+	}()
 }
 
-func (r *processRuntime) Start(ctx context.Context) error {
-	if r.process.Exited() {
-		return loader.ErrUnavailable
+// stopExitWatch 撤销意外退出通知（停止流程已接管进程回收）。
+func (r *runtimeShared) stopExitWatch() {
+	r.mu.Lock()
+	r.exitNotified = true
+	r.mu.Unlock()
+}
+
+func (r *runtimeShared) Describe(context.Context) (loader.Description, error) {
+	return loader.Description{ID: r.manifest.ID, Version: r.manifest.Version, Mode: r.manifest.Mode}, nil
+}
+
+// alive 报告监督对象是否存活：连接模式（无进程）视为存活。
+func (r *runtimeShared) alive() bool {
+	return r.process == nil || !r.process.Exited()
+}
+
+// waitExit 在宽限期内等待进程退出；无进程（连接模式）视为已退出。
+func (r *runtimeShared) waitExit(ctx context.Context, grace time.Duration) bool {
+	if r.process == nil {
+		return true
 	}
-	return r.runtime.Start(ctx)
+	return r.process.Wait(ctx, grace)
 }
 
-func (r *processRuntime) Health(ctx context.Context) error {
-	if r.process.Exited() {
-		return loader.ErrUnavailable
-	}
-	return r.runtime.Health(ctx)
-}
-
-func (r *processRuntime) Invoke(ctx context.Context, request contracts.RequestContext, payload json.RawMessage) (json.RawMessage, error) {
-	if r.process.Exited() {
-		return nil, loader.ErrUnavailable
-	}
-	return r.runtime.Invoke(ctx, request, payload)
-}
-
-func (r *processRuntime) Stop(ctx context.Context) error {
+// Stop 优雅停止：先通知传输面收尾（生命周期 RPC），宽限期内未退出则强制
+// 清理并告警。
+func (r *runtimeShared) Stop(ctx context.Context) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.stopped {
 		return nil
 	}
-	if r.process.Exited() {
-		return r.finish()
+	if !r.alive() {
+		return r.finishLocked()
 	}
-	stopErr := r.runtime.Stop(ctx)
-	if stopErr == nil && r.process.Wait(ctx, r.stopGrace) {
-		return r.finish()
+	if r.stopTransport != nil {
+		if stopErr := r.stopTransport(ctx); stopErr == nil && r.waitExit(ctx, r.stopGrace) {
+			return r.finishLocked()
+		}
 	}
+	// 进入强制清理：进程回收由监督接管，撤销意外退出通知（已持锁）。
+	r.exitNotified = true
 	cleanupContext, cancel := context.WithTimeout(
 		context.WithoutCancel(ctx), r.stopGrace+r.terminateGrace+time.Second,
 	)
@@ -503,29 +540,35 @@ func (r *processRuntime) Stop(ctx context.Context) error {
 		return errors.Join(ErrProcessCleanup, err)
 	}
 	observe.Warn(ctx, "隔离运行时未在宽限期内退出，已完成强制清理")
-	return r.finish()
+	return r.finishLocked()
 }
 
-func (r *processRuntime) hostClose(ctx context.Context) error {
+// hostClose 强制回收：不经生命周期 RPC 直接关闭传输并回收进程与 socket，
+// 幂等（宿主 Close 与装载失败清理共用）。
+func (r *runtimeShared) hostClose(ctx context.Context) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.stopped {
 		return nil
 	}
+	r.exitNotified = true
 	if err := r.forceCleanupLocked(ctx); err != nil {
 		return err
 	}
-	return r.finish()
+	return r.finishLocked()
 }
 
-func (r *processRuntime) forceCleanupLocked(ctx context.Context) error {
+// forceCleanupLocked 强制清理（锁内）：关闭传输 → 优雅终止 + terminateGrace
+// 等待 → 强制终止 + stopGrace 等待 → 回收 socket 与限额。
+func (r *runtimeShared) forceCleanupLocked(ctx context.Context) error {
 	var cleanupFailed bool
-	if closer, ok := transportCloserOf(r.runtime); ok {
-		if err := closer.CloseTransport(); err != nil {
+	if r.transportClose != nil {
+		if err := r.transportClose(); err != nil {
 			cleanupFailed = true
 		}
 	}
-	if r.process.Exited() {
+	// 连接模式（无进程）或进程已退出：只回收传输与 socket。
+	if r.process == nil || r.process.Exited() {
 		return r.completeProcessCleanup(cleanupFailed)
 	}
 	if err := r.process.Terminate(); err != nil && !r.process.Exited() {
@@ -543,7 +586,31 @@ func (r *processRuntime) forceCleanupLocked(ctx context.Context) error {
 	return r.completeProcessCleanup(cleanupFailed)
 }
 
-func (r *processRuntime) completeProcessCleanup(cleanupFailed bool) error {
+// finishLocked 标记停止、从宿主注销并释放传输与限额。
+func (r *runtimeShared) finishLocked() error {
+	var cleanupFailed bool
+	if r.transportClose != nil {
+		if err := r.transportClose(); err != nil {
+			cleanupFailed = true
+		}
+	}
+	if err := removeRuntimeSocket(r.socketPath); err != nil {
+		cleanupFailed = true
+	}
+	r.stopped = true
+	if r.host != nil {
+		r.host.remove(r)
+	}
+	if r.process != nil {
+		r.process.Release()
+	}
+	if cleanupFailed {
+		return ErrProcessCleanup
+	}
+	return nil
+}
+
+func (r *runtimeShared) completeProcessCleanup(cleanupFailed bool) error {
 	if err := removeRuntimeSocket(r.socketPath); err != nil {
 		cleanupFailed = true
 	}
@@ -553,77 +620,97 @@ func (r *processRuntime) completeProcessCleanup(cleanupFailed bool) error {
 	return nil
 }
 
-func (r *processRuntime) cleanupAfterLoad(ctx context.Context) error {
+// releaseAfterLoad 是装载失败的清理原语：运行时已登记到宿主，强制清理
+// （传输 + 进程 + socket）后注销，等待上限与 Stop 一致。
+func (r *runtimeShared) releaseAfterLoad(ctx context.Context) error {
 	cleanupContext, cancel := context.WithTimeout(
 		context.WithoutCancel(ctx), r.stopGrace+r.terminateGrace+time.Second,
 	)
 	defer cancel()
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.stopped {
+	return r.hostClose(cleanupContext)
+}
+
+// transportRuntime 是传输面骨架：存活门控 + 委派（Describe 直接回放静态身份，
+// Start/Health/Invoke 委派给传输闭包，角色差异收在闭包里；Stop 走监督面优雅
+// 停止），两种 role 的运行时内嵌本骨架。
+type transportRuntime struct {
+	*runtimeShared
+	// transport 是承载协议的传输面；nil 表示尚未装载完成或无连接（无进程
+	// 且无长连接的形态）。
+	transport loader.TransportCloser
+	// start 是传输面的启动闭包（executor 为空操作）。
+	start func(context.Context) error
+	// health/invoke 是传输面的健康与调用闭包（前置存活门控）。
+	health func(context.Context) error
+	invoke func(context.Context, contracts.RequestContext, json.RawMessage) (json.RawMessage, error)
+}
+
+// closeTransport 关闭底层连接（不经生命周期 RPC），幂等。
+func (r *transportRuntime) closeTransport() error {
+	if r.transport == nil {
 		return nil
 	}
-	if err := r.forceCleanupLocked(cleanupContext); err != nil {
-		return err
-	}
-	return r.finish()
+	return r.transport.CloseTransport()
 }
 
-func (r *processRuntime) finish() error {
-	if closer, ok := transportCloserOf(r.runtime); ok {
-		if err := closer.CloseTransport(); err != nil {
-			r.stopped = true
-			r.host.remove(r)
-			r.releaseProcessLimits()
-			return ErrProcessCleanup
-		}
-	}
-	if err := removeRuntimeSocket(r.socketPath); err != nil {
-		r.stopped = true
-		r.host.remove(r)
-		r.releaseProcessLimits()
-		return ErrProcessCleanup
-	}
-	r.stopped = true
-	r.host.remove(r)
-	r.releaseProcessLimits()
-	return nil
+func (r *transportRuntime) Stop(ctx context.Context) error {
+	return r.runtimeShared.Stop(ctx)
 }
 
-// releaseProcessLimits 释放平台资源限额句柄（Windows Job Object）。进程已回收，
-// 释放句柄不会误杀子进程；提前释放会触发 KILL_ON_JOB_CLOSE 立即终止。
-func (r *processRuntime) releaseProcessLimits() {
-	r.process.Release()
+func (r *transportRuntime) Start(ctx context.Context) error {
+	if !r.alive() {
+		return loader.ErrUnavailable
+	}
+	if r.start == nil {
+		return nil
+	}
+	return r.start(ctx)
 }
 
-// executorRuntime 是 executor.v1 协议面的运行时：进程监督 + 会话客户端。
+// providerRuntime 是 runtime_host 协议面的运行时：传输面 = GRPCHost 装载的
+// runtime_host 实现（生命周期 RPC + 治理调用），监督面统一。
+type providerRuntime struct {
+	transportRuntime
+	// core 是装载完成的 runtime_host 实现；nil 表示装载未完成。
+	core processRuntimeCore
+}
+
+func (r *providerRuntime) Health(ctx context.Context) error {
+	if !r.alive() {
+		return loader.ErrUnavailable
+	}
+	return r.core.Health(ctx)
+}
+
+func (r *providerRuntime) Invoke(ctx context.Context, request contracts.RequestContext, payload json.RawMessage) (json.RawMessage, error) {
+	if !r.alive() {
+		return nil, loader.ErrUnavailable
+	}
+	return r.core.Invoke(ctx, request, payload)
+}
+
+// executorRuntime 是 executor.v1 协议面的运行时：传输面 = executor.v1 会话
+// 客户端，监督面统一。
 type executorRuntime struct {
-	id, version, mode string
-	process           *Process
-	connection        *grpc.ClientConn
-	client            executor.Client
-	host              *ProcessHost
-	stopGrace         time.Duration
-	terminateGrace    time.Duration
-
-	stopOnce sync.Once
-	stopErr  error
+	transportRuntime
+	// client 是 executor.v1 会话客户端（loader.RoleExecutor 的能力面）。
+	client executor.Client
 }
-
-func (r *executorRuntime) Describe(context.Context) (loader.Description, error) {
-	return loader.Description{ID: r.id, Version: r.version, Mode: r.mode}, nil
-}
-
-func (r *executorRuntime) Start(context.Context) error { return nil }
 
 func (r *executorRuntime) Health(ctx context.Context) error {
-	if r.process != nil && r.process.Exited() {
+	if !r.alive() {
 		return loader.ErrUnavailable
 	}
-	if r.client == nil {
-		return loader.ErrUnavailable
-	}
-	response, err := r.client.Health(ctx, &executor.HealthRequest{
+	return validateExecutorHealth(ctx, r.client)
+}
+
+// Client 实现 executor.ClientProvider。
+func (r *executorRuntime) Client() executor.Client { return r.client }
+
+// validateExecutorHealth 是 executor.v1 健康检查：Health RPC + 协议版本与
+// 就绪校验。
+func validateExecutorHealth(ctx context.Context, client executor.Client) error {
+	response, err := client.Health(ctx, &executor.HealthRequest{
 		AcceptedProtocolVersions: []string{executor.Version},
 	})
 	if err != nil {
@@ -638,51 +725,19 @@ func (r *executorRuntime) Health(ctx context.Context) error {
 	return nil
 }
 
-func (r *executorRuntime) Stop(ctx context.Context) error {
-	r.stopOnce.Do(func() {
-		r.stopErr = r.close(ctx)
-	})
-	return r.stopErr
+// executorTransport 是 executor.v1 传输面：gRPC 连接（连接释放归监督面）。
+type executorTransport struct {
+	connection *grpc.ClientConn
 }
 
-// hostClose 强制回收：与 Stop 同语义（优雅终止 + 连接关闭），幂等。
-func (r *executorRuntime) hostClose(ctx context.Context) error {
-	r.stopOnce.Do(func() {
-		r.stopErr = r.close(ctx)
-	})
-	return r.stopErr
-}
-
-func (r *executorRuntime) close(ctx context.Context) error {
-	var processErr error
-	if r.process != nil {
-		processErr = r.process.Reap(ctx, r.stopGrace, r.terminateGrace)
-	}
-	var connectionErr error
-	if r.connection != nil {
-		connectionErr = r.connection.Close()
-		r.connection = nil
-	}
-	if r.host != nil {
-		r.host.remove(r)
-	}
-	return errors.Join(processErr, connectionErr)
-}
-
-func (r *executorRuntime) Client() executor.Client { return r.client }
-
-func (r *executorRuntime) Done() <-chan struct{} {
-	if r.process == nil {
+// CloseTransport 实现 loader.TransportCloser。
+func (t *executorTransport) CloseTransport() error {
+	if t.connection == nil {
 		return nil
 	}
-	return r.process.Done()
-}
-
-func (r *executorRuntime) Err() error {
-	if r.process == nil {
-		return nil
-	}
-	return r.process.Err()
+	err := t.connection.Close()
+	t.connection = nil
+	return err
 }
 
 func dialExecutor(ctx context.Context, address string, process *Process, dialTimeout time.Duration) (*grpc.ClientConn, executor.Client, error) {
@@ -706,12 +761,20 @@ func dialExecutor(ctx context.Context, address string, process *Process, dialTim
 	return connection, executor.NewClient(connection), nil
 }
 
+// unixSocketPath 提取 unix 地址的 socket 路径；非 unix 地址（连接模式 TCP）
+// 返回空串（无本地 socket 需要回收）。
+func unixSocketPath(address string) string {
+	if strings.HasPrefix(address, "unix:") {
+		return strings.TrimPrefix(address, "unix:")
+	}
+	return ""
+}
+
 var (
-	_ loader.Runtime            = (*executorRuntime)(nil)
-	_ executor.ClientProvider   = (*executorRuntime)(nil)
-	_ executor.ProcessLifecycle = (*executorRuntime)(nil)
-	_ hostManagedRuntime        = (*executorRuntime)(nil)
-	_ hostManagedRuntime        = (*processRuntime)(nil)
+	_ loader.Runtime          = (*providerRuntime)(nil)
+	_ loader.Runtime          = (*executorRuntime)(nil)
+	_ loader.Invoker          = (*providerRuntime)(nil)
+	_ executor.ClientProvider = (*executorRuntime)(nil)
 )
 
 func validateProcessSpec(spec packagecontract.ProcessSpec) error {
@@ -749,6 +812,9 @@ func validateProcessSpec(spec packagecontract.ProcessSpec) error {
 }
 
 func removeRuntimeSocket(socketPath string) error {
+	if socketPath == "" {
+		return nil
+	}
 	info, err := os.Lstat(socketPath)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil

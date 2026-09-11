@@ -108,6 +108,7 @@ func Run() error {
 				observe.Error(ctx, "上一配置内核关闭时发生错误", err)
 			}
 		case err := <-coreErrors:
+			cancelCore()
 			if ctx.Err() != nil {
 				return nil
 			}
@@ -175,7 +176,17 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 	if err := childrun.Register(reg, childService); err != nil {
 		return fmt.Errorf("register Core child Run capabilities: %w", err)
 	}
-	installedHosts, installedRecords, err := configureInstalledRuntimes(ctx, config, store.PackageDocuments())
+	// 执行者进程意外退出按 fail-closed 停止内核；能力进程退出只记录（能力
+	// 调用会经存活门控与运行时治理自然失败）。
+	onRuntimeExit := func(manifest loader.Manifest, processErr error) {
+		if manifest.Role == loader.RoleExecutor {
+			observe.Error(ctx, "执行者进程异常退出，正在停止内核", processErr)
+			stop()
+			return
+		}
+		observe.Error(ctx, "隔离能力进程意外退出", processErr, observe.StringAttr("runtime_id", manifest.ID))
+	}
+	installedHosts, installedRecords, err := configureInstalledRuntimes(ctx, config, store.PackageDocuments(), onRuntimeExit)
 	if err != nil {
 		return err
 	}
@@ -245,17 +256,6 @@ func runCore(ctx context.Context, stop context.CancelFunc, config config, localC
 		return fmt.Errorf("executor runtime does not expose an executor client")
 	}
 	executorClient := clientProvider.Client()
-	if config.manageExecutor {
-		if lifecycle, ok := executorRuntime.(executor.ProcessLifecycle); ok {
-			go func() {
-				<-lifecycle.Done()
-				if processErr := lifecycle.Err(); processErr != nil && ctx.Err() == nil {
-					observe.Error(ctx, "执行者进程异常退出", processErr)
-					stop()
-				}
-			}()
-		}
-	}
 	observe.Info(ctx, "执行者已经就绪",
 		observe.StringAttr("runtime_id", executorLease.ID()),
 		observe.BoolAttr("managed_process", config.manageExecutor),

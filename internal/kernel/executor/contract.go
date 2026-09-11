@@ -32,10 +32,3 @@ func NewClient(conn grpc.ClientConnInterface) Client {
 type ClientProvider interface {
 	Client() Client
 }
-
-// ProcessLifecycle 由持有受监督进程的执行者运行时实现（连接模式不拥有进程时
-// 不实现该契约）：进程异常退出时内核按 fail-closed 策略停止。
-type ProcessLifecycle interface {
-	Done() <-chan struct{}
-	Err() error
-}
