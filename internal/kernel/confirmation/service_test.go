@@ -641,11 +641,16 @@ func registerCapability(t *testing.T, reg *registry.Registry, spec capability.Ca
 	}
 }
 
-func validRequest(runID string) contracts.RequestContext {
+func validRequest() contracts.RequestContext {
+	// Run 介导形态：RunID 非空且携带 Run 接受时冻结的授权范围；确认记录
+	// 与 Run 绑定，VerifyConfirmation 按 App/Echo/Run/目标完整匹配。
 	return contracts.RequestContext{
-		AppID:     "app",
-		EchoID:    "echo",
-		RunID:     runID,
+		AppID:  "app",
+		EchoID: "echo",
+		RunID:  "run",
+		RunCapabilityGrants: []capability.Grant{
+			{CapabilityID: "external-capability"},
+		},
 		RequestID: "request",
 		Deadline:  time.Now().Add(time.Minute),
 	}
@@ -683,7 +688,7 @@ func TestDispatcherExecutesApprovedSideEffectExactlyOnce(t *testing.T) {
 		ConfirmationVerifier: service,
 	})
 
-	request := validRequest("run")
+	request := validRequest()
 	request.ConfirmationID = record.ConfirmationID
 	request.IdempotencyKey = "operation-1"
 
@@ -746,7 +751,7 @@ func TestDispatcherRejectsUnapprovedConfirmation(t *testing.T) {
 		"已拒绝":    rejected.ConfirmationID,
 		"不存在的确认": strings.Repeat("f", 8),
 	} {
-		request := validRequest("run")
+		request := validRequest()
 		request.ConfirmationID = confirmationID
 		request.IdempotencyKey = "operation-1"
 		if _, err := dispatcher.InvokeCapability(context.Background(), request, "external-capability", json.RawMessage(`{"value":1}`)); !errors.Is(err, runtime.ErrConfirmationRequired) {

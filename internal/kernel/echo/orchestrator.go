@@ -904,31 +904,8 @@ func (o *Orchestrator) invokeCapabilityOnce(ctx context.Context, run RunRecord, 
 	)
 	requestID := uuid.NewString()
 	ctx = observe.With(ctx, observe.StringAttr("request_id", requestID))
-	policy, err := o.policy.Snapshot(ctx, o.config.AppID)
-	if err != nil {
-		public := publicerror.Capability(errors.Join(runtime.ErrAppPolicyUnavailable, err))
-		return &executor.CapabilityResult{
-			CallId: call.CallId, CapabilityId: call.CapabilityId,
-			ErrorCode: public.Code, ErrorMessage: public.Message,
-		}
-	}
-	if err := policy.Verify(o.config.AppID); err != nil {
-		public := publicerror.Capability(errors.Join(runtime.ErrAppPolicyUnavailable, err))
-		return &executor.CapabilityResult{
-			CallId: call.CallId, CapabilityId: call.CapabilityId,
-			ErrorCode: public.Code, ErrorMessage: public.Message,
-		}
-	}
-	if !policy.Enabled {
-		public := publicerror.Capability(runtime.ErrCapabilityDisabled)
-		return &executor.CapabilityResult{
-			CallId: call.CallId, CapabilityId: call.CapabilityId,
-			ErrorCode: public.Code, ErrorMessage: public.Message,
-		}
-	}
-	if _, allowed := capabilityGrantIDs(run.CapabilityGrants)[call.CapabilityId]; !allowed {
-		return o.rejectedCapability(ctx, run, call, started, runtime.ErrCapabilityDisabled)
-	}
+	// 治理统一收敛在 Dispatcher：App 策略快照与 Run 冻结授权范围都由同一条
+	// 路由链路校验，Orchestrator 不再重复快照或仅按 ID 过滤。
 	deadline := started.Add(30 * time.Second)
 	if contextDeadline, ok := ctx.Deadline(); ok && contextDeadline.Before(deadline) {
 		deadline = contextDeadline
@@ -950,6 +927,7 @@ func (o *Orchestrator) invokeCapabilityOnce(ctx context.Context, run RunRecord, 
 		ProtocolVersion:     executor.Version,
 		CapabilityCallsUsed: callsUsed,
 		CapabilityCostUsed:  run.UsedCostMicrousd,
+		RunCapabilityGrants: run.CapabilityGrants,
 	}
 	payload, err := o.dispatcher.InvokeCapability(ctx, request, call.CapabilityId, call.PayloadJson)
 	result := &executor.CapabilityResult{
@@ -990,37 +968,6 @@ func (o *Orchestrator) invokeCapabilityOnce(ctx context.Context, run RunRecord, 
 			observe.Duration(started),
 		)
 	}
-	return result
-}
-
-func capabilityGrantIDs(grants []capability.Grant) map[string]struct{} {
-	ids := make(map[string]struct{}, len(grants))
-	for _, grant := range grants {
-		ids[grant.CapabilityID] = struct{}{}
-	}
-	return ids
-}
-
-func (o *Orchestrator) rejectedCapability(ctx context.Context, run RunRecord, call *executor.CapabilityCall, started time.Time, cause error) *executor.CapabilityResult {
-	public := publicerror.Capability(cause)
-	result := &executor.CapabilityResult{
-		CallId: call.CallId, CapabilityId: call.CapabilityId,
-		ErrorCode: public.Code, ErrorMessage: public.Message,
-	}
-	auditPayload := observe.SanitizeAuditJSON(call.PayloadJson, 8192)
-	auditContext, auditCancel := detachedContext(ctx)
-	auditErr := o.ports.Audit.RecordCapabilityCall(
-		auditContext, call.CallId, run.ID, run.EchoID, run.AppID, call.CapabilityId,
-		auditPayload, false, public, o.now().Sub(started),
-	)
-	auditCancel()
-	if auditErr != nil {
-		observe.Error(ctx, "持久化被拒绝 Capability 的审计记录失败", auditErr)
-	}
-	observe.Warn(ctx, "Run 请求了未投影、越权或已撤权的 Capability",
-		observe.StringAttr("error_code", public.Code),
-		observe.Duration(started),
-	)
 	return result
 }
 
