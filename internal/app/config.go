@@ -193,7 +193,7 @@ func initialCapabilityGrants(appID string, reg *registry.Registry, records []loa
 // configureInstalledRuntimes 发现安装目录中的 Runtime 包，按声明的运行模式
 // 选择宿主。Loader 只接收已校验的安装记录和通用 Host。宿主函数按清单提供：
 // ailuo.store 通用存储函数绑定到各包声明的 namespace，App 隔离在宿主侧强制。
-func configureInstalledRuntimes(ctx context.Context, cfg config, packageStore packstore.Store) (hosts []loader.Host, records []loader.InstalledRecord, err error) {
+func configureInstalledRuntimes(ctx context.Context, cfg config, packageStore packstore.Store, onRuntimeExit func(manifest loader.Manifest, processErr error)) (hosts []loader.Host, records []loader.InstalledRecord, err error) {
 	if cfg.runtimeInstallRoot == "" || cfg.projectRoot == "" {
 		return nil, nil, fmt.Errorf("configuration error: project root and runtime install root are required")
 	}
@@ -270,6 +270,7 @@ func configureInstalledRuntimes(ctx context.Context, cfg config, packageStore pa
 			DialTimeout:    secondsDuration(cfg.runtimeProcess.DialTimeoutSeconds),
 			StopGrace:      secondsDuration(cfg.runtimeProcess.StopGraceSeconds),
 			TerminateGrace: secondsDuration(cfg.runtimeProcess.TerminateGraceSeconds),
+			OnRuntimeExit:  onRuntimeExit,
 		})
 		if hostErr != nil {
 			return nil, nil, fmt.Errorf("configure isolated runtime boundary: %w", hostErr)
