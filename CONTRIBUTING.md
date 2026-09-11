@@ -8,7 +8,7 @@
 
 本指南的历史保留方案要求新开发 PR、`dev → main` 和启用的 merge queue 均采用 merge commit。恢复链不得使用 squash 或 rebase；规则配置已更新不代表历史已进入主线，正常合并后仍须逐项验证实际 `main` 的原始 SHA 可达性，不绕过现有门禁。
 
-[`pull_request_target` 工作流](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#pull_request_target)从默认分支读取。标题兼容修复的默认分支入口是 [#126](https://github.com/projectluojia/AI-Luo-Man-ga/pull/126)；该草案须经过审查合入 `main`，并由新 PR 事件触发后核实生效，不能用工作分支内存在修复或旧检查成功代替。
+[`pull_request_target` 工作流](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#pull_request_target)从默认分支读取。标题兼容修复的默认分支入口是 [#126](https://github.com/projectluojia/AI-Luo-Man-ga/pull/126)；该 PR 须经过审查合入 `main`，并由新 PR 事件触发后核实生效，不能用工作分支内存在修复或旧检查成功代替。
 
 ## 快速开始
 
@@ -37,6 +37,8 @@ make test-e2e      # Executor e2e（源包，Unix 平台）
 
 ## PR 流程
 
+在已有授权范围内创建或更新 PR，默认以 Draft 打开；明确要求直接审查时使用 `gh pr ready <PR号>`，或在 `gh stack link` / `submit` 时加 `--open`。转为 Ready、取得机器人反馈与获得合并授权是不同状态。
+
 1. 一个 PR 解决一个可验收的问题。使用[四栏模板](.github/PULL_REQUEST_TEMPLATE.md)：改什么、谁贡献了什么、如何验证、需要 review 的风险点。有依赖就在第一栏链接直接 base PR，只描述本层增量。人工描述用中文，命令、路径和协议标识保留原文。
 2. 先运行与改动相关的本地验证；当前 head 上 CI 已执行的适用门禁给结果链接，无需每人在本机重复整套。区分通过、失败、未运行和不适用，不能把旧 head 的结果当成新 head 通过。
 3. 普通 `dev` PR 不增加逐 PR 人工批准硬门。按风险或来源争议指定同伴核查，已有结论直接引用；未审部分如实标明。目标分支 required checks 及其他适用验证通过、已知阻断缺陷处理后，按现有权限合并；未完成的业务验收继续随 PR 保留，不冒充生产完成。
@@ -50,13 +52,22 @@ make test-e2e      # Executor e2e（源包，Unix 平台）
 
 仅真实依赖才堆叠，新链建议不超过两层；独立工作并行开发。最底层 base 是 `dev`，上层 base 是直接依赖分支。已有长链由约定的整合者从底向上收敛，调整前保存各层 head，避免重写他人来源记录。
 
-需要使用 `gh stack` 时，先确认其同步策略不会重写待保全历史；工具会 rebase 的链不直接执行自动同步。每次创建、调整或整合后核对 base、直接依赖、完整 diff 与需保留的 SHA。工具选择不改变原始历史保留要求，也不代替创建、推送、改 base 或合并的授权。
+使用官方扩展 `github/gh-stack` 管理原生栈。先运行 `gh stack --version`；缺少扩展时安装 `gh extension install github/gh-stack`，认证使用已有授权的 `gh auth`。工具或服务确实不可用时，可按直接依赖创建 Draft PR，记录原因并标明尚未接入原生 Stack；恢复可用后用 `link` 接管，不把手工 base 链当成完成栈管理。
+
+- 新建链：`gh stack init --base dev <bottom> <next>`，准备好提交后用 `gh stack submit` 推送并创建 PR；需要直接审查时加 `--open`。`gh stack push` 只推送分支，不创建 PR。
+- 接管已有 PR：`gh stack link --base dev <底层PR号> <上层PR号>`，参数按自底向上排列；已有 Stack 追加层使用 `gh stack link <stack-number> <新PR号>`。需要直接审查时加 `--open`。本地接管用 `gh stack checkout <stack-number>`。
+- 每次 `init`、`link`、`submit`、`checkout` 或同步后，用 `gh stack view --json` 和 `gh pr view <PR号> --json baseRefName,headRefName,headRefOid,isDraft` 核对顺序、直接依赖、完整 diff 与待保全 SHA。`link` 不写本地跟踪状态，应先 `checkout` 再 `view`，并核对 GitHub 原生 Stack 成员关系。
+- `gh stack sync` 包含 rebase；本项目保留原始 SHA 的链禁止直接执行 `sync` / `rebase`。下层修复通过保留祖先的 merge commit 向上逐层传播，验证后推送；已有远端分支只做普通 fast-forward 推送。每次修订后重新核验作者、原始 SHA 与各层 diff，不因采用栈工具而放宽历史保全或操作授权。
 
 ### 审查与修复
 
 AI review 辅助发现问题，不替代非作者人工判断或贡献确认。同一 head 不无目的重复全量审查；修改后只复查仍未解决的问题及受影响路径，已有有效结论给链接。机器人的通过状态必须核对所审 SHA；本指南未修改机器人配置。
 
+CodeRabbit 的自动审查范围以实际配置和服务反馈为准；需覆盖非默认 base 时检查 `.coderabbit.yaml` 的 `reviews.auto_review.base_branches`，Draft 是否自动审查由 `reviews.auto_review.drafts` 决定。需要审查而未自动启动时，手动评论 `@coderabbitai review`，确认收到处理或完成回执。Draft 跳过、无审查额度、限流和仅状态为 SUCCESS 均不代表已审；遇限流记录下一次可用时间，届时逐层触发，不批量重复请求，也不把机器人等待设成额外人工批准门。
+
 每条意见先核对当前代码、改动范围及实际风险：有效意见最小修复并跑受影响验证；误报或不采纳意见给依据；有效但超范围的问题记入可追踪的后续事项。合并前相关 thread 应有明确结论，再 resolve；不得只关闭讨论掩盖未处理的缺陷。
+
+在对应 thread 回复：已修复的意见给出修复提交及受影响验证，不适用的意见说明依据，超范围的意见链接后续事项。评审方继续反驳时继续复核、补充证据或明确保留立场，不能只 resolve 结束争议。修复提交按自洽逻辑单元遵循 Conventional Commits，并复核最新 head 的相关检查。
 
 ### 验证依据
 
