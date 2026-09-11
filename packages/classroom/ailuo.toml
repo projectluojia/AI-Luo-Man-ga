@@ -1,0 +1,118 @@
+# classroom 作者侧源清单（ailuo.toml）。
+# 构建：`ailuo-pm pack . dist` 经 component.build 自动交叉编译（源码在包目录内）。
+# 业务层在 classroom/ 与 app/（原生可测），src/main.go 只装配 guestkit.Run。
+
+[package]
+id = "classroom"
+version = "1.0.0"
+description = "Empty classroom lookup and personal study schedules."
+pin = true
+
+[[component]]
+id = "provider"
+mode = "hosted"
+role = "provider"
+entrypoint = "classroom.wasm"
+exports = [
+  "classroom.rooms.search", "classroom.campuses.list", "classroom.buildings.list",
+  "classroom.schedule.create", "classroom.schedule.list", "classroom.schedule.cancel",
+]
+
+[[component.host_function]]
+module = "ailuo.store"
+name = "list"
+purpose = "分页读取包命名空间内的集合文档并携带一致的快照治理元数据"
+
+[[component.host_function]]
+module = "ailuo.store"
+name = "get"
+purpose = "读取单个文档（个人作用域日程）"
+
+[[component.host_function]]
+module = "ailuo.store"
+name = "put"
+purpose = "写入个人作用域日程文档"
+
+[[component.host_function]]
+module = "ailuo.store"
+name = "delete"
+purpose = "删除个人作用域日程文档"
+
+[component.build]
+tool = "go-wasm"
+source = "src"
+
+[storage]
+namespace = "classroom/rooms"
+
+[[capability]]
+id = "classroom.rooms.search"
+name = "查询空闲教室"
+description = "Search empty classrooms by academic date, campus, optional building and period 1-13."
+schema = """{"type":"object","properties":{"date":{"type":"string","format":"date","pattern":"^[0-9]{4}-[0-9]{2}-[0-9]{2}$"},"campus_id":{"type":"string","minLength":1},"building_id":{"type":"string","minLength":1},"period":{"type":"integer","minimum":1,"maximum":13},"limit":{"type":"integer","minimum":1,"maximum":100}},"required":["date","campus_id","period"],"additionalProperties":false}"""
+[capability.authorization]
+resource_type = "classroom.snapshot"
+[capability.execution]
+effect_target = "none"
+replay = "safe"
+confirmation_floor = "policy"
+
+[[capability]]
+id = "classroom.campuses.list"
+name = "列出校区"
+description = "List campuses from the current authoritative classroom snapshot."
+schema = """{"type":"object","properties":{"limit":{"type":"integer","minimum":1,"maximum":100}},"additionalProperties":false}"""
+[capability.authorization]
+resource_type = "classroom.snapshot"
+[capability.execution]
+effect_target = "none"
+replay = "safe"
+confirmation_floor = "policy"
+
+[[capability]]
+id = "classroom.buildings.list"
+name = "列出教学楼"
+description = "List buildings for a campus from the current authoritative classroom snapshot."
+schema = """{"type":"object","properties":{"campus_id":{"type":"string","minLength":1},"limit":{"type":"integer","minimum":1,"maximum":100}},"required":["campus_id"],"additionalProperties":false}"""
+[capability.authorization]
+resource_type = "classroom.snapshot"
+[capability.execution]
+effect_target = "none"
+replay = "safe"
+confirmation_floor = "policy"
+
+[[capability]]
+id = "classroom.schedule.create"
+name = "创建教室日程"
+description = "Create a personal classroom schedule item from a room, academic date and period."
+schema = """{"type":"object","properties":{"room_id":{"type":"string","minLength":1},"date":{"type":"string","format":"date","pattern":"^[0-9]{4}-[0-9]{2}-[0-9]{2}$"},"period":{"type":"integer","minimum":1,"maximum":13},"title":{"type":"string","maxLength":256}},"required":["room_id","date","period"],"additionalProperties":false}"""
+[capability.authorization]
+resource_type = "classroom.schedule"
+[capability.execution]
+effect_target = "governed_state"
+replay = "idempotency_key"
+confirmation_floor = "policy"
+
+[[capability]]
+id = "classroom.schedule.list"
+name = "查看教室日程"
+description = "List personal classroom schedule items owned by the current user."
+schema = """{"type":"object","properties":{"limit":{"type":"integer","minimum":1,"maximum":100}},"additionalProperties":false}"""
+[capability.authorization]
+resource_type = "classroom.schedule"
+[capability.execution]
+effect_target = "none"
+replay = "safe"
+confirmation_floor = "policy"
+
+[[capability]]
+id = "classroom.schedule.cancel"
+name = "取消教室日程"
+description = "Cancel a personal classroom schedule item owned by the current user."
+schema = """{"type":"object","properties":{"schedule_id":{"type":"string","minLength":1}},"required":["schedule_id"],"additionalProperties":false}"""
+[capability.authorization]
+resource_type = "classroom.schedule"
+[capability.execution]
+effect_target = "governed_state"
+replay = "idempotency_key"
+confirmation_floor = "required"
