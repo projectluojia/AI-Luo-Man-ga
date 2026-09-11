@@ -198,7 +198,7 @@ func (h *sanitizingHandler) Enabled(ctx context.Context, level slog.Level) bool 
 }
 
 func (h *sanitizingHandler) Handle(ctx context.Context, record slog.Record) error {
-	clean := slog.NewRecord(record.Time.UTC(), record.Level, truncate(record.Message, h.maxValueLength), record.PC)
+	clean := slog.NewRecord(record.Time.UTC(), record.Level, sanitizeText(record.Message, h.maxValueLength), record.PC)
 	record.Attrs(func(attr slog.Attr) bool {
 		clean.AddAttrs(sanitizeAttr(attr, h.maxValueLength))
 		return true
@@ -215,21 +215,22 @@ func (h *sanitizingHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 }
 
 func (h *sanitizingHandler) WithGroup(name string) slog.Handler {
-	return &sanitizingHandler{next: h.next.WithGroup(name), maxValueLength: h.maxValueLength}
+	return &sanitizingHandler{next: h.next.WithGroup(sanitizeText(name, h.maxValueLength)), maxValueLength: h.maxValueLength}
 }
 
 func sanitizeAttr(attr slog.Attr, maxLength int) slog.Attr {
+	sensitive := isSensitiveKey(attr.Key) && !isSafeNumericTokenCount(attr.Key, attr.Value)
+	attr.Key = sanitizeText(attr.Key, maxLength)
 	attr.Value = attr.Value.Resolve()
-	if isSensitiveKey(attr.Key) && !isSafeNumericTokenCount(attr.Key, attr.Value) {
+	if sensitive {
 		return slog.String(attr.Key, redactedValue)
 	}
 	switch attr.Value.Kind() {
 	case slog.KindString:
-		attr.Value = slog.StringValue(truncate(attr.Value.String(), maxLength))
+		attr.Value = slog.StringValue(sanitizeText(attr.Value.String(), maxLength))
 	case slog.KindAny:
-		if err, ok := attr.Value.Any().(error); ok {
-			attr.Value = slog.StringValue(truncate(err.Error(), maxLength))
-		}
+		// 不调用任意对象的 Error/String/MarshalJSON；需要的诊断改用显式标量或 Group。
+		attr.Value = slog.StringValue(redactedValue)
 	case slog.KindGroup:
 		group := attr.Value.Group()
 		clean := make([]slog.Attr, 0, len(group))

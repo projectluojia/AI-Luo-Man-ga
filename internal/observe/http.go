@@ -3,7 +3,6 @@ package observe
 import (
 	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -24,7 +23,6 @@ func HTTPMiddleware(component string, next http.Handler) http.Handler {
 			slog.String("request_id", requestID),
 			slog.String("trace_id", traceID),
 			slog.String("method", request.Method),
-			slog.String("path", request.URL.Path),
 		)
 		if parentSpanID != "" {
 			ctx = With(ctx, slog.String("span_id", parentSpanID))
@@ -39,10 +37,8 @@ func HTTPMiddleware(component string, next http.Handler) http.Handler {
 		writer.Header().Set("X-Trace-ID", traceID)
 		writer.Header().Set("traceparent", Traceparent(ctx))
 		capture := &responseCapture{ResponseWriter: writer}
-		Debug(ctx, "开始处理网页请求",
-			slog.String("remote_ip", remoteIP(request.RemoteAddr)),
-			slog.String("user_agent", request.UserAgent()),
-		)
+		// 路径参数、IP 和 User-Agent 可能包含个人信息；完成时只记录路由模板。
+		Debug(ctx, "开始处理网页请求")
 		defer func() {
 			if recovered := recover(); recovered != nil {
 				spanErr = fmt.Errorf("http panic")
@@ -126,12 +122,4 @@ func validIDOrNew(value string) string {
 		return value
 	}
 	return uuid.NewString()
-}
-
-func remoteIP(address string) string {
-	host, _, err := net.SplitHostPort(address)
-	if err == nil {
-		return host
-	}
-	return address
 }

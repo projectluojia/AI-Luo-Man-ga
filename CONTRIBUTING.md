@@ -90,6 +90,10 @@ AILUO_EXECUTOR_PACKAGE_DIR="$PWD/packages/agent" go test -tags=integration ./e2e
 
 ## 安全问题
 
+公开 AI 会话证据、截图或申报材料前，按 [协作材料脱敏与发布](docs/协作材料脱敏与发布.md)
+制作副本；原件受限保存在仓外。发布检查随原有 PR 一次完成，不增加审批层；CI 不代替
+截图、文档元数据和链接访问权限的人工核对。
+
 发现漏洞请走 [SECURITY.md](SECURITY.md) 的私有披露流程，不要在 issue 或 PR 中公开敏感细节。
 
 ## 数据授权
