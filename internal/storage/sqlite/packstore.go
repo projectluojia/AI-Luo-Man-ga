@@ -13,9 +13,10 @@ import (
 )
 
 // packageDocuments 实现 packstore.Store：包装统一 Store 复用其连接与事务
-// 互斥。作用域以 (app_id, package-qualified namespace) 复合键强制 App 与包隔离，全部查询参数化；
-// 读取在单事务内同时取回文档与快照元数据（快照原子替换下 reader 永不观察
-// 到跨修订混合），快照替换在单写事务内原子生效、失败保留上一完整版本。
+// 互斥。作用域以 (app_id, user_id, package-qualified namespace) 复合键强制
+// App、用户与包隔离，全部查询参数化；读取在单事务内同时取回文档与快照元数据
+// （快照原子替换下 reader 永不观察到跨修订混合），快照替换在单写事务内原子
+// 生效、失败保留上一完整版本。user_id 为空是系统作用域，个人文档与之物理隔离。
 type packageDocuments struct {
 	store *Store
 }
@@ -27,8 +28,13 @@ func (s *Store) PackageDocuments() packstore.Store {
 }
 
 // readSnapshotMetaTx 在给定查询器上读取当前生效快照元数据；无快照时
-// metaFound 为 false（文档可由 put 独立写入而尚无快照）。
+// metaFound 为 false（文档可由 put 独立写入而尚无快照）。快照元数据是
+// 系统作用域概念：个人作用域读取不携带快照元数据（MetaFound 恒 false），
+// 用户自建数据不应被误当作治理快照。
 func readSnapshotMetaTx(ctx context.Context, queryer rowQueryer, scope packstore.Scope) (packstore.SnapshotMeta, bool, error) {
+	if scope.Kind() == packstore.ScopeUser {
+		return packstore.SnapshotMeta{}, false, nil
+	}
 	var meta packstore.SnapshotMeta
 	var authoritative, complete int
 	var importedAt, validUntil string
@@ -77,8 +83,8 @@ func (p packageDocuments) Get(ctx context.Context, scope packstore.Scope, collec
 	var payload string
 	err = tx.QueryRowContext(ctx, `
 SELECT payload FROM package_documents
-WHERE app_id=? AND namespace=? AND collection=? AND doc_id=?`,
-		scope.AppID, scope.Namespace, collection, id).Scan(&payload)
+WHERE app_id=? AND user_id=? AND namespace=? AND collection=? AND doc_id=?`,
+		scope.AppID, scope.UserID, scope.Namespace, collection, id).Scan(&payload)
 	if errors.Is(err, sql.ErrNoRows) {
 		return packstore.DocumentRead{Meta: meta, MetaFound: metaFound, Found: false}, nil
 	}
@@ -113,11 +119,11 @@ func (p packageDocuments) Put(ctx context.Context, scope packstore.Scope, collec
 	}
 	defer p.store.finishTx(tx, &resultErr, "put package document")
 	if _, err := tx.ExecContext(ctx, `
-INSERT INTO package_documents(app_id,namespace,collection,doc_id,payload,updated_at)
-VALUES(?,?,?,?,?,?)
-ON CONFLICT(app_id,namespace,collection,doc_id) DO UPDATE SET
+INSERT INTO package_documents(app_id,user_id,namespace,collection,doc_id,payload,updated_at)
+VALUES(?,?,?,?,?,?,?)
+ON CONFLICT(app_id,user_id,namespace,collection,doc_id) DO UPDATE SET
   payload=excluded.payload, updated_at=excluded.updated_at`,
-		scope.AppID, scope.Namespace, collection, id, string(payload),
+		scope.AppID, scope.UserID, scope.Namespace, collection, id, string(payload),
 		time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
 		return fmt.Errorf("write package document: %w", err)
 	}
@@ -144,8 +150,8 @@ func (p packageDocuments) Delete(ctx context.Context, scope packstore.Scope, col
 	defer p.store.finishTx(tx, &resultErr, "delete package document")
 	result, err := tx.ExecContext(ctx, `
 DELETE FROM package_documents
-WHERE app_id=? AND namespace=? AND collection=? AND doc_id=?`,
-		scope.AppID, scope.Namespace, collection, id)
+WHERE app_id=? AND user_id=? AND namespace=? AND collection=? AND doc_id=?`,
+		scope.AppID, scope.UserID, scope.Namespace, collection, id)
 	if err != nil {
 		return fmt.Errorf("delete package document: %w", err)
 	}
@@ -188,9 +194,9 @@ func (p packageDocuments) List(ctx context.Context, scope packstore.Scope, colle
 	}
 	rows, err := tx.QueryContext(ctx, `
 SELECT doc_id, payload FROM package_documents
-WHERE app_id=? AND namespace=? AND collection=? AND doc_id > ?
+WHERE app_id=? AND user_id=? AND namespace=? AND collection=? AND doc_id > ?
 ORDER BY doc_id LIMIT ?`,
-		scope.AppID, scope.Namespace, collection, afterID, limit)
+		scope.AppID, scope.UserID, scope.Namespace, collection, afterID, limit)
 	if err != nil {
 		return packstore.CollectionRead{}, fmt.Errorf("list package documents: %w", err)
 	}
@@ -221,6 +227,10 @@ ORDER BY doc_id LIMIT ?`,
 func (p packageDocuments) ReplaceSnapshot(ctx context.Context, scope packstore.Scope, meta packstore.SnapshotMeta, collections map[string][]packstore.Document) (resultErr error) {
 	started := time.Now()
 	defer func() { observeStorageOperation(ctx, "replace_package_snapshot", started, resultErr) }()
+	// 快照替换是系统级操作：仅系统作用域（user_id=''）合法。
+	if scope.Kind() != packstore.ScopeSystem {
+		return packstore.ErrInvalidScope
+	}
 	if err := packstore.ValidateScope(scope); err != nil {
 		return err
 	}
@@ -233,12 +243,13 @@ func (p packageDocuments) ReplaceSnapshot(ctx context.Context, scope packstore.S
 	}
 	defer p.store.finishTx(tx, &resultErr, "replace package snapshot")
 	// 先停用旧快照再写入：任一步失败整体回滚，保留上一完整版本。
+	// 快照替换只针对系统作用域（user_id=''）：个人作用域文档不受影响。
 	if _, err := tx.ExecContext(ctx, `
 UPDATE package_snapshots SET is_current=0
 WHERE app_id=? AND namespace=? AND is_current=1`, scope.AppID, scope.Namespace); err != nil {
 		return fmt.Errorf("deactivate package snapshot: %w", err)
 	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM package_documents WHERE app_id=? AND namespace=?`,
+	if _, err := tx.ExecContext(ctx, `DELETE FROM package_documents WHERE app_id=? AND user_id='' AND namespace=?`,
 		scope.AppID, scope.Namespace); err != nil {
 		return fmt.Errorf("clear package documents: %w", err)
 	}
@@ -246,8 +257,8 @@ WHERE app_id=? AND namespace=? AND is_current=1`, scope.AppID, scope.Namespace);
 	for collection, documents := range collections {
 		for _, document := range documents {
 			if _, err := tx.ExecContext(ctx, `
-INSERT INTO package_documents(app_id,namespace,collection,doc_id,payload,updated_at)
-VALUES(?,?,?,?,?,?)`,
+INSERT INTO package_documents(app_id,user_id,namespace,collection,doc_id,payload,updated_at)
+VALUES(?,'',?,?,?,?,?)`,
 				scope.AppID, scope.Namespace, collection, document.ID, string(document.Payload), updatedAt); err != nil {
 				return fmt.Errorf("insert package document %q/%q: %w", collection, document.ID, err)
 			}

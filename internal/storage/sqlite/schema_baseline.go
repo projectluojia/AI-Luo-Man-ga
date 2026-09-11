@@ -2,7 +2,7 @@ package sqlite
 
 import _ "embed"
 
-const schemaBaselineVersion = 30
+const schemaBaselineVersion = 31
 
 //go:embed schema.sql
 var schemaBaselineSQL string
