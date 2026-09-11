@@ -9,6 +9,7 @@ use (
 	./packages/calendar
 	./packages/guestkit
 	./packages/library
+	./packages/sports
 	./packages/timetable
 	./packages/weather
 )
