@@ -1,6 +1,6 @@
 //go:build integration && unix
 
-package loader_test
+package processhost_test
 
 import (
 	"context"
@@ -18,6 +18,7 @@ import (
 	runtimev1 "github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/runtimev1"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader/processhost"
 
 	"google.golang.org/grpc"
 )
@@ -125,7 +126,7 @@ func TestProcessHostRunsOutsideKernelAndShutsDownGracefully(t *testing.T) {
 	}
 	var resolves atomic.Int32
 	var verifies atomic.Int32
-	host, err := loader.NewProcessHost(loader.ProcessHostConfig{
+	host, err := processhost.NewProcessHost(processhost.ProcessHostConfig{
 		Resolve: func(context.Context, loader.Manifest) (packagecontract.ProcessSpec, error) {
 			resolves.Add(1)
 			return spec, nil
@@ -198,7 +199,7 @@ func TestProcessHostEnforcesFileSizeLimit(t *testing.T) {
 		// RLIMIT_FSIZE=1 KiB：helper 写入 8 KiB 必须被限额阻止。
 		Limits: packagecontract.ProcessLimits{MaxFileBytes: 1024},
 	}
-	host, err := loader.NewProcessHost(loader.ProcessHostConfig{
+	host, err := processhost.NewProcessHost(processhost.ProcessHostConfig{
 		Resolve:     func(context.Context, loader.Manifest) (packagecontract.ProcessSpec, error) { return spec, nil },
 		Verify:      func(context.Context, loader.Manifest, packagecontract.ProcessSpec) error { return nil },
 		Spawn:       true,
@@ -251,7 +252,7 @@ func TestProcessHostForcesBoundedExitAfterStopGrace(t *testing.T) {
 		},
 		WorkDir: workDir, Address: "unix:" + socketPath,
 	}
-	host, err := loader.NewProcessHost(loader.ProcessHostConfig{
+	host, err := processhost.NewProcessHost(processhost.ProcessHostConfig{
 		Resolve:        func(context.Context, loader.Manifest) (packagecontract.ProcessSpec, error) { return spec, nil },
 		Verify:         func(context.Context, loader.Manifest, packagecontract.ProcessSpec) error { return nil },
 		Spawn:          true,
@@ -304,7 +305,7 @@ func TestProcessHostRejectsUnsafeLaunchSpecifications(t *testing.T) {
 	}
 	for _, spec := range tests {
 		var verifies atomic.Int32
-		host, err := loader.NewProcessHost(loader.ProcessHostConfig{
+		host, err := processhost.NewProcessHost(processhost.ProcessHostConfig{
 			Resolve: func(context.Context, loader.Manifest) (packagecontract.ProcessSpec, error) { return spec, nil },
 			Spawn:   true,
 			Verify: func(context.Context, loader.Manifest, packagecontract.ProcessSpec) error {

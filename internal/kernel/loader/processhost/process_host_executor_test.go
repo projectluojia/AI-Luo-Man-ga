@@ -1,4 +1,4 @@
-package loader_test
+package processhost_test
 
 import (
 	"context"
@@ -12,6 +12,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/executor"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader/processhost"
 
 	"google.golang.org/grpc"
 )
@@ -43,7 +44,7 @@ func TestProcessHostServesExecutorOverConnectMode(t *testing.T) {
 		ID: "executor.test", Version: "1.0.0", Mode: loader.ModeIsolated,
 		Role: loader.RoleExecutor, LockedDigest: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
 	}
-	host, err := loader.NewProcessHost(loader.ProcessHostConfig{
+	host, err := processhost.NewProcessHost(processhost.ProcessHostConfig{
 		Resolve: func(context.Context, loader.Manifest) (packagecontract.ProcessSpec, error) {
 			return packagecontract.ProcessSpec{Address: listener.Addr().String()}, nil
 		},
@@ -89,7 +90,7 @@ func TestProcessHostServesExecutorOverConnectMode(t *testing.T) {
 // TestProcessHostRequiresSpawnForCapabilityRole 验证 capability 组件必须由本
 // 宿主启动：连接模式只服务 executor 角色。
 func TestProcessHostRequiresSpawnForCapabilityRole(t *testing.T) {
-	host, err := loader.NewProcessHost(loader.ProcessHostConfig{
+	host, err := processhost.NewProcessHost(processhost.ProcessHostConfig{
 		Resolve: func(context.Context, loader.Manifest) (packagecontract.ProcessSpec, error) {
 			return packagecontract.ProcessSpec{}, nil
 		},
@@ -101,7 +102,7 @@ func TestProcessHostRequiresSpawnForCapabilityRole(t *testing.T) {
 		ID: "capability.test", Version: "1.0.0", Mode: loader.ModeIsolated,
 		Role: loader.RoleProvider, LockedDigest: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
 	})
-	if !errors.Is(err, loader.ErrInvalidProcessSpec) {
+	if !errors.Is(err, processhost.ErrInvalidProcessSpec) {
 		t.Fatalf("verify error = %v, want ErrInvalidProcessSpec", err)
 	}
 }

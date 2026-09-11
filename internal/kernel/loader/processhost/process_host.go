@@ -1,4 +1,4 @@
-package loader
+package processhost
 
 import (
 	"context"
@@ -16,6 +16,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packageio"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/executor"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
 
 	"google.golang.org/grpc"
@@ -23,8 +24,10 @@ import (
 )
 
 var (
+	// ErrInvalidProcessSpec 表示 isolated 进程规格非法。
 	ErrInvalidProcessSpec = errors.New("invalid isolated runtime process specification")
-	ErrProcessCleanup     = errors.New("isolated runtime process cleanup failed")
+	// ErrProcessCleanup 表示 isolated 进程清理失败。
+	ErrProcessCleanup = errors.New("isolated runtime process cleanup failed")
 )
 
 // ProcessHostConfig 是统一进程宿主的配置：服务 mode=isolated 的全部组件，
@@ -34,14 +37,14 @@ var (
 type ProcessHostConfig struct {
 	// Resolve 按清单返回锁定的进程规格；解析失败的清单即该宿主不服务的
 	// 清单（Verify fail-closed）。
-	Resolve func(context.Context, Manifest) (packagecontract.ProcessSpec, error)
+	Resolve func(context.Context, loader.Manifest) (packagecontract.ProcessSpec, error)
 	// Verify 对解析出的规格做来源侧二次校验（例如安装锁），可空。
-	Verify func(context.Context, Manifest, packagecontract.ProcessSpec) error
+	Verify func(context.Context, loader.Manifest, packagecontract.ProcessSpec) error
 	// Spawn 是没有 SpawnFor 时的默认进程管理策略。
 	Spawn bool
 	// SpawnFor 按运行角色决定是否由本宿主启动进程；未设置时使用 Spawn。
 	// capability 角色若返回 false 会在加载期 fail-closed。
-	SpawnFor func(Manifest) bool
+	SpawnFor func(loader.Manifest) bool
 	// Stdout/Stderr 决定子进程输出去向；nil 默认丢弃。
 	Stdout io.Writer
 	Stderr io.Writer
@@ -62,7 +65,7 @@ type ProcessHost struct {
 
 func NewProcessHost(config ProcessHostConfig) (*ProcessHost, error) {
 	if config.Resolve == nil {
-		return nil, ErrInvalidManifest
+		return nil, loader.ErrInvalidManifest
 	}
 	// capability 组件必须由本宿主启动（Load 期校验）；executor 组件允许连接
 	// 外部已启动进程（Spawn=false）。
@@ -77,7 +80,7 @@ func NewProcessHost(config ProcessHostConfig) (*ProcessHost, error) {
 	}
 	if !ValidProcessDuration(config.DialTimeout) || !ValidProcessDuration(config.StopGrace) ||
 		!ValidProcessDuration(config.TerminateGrace) {
-		return nil, ErrInvalidManifest
+		return nil, loader.ErrInvalidManifest
 	}
 	if config.Stdout == nil {
 		config.Stdout = io.Discard
@@ -91,25 +94,25 @@ func NewProcessHost(config ProcessHostConfig) (*ProcessHost, error) {
 }
 
 // Mode 返回宿主服务的运行模式：isolated 本机进程。
-func (h *ProcessHost) Mode() string { return ModeIsolated }
+func (h *ProcessHost) Mode() string { return loader.ModeIsolated }
 
-func (h *ProcessHost) Verify(ctx context.Context, manifest Manifest) error {
-	if manifest.Mode != ModeIsolated {
-		return ErrUnsupportedMode
+func (h *ProcessHost) Verify(ctx context.Context, manifest loader.Manifest) error {
+	if manifest.Mode != loader.ModeIsolated {
+		return loader.ErrUnsupportedMode
 	}
 	_, err := h.resolveVerifiedSpec(ctx, manifest)
 	return err
 }
 
-func (h *ProcessHost) Load(ctx context.Context, manifest Manifest) (Runtime, error) {
-	if manifest.Mode != ModeIsolated {
-		return nil, ErrUnsupportedMode
+func (h *ProcessHost) Load(ctx context.Context, manifest loader.Manifest) (loader.Runtime, error) {
+	if manifest.Mode != loader.ModeIsolated {
+		return nil, loader.ErrUnsupportedMode
 	}
 	h.mu.Lock()
 	closed := h.closed
 	h.mu.Unlock()
 	if closed {
-		return nil, ErrShuttingDown
+		return nil, loader.ErrShuttingDown
 	}
 
 	// Load 再次解析并校验，避免 Verify 与真正执行之间替换安装单元。
@@ -118,23 +121,23 @@ func (h *ProcessHost) Load(ctx context.Context, manifest Manifest) (Runtime, err
 		return nil, err
 	}
 	switch manifest.Role {
-	case RoleExecutor:
+	case loader.RoleExecutor:
 		return h.loadExecutor(ctx, manifest, spec)
-	case RoleProvider:
+	case loader.RoleProvider:
 		return h.loadCapability(ctx, manifest, spec)
 	default:
-		return nil, ErrInvalidManifest
+		return nil, loader.ErrInvalidManifest
 	}
 }
 
 // loadExecutor 启动（或连接）executor.v1 运行时进程。
-func (h *ProcessHost) loadExecutor(ctx context.Context, manifest Manifest, spec packagecontract.ProcessSpec) (Runtime, error) {
+func (h *ProcessHost) loadExecutor(ctx context.Context, manifest loader.Manifest, spec packagecontract.ProcessSpec) (loader.Runtime, error) {
 	var process *Process
 	if h.shouldSpawn(manifest) {
 		var err error
 		process, err = StartProcess(ctx, spec, h.config.Stdout, h.config.Stderr)
 		if err != nil {
-			return nil, ErrUnavailable
+			return nil, loader.ErrUnavailable
 		}
 	}
 	connection, client, err := dialExecutor(ctx, spec.Address, process, h.config.DialTimeout)
@@ -142,7 +145,7 @@ func (h *ProcessHost) loadExecutor(ctx context.Context, manifest Manifest, spec 
 		if process != nil {
 			err = errors.Join(err, process.Reap(context.Background(), h.config.StopGrace, h.config.TerminateGrace))
 		}
-		return nil, errors.Join(ErrUnavailable, err)
+		return nil, errors.Join(loader.ErrUnavailable, err)
 	}
 	runtime := &executorRuntime{
 		id: manifest.ID, version: manifest.Version, mode: manifest.Mode,
@@ -154,13 +157,13 @@ func (h *ProcessHost) loadExecutor(ctx context.Context, manifest Manifest, spec 
 }
 
 // loadCapability 启动 capability 进程并经 runtime_host 协议装载。
-func (h *ProcessHost) loadCapability(ctx context.Context, manifest Manifest, spec packagecontract.ProcessSpec) (Runtime, error) {
+func (h *ProcessHost) loadCapability(ctx context.Context, manifest loader.Manifest, spec packagecontract.ProcessSpec) (loader.Runtime, error) {
 	if !h.shouldSpawn(manifest) {
 		return nil, ErrInvalidProcessSpec
 	}
 	process, err := StartProcess(ctx, spec, h.config.Stdout, h.config.Stderr)
 	if err != nil {
-		return nil, ErrUnavailable
+		return nil, loader.ErrUnavailable
 	}
 	wrapped := &processRuntime{
 		process: process, host: h, socketPath: strings.TrimPrefix(spec.Address, "unix:"),
@@ -168,9 +171,9 @@ func (h *ProcessHost) loadCapability(ctx context.Context, manifest Manifest, spe
 	}
 	h.track(wrapped)
 
-	grpcHost, err := NewGRPCHost(GRPCHostConfig{
-		Mode: ModeIsolated, Address: spec.Address, DialTimeout: h.config.DialTimeout,
-		VerifyInstalled: func(context.Context, Manifest) error { return nil },
+	grpcHost, err := loader.NewGRPCHost(loader.GRPCHostConfig{
+		Mode: loader.ModeIsolated, Address: spec.Address, DialTimeout: h.config.DialTimeout,
+		VerifyInstalled: func(context.Context, loader.Manifest) error { return nil },
 	})
 	if err != nil {
 		cleanupErr := wrapped.cleanupAfterLoad(ctx)
@@ -183,17 +186,17 @@ func (h *ProcessHost) loadCapability(ctx context.Context, manifest Manifest, spe
 	stopWatch()
 	if err != nil {
 		if process.Exited() {
-			err = ErrUnavailable
+			err = loader.ErrUnavailable
 		}
 		cleanupErr := wrapped.cleanupAfterLoad(ctx)
 		h.remove(wrapped)
 		return nil, errors.Join(err, cleanupErr)
 	}
-	runtime, ok := loaded.(*grpcRuntime)
+	runtime, ok := loaded.(processRuntimeCore)
 	if !ok {
 		cleanupErr := wrapped.cleanupAfterLoad(ctx)
 		h.remove(wrapped)
-		return nil, errors.Join(ErrUnavailable, cleanupErr)
+		return nil, errors.Join(loader.ErrUnavailable, cleanupErr)
 	}
 	wrapped.runtime = runtime
 	return wrapped, nil
@@ -233,8 +236,8 @@ func (h *ProcessHost) Close(ctx context.Context) error {
 
 // validateSpec 校验解析出的进程规格：连接模式的 executor 只校验地址与限额，
 // 由本宿主启动的进程叠加文件系统与内容安全校验。
-func (h *ProcessHost) validateSpec(manifest Manifest, spec packagecontract.ProcessSpec) error {
-	if manifest.Role == RoleExecutor && !h.shouldSpawn(manifest) {
+func (h *ProcessHost) validateSpec(manifest loader.Manifest, spec packagecontract.ProcessSpec) error {
+	if manifest.Role == loader.RoleExecutor && !h.shouldSpawn(manifest) {
 		if !packagecontract.IsLocalRuntimeAddress(spec.Address) || !packagecontract.ValidProcessLimits(spec.Limits) {
 			return ErrInvalidProcessSpec
 		}
@@ -244,7 +247,7 @@ func (h *ProcessHost) validateSpec(manifest Manifest, spec packagecontract.Proce
 }
 
 // shouldSpawn 返回当前清单的进程管理策略。
-func (h *ProcessHost) shouldSpawn(manifest Manifest) bool {
+func (h *ProcessHost) shouldSpawn(manifest loader.Manifest) bool {
 	if h.config.SpawnFor != nil {
 		return h.config.SpawnFor(manifest)
 	}
@@ -252,10 +255,10 @@ func (h *ProcessHost) shouldSpawn(manifest Manifest) bool {
 }
 
 // resolveVerifiedSpec 读取并校验来源锁定的规格。
-func (h *ProcessHost) resolveVerifiedSpec(ctx context.Context, manifest Manifest) (packagecontract.ProcessSpec, error) {
+func (h *ProcessHost) resolveVerifiedSpec(ctx context.Context, manifest loader.Manifest) (packagecontract.ProcessSpec, error) {
 	spec, err := h.config.Resolve(ctx, manifest)
 	if err != nil {
-		return packagecontract.ProcessSpec{}, errors.Join(ErrUnavailable, err)
+		return packagecontract.ProcessSpec{}, errors.Join(loader.ErrUnavailable, err)
 	}
 	if err := h.validateSpec(manifest, spec); err != nil {
 		return packagecontract.ProcessSpec{}, err
@@ -268,9 +271,16 @@ func (h *ProcessHost) resolveVerifiedSpec(ctx context.Context, manifest Manifest
 	return spec, nil
 }
 
+// processRuntimeCore 是隔离 provider 进程承载的运行时面：生命周期与治理
+// 调用（provider 角色由 GRPCHost 装载，运行时同时实现两者）。
+type processRuntimeCore interface {
+	loader.Runtime
+	loader.Invoker
+}
+
 // hostManagedRuntime 是进程宿主可强制清理的运行时统一面。
 type hostManagedRuntime interface {
-	Runtime
+	loader.Runtime
 	// hostClose 强制回收进程与连接（宿主 Close 与装载失败清理用）。
 	hostClose(ctx context.Context) error
 }
@@ -426,7 +436,7 @@ func (p *Process) Release() {
 }
 
 type processRuntime struct {
-	runtime        *grpcRuntime
+	runtime        processRuntimeCore
 	process        *Process
 	host           *ProcessHost
 	socketPath     string
@@ -437,30 +447,37 @@ type processRuntime struct {
 	stopped bool
 }
 
-func (r *processRuntime) Describe(ctx context.Context) (Description, error) {
+// transportCloserOf 断言运行时可选实现 loader.TransportCloser（连接模式运行
+// 时持有底层传输；非连接实现天然缺席，清理时跳过传输释放）。
+func transportCloserOf(runtime loader.Runtime) (loader.TransportCloser, bool) {
+	closer, ok := runtime.(loader.TransportCloser)
+	return closer, ok
+}
+
+func (r *processRuntime) Describe(ctx context.Context) (loader.Description, error) {
 	if r.process.Exited() {
-		return Description{}, ErrUnavailable
+		return loader.Description{}, loader.ErrUnavailable
 	}
 	return r.runtime.Describe(ctx)
 }
 
 func (r *processRuntime) Start(ctx context.Context) error {
 	if r.process.Exited() {
-		return ErrUnavailable
+		return loader.ErrUnavailable
 	}
 	return r.runtime.Start(ctx)
 }
 
 func (r *processRuntime) Health(ctx context.Context) error {
 	if r.process.Exited() {
-		return ErrUnavailable
+		return loader.ErrUnavailable
 	}
 	return r.runtime.Health(ctx)
 }
 
 func (r *processRuntime) Invoke(ctx context.Context, request contracts.RequestContext, payload json.RawMessage) (json.RawMessage, error) {
 	if r.process.Exited() {
-		return nil, ErrUnavailable
+		return nil, loader.ErrUnavailable
 	}
 	return r.runtime.Invoke(ctx, request, payload)
 }
@@ -503,8 +520,8 @@ func (r *processRuntime) hostClose(ctx context.Context) error {
 
 func (r *processRuntime) forceCleanupLocked(ctx context.Context) error {
 	var cleanupFailed bool
-	if r.runtime != nil {
-		if err := r.runtime.closeTransport(); err != nil {
+	if closer, ok := transportCloserOf(r.runtime); ok {
+		if err := closer.CloseTransport(); err != nil {
 			cleanupFailed = true
 		}
 	}
@@ -553,8 +570,8 @@ func (r *processRuntime) cleanupAfterLoad(ctx context.Context) error {
 }
 
 func (r *processRuntime) finish() error {
-	if r.runtime != nil {
-		if err := r.runtime.closeTransport(); err != nil {
+	if closer, ok := transportCloserOf(r.runtime); ok {
+		if err := closer.CloseTransport(); err != nil {
 			r.stopped = true
 			r.host.remove(r)
 			r.releaseProcessLimits()
@@ -593,18 +610,18 @@ type executorRuntime struct {
 	stopErr  error
 }
 
-func (r *executorRuntime) Describe(context.Context) (Description, error) {
-	return Description{ID: r.id, Version: r.version, Mode: r.mode}, nil
+func (r *executorRuntime) Describe(context.Context) (loader.Description, error) {
+	return loader.Description{ID: r.id, Version: r.version, Mode: r.mode}, nil
 }
 
 func (r *executorRuntime) Start(context.Context) error { return nil }
 
 func (r *executorRuntime) Health(ctx context.Context) error {
 	if r.process != nil && r.process.Exited() {
-		return ErrUnavailable
+		return loader.ErrUnavailable
 	}
 	if r.client == nil {
-		return ErrUnavailable
+		return loader.ErrUnavailable
 	}
 	response, err := r.client.Health(ctx, &executor.HealthRequest{
 		AcceptedProtocolVersions: []string{executor.Version},
@@ -613,10 +630,10 @@ func (r *executorRuntime) Health(ctx context.Context) error {
 		return err
 	}
 	if err := executor.ValidateHealthResponse(response); err != nil {
-		return errors.Join(ErrRuntimeProtocol, err)
+		return errors.Join(loader.ErrRuntimeProtocol, err)
 	}
 	if !response.Ready || !executor.Supports(response.SupportedProtocolVersions) {
-		return ErrUnavailable
+		return loader.ErrUnavailable
 	}
 	return nil
 }
@@ -690,7 +707,7 @@ func dialExecutor(ctx context.Context, address string, process *Process, dialTim
 }
 
 var (
-	_ Runtime                   = (*executorRuntime)(nil)
+	_ loader.Runtime            = (*executorRuntime)(nil)
 	_ executor.ClientProvider   = (*executorRuntime)(nil)
 	_ executor.ProcessLifecycle = (*executorRuntime)(nil)
 	_ hostManagedRuntime        = (*executorRuntime)(nil)

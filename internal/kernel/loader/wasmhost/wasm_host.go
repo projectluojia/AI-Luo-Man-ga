@@ -1,4 +1,4 @@
-package loader
+package wasmhost
 
 import (
 	"bytes"
@@ -19,6 +19,7 @@ import (
 
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packagecontract"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
 )
 
@@ -57,7 +58,7 @@ type HostedFunction struct {
 // WasmHostConfig 装配 hosted 沙箱执行器。
 type WasmHostConfig struct {
 	// ReadArtifact 返回与 manifest 锁定的 .wasm 工件字节（负责 digest 与大小校验）。
-	ReadArtifact func(context.Context, Manifest) ([]byte, error)
+	ReadArtifact func(context.Context, loader.Manifest) ([]byte, error)
 	// MemoryLimitPages 是 guest 线性内存上限（页，每页 64 KiB）；0 使用默认值。
 	MemoryLimitPages uint32
 	// MaxArtifactBytes 是工件字节上限；0 使用默认值。
@@ -68,7 +69,7 @@ type WasmHostConfig struct {
 	// HostFunctionsFor 按清单返回投影给该 guest 的宿主函数（可空：无宿主函数
 	// 时声明了宿主函数依赖的清单在 Verify 期 fail-closed）。按清单提供使宿主
 	// 函数可绑定到包自身的声明（如 ailuo.store 的 namespace 隔离）。
-	HostFunctionsFor func(Manifest) ([]HostedFunction, error)
+	HostFunctionsFor func(loader.Manifest) ([]HostedFunction, error)
 	// RequireHostFunctions 为 true 时只接受声明了宿主函数的清单（安装目录 hosted
 	// 包专用宿主）：无宿主函数声明的包交给外部 GRPCHost 执行，避免双宿主歧义。
 	RequireHostFunctions bool
@@ -87,7 +88,7 @@ type WasmHost struct {
 // NewWasmHost 构造 hosted 沙箱宿主；配置非法时返回显式错误。
 func NewWasmHost(config WasmHostConfig) (*WasmHost, error) {
 	if config.ReadArtifact == nil {
-		return nil, ErrUnavailable
+		return nil, loader.ErrUnavailable
 	}
 	if config.MemoryLimitPages == 0 {
 		config.MemoryLimitPages = hostedDefaultMemoryPages
@@ -112,11 +113,11 @@ func (h *WasmHost) supportedABIs() []string {
 
 // manifestHostFunctions 解析按清单提供的宿主函数并校验：函数字段完整、模块名
 // 唯一。提供者返回的错误原样上浮（装配期的声明问题不得延迟到调用期）。
-func (h *WasmHost) manifestHostFunctions(manifest Manifest) ([]HostedFunction, error) {
+func (h *WasmHost) manifestHostFunctions(manifest loader.Manifest) ([]HostedFunction, error) {
 	if h.config.HostFunctionsFor == nil {
 		if len(manifest.HostFunctions) > 0 {
 			return nil, fmt.Errorf("%w: host provides no host functions for package %q",
-				ErrInvalidManifest, manifest.ID)
+				loader.ErrInvalidManifest, manifest.ID)
 		}
 		return nil, nil
 	}
@@ -127,11 +128,11 @@ func (h *WasmHost) manifestHostFunctions(manifest Manifest) ([]HostedFunction, e
 	seen := make(map[string]struct{}, len(functions))
 	for _, fn := range functions {
 		if fn.Module == "" || fn.Name == "" || fn.Call == nil {
-			return nil, ErrUnavailable
+			return nil, loader.ErrUnavailable
 		}
 		key := packagecontract.HostedFunctionKey(fn.Module, fn.Name)
 		if _, exists := seen[key]; exists {
-			return nil, ErrDuplicateID
+			return nil, loader.ErrDuplicateID
 		}
 		seen[key] = struct{}{}
 	}
@@ -139,21 +140,21 @@ func (h *WasmHost) manifestHostFunctions(manifest Manifest) ([]HostedFunction, e
 }
 
 // Mode 返回宿主服务的运行模式：hosted 沙箱。
-func (h *WasmHost) Mode() string { return ModeHosted }
+func (h *WasmHost) Mode() string { return loader.ModeHosted }
 
 // Verify 确认工件可读、未超过大小上限，且清单声明的宿主函数全部由本宿主
 // 提供（声明 ⊆ 可用，缺项在注册期 fail-closed）；digest 校验由 ReadArtifact 负责。
 // RequireHostFunctions 时无宿主函数声明的清单直接拒绝（本宿主只服务需内核
 // 投影的安装目录 hosted 包，无声明者归 GRPCHost，防路由歧义）。
-func (h *WasmHost) Verify(ctx context.Context, manifest Manifest) error {
+func (h *WasmHost) Verify(ctx context.Context, manifest loader.Manifest) error {
 	if h.config.RequireHostFunctions && len(manifest.HostFunctions) == 0 {
-		return fmt.Errorf("%w: host requires host_functions declarations", ErrUnsupportedMode)
+		return fmt.Errorf("%w: host requires host_functions declarations", loader.ErrUnsupportedMode)
 	}
 	// guest ABI 闭集校验：声明版本必须落在宿主支持的集合内，否则本宿主无法
 	// 承载该 guest 的调用协议（注册期 fail-closed）。
 	if manifest.ABIVersion == "" || !slices.Contains(h.supportedABIs(), manifest.ABIVersion) {
 		return fmt.Errorf("%w: guest abi_version %q is not supported by this host",
-			ErrInvalidManifest, manifest.ABIVersion)
+			loader.ErrInvalidManifest, manifest.ABIVersion)
 	}
 	functions, err := h.manifestHostFunctions(manifest)
 	if err != nil {
@@ -164,7 +165,7 @@ func (h *WasmHost) Verify(ctx context.Context, manifest Manifest) error {
 		return err
 	}
 	if int64(len(artifact)) > h.config.MaxArtifactBytes {
-		return ErrInvalidManifest
+		return loader.ErrInvalidManifest
 	}
 	available := make(map[string]struct{}, len(functions))
 	for _, fn := range functions {
@@ -173,7 +174,7 @@ func (h *WasmHost) Verify(ctx context.Context, manifest Manifest) error {
 	for _, decl := range manifest.HostFunctions {
 		if _, ok := available[packagecontract.HostedFunctionKey(decl.Module, decl.Name)]; !ok {
 			return fmt.Errorf("%w: host function %s.%s is not provided by this host",
-				ErrInvalidManifest, decl.Module, decl.Name)
+				loader.ErrInvalidManifest, decl.Module, decl.Name)
 		}
 	}
 	return nil
@@ -182,7 +183,7 @@ func (h *WasmHost) Verify(ctx context.Context, manifest Manifest) error {
 // Load 编译工件并装配宿主函数，返回沙箱 Runtime；编译失败快速失败。
 // 加载期强制"只投影声明集合"：guest 只能 import 清单声明的宿主函数（WASI
 // 除外），未声明导入直接拒绝，宿主函数实现仍只来自宿主配置。
-func (h *WasmHost) Load(ctx context.Context, manifest Manifest) (Runtime, error) {
+func (h *WasmHost) Load(ctx context.Context, manifest loader.Manifest) (loader.Runtime, error) {
 	// 装配期问题（提供者错误、重复函数）先于编译快速失败，不产生半装配运行时。
 	functions, err := h.manifestHostFunctions(manifest)
 	if err != nil {
@@ -193,23 +194,23 @@ func (h *WasmHost) Load(ctx context.Context, manifest Manifest) (Runtime, error)
 		return nil, err
 	}
 	if int64(len(artifact)) > h.config.MaxArtifactBytes {
-		return nil, ErrInvalidManifest
+		return nil, loader.ErrInvalidManifest
 	}
 	wazeroRuntime := wazero.NewRuntimeWithConfig(ctx, wazero.NewRuntimeConfigCompiler().
 		WithMemoryLimitPages(h.config.MemoryLimitPages).
 		WithCloseOnContextDone(true))
 	if _, err := wasi_snapshot_preview1.Instantiate(ctx, wazeroRuntime); err != nil {
 		_ = wazeroRuntime.Close(ctx)
-		return nil, errors.Join(ErrLoadFailed, err)
+		return nil, errors.Join(loader.ErrLoadFailed, err)
 	}
 	compiled, err := wazeroRuntime.CompileModule(ctx, artifact)
 	if err != nil {
 		_ = wazeroRuntime.Close(ctx)
-		return nil, errors.Join(ErrLoadFailed, err)
+		return nil, errors.Join(loader.ErrLoadFailed, err)
 	}
 	if err := checkDeclaredHostFunctionImports(compiled, manifest.HostFunctions); err != nil {
 		_ = wazeroRuntime.Close(ctx)
-		return nil, errors.Join(ErrLoadFailed, err)
+		return nil, errors.Join(loader.ErrLoadFailed, err)
 	}
 	projected := functions
 	hosted := &wasmRuntime{
@@ -225,7 +226,7 @@ func (h *WasmHost) Load(ctx context.Context, manifest Manifest) (Runtime, error)
 	}
 	if err := hosted.registerHostFunctions(ctx, projected); err != nil {
 		_ = wazeroRuntime.Close(ctx)
-		return nil, errors.Join(ErrLoadFailed, err)
+		return nil, errors.Join(loader.ErrLoadFailed, err)
 	}
 	return hosted, nil
 }
@@ -270,8 +271,8 @@ type hostedInvokeState struct {
 	funcs   map[string]func(context.Context, contracts.RequestContext, []byte) ([]byte, error)
 }
 
-func (r *wasmRuntime) Describe(context.Context) (Description, error) {
-	return Description{ID: r.id, Version: r.version, Mode: ModeHosted}, nil
+func (r *wasmRuntime) Describe(context.Context) (loader.Description, error) {
+	return loader.Description{ID: r.id, Version: r.version, Mode: loader.ModeHosted}, nil
 }
 
 func (r *wasmRuntime) Start(context.Context) error { return nil }
@@ -350,7 +351,7 @@ type hostedRequest struct {
 func (r *wasmRuntime) Invoke(ctx context.Context, request contracts.RequestContext, payload json.RawMessage) (json.RawMessage, error) {
 	requestEnvelope, err := json.Marshal(hostedRequest{CapabilityID: request.CapabilityID, Payload: payload})
 	if err != nil {
-		return nil, errors.Join(ErrRuntimeProtocol, err)
+		return nil, errors.Join(loader.ErrRuntimeProtocol, err)
 	}
 	var stdout limitedBuffer
 	config := wazero.NewModuleConfig().
@@ -369,7 +370,7 @@ func (r *wasmRuntime) Invoke(ctx context.Context, request contracts.RequestConte
 	defer cancelBudget()
 	module, err := r.wazeroRuntime.InstantiateModule(budgetContext, r.compiled, config)
 	if err != nil {
-		return nil, errors.Join(ErrRuntimeProtocol, err)
+		return nil, errors.Join(loader.ErrRuntimeProtocol, err)
 	}
 	state := &hostedInvokeState{ctx: budgetContext, request: request, funcs: r.hostFuncs}
 	r.hostCalls.Store(module, state)
@@ -380,7 +381,7 @@ func (r *wasmRuntime) Invoke(ctx context.Context, request contracts.RequestConte
 
 	start := module.ExportedFunction("_start")
 	if start == nil {
-		return nil, ErrRuntimeProtocol
+		return nil, loader.ErrRuntimeProtocol
 	}
 	if _, err := start.Call(budgetContext); err != nil {
 		var exit *sys.ExitError
@@ -400,11 +401,11 @@ func (r *wasmRuntime) Invoke(ctx context.Context, request contracts.RequestConte
 			return nil, err
 		default:
 			// 其余退出码视为协议违例。
-			return nil, errors.Join(ErrRuntimeProtocol, err)
+			return nil, errors.Join(loader.ErrRuntimeProtocol, err)
 		}
 	}
 	if stdout.overflowed {
-		return nil, ErrRuntimeProtocol
+		return nil, loader.ErrRuntimeProtocol
 	}
 	return parseHostedEnvelope(r.id, stdout.Buffer())
 }
@@ -414,22 +415,22 @@ func (r *wasmRuntime) Invoke(ctx context.Context, request contracts.RequestConte
 func parseHostedEnvelope(runtimeID string, output []byte) (json.RawMessage, error) {
 	var fields map[string]json.RawMessage
 	if err := packagecontract.DecodeStrictJSON(output, &fields); err != nil {
-		return nil, errors.Join(ErrRuntimeProtocol, err)
+		return nil, errors.Join(loader.ErrRuntimeProtocol, err)
 	}
 	for key := range fields {
 		switch key {
 		case "ok", "result", "code", "message":
 		default:
-			return nil, ErrRuntimeProtocol
+			return nil, loader.ErrRuntimeProtocol
 		}
 	}
 	okValue, okPresent := fields["ok"]
 	if !okPresent {
-		return nil, ErrRuntimeProtocol
+		return nil, loader.ErrRuntimeProtocol
 	}
 	var ok *bool
 	if err := json.Unmarshal(okValue, &ok); err != nil || ok == nil {
-		return nil, ErrRuntimeProtocol
+		return nil, loader.ErrRuntimeProtocol
 	}
 	result, resultPresent := fields["result"]
 	codeValue, codePresent := fields["code"]
@@ -438,7 +439,7 @@ func parseHostedEnvelope(runtimeID string, output []byte) (json.RawMessage, erro
 	if codePresent {
 		var value *string
 		if err := json.Unmarshal(codeValue, &value); err != nil || value == nil {
-			return nil, ErrRuntimeProtocol
+			return nil, loader.ErrRuntimeProtocol
 		}
 		code = *value
 	}
@@ -446,18 +447,18 @@ func parseHostedEnvelope(runtimeID string, output []byte) (json.RawMessage, erro
 	if messagePresent {
 		var value *string
 		if err := json.Unmarshal(messageValue, &value); err != nil || value == nil {
-			return nil, ErrRuntimeProtocol
+			return nil, loader.ErrRuntimeProtocol
 		}
 		message = *value
 	}
 	if *ok {
 		if !resultPresent || len(result) == 0 || codePresent || messagePresent {
-			return nil, ErrRuntimeProtocol
+			return nil, loader.ErrRuntimeProtocol
 		}
 		return result, nil
 	}
 	if resultPresent || !codePresent || code == "" {
-		return nil, ErrRuntimeProtocol
+		return nil, loader.ErrRuntimeProtocol
 	}
 	observe.Warn(context.Background(), "hosted 包拒绝了调用",
 		observe.StringAttr("runtime_id", runtimeID),
@@ -466,16 +467,16 @@ func parseHostedEnvelope(runtimeID string, output []byte) (json.RawMessage, erro
 	)
 	switch code {
 	case "data_unavailable", "data_incomplete", "data_expired":
-		return nil, errors.Join(ErrHostedCallRejected, InvocationError{Code: code})
+		return nil, errors.Join(ErrHostedCallRejected, loader.InvocationError{Code: code})
 	case "data_untrusted":
-		return nil, errors.Join(ErrHostedCallRejected, InvocationError{Code: "data_non_authoritative"})
+		return nil, errors.Join(ErrHostedCallRejected, loader.InvocationError{Code: "data_non_authoritative"})
 	case "invalid_argument":
-		return nil, errors.Join(ErrHostedCallRejected, InvocationError{Code: "invalid_arguments"})
+		return nil, errors.Join(ErrHostedCallRejected, loader.InvocationError{Code: "invalid_arguments"})
 	case "internal":
 		return nil, ErrHostedCallRejected
 	default:
 		// 未知错误码视为协议违例：不允许 guest 自定义错误码进入内核错误面。
-		return nil, ErrRuntimeProtocol
+		return nil, loader.ErrRuntimeProtocol
 	}
 }
 

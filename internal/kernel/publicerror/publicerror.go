@@ -8,6 +8,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/idempotency"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader/processhost"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime"
 )
@@ -64,7 +65,7 @@ func Capability(err error) Error {
 	case errors.Is(err, loader.ErrLoadFailed), errors.Is(err, loader.ErrUnavailable),
 		errors.Is(err, loader.ErrShuttingDown), errors.Is(err, loader.ErrNotFound),
 		errors.Is(err, loader.ErrUnsupportedMode), errors.Is(err, loader.ErrRuntimeBusy),
-		errors.Is(err, loader.ErrProcessCleanup):
+		errors.Is(err, processhost.ErrProcessCleanup):
 		return capabilityCodeTable["runtime_unavailable"]
 	case errors.Is(err, registry.ErrCapabilityNotFound):
 		return capabilityCodeTable["capability_unavailable"]
