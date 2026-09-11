@@ -1,6 +1,14 @@
 # 贡献指南
 
-欢迎贡献 AI珞（爱珞）V3。本文件是贡献流程的唯一入口；架构、安全与存储的深度契约以 `AGENTS.md` 和 `docs/` 设计文档为准。
+欢迎贡献 AI珞（爱珞）V3。本文件是分支、提交、PR、审查和贡献留存的唯一流程入口；架构、安全、数据授权及适用测试契约继续由 [AGENTS.md](AGENTS.md) 和设计文档维护。流程按三位活跃开发者的容量安排，成员记录见[版本与贡献索引](docs/版本与贡献索引.md)。
+
+## 配置状态与待落地项
+
+2026-09-10 核验的远端规则是：`dev` 人工批准数为 0，`main` 为 1；[`dev` 规则集](https://github.com/projectluojia/AI-Luo-Man-ga/rules/22379240)中的 merge queue 已从 `SQUASH` 改为 `MERGE`，其他规则字段不变，`main` 保护未修改。
+
+本指南的历史保留方案要求新开发 PR、`dev → main` 和启用的 merge queue 均采用 merge commit。恢复链不得使用 squash 或 rebase；规则配置已更新不代表历史已进入主线，正常合并后仍须逐项验证实际 `main` 的原始 SHA 可达性，不绕过现有门禁。
+
+[`pull_request_target` 工作流](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#pull_request_target)从默认分支读取。标题兼容修复的默认分支入口是 [#126](https://github.com/projectluojia/AI-Luo-Man-ga/pull/126)；该 PR 须经过审查合入 `main`，并由新 PR 事件触发后核实生效，不能用工作分支内存在修复或旧检查成功代替。
 
 ## 快速开始
 
@@ -21,58 +29,56 @@ make test-e2e      # Executor e2e（源包，Unix 平台）
 ## 分支与提交
 
 - 分支命名使用前缀：`feat/`、`fix/`、`chore/`、`docs/`、`refactor/`。
-- 提交信息、PR 标题和 squash 合并消息均严格遵循 Conventional Commits；破坏性变更在标题中使用 `!`，并在 footer 写明 `BREAKING CHANGE: <说明>`（`pr-title.yml` 强制校验）。
+- 提交信息和 PR 标题遵循 Conventional Commits：`<type>[optional scope][!]: <描述>`，类型为 `feat`、`fix`、`docs`、`style`、`refactor`、`perf`、`test`、`build`、`ci`、`chore`、`revert`。破坏性变更在标题使用 `!`，并在 footer 写明 `BREAKING CHANGE: <说明>`。标题检查见 [pr-title.yml](.github/workflows/pr-title.yml)。
+- 有至少两个真实父提交的标准 Git 自动合并消息可以原样保留，无需为标题格式重写原 SHA；普通提交或带破坏性声明的提交仍按上述格式校验，PR 标题不适用该例外。
 - 一个 commit 是一个自洽的逻辑单元：可独立构建、独立回滚（例如迁移 + 存取代码 + 测试同处一个 commit）。
-- `main` 只接受 squash 合并，合并前必须通过全部 required status checks。
+- 独立工作从最新 `dev` 开始；更新个人分支时保留待保全的原始 SHA。不得未经约定 force-push、rebase 或 restack 他人的分支；共享历史重写先记录范围、参与者同意及旧 ref 备份。
+- 新开发采用 merge commit，`dev → main` 也保留 merge ancestry。纯整理工作若确需 squash，先确认没有需要保留的原始 SHA、作者或来源证据；恢复历史的分支不适用该例外。
 
 ## PR 流程
 
-1. 从最新 `main` 切出前缀分支，合并前自行 rebase 保持 up-to-date。
-2. 必须按 `.github/PULL_REQUEST_TEMPLATE.md` 填写变更内容、堆叠关系、影响范围、验证证据与安全治理清单；人工描述使用中文，命令、路径、API/协议名称和标准关键字可保留原文。
-3. 标题格式：`<type>[optional scope][!]: <描述>`，类型限定 `feat` / `fix` / `docs` / `style` / `refactor` / `perf` / `test` / `build` / `ci` / `chore` / `revert`；破坏性变更还要有 `BREAKING CHANGE: <说明>` footer。
-4. 等待 `ci-required`、CodeQL 和安全扫描等 required checks 全绿；再确认变更涉及的 Agent/Campus 独立包 workflow 通过。Core 门禁覆盖三平台核心测试、Linux 完整质量门禁和 proto 生成物漂移；Agent workflow 额外覆盖安装后 e2e。
-5. 合并需 1 人审批；审批后新的 push 会使旧审批失效，需重新审批。管理员绕过仅限紧急修复，日常合并一律走规则集。
+在已有授权范围内创建或更新 PR，默认以 Draft 打开；明确要求直接审查时使用 `gh pr ready <PR号>`，或在 `gh stack link` / `submit` 时加 `--open`。转为 Ready、取得机器人反馈与获得合并授权是不同状态。
+
+1. 一个 PR 解决一个可验收的问题。使用[四栏模板](.github/PULL_REQUEST_TEMPLATE.md)：改什么、谁贡献了什么、如何验证、需要 review 的风险点。有依赖就在第一栏链接直接 base PR，只描述本层增量。人工描述用中文，命令、路径和协议标识保留原文。
+2. 先运行与改动相关的本地验证；当前 head 上 CI 已执行的适用门禁给结果链接，无需每人在本机重复整套。区分通过、失败、未运行和不适用，不能把旧 head 的结果当成新 head 通过。
+3. 普通 `dev` PR 不增加逐 PR 人工批准硬门。按风险或来源争议指定同伴核查，已有结论直接引用；未审部分如实标明。目标分支 required checks 及其他适用验证通过、已知阻断缺陷处理后，按现有权限合并；未完成的业务验收继续随 PR 保留，不冒充生产完成。
+4. `main` 保留 1 票批准；鉴权、敏感数据、破坏性迁移、协议兼容、外部副作用和部署信任边界等高风险改动，进入 `main` 前必须有具备判断能力的非作者人工结论。整合审查聚焦新增差异、集成结果及未关闭风险，引用已有 PR 与对应 SHA 的结论。
+
+纯文字纠错、非行为格式调整等低风险变更，可在目标分支现有规则允许时由作者自合并并写明理由；不能绕过 `main` 的 1 票规则。CI 权限、依赖、协议或运行行为变化按实质影响评估，不因文件扩展名是 Markdown 就视为低风险。提交更新后复核最新 head 的审批与门禁状态，不假定旧批准仍有效。
+
+共同实现者不能互相冒充独立 reviewer。没有合适非作者时，记录实现者、已核查范围与待验收高风险项，并安排有能力的非作者完成上述 `main` 审查；不强迫第三人形式签字，也不把等待超时当作批准。日常合并不以管理员绕过代替门禁。
 
 ### 堆叠 PR
 
-存在真实依赖时，用 `gh stack` 按底层到顶层维护分支和 PR：`gh stack init --base main <bottom> <next> ...` 创建新 stack，`gh stack link <stack-number> <pr-or-branch> ...` 接管已有 PR，`gh stack sync` 同步远端，`gh stack view --json` 复核完整链条。每个上层 PR 只能以直接依赖的下一层分支为 base；PR body 使用同一模板，只描述本层增量，不复制父层内容。需要 ready 审查时使用 `--open`，否则保持 draft。不要手工改 base 后继续提交。
+仅真实依赖才堆叠，新链建议不超过两层；独立工作并行开发。最底层 base 是 `dev`，上层 base 是直接依赖分支。已有长链由约定的整合者从底向上收敛，调整前保存各层 head，避免重写他人来源记录。
 
-### 合并前本地验证（与 CI 部分重合）
+使用官方扩展 `github/gh-stack` 管理原生栈。先运行 `gh stack --version`；缺少扩展时安装 `gh extension install github/gh-stack`，认证使用已有授权的 `gh auth`。工具或服务确实不可用时，可按直接依赖创建 Draft PR，记录原因并标明尚未接入原生 Stack；恢复可用后用 `link` 接管，不把手工 base 链当成完成栈管理。
 
-以下是本地可运行的主要门禁，不等同于 CI 完整门禁。CI 另外执行 Protobuf 漂移、包发布物 `pack → install → list`、Agent 安装后 e2e、CodeQL 和安全扫描；任何未运行的适用门禁都要在交付说明中标明。
+- 新建链：`gh stack init --base dev <bottom> <next>`，准备好提交后用 `gh stack submit` 推送并创建 PR；需要直接审查时加 `--open`。`gh stack push` 只推送分支，不创建 PR。
+- 接管已有 PR：`gh stack link --base dev <底层PR号> <上层PR号>`，参数按自底向上排列；已有 Stack 追加层使用 `gh stack link <stack-number> <新PR号>`。需要直接审查时加 `--open`。本地接管用 `gh stack checkout <stack-number>`。
+- 每次 `init`、`link`、`submit`、`checkout` 或同步后，用 `gh stack view --json` 和 `gh pr view <PR号> --json baseRefName,headRefName,headRefOid,isDraft` 核对顺序、直接依赖、完整 diff 与待保全 SHA。`link` 不写本地跟踪状态，应先 `checkout` 再 `view`，并核对 GitHub 原生 Stack 成员关系。
+- `gh stack sync` 包含 rebase；本项目保留原始 SHA 的链禁止直接执行 `sync` / `rebase`。下层修复通过保留祖先的 merge commit 向上逐层传播，验证后推送；已有远端分支只做普通 fast-forward 推送。每次修订后重新核验作者、原始 SHA 与各层 diff，不因采用栈工具而放宽历史保全或操作授权。
 
-```bash
-files="$(gofmt -l .)"
-test -z "$files" || { echo "$files"; exit 1; }
-go mod verify
-go mod tidy -diff
-go test ./...
-(
-  cd contracts
-  go mod verify
-  go mod tidy -diff
-  go test ./...
-  go vet ./...
-)
-(
-  cd package-manager
-  go mod verify
-  go mod tidy -diff
-  go test ./...
-  go vet ./...
-)
-make test-campus
-go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 '-checks=inherit,-SA1019' ./...
-actionlint .github/workflows/*.yml
-uv sync --project packages/agent/runtime --locked
-uv run --project packages/agent/runtime --locked python -m compileall -q packages/agent/runtime
-(cd packages/agent/runtime && uv run --project . --locked ruff check .)
-uv run --project packages/agent/runtime --locked python -m unittest discover -s packages/agent/runtime -p 'test_*.py' -v
-go test -race ./...
-go vet ./...
-go test -tags=integration ./internal/kernel/loader -v -timeout=30s
-AILUO_EXECUTOR_PACKAGE_DIR="$PWD/packages/agent" go test -tags=integration ./e2e -v -timeout=60s
-```
+### 审查与修复
+
+AI review 辅助发现问题，不替代非作者人工判断或贡献确认。同一 head 不无目的重复全量审查；修改后只复查仍未解决的问题及受影响路径，已有有效结论给链接。机器人的通过状态必须核对所审 SHA；本指南未修改机器人配置。
+
+CodeRabbit 的自动审查范围以实际配置和服务反馈为准；需覆盖非默认 base 时检查 `.coderabbit.yaml` 的 `reviews.auto_review.base_branches`，Draft 是否自动审查由 `reviews.auto_review.drafts` 决定。需要审查而未自动启动时，手动评论 `@coderabbitai review`，确认收到处理或完成回执。Draft 跳过、无审查额度、限流和仅状态为 SUCCESS 均不代表已审；遇限流记录下一次可用时间，届时逐层触发，不批量重复请求，也不把机器人等待设成额外人工批准门。
+
+每条意见先核对当前代码、改动范围及实际风险：有效意见最小修复并跑受影响验证；误报或不采纳意见给依据；有效但超范围的问题记入可追踪的后续事项。合并前相关 thread 应有明确结论，再 resolve；不得只关闭讨论掩盖未处理的缺陷。
+
+在对应 thread 回复：已修复的意见给出修复提交及受影响验证，不适用的意见说明依据，超范围的意见链接后续事项。评审方继续反驳时继续复核、补充证据或明确保留立场，不能只 resolve 结束争议。修复提交按自洽逻辑单元遵循 Conventional Commits，并复核最新 head 的相关检查。
+
+### 验证依据
+
+完整适用测试要求和命令清单见 [AGENTS.md 的 Validation](AGENTS.md#validation)，CI 实际任务见 [workflows](.github/workflows)。合并须通过目标分支所有 required checks（含配置要求的 `ci-required`、CodeQL、安全扫描等），并核对改动涉及的独立包验证。CI 证据可以复用，检查范围、安全不变量和失败处理要求不能因流程简化而削弱；无法运行的适用检查明确列为未验证。
+
+## 贡献与 AI 证据
+
+- 使用本人身份提交；PR 区分原始实现、迁移适配、设计、测试和评审，沿用他人成果时给原仓库及固定 SHA/PR。真实共同创作才使用 `Co-authored-by`，不以提交数、代码行数或 AI 会话长度推定贡献。
+- 每个可验收里程碑复用已有 PR/Issue 记录参与账号、实际工作、证据和验收状态，不另建日报。跨版本入口只维护[版本与贡献索引](docs/版本与贡献索引.md)，公开条目经相关参与者核对；分歧暂不写成署名或权属结论。
+- AI 使用按实际环节说明工具、关键人工判断及验证；已有原始 session 由本人保留，缺失据实标明。按明确用途提供必要的脱敏片段，不把导出完整个人会话设成 PR 门禁，不收集密钥、私人聊天或未授权数据。
+- 旧版本可在原仓库独立保留；已约定进入 V3 主线的原始提交另按固定 SHA 验收 ancestry。索引可见、迁移后重新署名和原始 SHA 成为祖先是不同证据，不互相替代。软件权属、论文署名及学分仍按各自适用规则确认。
 
 ## 代码规范
 
