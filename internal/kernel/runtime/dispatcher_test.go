@@ -42,6 +42,45 @@ func TestDispatcherAuthorizesConcreteResource(t *testing.T) {
 	}
 }
 
+// TestDispatcherEnforcesRunFrozenScope 验证 Run 介导的调用只能触达 Run 接受时
+// 冻结投影内的 Capability：范围内放行，范围外 fail-closed；Web 直连（无 RunID）
+// 不受 Run 范围约束，仍按 App 策略授权。
+func TestDispatcherEnforcesRunFrozenScope(t *testing.T) {
+	reg := registry.New()
+	if err := reg.Register(registry.CapabilityRegistration{
+		Spec: capability.CapabilitySpec{
+			ID: "library.book.get", Version: "1.0.0", Name: "查看图书",
+			InputSchemaJSON: `{"type":"object","additionalProperties":false}`,
+			Authorization:   capability.AuthorizationSpec{ResourceType: "capability.resource"},
+			Execution:       capability.ExecutionSpec{EffectTarget: capability.EffectNone, Replay: capability.ReplaySafe, ConfirmationFloor: capability.ConfirmationPolicy},
+		},
+		Handler: func(context.Context, contracts.RequestContext, json.RawMessage) (json.RawMessage, error) {
+			return json.RawMessage(`{}`), nil
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	policy := runtimetest.NewStaticAppPolicy()
+	policy.Enable("app", "library.book.get")
+	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{})
+	deadline := time.Now().Add(time.Minute)
+	within := contracts.RequestContext{AppID: "app", EchoID: "echo", RequestID: "request",
+		RunID: "run-1", RunCapabilityGrants: []capability.Grant{{CapabilityID: "library.book.get"}},
+		Deadline: deadline}
+	if _, err := dispatcher.InvokeCapability(t.Context(), within, "library.book.get", []byte(`{}`)); err != nil {
+		t.Fatalf("in-scope capability error=%v", err)
+	}
+	outside := contracts.RequestContext{AppID: "app", EchoID: "echo", RequestID: "request",
+		RunID: "run-1", Deadline: deadline}
+	if _, err := dispatcher.InvokeCapability(t.Context(), outside, "library.book.get", []byte(`{}`)); !errors.Is(err, runtime.ErrCapabilityDisabled) {
+		t.Fatalf("out-of-scope capability error=%v, want ErrCapabilityDisabled", err)
+	}
+	direct := contracts.RequestContext{AppID: "app", EchoID: "echo", RequestID: "request", Deadline: deadline}
+	if _, err := dispatcher.InvokeCapability(t.Context(), direct, "library.book.get", []byte(`{}`)); err != nil {
+		t.Fatalf("web-direct capability error=%v", err)
+	}
+}
+
 // TestDispatcherValidatesSchemaBeforeAuthorization 验证 Schema 校验先于授权：
 // 载荷畸形时即使 Grant 也不匹配，也必须返回 Schema 校验错误（HTTP 400
 // invalid_input），而不是被授权错误吞成 permission_denied（403）。
