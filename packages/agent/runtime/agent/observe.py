@@ -37,7 +37,7 @@ _environment = "development"
 _service = "ailuo-python-agent"
 
 # 与 Go 集中日志入口保持同一组明确凭据格式，不声称识别任意个人信息。
-_credential_patterns = tuple(re.compile(pattern) for pattern in (
+_credential_patterns = tuple(re.compile(pattern, re.ASCII) for pattern in (
     r'''(?i)\b(?:password|passwd|secret|(?:access[_-]?|refresh[_-]?)?token|api[_-]?key|authorization|cookie|credential)["']?\s*[:=]\s*\S''',
     r"(?i)\b(?:bearer|basic)\s+\S+",
     r"(?i)\b[a-z][a-z0-9+.-]{0,31}://[^\s/@]+@",

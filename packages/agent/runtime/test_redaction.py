@@ -15,6 +15,7 @@ class RedactionTest(unittest.TestCase):
     def test_free_text_credentials_and_opaque_values(self) -> None:
         values = [
             "请求失败 password=synthetic-private-value",
+            "请求失败password=synthetic-private-value",
             '响应 {"api_key": "synthetic-private-value"}',
             "Authorization: Bearer synthetic-private-value",
             "Cookie: sid=synthetic-private-value",
