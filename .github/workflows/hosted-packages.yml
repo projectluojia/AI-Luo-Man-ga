@@ -1,15 +1,16 @@
 name: Hosted packages
 
-# packages/ 下全部 hosted provider 包（guestkit 共享库 + 业务包）共享一条
-# 矩阵流水线：module 校验 + wasip1 vet + 单元测试 + pack + 冒烟安装。
-# 各包迁移到独立仓库时，把本文件的矩阵行复制为独立的 per-package workflow。
+# packages/ 下全部 hosted provider 包共享一条矩阵流水线：module 校验 +
+# wasip1 vet + 单元测试 + pack + 冒烟安装。guestkit 是 guest 侧共享 ABI
+# 库（仓库根，非可安装包），由独立 job 校验。各包迁移到独立仓库时，把
+# 对应 job 复制为独立 workflow。
 # 该流程不参与 Core 的 ci-required。
 
 on:
   push:
     branches: [main]
     paths:
-      - packages/guestkit/**
+      - guestkit/**
       - packages/timetable/**
       - packages/classroom/**
       - packages/calendar/**
@@ -22,7 +23,7 @@ on:
       - .github/workflows/hosted-packages.yml
   pull_request:
     paths:
-      - packages/guestkit/**
+      - guestkit/**
       - packages/timetable/**
       - packages/classroom/**
       - packages/calendar/**
@@ -43,6 +44,28 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  guestkit:
+    name: guestkit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: guestkit/go.mod
+          cache: true
+          cache-dependency-path: guestkit/go.mod
+      - name: 校验 guestkit Go module
+        working-directory: guestkit
+        shell: bash
+        run: |
+          set -euo pipefail
+          go mod verify
+          go mod tidy -diff
+          go test ./...
+
   package:
     name: ${{ matrix.package }}
     runs-on: ubuntu-latest
@@ -51,7 +74,6 @@ jobs:
       fail-fast: false
       matrix:
         package:
-          - guestkit
           - timetable
           - classroom
           - calendar
@@ -68,7 +90,7 @@ jobs:
           cache: true
           cache-dependency-path: |
             packages/${{ matrix.package }}/go.mod
-            packages/guestkit/go.mod
+            guestkit/go.mod
             go.work.sum
       - name: 校验 ${{ matrix.package }} Go module 与 WASM 构建
         working-directory: packages/${{ matrix.package }}
@@ -78,28 +100,15 @@ jobs:
           go mod verify
           go mod tidy -diff
           go test ./...
-        # guestkit 是纯共享库（无 src/、无 ailuo.toml），跳过 wasip1 vet。
-        if: matrix.package != 'guestkit'
-      - name: 校验 guestkit Go module
-        working-directory: packages/guestkit
-        if: matrix.package == 'guestkit'
-        shell: bash
-        run: |
-          set -euo pipefail
-          go mod verify
-          go mod tidy -diff
-          go test ./...
+          GOOS=wasip1 GOARCH=wasm go vet ./src
       - name: 构建 Package Manager CLI
-        if: matrix.package != 'guestkit'
         working-directory: package-manager
         run: |
           go build -o "$RUNNER_TEMP/ailuo" ./cmd/ailuo-pm
       - name: 打包 ${{ matrix.package }}
-        if: matrix.package != 'guestkit'
         run: |
           "$RUNNER_TEMP/ailuo" pack "packages/${{ matrix.package }}" "$RUNNER_TEMP/package-dist"
       - name: 安装并验证 ${{ matrix.package }} 发布物
-        if: matrix.package != 'guestkit'
         shell: bash
         run: |
           set -euo pipefail

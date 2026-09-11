@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/capability"
+	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packagecontract"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 )
@@ -55,7 +56,7 @@ func TestRegisterInstalledRejectsInvalidPackageGroups(t *testing.T) {
 func capabilityRecord(runtimeID, packageID, componentID string, order int, capabilityID string) loader.InstalledRecord {
 	return loader.InstalledRecord{
 		Runtime: loader.Manifest{
-			ID: runtimeID, Version: "1.2.3", Mode: loader.ModeHosted,
+			ID: runtimeID, Version: "1.2.3", Mode: loader.ModeHosted, ABIVersion: packagecontract.GuestABI1,
 			Role: loader.RoleProvider, LockedDigest: digest, Capabilities: []capability.CapabilitySpec{{
 				ID: capabilityID, Version: "1.2.3", Name: capabilityID,
 				InputSchemaJSON: `{"type":"object","additionalProperties":false}`,

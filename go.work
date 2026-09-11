@@ -3,12 +3,12 @@ go 1.26
 use (
 	.
 	./contracts
+	./guestkit
 	./package-manager
 	./packages/campus-bus
 	./packages/ecard
 	./packages/classroom
 	./packages/calendar
-	./packages/guestkit
 	./packages/library
 	./packages/sports
 	./packages/timetable

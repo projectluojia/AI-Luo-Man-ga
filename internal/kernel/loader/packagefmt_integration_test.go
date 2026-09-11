@@ -84,7 +84,7 @@ func TestDeclaredCapabilityRunsThroughDispatcher(t *testing.T) {
 		ID:            "autogen.test",
 		Version:       "1.0.0",
 		Components: []packagecontract.Component{{
-			ID: "main", Mode: packagecontract.ModeHosted, Role: packagecontract.RoleProvider,
+			ID: "main", Mode: packagecontract.ModeHosted, ABIVersion: packagecontract.GuestABI1, Role: packagecontract.RoleProvider,
 			Entrypoint: "main.wasm", Exports: []string{"autogen.test.hello"},
 		}},
 		Capabilities: []capability.CapabilitySpec{{
@@ -120,7 +120,7 @@ func TestDeclaredCapabilityRunsThroughDispatcher(t *testing.T) {
 	}
 	runtimeID := "autogen.test.main"
 	if err := manager.Register(ctx, loader.Manifest{
-		ID: runtimeID, Version: manifest.Version, Mode: loader.ModeHosted,
+		ID: runtimeID, Version: manifest.Version, Mode: loader.ModeHosted, ABIVersion: packagecontract.GuestABI1,
 		Role: loader.RoleProvider, LockedDigest: hex.EncodeToString(digest[:]),
 	}); err != nil {
 		t.Fatal(err)

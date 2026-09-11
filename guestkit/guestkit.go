@@ -1,3 +1,7 @@
+// Package guestkit 是 AI珞 hosted 包 guest ABI 1 的参考实现：stdin/stdout
+// 调用信封循环、闭式错误码与 ailuo.store 宿主函数客户端。abi_version = "1"
+// 的清单承诺本模块定义的调用协议；协议不兼容演进以新 ABI 版本号与 guestkit
+// 新主版本承载，不做隐式兼容。
 package guestkit
 
 import (

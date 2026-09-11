@@ -42,7 +42,11 @@ type Component struct {
 	// Role 是运行角色：provider（响应 Capability）或 executor（发起调用的认知
 	// 运行时）。executor 必须 isolated——wasm 沙箱无出站，装不下思考者；
 	// 部署策略要求 executor 包经过签名信任。
-	Role       string `json:"role"`
+	Role string `json:"role"`
+	// ABIVersion 是 hosted 组件的 guest ABI 版本声明：stdin/stdout 调用协议、
+	// 错误码闭集与宿主函数签名的契约版本。hosted 必填且必须落在宿主支持闭集
+	// 内，isolated 禁止（进程契约由包依赖与 lock 锁定，不经此字段）。
+	ABIVersion string `json:"abi_version,omitempty"`
 	Entrypoint string `json:"entrypoint"`
 	// Process 是 isolated 组件的包内相对进程模板；安装时由 packmgr 解析为
 	// lock 中的绝对 ProcessSpec。模板不包含凭据，Provider 等部署配置不属于
@@ -192,6 +196,15 @@ func ValidateManifest(manifest Manifest) error {
 			return ErrInvalidFormat
 		}
 		if component.Mode == ModeIsolated && component.Process == nil {
+			return ErrInvalidFormat
+		}
+		if component.Mode == ModeHosted {
+			// guest ABI 是显式版本契约：hosted 声明缺失或不在宿主支持闭集内都在
+			// 校验期拒绝，装载永远知道 guest 讲哪种协议。
+			if !SupportedABI(component.ABIVersion) {
+				return ErrInvalidFormat
+			}
+		} else if component.ABIVersion != "" {
 			return ErrInvalidFormat
 		}
 		if component.Process != nil {

@@ -72,7 +72,7 @@ func dispatch(t *testing.T, store guestkit.Store, payload any) guestkit.ResultEn
 	if err != nil {
 		t.Fatal(err)
 	}
-	return NewDispatcher(store).Dispatch(EventsListCapabilityID, body)
+	return guestkit.NewDispatcher(Handlers(store)).Dispatch(EventsListCapabilityID, body)
 }
 
 func decodeResult(t *testing.T, envelope guestkit.ResultEnvelope, target any) {
@@ -120,7 +120,7 @@ func TestQueryRejectsInvalidWindows(t *testing.T) {
 
 func TestEventsListRejectsUnknownFields(t *testing.T) {
 	store := eventStore(t, authoritativeMeta(), true)
-	envelope := NewDispatcher(store).Dispatch(EventsListCapabilityID, json.RawMessage(`{"from":"2026-09-01T00:00:00Z","to":"2026-09-02T00:00:00Z","extra":1}`))
+	envelope := guestkit.NewDispatcher(Handlers(store)).Dispatch(EventsListCapabilityID, json.RawMessage(`{"from":"2026-09-01T00:00:00Z","to":"2026-09-02T00:00:00Z","extra":1}`))
 	if envelope.OK || envelope.Code != guestkit.CodeInvalidArgument {
 		t.Fatalf("envelope=%+v", envelope)
 	}
@@ -128,7 +128,7 @@ func TestEventsListRejectsUnknownFields(t *testing.T) {
 
 func TestUnknownCapabilityIsInvalidArgument(t *testing.T) {
 	store := eventStore(t, authoritativeMeta(), true)
-	if envelope := NewDispatcher(store).Dispatch("calendar.missing", nil); envelope.OK || envelope.Code != guestkit.CodeInvalidArgument {
+	if envelope := guestkit.NewDispatcher(Handlers(store)).Dispatch("calendar.missing", nil); envelope.OK || envelope.Code != guestkit.CodeInvalidArgument {
 		t.Fatalf("envelope=%+v", envelope)
 	}
 }
