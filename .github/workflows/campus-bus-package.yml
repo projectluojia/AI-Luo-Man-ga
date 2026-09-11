@@ -8,7 +8,7 @@ on:
     branches: [main]
     paths:
       - packages/campus-bus/**
-      - packages/guestkit/**
+      - guestkit/**
       - contracts/**
       - package-manager/**
       - go.work
@@ -17,7 +17,7 @@ on:
   pull_request:
     paths:
       - packages/campus-bus/**
-      - packages/guestkit/**
+      - guestkit/**
       - contracts/**
       - package-manager/**
       - go.work

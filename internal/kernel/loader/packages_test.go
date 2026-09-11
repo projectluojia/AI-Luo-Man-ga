@@ -5,6 +5,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packagecontract"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
 )
 
@@ -192,10 +193,10 @@ func TestWarmupLoadsPinnedPackageInTopologyOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	if err := manager.Register(ctx, loader.Manifest{ID: "pkg.warm.provider", Version: "1.0.0", Mode: loader.ModeHosted, Role: loader.RoleProvider, LockedDigest: digest, Pin: true}); err != nil {
+	if err := manager.Register(ctx, loader.Manifest{ID: "pkg.warm.provider", Version: "1.0.0", Mode: loader.ModeHosted, ABIVersion: packagecontract.GuestABI1, Role: loader.RoleProvider, LockedDigest: digest, Pin: true}); err != nil {
 		t.Fatal(err)
 	}
-	if err := manager.Register(ctx, loader.Manifest{ID: "pkg.warm.consumer", Version: "1.0.0", Mode: loader.ModeHosted, Role: loader.RoleProvider, LockedDigest: digest, Pin: true}); err != nil {
+	if err := manager.Register(ctx, loader.Manifest{ID: "pkg.warm.consumer", Version: "1.0.0", Mode: loader.ModeHosted, ABIVersion: packagecontract.GuestABI1, Role: loader.RoleProvider, LockedDigest: digest, Pin: true}); err != nil {
 		t.Fatal(err)
 	}
 	if err := manager.RegisterPackages(map[string][]string{"pkg.warm": {"pkg.warm.provider", "pkg.warm.consumer"}}); err != nil {

@@ -52,7 +52,7 @@ func TestRuntimeHostProductionWiring(t *testing.T) {
 			Execution:       capability.ExecutionSpec{EffectTarget: capability.EffectNone, Replay: capability.ReplaySafe, ConfirmationFloor: capability.ConfirmationPolicy},
 		}},
 		Components: []packagecontract.Component{{
-			ID: "runtime", Mode: loader.ModeHosted, Role: packagecontract.RoleProvider, Entrypoint: "success.wasm",
+			ID: "runtime", Mode: loader.ModeHosted, ABIVersion: packagecontract.GuestABI1, Role: packagecontract.RoleProvider, Entrypoint: "success.wasm",
 			Exports: []string{testCapabilityID},
 		}},
 	}

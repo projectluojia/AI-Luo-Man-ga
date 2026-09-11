@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packagecontract"
 	runtimev1 "github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/runtimev1"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
@@ -136,6 +137,12 @@ func newRuntimeGRPCHost(t *testing.T, mode string, dialer func(context.Context, 
 func runtimeManifest(id, mode string) loader.Manifest {
 	return loader.Manifest{
 		ID: id, Version: "1.2.3", Mode: mode, Role: loader.RoleProvider, LockedDigest: digest,
+		ABIVersion: func() string {
+			if mode == loader.ModeHosted {
+				return packagecontract.GuestABI1
+			}
+			return ""
+		}(),
 	}
 }
 

@@ -87,6 +87,7 @@ func Register(t testing.TB, target *registry.Registry, store packstore.Store, sp
 	loaderManifest := loader.Manifest{
 		ID: manifest.ID, PackageID: manifest.ID, Version: manifest.Version, Mode: loader.ModeHosted,
 		Role: loader.RoleProvider, LockedDigest: artifactDigest, Pin: true,
+		ABIVersion:    manifest.Components[0].ABIVersion,
 		Storage:       manifest.Storage,
 		Capabilities:  manifest.Capabilities,
 		HostFunctions: manifest.Components[0].HostFunctions,

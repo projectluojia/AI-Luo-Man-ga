@@ -140,7 +140,7 @@ func dispatch(t *testing.T, store guestkit.Store, capabilityID string, payload a
 	if err != nil {
 		t.Fatal(err)
 	}
-	return NewDispatcher(store).Dispatch(capabilityID, body)
+	return guestkit.NewDispatcher(Handlers(store)).Dispatch(capabilityID, body)
 }
 
 func decodeResult(t *testing.T, envelope guestkit.ResultEnvelope, target any) {
@@ -215,7 +215,7 @@ func TestOrdersWebviewReturnsDescriptor(t *testing.T) {
 
 func TestReservationLifecycleCreateCancelReplayConflict(t *testing.T) {
 	store := fixtureStore(t)
-	dispatcher := NewDispatcher(store)
+	dispatcher := guestkit.NewDispatcher(Handlers(store))
 
 	created := dispatcher.Dispatch(capReservationsCreate, payload(t, sports.ReservationCreateRequest{
 		VenueID: "venue-1", ProjectID: "project-1", SlotID: "slot-1", Count: 2,
@@ -291,7 +291,7 @@ func TestReservationQuotaExceeded(t *testing.T) {
 			Capacity: 3, RemainingQuota: 3, SourceRevision: "rev-1",
 		}),
 	}
-	result := NewDispatcher(store).Dispatch(capReservationsCreate, payload(t, sports.ReservationCreateRequest{
+	result := guestkit.NewDispatcher(Handlers(store)).Dispatch(capReservationsCreate, payload(t, sports.ReservationCreateRequest{
 		VenueID: "venue-1", ProjectID: "project-1", SlotID: "slot-1", Count: sports.MaxCount,
 	}))
 	if !result.OK {
@@ -305,7 +305,7 @@ func TestReservationQuotaExceeded(t *testing.T) {
 
 func TestReservationCreateUnknownVenueInBandNotFound(t *testing.T) {
 	store := fixtureStore(t)
-	result := NewDispatcher(store).Dispatch(capReservationsCreate, payload(t, sports.ReservationCreateRequest{
+	result := guestkit.NewDispatcher(Handlers(store)).Dispatch(capReservationsCreate, payload(t, sports.ReservationCreateRequest{
 		VenueID: "venue-missing", ProjectID: "project-1", SlotID: "slot-1",
 	}))
 	if !result.OK {
@@ -326,7 +326,7 @@ func TestReservationCreateRejectsPastSlot(t *testing.T) {
 			Capacity: 4, RemainingQuota: 4, SourceRevision: "rev-1",
 		}),
 	}
-	result := NewDispatcher(store).Dispatch(capReservationsCreate, payload(t, sports.ReservationCreateRequest{
+	result := guestkit.NewDispatcher(Handlers(store)).Dispatch(capReservationsCreate, payload(t, sports.ReservationCreateRequest{
 		VenueID: "venue-1", ProjectID: "project-1", SlotID: "slot-1",
 	}))
 	if result.OK || result.Code != guestkit.CodeDataExpired {
@@ -336,7 +336,7 @@ func TestReservationCreateRejectsPastSlot(t *testing.T) {
 
 func TestScheduleAddIdempotent(t *testing.T) {
 	store := fixtureStore(t)
-	dispatcher := NewDispatcher(store)
+	dispatcher := guestkit.NewDispatcher(Handlers(store))
 	created := dispatcher.Dispatch(capReservationsCreate, payload(t, sports.ReservationCreateRequest{
 		VenueID: "venue-1", ProjectID: "project-1", SlotID: "slot-1",
 	}))
@@ -380,7 +380,7 @@ func TestScheduleAddIdempotent(t *testing.T) {
 
 func TestReservationsMineSortsNewestFirst(t *testing.T) {
 	store := fixtureStore(t)
-	dispatcher := NewDispatcher(store)
+	dispatcher := guestkit.NewDispatcher(Handlers(store))
 	if ok := dispatcher.Dispatch(capReservationsCreate, payload(t, sports.ReservationCreateRequest{
 		VenueID: "venue-1", ProjectID: "project-1", SlotID: "slot-1",
 	})); !ok.OK {
@@ -426,13 +426,13 @@ func TestGovernanceFailuresMapToStableCodes(t *testing.T) {
 
 func TestUnknownCapabilityAndInvalidPayloads(t *testing.T) {
 	store := fixtureStore(t)
-	if envelope := NewDispatcher(store).Dispatch("sports.missing", nil); envelope.OK || envelope.Code != guestkit.CodeInvalidArgument {
+	if envelope := guestkit.NewDispatcher(Handlers(store)).Dispatch("sports.missing", nil); envelope.OK || envelope.Code != guestkit.CodeInvalidArgument {
 		t.Fatalf("envelope=%+v", envelope)
 	}
-	if envelope := NewDispatcher(store).Dispatch(capVenuesList, json.RawMessage(`{"extra":1}`)); envelope.OK || envelope.Code != guestkit.CodeInvalidArgument {
+	if envelope := guestkit.NewDispatcher(Handlers(store)).Dispatch(capVenuesList, json.RawMessage(`{"extra":1}`)); envelope.OK || envelope.Code != guestkit.CodeInvalidArgument {
 		t.Fatalf("unknown field envelope=%+v", envelope)
 	}
-	if envelope := NewDispatcher(store).Dispatch(capProjectsList, json.RawMessage(`{}`)); envelope.OK || envelope.Code != guestkit.CodeInvalidArgument {
+	if envelope := guestkit.NewDispatcher(Handlers(store)).Dispatch(capProjectsList, json.RawMessage(`{}`)); envelope.OK || envelope.Code != guestkit.CodeInvalidArgument {
 		t.Fatalf("missing venue_id envelope=%+v", envelope)
 	}
 }

@@ -48,6 +48,7 @@ type sourceComponent struct {
 	ID            string                 `toml:"id"`
 	Mode          string                 `toml:"mode"`
 	Role          string                 `toml:"role,omitempty"`
+	ABIVersion    string                 `toml:"abi_version,omitempty"`
 	Entrypoint    string                 `toml:"entrypoint"`
 	Process       *sourceProcess         `toml:"process,omitempty"`
 	Exports       []string               `toml:"exports,omitempty"`
@@ -193,6 +194,7 @@ func (s sourceManifest) convert() (packagecontract.Manifest, error) {
 		}
 		manifest.Components = append(manifest.Components, packagecontract.Component{
 			ID: component.ID, Mode: component.Mode, Role: component.Role,
+			ABIVersion: component.ABIVersion,
 			Entrypoint: component.Entrypoint, Process: process,
 			Exports: append([]string(nil), component.Exports...), HostFunctions: decls,
 		})

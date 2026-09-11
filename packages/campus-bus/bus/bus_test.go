@@ -80,7 +80,7 @@ func encode(t *testing.T, value any) json.RawMessage {
 
 func dispatch(t *testing.T, store guestkit.Store, capabilityID string, payload any) guestkit.ResultEnvelope {
 	t.Helper()
-	return NewDispatcher(store).Dispatch(capabilityID, encode(t, payload))
+	return guestkit.NewDispatcher(Handlers(store)).Dispatch(capabilityID, encode(t, payload))
 }
 
 func decodeResult(t *testing.T, envelope guestkit.ResultEnvelope, target any) {
@@ -162,7 +162,7 @@ func TestJourneySearchFiltersStopsAndDeparture(t *testing.T) {
 
 func TestJourneySearchRejectsStrictSchema(t *testing.T) {
 	store := storeFixture(t, nil)
-	envelope := NewDispatcher(store).Dispatch(JourneySearchCapabilityID, json.RawMessage(`{"origin_stop_id":"a","destination_stop_id":"b","unknown":1}`))
+	envelope := guestkit.NewDispatcher(Handlers(store)).Dispatch(JourneySearchCapabilityID, json.RawMessage(`{"origin_stop_id":"a","destination_stop_id":"b","unknown":1}`))
 	if envelope.OK || envelope.Code != guestkit.CodeInvalidArgument {
 		t.Fatalf("envelope=%+v", envelope)
 	}
@@ -249,7 +249,7 @@ func TestGovernanceFailuresMapToStableCodes(t *testing.T) {
 
 func TestUnknownCapabilityIsInvalidArgument(t *testing.T) {
 	store := storeFixture(t, nil)
-	if envelope := NewDispatcher(store).Dispatch("campus.bus.missing", nil); envelope.OK || envelope.Code != guestkit.CodeInvalidArgument {
+	if envelope := guestkit.NewDispatcher(Handlers(store)).Dispatch("campus.bus.missing", nil); envelope.OK || envelope.Code != guestkit.CodeInvalidArgument {
 		t.Fatalf("envelope=%+v", envelope)
 	}
 }
@@ -297,7 +297,7 @@ func TestDispatchMarshalFailureIsInternal(t *testing.T) {
 	store := storeFixture(t, map[string][]any{"stops": {
 		Stop{ID: "s1", Name: "站", Latitude: 1, Longitude: 2, SourceRevision: "rev-1"},
 	}})
-	envelope := NewDispatcher(store).Dispatch(StopSearchCapabilityID, encode(t, StopSearchRequest{Query: "站"}))
+	envelope := guestkit.NewDispatcher(Handlers(store)).Dispatch(StopSearchCapabilityID, encode(t, StopSearchRequest{Query: "站"}))
 	if !envelope.OK {
 		t.Fatalf("envelope=%+v", envelope)
 	}
