@@ -3,6 +3,7 @@ package loader
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -338,6 +339,9 @@ func (r *wasmRuntime) Invoke(ctx context.Context, request contracts.RequestConte
 		WithStderr(io.Discard).
 		WithSysWalltime().
 		WithSysNanotime().
+		// 真实操作系统熵：wazero 默认 RandSource 是确定性假源，guest 的
+		// crypto/rand 会跨调用产出相同字节（文档 ID 等全部碰撞）。
+		WithRandSource(rand.Reader).
 		WithStartFunctions()
 	// 每次调用绑定执行时间预算：wazero 编译期周期检查（WithCloseOnContextDone）
 	// 在预算耗尽时强制终止 guest 并关闭模块。不存在"不限时"路径。

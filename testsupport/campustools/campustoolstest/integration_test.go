@@ -13,89 +13,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/idempotency"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/packstore"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime/runtimetest"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/memory"
 	"github.com/projectluojia/AI-Luo-Man-ga/testsupport/campustools/campustoolstest"
+	"github.com/projectluojia/AI-Luo-Man-ga/testsupport/hostedtest"
 )
-
-// memIdempotencyStore 是集成测试用的最小内存幂等存储：单进程、无并发争用，
-// 只维护 Manager.Execute 所需的 claim/complete/replay 语义。
-type memIdempotencyStore struct {
-	records map[string]*idempotency.Record
-}
-
-func newMemIdempotencyStore() *memIdempotencyStore {
-	return &memIdempotencyStore{records: map[string]*idempotency.Record{}}
-}
-
-func recordKey(appID, scope, key string) string { return appID + "\x00" + scope + "\x00" + key }
-
-func (s *memIdempotencyStore) BeginIdempotent(_ context.Context, claim idempotency.Claim, now time.Time) (idempotency.Record, bool, error) {
-	k := recordKey(claim.AppID, claim.Scope, claim.Key)
-	if existing, ok := s.records[k]; ok {
-		return *existing, false, nil
-	}
-	record := idempotency.Record{
-		Operation:      claim.Operation,
-		Status:         idempotency.StatusExecuting,
-		LeaseToken:     claim.LeaseToken,
-		LeaseExpiresAt: claim.LeaseExpiresAt,
-		CreatedAt:      now,
-	}
-	s.records[k] = &record
-	return record, true, nil
-}
-
-func (s *memIdempotencyStore) GetIdempotent(_ context.Context, appID, scope, key string) (idempotency.Record, error) {
-	if existing, ok := s.records[recordKey(appID, scope, key)]; ok {
-		return *existing, nil
-	}
-	return idempotency.Record{}, idempotency.ErrRecordNotFound
-}
-
-func (s *memIdempotencyStore) CompleteIdempotent(_ context.Context, claim idempotency.Claim, status string, result []byte, errorCode string, completedAt time.Time, expiresAt time.Time) error {
-	k := recordKey(claim.AppID, claim.Scope, claim.Key)
-	record, ok := s.records[k]
-	if !ok {
-		return idempotency.ErrRecordNotFound
-	}
-	record.Status = status
-	record.Result = result
-	record.ErrorCode = errorCode
-	record.CompletedAt = &completedAt
-	record.ExpiresAt = &expiresAt
-	return nil
-}
-
-// acceptAllConfirmations 是测试确认验证器：非空 ConfirmationID 的调用放行。
-type acceptAllConfirmations struct{}
-
-func (acceptAllConfirmations) VerifyConfirmation(context.Context, runtime.ConfirmationRequest) error {
-	return nil
-}
-
-// authoritativeMeta 是 packstore 侧的权威快照元数据（与 guestkit.Govern 对齐）。
-func authoritativeMeta(now time.Time) packstore.SnapshotMeta {
-	return packstore.SnapshotMeta{
-		Revision: "rev-1", Source: "zhihui-luojia", Authoritative: true, Complete: true,
-		ImportedAt: now.Add(-time.Hour), ValidUntil: now.Add(time.Hour),
-	}
-}
-
-func mustDoc(t *testing.T, id string, payload any) packstore.Document {
-	t.Helper()
-	data, err := json.Marshal(payload)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return packstore.Document{ID: id, Payload: data}
-}
 
 // seedClassroom 播种教室系统快照：campus-a 两个学部楼栋、两间教室，room-1
 // 在 2026-09-07 第 1 节被占用。AppID 与 invoke 的治理上下文一致（packstore
@@ -104,11 +28,11 @@ func seedClassroom(t *testing.T, store packstore.Store) {
 	t.Helper()
 	now := time.Now().UTC()
 	scope := packstore.Scope{AppID: campustoolstest.ClassroomPackageID, PackageID: campustoolstest.ClassroomPackageID, Namespace: campustoolstest.ClassroomStorageNamespace}
-	if err := store.ReplaceSnapshot(context.Background(), scope, authoritativeMeta(now), map[string][]packstore.Document{
-		"campuses":  {mustDoc(t, "campus-a", map[string]any{"id": "campus-a", "name": "文理学部", "source_revision": "rev-1"})},
-		"buildings": {mustDoc(t, "b1", map[string]any{"id": "b1", "campus_id": "campus-a", "name": "教五", "source_revision": "rev-1"}), mustDoc(t, "b2", map[string]any{"id": "b2", "campus_id": "campus-a", "name": "一教", "source_revision": "rev-1"})},
-		"rooms":     {mustDoc(t, "room-1", map[string]any{"id": "room-1", "campus_id": "campus-a", "building_id": "b1", "name": "教五-101", "source_revision": "rev-1"}), mustDoc(t, "room-2", map[string]any{"id": "room-2", "campus_id": "campus-a", "building_id": "b2", "name": "一教-101", "source_revision": "rev-1"})},
-		"occupancy": {mustDoc(t, "room-1-2026-09-07-1", map[string]any{"room_id": "room-1", "academic_date": "2026-09-07", "period": 1, "source_revision": "rev-1"})},
+	if err := store.ReplaceSnapshot(context.Background(), scope, hostedtest.AuthoritativeMeta(now), map[string][]packstore.Document{
+		"campuses":  {hostedtest.MustDoc(t, "campus-a", map[string]any{"id": "campus-a", "name": "文理学部", "source_revision": "rev-1"})},
+		"buildings": {hostedtest.MustDoc(t, "b1", map[string]any{"id": "b1", "campus_id": "campus-a", "name": "教五", "source_revision": "rev-1"}), hostedtest.MustDoc(t, "b2", map[string]any{"id": "b2", "campus_id": "campus-a", "name": "一教", "source_revision": "rev-1"})},
+		"rooms":     {hostedtest.MustDoc(t, "room-1", map[string]any{"id": "room-1", "campus_id": "campus-a", "building_id": "b1", "name": "教五-101", "source_revision": "rev-1"}), hostedtest.MustDoc(t, "room-2", map[string]any{"id": "room-2", "campus_id": "campus-a", "building_id": "b2", "name": "一教-101", "source_revision": "rev-1"})},
+		"occupancy": {hostedtest.MustDoc(t, "room-1-2026-09-07-1", map[string]any{"room_id": "room-1", "academic_date": "2026-09-07", "period": 1, "source_revision": "rev-1"})},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -119,56 +43,36 @@ func seedCalendar(t *testing.T, store packstore.Store) {
 	t.Helper()
 	now := time.Now().UTC()
 	scope := packstore.Scope{AppID: campustoolstest.CalendarPackageID, PackageID: campustoolstest.CalendarPackageID, Namespace: campustoolstest.CalendarStorageNamespace}
-	if err := store.ReplaceSnapshot(context.Background(), scope, authoritativeMeta(now), map[string][]packstore.Document{
-		"events": {mustDoc(t, "e1", map[string]any{"id": "e1", "title": "开学", "type": "term", "start_at": "2026-09-02T00:00:00Z", "end_at": "2026-09-03T00:00:00Z", "source_revision": "rev-1"})},
+	if err := store.ReplaceSnapshot(context.Background(), scope, hostedtest.AuthoritativeMeta(now), map[string][]packstore.Document{
+		"events": {hostedtest.MustDoc(t, "e1", map[string]any{"id": "e1", "title": "开学", "type": "term", "start_at": "2026-09-02T00:00:00Z", "end_at": "2026-09-03T00:00:00Z", "source_revision": "rev-1"})},
 	}); err != nil {
 		t.Fatal(err)
 	}
 }
 
+// newClassroomDispatcher 装配教室包完整治理链路 Dispatcher。
 func newClassroomDispatcher(t *testing.T) *runtime.Dispatcher {
 	t.Helper()
 	reg := registry.New()
-	store := memory.NewDocuments()
+	store := hostedtest.MemoryStore()
 	seedClassroom(t, store)
 	campustoolstest.RegisterClassroomHosted(t, reg, store)
-	policy := runtimetest.NewStaticAppPolicy()
-	for _, capabilityID := range campustoolstest.ClassroomCapabilityIDs() {
-		policy.Enable(campustoolstest.ClassroomPackageID, capabilityID)
-	}
-	return runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{
-		IdempotencyStore:     newMemIdempotencyStore(),
-		ConfirmationVerifier: acceptAllConfirmations{},
-	})
+	return hostedtest.NewDispatcher(t, reg, campustoolstest.ClassroomPackageID, campustoolstest.ClassroomCapabilityIDs())
 }
 
+// newCalendarDispatcher 装配校历包完整治理链路 Dispatcher。
 func newCalendarDispatcher(t *testing.T) *runtime.Dispatcher {
 	t.Helper()
 	reg := registry.New()
-	store := memory.NewDocuments()
+	store := hostedtest.MemoryStore()
 	seedCalendar(t, store)
 	campustoolstest.RegisterCalendarHosted(t, reg, store)
-	policy := runtimetest.NewStaticAppPolicy()
-	policy.Enable(campustoolstest.CalendarPackageID, campustoolstest.CalendarEventsListCapabilityID)
-	return runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{
-		IdempotencyStore:     newMemIdempotencyStore(),
-		ConfirmationVerifier: acceptAllConfirmations{},
-	})
+	return hostedtest.NewDispatcher(t, reg, campustoolstest.CalendarPackageID, []string{campustoolstest.CalendarEventsListCapabilityID})
 }
 
-// invoke 走真实 Dispatcher 前置治理链路：校验 → 策略 → 幂等/确认门槛。
 func invoke(t *testing.T, d *runtime.Dispatcher, appID, capabilityID, payload, idempotencyKey, confirmationID string) (bool, json.RawMessage, string) {
 	t.Helper()
-	request := contracts.RequestContext{
-		AppID: appID, EchoID: "echo-1", RequestID: "request-" + capabilityID,
-		UserID: "user-1", IdempotencyKey: idempotencyKey, ConfirmationID: confirmationID,
-		Deadline: time.Now().Add(time.Minute),
-	}
-	result, err := d.InvokeCapability(t.Context(), request, capabilityID, json.RawMessage(payload))
-	if err != nil {
-		return false, nil, err.Error()
-	}
-	return true, result, ""
+	return hostedtest.Invoke(t, d, appID, capabilityID, payload, idempotencyKey, confirmationID)
 }
 
 // TestHostedClassroomRoomsSearch 经真实 wasm guest 查询空闲教室：排除占用
@@ -316,30 +220,20 @@ func TestHostedClassroomCreateUnknownRoom(t *testing.T) {
 // data_non_authoritative（细节不外泄）。
 func TestHostedClassroomGovernedSnapshotRejection(t *testing.T) {
 	reg := registry.New()
-	store := memory.NewDocuments()
+	store := hostedtest.MemoryStore()
 	now := time.Now().UTC()
 	scope := packstore.Scope{AppID: campustoolstest.ClassroomPackageID, PackageID: campustoolstest.ClassroomPackageID, Namespace: campustoolstest.ClassroomStorageNamespace}
-	demo := authoritativeMeta(now)
+	demo := hostedtest.AuthoritativeMeta(now)
 	demo.Authoritative = false
 	demo.Source = "demo-fixture"
 	if err := store.ReplaceSnapshot(context.Background(), scope, demo, map[string][]packstore.Document{
-		"rooms": {mustDoc(t, "room-1", map[string]any{"id": "room-1", "campus_id": "c", "name": "r", "source_revision": "rev-1"})},
+		"rooms": {hostedtest.MustDoc(t, "room-1", map[string]any{"id": "room-1", "campus_id": "c", "name": "r", "source_revision": "rev-1"})},
 	}); err != nil {
 		t.Fatal(err)
 	}
 	campustoolstest.RegisterClassroomHosted(t, reg, store)
-	policy := runtimetest.NewStaticAppPolicy()
-	for _, capabilityID := range campustoolstest.ClassroomCapabilityIDs() {
-		policy.Enable(campustoolstest.ClassroomPackageID, capabilityID)
-	}
-	d := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{
-		IdempotencyStore:     newMemIdempotencyStore(),
-		ConfirmationVerifier: acceptAllConfirmations{},
-	})
-	request := contracts.RequestContext{
-		AppID: campustoolstest.ClassroomPackageID, EchoID: "echo-1", RequestID: "request-governed-rejection",
-		UserID: "user-1", Deadline: time.Now().Add(time.Minute),
-	}
+	d := hostedtest.NewDispatcher(t, reg, campustoolstest.ClassroomPackageID, campustoolstest.ClassroomCapabilityIDs())
+	request := hostedtest.RequestContext(campustoolstest.ClassroomPackageID, "request-governed-rejection")
 	_, invokeErr := d.InvokeCapability(t.Context(), request, campustoolstest.ClassroomRoomsSearchCapabilityID, json.RawMessage(`{"date":"2026-09-07","campus_id":"c","period":1}`))
 	if invokeErr == nil || !strings.Contains(invokeErr.Error(), "hosted package rejected the call") {
 		t.Fatalf("err = %v", invokeErr)
