@@ -19,15 +19,20 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime"
 	"github.com/projectluojia/AI-Luo-Man-ga/testsupport/hostedtest"
-	"github.com/projectluojia/AI-Luo-Man-ga/testsupport/sports/sportstest"
 )
 
 // seedSports 播种场馆/项目/时段/WebView 描述符快照。时段定位于未来学术日
 // （上海日历日），remaining_quota 由导入方维护。
+
+// packageID 返回 sports 包的真实包 ID（来自 ailuo.toml 清单）。
+func packageID(t *testing.T) string {
+	return hostedtest.ManifestOf(t, "sports").ID
+}
+
 func seedSports(t *testing.T, store packstore.Store) {
 	t.Helper()
 	now := time.Now().UTC()
-	scope := packstore.Scope{AppID: sportstest.PackageID, PackageID: sportstest.PackageID, Namespace: sportstest.StorageNamespace}
+	scope := packstore.Scope{AppID: packageID(t), PackageID: packageID(t), Namespace: hostedtest.Packages["sports"].StorageNamespace}
 	slotStart := time.Now().UTC().AddDate(0, 0, 1).Truncate(time.Hour)
 	slotDate := slotStart.In(time.FixedZone("CST", 8*60*60)).Format("2006-01-02")
 	if err := store.ReplaceSnapshot(context.Background(), scope, hostedtest.AuthoritativeMeta(now), map[string][]packstore.Document{
@@ -53,13 +58,13 @@ func newSportsDispatcher(t *testing.T) *runtime.Dispatcher {
 	reg := registry.New()
 	store := hostedtest.MemoryStore()
 	seedSports(t, store)
-	sportstest.RegisterHosted(t, reg, store)
-	return hostedtest.NewDispatcher(t, reg, sportstest.PackageID, sportstest.CapabilityIDs())
+	hostedtest.RegisterHosted(t, reg, store, "sports")
+	return hostedtest.NewDispatcher(t, reg, packageID(t), hostedtest.CapabilityIDs(t, "sports"))
 }
 
 func invoke(t *testing.T, d *runtime.Dispatcher, capabilityID, payload, idempotencyKey, confirmationID string) (bool, json.RawMessage, string) {
 	t.Helper()
-	return hostedtest.Invoke(t, d, sportstest.PackageID, capabilityID, payload, idempotencyKey, confirmationID)
+	return hostedtest.Invoke(t, d, packageID(t), capabilityID, payload, idempotencyKey, confirmationID)
 }
 
 // TestHostedSportsCatalogQueries 经真实 wasm guest 走通目录查询三件套：场馆/
@@ -67,7 +72,7 @@ func invoke(t *testing.T, d *runtime.Dispatcher, capabilityID, payload, idempote
 func TestHostedSportsCatalogQueries(t *testing.T) {
 	d := newSportsDispatcher(t)
 
-	ok, result, errText := invoke(t, d, sportstest.VenuesListCapabilityID, `{}`, "", "")
+	ok, result, errText := invoke(t, d, "sports.venues.list", `{}`, "", "")
 	if !ok {
 		t.Fatalf("venues.list failed: %s", errText)
 	}
@@ -90,7 +95,7 @@ func TestHostedSportsCatalogQueries(t *testing.T) {
 		t.Fatalf("venues = %#v", venues.Venues)
 	}
 
-	ok, result, errText = invoke(t, d, sportstest.ProjectsListCapabilityID, `{"venue_id":"venue-1"}`, "", "")
+	ok, result, errText = invoke(t, d, "sports.projects.list", `{"venue_id":"venue-1"}`, "", "")
 	if !ok {
 		t.Fatalf("projects.list failed: %s", errText)
 	}
@@ -108,7 +113,7 @@ func TestHostedSportsCatalogQueries(t *testing.T) {
 		t.Fatalf("projects = %#v", projects.Projects)
 	}
 
-	ok, result, errText = invoke(t, d, sportstest.SlotsSearchCapabilityID,
+	ok, result, errText = invoke(t, d, "sports.slots.search",
 		`{"venue_id":"venue-1","project_id":"project-1","date":"`+slotSeedDate(t)+`"}`, "", "")
 	if !ok {
 		t.Fatalf("slots.search failed: %s", errText)
@@ -133,7 +138,7 @@ func TestHostedSportsCatalogQueries(t *testing.T) {
 func TestHostedSportsReservationLifecycle(t *testing.T) {
 	d := newSportsDispatcher(t)
 
-	ok, result, errText := invoke(t, d, sportstest.ReservationsCreateCapabilityID,
+	ok, result, errText := invoke(t, d, "sports.reservations.create",
 		`{"venue_id":"venue-1","project_id":"project-1","slot_id":"slot-1","count":2}`, "idem-create", "confirm-create")
 	if !ok {
 		t.Fatalf("reservations.create failed: %s", errText)
@@ -158,7 +163,7 @@ func TestHostedSportsReservationLifecycle(t *testing.T) {
 	reservationID := created.Reservation.ReservationID
 
 	// 重复预约同一时段带内冲突。
-	ok, result, errText = invoke(t, d, sportstest.ReservationsCreateCapabilityID,
+	ok, result, errText = invoke(t, d, "sports.reservations.create",
 		`{"venue_id":"venue-1","project_id":"project-1","slot_id":"slot-1"}`, "idem-conflict", "confirm-create")
 	if !ok {
 		t.Fatalf("double-book should be in-band: %s", errText)
@@ -171,7 +176,7 @@ func TestHostedSportsReservationLifecycle(t *testing.T) {
 	}
 
 	// 我的预约列表含已创建项。
-	ok, result, errText = invoke(t, d, sportstest.ReservationsMineCapabilityID, `{}`, "", "")
+	ok, result, errText = invoke(t, d, "sports.reservations.mine", `{}`, "", "")
 	if !ok {
 		t.Fatalf("reservations.mine failed: %s", errText)
 	}
@@ -188,7 +193,7 @@ func TestHostedSportsReservationLifecycle(t *testing.T) {
 	}
 
 	// 取消是确认门槛能力：无确认被 dispatcher 前置拒绝。
-	ok, _, errText = invoke(t, d, sportstest.ReservationsCancelCapabilityID,
+	ok, _, errText = invoke(t, d, "sports.reservations.cancel",
 		`{"reservation_id":"`+reservationID+`"}`, "idem-cancel", "")
 	if ok {
 		t.Fatal("cancel without confirmation should fail")
@@ -197,7 +202,7 @@ func TestHostedSportsReservationLifecycle(t *testing.T) {
 		t.Fatalf("cancel error = %q, want confirmation required", errText)
 	}
 
-	ok, result, errText = invoke(t, d, sportstest.ReservationsCancelCapabilityID,
+	ok, result, errText = invoke(t, d, "sports.reservations.cancel",
 		`{"reservation_id":"`+reservationID+`"}`, "idem-cancel", "confirm-cancel")
 	if !ok {
 		t.Fatalf("reservations.cancel failed: %s", errText)
@@ -215,7 +220,7 @@ func TestHostedSportsReservationLifecycle(t *testing.T) {
 	}
 
 	// 重复取消带内冲突。
-	ok, result, errText = invoke(t, d, sportstest.ReservationsCancelCapabilityID,
+	ok, result, errText = invoke(t, d, "sports.reservations.cancel",
 		`{"reservation_id":"`+reservationID+`"}`, "idem-cancel-2", "confirm-cancel")
 	if !ok {
 		t.Fatalf("double cancel should be in-band: %s", errText)
@@ -232,7 +237,7 @@ func TestHostedSportsReservationLifecycle(t *testing.T) {
 // 超出 remaining_quota 按带内 quota_exceeded 应答。
 func TestHostedSportsQuotaExceeded(t *testing.T) {
 	d := newSportsDispatcher(t)
-	ok, result, errText := invoke(t, d, sportstest.ReservationsCreateCapabilityID,
+	ok, result, errText := invoke(t, d, "sports.reservations.create",
 		`{"venue_id":"venue-1","project_id":"project-1","slot_id":"slot-1","count":16}`, "idem-quota", "confirm-quota")
 	if !ok {
 		t.Fatalf("over-quota should be in-band: %s", errText)
@@ -249,7 +254,7 @@ func TestHostedSportsQuotaExceeded(t *testing.T) {
 // 入口 URL 与请求头要求按快照治理返回（不含凭据）。
 func TestHostedSportsOrdersWebview(t *testing.T) {
 	d := newSportsDispatcher(t)
-	ok, result, errText := invoke(t, d, sportstest.OrdersWebviewCapabilityID, `{}`, "", "")
+	ok, result, errText := invoke(t, d, "sports.orders.webview", `{}`, "", "")
 	if !ok {
 		t.Fatalf("orders.webview failed: %s", errText)
 	}
@@ -281,7 +286,7 @@ func TestHostedSportsOrdersWebview(t *testing.T) {
 // 重复添加返回既有日程（幂等）。
 func TestHostedSportsScheduleAddIdempotent(t *testing.T) {
 	d := newSportsDispatcher(t)
-	ok, result, errText := invoke(t, d, sportstest.ReservationsCreateCapabilityID,
+	ok, result, errText := invoke(t, d, "sports.reservations.create",
 		`{"venue_id":"venue-1","project_id":"project-1","slot_id":"slot-1"}`, "idem-create", "confirm-create")
 	if !ok {
 		t.Fatalf("create failed: %s", errText)
@@ -296,7 +301,7 @@ func TestHostedSportsScheduleAddIdempotent(t *testing.T) {
 	}
 
 	// 日程添加是确认门槛能力。
-	ok, _, errText = invoke(t, d, sportstest.ScheduleAddCapabilityID,
+	ok, _, errText = invoke(t, d, "sports.schedule.add",
 		`{"reservation_id":"`+created.Reservation.ReservationID+`"}`, "idem-sched", "")
 	if ok {
 		t.Fatal("schedule.add without confirmation should fail")
@@ -305,7 +310,7 @@ func TestHostedSportsScheduleAddIdempotent(t *testing.T) {
 		t.Fatalf("schedule.add error = %q, want confirmation required", errText)
 	}
 
-	ok, result, errText = invoke(t, d, sportstest.ScheduleAddCapabilityID,
+	ok, result, errText = invoke(t, d, "sports.schedule.add",
 		`{"reservation_id":"`+created.Reservation.ReservationID+`"}`, "idem-sched", "confirm-sched")
 	if !ok {
 		t.Fatalf("schedule.add failed: %s", errText)
@@ -324,7 +329,7 @@ func TestHostedSportsScheduleAddIdempotent(t *testing.T) {
 		t.Fatalf("schedule = %#v", first.Schedule)
 	}
 
-	ok, result, errText = invoke(t, d, sportstest.ScheduleAddCapabilityID,
+	ok, result, errText = invoke(t, d, "sports.schedule.add",
 		`{"reservation_id":"`+created.Reservation.ReservationID+`"}`, "idem-sched-2", "confirm-sched")
 	if !ok {
 		t.Fatalf("schedule.add repeat failed: %s", errText)
@@ -345,7 +350,7 @@ func TestHostedSportsCreatePastSlotFailClosed(t *testing.T) {
 	reg := registry.New()
 	store := hostedtest.MemoryStore()
 	now := time.Now().UTC()
-	scope := packstore.Scope{AppID: sportstest.PackageID, PackageID: sportstest.PackageID, Namespace: sportstest.StorageNamespace}
+	scope := packstore.Scope{AppID: packageID(t), PackageID: packageID(t), Namespace: hostedtest.Packages["sports"].StorageNamespace}
 	if err := store.ReplaceSnapshot(context.Background(), scope, hostedtest.AuthoritativeMeta(now), map[string][]packstore.Document{
 		"venues":   {hostedtest.MustDoc(t, "venue-1", map[string]any{"id": "venue-1", "name": "卓尔体育馆", "source_revision": "rev-1"})},
 		"projects": {hostedtest.MustDoc(t, "project-1", map[string]any{"id": "project-1", "venue_id": "venue-1", "name": "羽毛球", "source_revision": "rev-1"})},
@@ -357,9 +362,9 @@ func TestHostedSportsCreatePastSlotFailClosed(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	sportstest.RegisterHosted(t, reg, store)
-	d := hostedtest.NewDispatcher(t, reg, sportstest.PackageID, sportstest.CapabilityIDs())
-	_, _, errText := invoke(t, d, sportstest.ReservationsCreateCapabilityID,
+	hostedtest.RegisterHosted(t, reg, store, "sports")
+	d := hostedtest.NewDispatcher(t, reg, packageID(t), hostedtest.CapabilityIDs(t, "sports"))
+	_, _, errText := invoke(t, d, "sports.reservations.create",
 		`{"venue_id":"venue-1","project_id":"project-1","slot_id":"slot-1"}`, "idem-past", "confirm-past")
 	if errText == "" {
 		t.Fatal("past slot create should fail")
@@ -376,7 +381,7 @@ func TestHostedSportsGovernedSnapshotRejection(t *testing.T) {
 	reg := registry.New()
 	store := hostedtest.MemoryStore()
 	now := time.Now().UTC()
-	scope := packstore.Scope{AppID: sportstest.PackageID, PackageID: sportstest.PackageID, Namespace: sportstest.StorageNamespace}
+	scope := packstore.Scope{AppID: packageID(t), PackageID: packageID(t), Namespace: hostedtest.Packages["sports"].StorageNamespace}
 	demo := hostedtest.AuthoritativeMeta(now)
 	demo.Authoritative = false
 	demo.Source = "demo-fixture"
@@ -385,10 +390,10 @@ func TestHostedSportsGovernedSnapshotRejection(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	sportstest.RegisterHosted(t, reg, store)
-	d := hostedtest.NewDispatcher(t, reg, sportstest.PackageID, sportstest.CapabilityIDs())
-	request := hostedtest.RequestContext(sportstest.PackageID, "request-governed-rejection")
-	_, invokeErr := d.InvokeCapability(t.Context(), request, sportstest.VenuesListCapabilityID, json.RawMessage(`{}`))
+	hostedtest.RegisterHosted(t, reg, store, "sports")
+	d := hostedtest.NewDispatcher(t, reg, packageID(t), hostedtest.CapabilityIDs(t, "sports"))
+	request := hostedtest.RequestContext(packageID(t), "request-governed-rejection")
+	_, invokeErr := d.InvokeCapability(t.Context(), request, "sports.venues.list", json.RawMessage(`{}`))
 	if invokeErr == nil || !strings.Contains(invokeErr.Error(), "hosted package rejected the call") {
 		t.Fatalf("err = %v", invokeErr)
 	}

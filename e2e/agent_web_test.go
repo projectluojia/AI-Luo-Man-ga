@@ -41,8 +41,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/blob"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/memory"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/sqlite"
-	"github.com/projectluojia/AI-Luo-Man-ga/testsupport/campus"
-	"github.com/projectluojia/AI-Luo-Man-ga/testsupport/campus/campustest"
+	"github.com/projectluojia/AI-Luo-Man-ga/testsupport/hostedtest"
 )
 
 // syncBuffer 保护 os/exec 输出协程与测试断言之间的并发读写。
@@ -246,7 +245,9 @@ func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 	defer executorLease.Release()
 
 	docs := memory.NewDocuments()
-	scope := packstore.Scope{AppID: campus.AppID, PackageID: campus.PackageID, Namespace: campus.StorageNamespace}
+	appID := "campus-services"
+	packageID := hostedtest.ManifestOf(t, "campus-bus").ID
+	scope := packstore.Scope{AppID: appID, PackageID: packageID, Namespace: hostedtest.Packages["campus-bus"].StorageNamespace}
 	routes := []packstore.Document{{ID: "r", Payload: []byte(`{"id":"r","name":"测试线路","direction":"去程","source_revision":"e2e-revision"}`)}}
 	if err := docs.ReplaceSnapshot(context.Background(), scope, packstore.SnapshotMeta{
 		Revision: "e2e-revision", Source: "zhihui-luojia", Authoritative: true, Complete: true,
@@ -255,9 +256,9 @@ func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 		t.Fatal(err)
 	}
 	policy := runtimetest.NewStaticAppPolicy()
-	policy.Enable(campus.AppID, campus.BusRouteListCapabilityID)
+	policy.Enable(appID, "campus.bus.routes.list")
 	dispatcher := runtime.NewDispatcher(reg, policy, runtime.DispatcherConfig{IdempotencyStore: store})
-	campustest.RegisterHosted(t, reg, docs)
+	hostedtest.RegisterHosted(t, reg, docs, "campus-bus")
 	// 上下文装配使用真实会话来源（SQLite 消息存储 + 安全 Blob 存储）。
 	blobStore, err := blob.Open(filepath.Join(t.TempDir(), "blobs"), session.MaxMessageContentBytes)
 	if err != nil {
@@ -269,7 +270,7 @@ func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 		t.Fatalf("new session service: %v", err)
 	}
 	if _, _, err := store.Ensure(ctx, appconfig.Config{
-		AppID: campus.AppID, Enabled: true, ExecutorID: executorRecord.Runtime.ID,
+		AppID: appID, Enabled: true, ExecutorID: executorRecord.Runtime.ID,
 		ExecutorConfig: []byte(`{"system_prompt":"test"}`), MaxSteps: 4, MaxCapabilityCalls: 8,
 		MaxExecutionUnits: 1500, MaxOutputBytes: 4096,
 		ExecutionTimeout: 5 * time.Second,
@@ -280,12 +281,12 @@ func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 		Idempotency: store, Creation: store, Execution: store, Recovery: store,
 		Children: store, Cancellation: store, Events: store, Audit: store,
 	}, kernelecho.Config{
-		AppID:           campus.AppID,
+		AppID:           appID,
 		AppConfigSource: store,
 		Context:         sessionService,
 	})
 	echoEvents := access.NewEventHub()
-	runScheduler := kernelecho.NewScheduler(ctx, orchestrator, store, echoEvents, campus.AppID)
+	runScheduler := kernelecho.NewScheduler(ctx, orchestrator, store, echoEvents, appID)
 	if _, err := runScheduler.Recover(ctx); err != nil {
 		t.Fatalf("recover durable runs: %v", err)
 	}
@@ -301,15 +302,15 @@ func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := identities.BindExternalIdentity(ctx, identity.ExternalIdentity{
-		AppID: campus.AppID, Platform: "web", PlatformSpaceID: "web",
+		AppID: appID, Platform: "web", PlatformSpaceID: "web",
 		PlatformUserID: "integration-user", UserID: "integration-user",
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := identities.SetMembership(ctx, identity.AppMembership{AppID: campus.AppID, UserID: "integration-user"}); err != nil {
+	if err := identities.SetMembership(ctx, identity.AppMembership{AppID: appID, UserID: "integration-user"}); err != nil {
 		t.Fatal(err)
 	}
-	platformHub, err := access.NewHub(campus.AppID, store, identities)
+	platformHub, err := access.NewHub(appID, store, identities)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -317,7 +318,7 @@ func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 	handler := web.NewServer(
 		echoAdmission, store,
 		health.Combined{store, health.ExecutorChecker{Client: executorClient}},
-		reg, policy, campus.AppID, platformHub, runScheduler, echoEvents,
+		reg, policy, appID, platformHub, runScheduler, echoEvents,
 		web.WithWebAuthenticator(integrationWebAuthenticator{}),
 	).Handler()
 	readinessRecorder := httptest.NewRecorder()
@@ -344,7 +345,7 @@ func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 	if eventsRecorder.Code != http.StatusOK || !strings.Contains(eventsRecorder.Body.String(), "event: run.completed") {
 		t.Fatalf("events status=%d body=%s logs=%s", eventsRecorder.Code, eventsRecorder.Body.String(), logs.String())
 	}
-	record, events, err := store.GetEcho(ctx, campus.AppID, echoID)
+	record, events, err := store.GetEcho(ctx, appID, echoID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -352,12 +353,12 @@ func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 		encoded, _ := json.Marshal(events)
 		t.Fatalf("record=%#v model_turns=%d events=%s logs=%s", record, modelTurns.Load(), encoded, logs.String())
 	}
-	runs, err := store.ListRuns(ctx, campus.AppID, echoID)
+	runs, err := store.ListRuns(ctx, appID, echoID)
 	if err != nil || len(runs) != 1 {
 		t.Fatalf("runs=%#v err=%v logs=%s", runs, err, logs.String())
 	}
 	rootRun := runs[0]
-	messages, err := store.ListMessages(ctx, campus.AppID, rootRun.SessionID, session.MessageQuery{Limit: 10})
+	messages, err := store.ListMessages(ctx, appID, rootRun.SessionID, session.MessageQuery{Limit: 10})
 	if err != nil || len(messages) != 1 || messages[0].SenderUserID != "integration-user" || messages[0].Type != "text" {
 		t.Fatalf("会话消息未持久化或形状错误: messages=%#v err=%v", messages, err)
 	}
@@ -365,7 +366,7 @@ func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 		rootRun.UsedRetries != 0 {
 		t.Fatalf("run usage/state=%#v logs=%s", rootRun, logs.String())
 	}
-	audits, err := store.ListCapabilityCalls(ctx, campus.AppID, echoID)
+	audits, err := store.ListCapabilityCalls(ctx, appID, echoID)
 	if err != nil || len(audits) != 1 {
 		t.Fatalf("audits=%#v err=%v logs=%s", audits, err, logs.String())
 	}
