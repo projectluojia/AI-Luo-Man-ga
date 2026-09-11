@@ -1,0 +1,40 @@
+# calendar 作者侧源清单（ailuo.toml）。
+# 构建：`ailuo-pm pack . dist` 经 component.build 自动交叉编译（源码在包目录内）。
+# 业务层在 calendar/ 与 app/（原生可测），src/main.go 只装配 guestkit.Run。
+
+[package]
+id = "calendar"
+version = "1.0.0"
+description = "Authoritative academic calendar events."
+pin = true
+
+[[component]]
+id = "provider"
+mode = "hosted"
+role = "provider"
+entrypoint = "calendar.wasm"
+exports = ["calendar.events.list"]
+
+[[component.host_function]]
+module = "ailuo.store"
+name = "list"
+purpose = "分页读取包命名空间内的集合文档并携带一致的快照治理元数据"
+
+[component.build]
+tool = "go-wasm"
+source = "src"
+
+[storage]
+namespace = "calendar/events"
+
+[[capability]]
+id = "calendar.events.list"
+name = "查询校历事件"
+description = "List authoritative academic calendar events intersecting a time window (max 366 days)."
+schema = """{"type":"object","properties":{"from":{"type":"string","format":"date-time"},"to":{"type":"string","format":"date-time"},"limit":{"type":"integer","minimum":1,"maximum":5000}},"required":["from","to"],"additionalProperties":false}"""
+[capability.authorization]
+resource_type = "calendar.snapshot"
+[capability.execution]
+effect_target = "none"
+replay = "safe"
+confirmation_floor = "policy"

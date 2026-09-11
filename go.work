@@ -5,6 +5,8 @@ use (
 	./contracts
 	./package-manager
 	./packages/campus-bus
+	./packages/classroom
+	./packages/calendar
 	./packages/guestkit
 	./packages/timetable
 	./packages/weather

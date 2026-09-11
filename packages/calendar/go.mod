@@ -1,4 +1,4 @@
-module github.com/projectluojia/campus-bus
+module github.com/projectluojia/calendar
 
 go 1.26
 
