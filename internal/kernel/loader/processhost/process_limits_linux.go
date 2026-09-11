@@ -1,6 +1,6 @@
 //go:build linux
 
-package loader
+package processhost
 
 import (
 	"fmt"

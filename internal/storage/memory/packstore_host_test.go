@@ -9,19 +9,19 @@ import (
 
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/capability"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader/wasmhost"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/packstore"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/storage/memory"
 )
 
 // hostFunctionByName 取指定名称的存储宿主函数。
-func hostFunctionByName(functions []loader.HostedFunction, name string) loader.HostedFunction {
+func hostFunctionByName(functions []wasmhost.HostedFunction, name string) wasmhost.HostedFunction {
 	for _, fn := range functions {
 		if fn.Name == name {
 			return fn
 		}
 	}
-	return loader.HostedFunction{}
+	return wasmhost.HostedFunction{}
 }
 
 func testCapabilities() []capability.CapabilitySpec {

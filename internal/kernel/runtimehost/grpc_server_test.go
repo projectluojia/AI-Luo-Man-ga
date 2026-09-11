@@ -1,4 +1,4 @@
-package loader_test
+package runtimehost_test
 
 import (
 	"context"
@@ -14,6 +14,8 @@ import (
 	runtimev1 "github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/runtimev1"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader/wasmhost"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtimehost"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -39,21 +41,21 @@ type fakeRuntimeBackend struct {
 	contexts []contracts.RequestContext
 }
 
-func (b *fakeRuntimeBackend) Describe(_ context.Context, identity loader.BackendIdentity) (loader.Description, error) {
+func (b *fakeRuntimeBackend) Describe(_ context.Context, identity runtimehost.BackendIdentity) (loader.Description, error) {
 	return loader.Description{ID: identity.ID, Version: identity.Version, Mode: b.mode}, nil
 }
 
-func (b *fakeRuntimeBackend) Start(context.Context, loader.BackendIdentity) error {
+func (b *fakeRuntimeBackend) Start(context.Context, runtimehost.BackendIdentity) error {
 	b.starts.Add(1)
 	return b.startErr
 }
 
-func (b *fakeRuntimeBackend) Health(context.Context, loader.BackendIdentity) error {
+func (b *fakeRuntimeBackend) Health(context.Context, runtimehost.BackendIdentity) error {
 	b.health.Add(1)
 	return b.healthErr
 }
 
-func (b *fakeRuntimeBackend) Invoke(_ context.Context, _ loader.BackendIdentity, request contracts.RequestContext, _ json.RawMessage) (json.RawMessage, error) {
+func (b *fakeRuntimeBackend) Invoke(_ context.Context, _ runtimehost.BackendIdentity, request contracts.RequestContext, _ json.RawMessage) (json.RawMessage, error) {
 	b.invokes.Add(1)
 	b.mu.Lock()
 	b.contexts = append(b.contexts, request)
@@ -76,7 +78,7 @@ func (b *fakeRuntimeBackend) Invoke(_ context.Context, _ loader.BackendIdentity,
 	return json.RawMessage(`{"ok":true}`), nil
 }
 
-func (b *fakeRuntimeBackend) Stop(context.Context, loader.BackendIdentity) error {
+func (b *fakeRuntimeBackend) Stop(context.Context, runtimehost.BackendIdentity) error {
 	b.stops.Add(1)
 	return b.stopErr
 }
@@ -103,10 +105,10 @@ func invokeRequest(id string) *runtimev1.InvokeRequest {
 	}
 }
 
-func newProtocolServer(t *testing.T, backend *fakeRuntimeBackend, maxRuntimes, maxConcurrent int) *loader.RuntimeHostProtocolServer {
+func newProtocolServer(t *testing.T, backend *fakeRuntimeBackend, maxRuntimes, maxConcurrent int) *runtimehost.RuntimeHostProtocolServer {
 	t.Helper()
-	server, err := loader.NewRuntimeHostProtocolServer(loader.RuntimeHostServerConfig{
-		Mode: loader.ModeHosted, Backend: backend, AllowedRuntimes: []loader.BackendIdentity{
+	server, err := runtimehost.NewRuntimeHostProtocolServer(runtimehost.RuntimeHostServerConfig{
+		Mode: loader.ModeHosted, Backend: backend, AllowedRuntimes: []runtimehost.BackendIdentity{
 			{ID: "hosted.server", Version: "1.2.3"},
 			{ID: "hosted.one", Version: "1.2.3"},
 			{ID: "hosted.two", Version: "1.2.3"},
@@ -281,7 +283,7 @@ func capabilityRuntimeRequest() contracts.RequestContext {
 // 真实 hosted Backend（wazero 执行）经完整 RuntimeHost 协议被内核 GRPCHost 调用。
 func TestRuntimeHostServesHostedArtifactOverProtocol(t *testing.T) {
 	artifact := hostedArtifact(t, filepath.Join("success", "success.wasm"))
-	backend, err := loader.NewHostedRuntimeBackend(loader.WasmHostConfig{
+	backend, err := runtimehost.NewHostedRuntimeBackend(wasmhost.WasmHostConfig{
 		ReadArtifact: func(_ context.Context, manifest loader.Manifest) ([]byte, error) {
 			if manifest.ID != testPackageID {
 				return nil, loader.ErrNotFound
@@ -292,8 +294,8 @@ func TestRuntimeHostServesHostedArtifactOverProtocol(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	protocolServer, err := loader.NewRuntimeHostProtocolServer(loader.RuntimeHostServerConfig{
-		Mode: loader.ModeHosted, Backend: backend, AllowedRuntimes: []loader.BackendIdentity{{ID: testPackageID, Version: "1.2.3"}}, MaxRuntimes: 2, MaxConcurrent: 2,
+	protocolServer, err := runtimehost.NewRuntimeHostProtocolServer(runtimehost.RuntimeHostServerConfig{
+		Mode: loader.ModeHosted, Backend: backend, AllowedRuntimes: []runtimehost.BackendIdentity{{ID: testPackageID, Version: "1.2.3"}}, MaxRuntimes: 2, MaxConcurrent: 2,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -332,7 +334,7 @@ func TestRuntimeHostServesHostedArtifactOverProtocol(t *testing.T) {
 // 死循环工件经协议调用在预算内被终止，归类为稳定超时。
 func TestRuntimeHostEnforcesExecutionBudgetOverProtocol(t *testing.T) {
 	artifact := hostedArtifact(t, filepath.Join("busy", "busy.wasm"))
-	backend, err := loader.NewHostedRuntimeBackend(loader.WasmHostConfig{
+	backend, err := runtimehost.NewHostedRuntimeBackend(wasmhost.WasmHostConfig{
 		ReadArtifact: func(_ context.Context, manifest loader.Manifest) ([]byte, error) {
 			if manifest.ID != "busy.host" {
 				return nil, loader.ErrNotFound
@@ -344,8 +346,8 @@ func TestRuntimeHostEnforcesExecutionBudgetOverProtocol(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	protocolServer, err := loader.NewRuntimeHostProtocolServer(loader.RuntimeHostServerConfig{
-		Mode: loader.ModeHosted, Backend: backend, AllowedRuntimes: []loader.BackendIdentity{{ID: "busy.host", Version: "1.2.3"}}, MaxRuntimes: 1, MaxConcurrent: 1,
+	protocolServer, err := runtimehost.NewRuntimeHostProtocolServer(runtimehost.RuntimeHostServerConfig{
+		Mode: loader.ModeHosted, Backend: backend, AllowedRuntimes: []runtimehost.BackendIdentity{{ID: "busy.host", Version: "1.2.3"}}, MaxRuntimes: 1, MaxConcurrent: 1,
 	})
 	if err != nil {
 		t.Fatal(err)

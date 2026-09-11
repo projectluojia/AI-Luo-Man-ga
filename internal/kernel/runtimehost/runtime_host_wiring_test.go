@@ -1,6 +1,6 @@
 //go:build unix
 
-package loader_test
+package runtimehost_test
 
 import (
 	"context"
@@ -13,9 +13,13 @@ import (
 
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/capability"
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packagecontract"
+	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packageio"
+	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/projectcontract"
 	runtimev1 "github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/runtimev1"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/adapters/packagesource"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader/wasmhost"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtimehost"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -118,17 +122,47 @@ func TestRuntimeHostProductionWiring(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	records, err := catalog.DiscoverLocked(t.Context(), catalogProjectLockForIDs(t, root, testPackageID))
-	if err != nil || len(records) != 1 || records[0].Runtime.ID != testRuntimeID {
-		t.Fatalf("discover records=%#v err=%v", records, err)
+	// 项目锁就地将本测试包锁定进项目：helper 属于 loader 包私有测试，跨包
+	// 复制任意 ID 形态只会制造第二份实现，这里只需单包锁定。
+	manifestPath := filepath.Join(t.TempDir(), "ailuo.toml")
+	if err := os.WriteFile(manifestPath, []byte("[project]\nid = \"test\"\n"), 0o640); err != nil {
+		t.Fatal(err)
 	}
-	backend, err := loader.NewHostedRuntimeBackend(loader.WasmHostConfig{ReadArtifact: catalog.ReadArtifact})
+	projectManifestSHA, err := packageio.HashFile(t.Context(), manifestPath, packagecontract.MaxManifestBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
-	protocolServer, err := loader.NewRuntimeHostProtocolServer(loader.RuntimeHostServerConfig{
+	manifestSHA, err := packageio.HashFile(t.Context(), filepath.Join(directory, "manifest.json"), packagecontract.MaxManifestBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var packageLock packagecontract.Lock
+	if err := packagecontract.DecodeStrictJSON(lockBytes, &packageLock); err != nil {
+		t.Fatal(err)
+	}
+	lockSHA, err := packageio.CanonicalLockDigest(t.Context(), directory, packageLock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	records, err := catalog.DiscoverLocked(t.Context(), projectcontract.Lock{
+		SchemaVersion:         projectcontract.SchemaVersion,
+		ProjectID:             "test",
+		ProjectManifestSHA256: projectManifestSHA,
+		Packages: []projectcontract.LockedPackage{{
+			ID: testPackageID, Version: "1.0.0", Source: "path:packages/" + testPackageID,
+			ManifestSHA256: manifestSHA, LockSHA256: lockSHA,
+		}},
+	})
+	if err != nil || len(records) != 1 || records[0].Runtime.ID != testRuntimeID {
+		t.Fatalf("discover records=%#v err=%v", records, err)
+	}
+	backend, err := runtimehost.NewHostedRuntimeBackend(wasmhost.WasmHostConfig{ReadArtifact: catalog.ReadArtifact})
+	if err != nil {
+		t.Fatal(err)
+	}
+	protocolServer, err := runtimehost.NewRuntimeHostProtocolServer(runtimehost.RuntimeHostServerConfig{
 		Mode: loader.ModeHosted, Backend: backend,
-		AllowedRuntimes: []loader.BackendIdentity{{ID: records[0].Runtime.ID, Version: records[0].Runtime.Version}},
+		AllowedRuntimes: []runtimehost.BackendIdentity{{ID: records[0].Runtime.ID, Version: records[0].Runtime.Version}},
 		MaxRuntimes:     1, MaxConcurrent: 1,
 	})
 	if err != nil {
