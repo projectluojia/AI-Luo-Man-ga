@@ -83,7 +83,7 @@ func TestConfigureInstalledRuntimesAllowsEmptySecureCatalog(t *testing.T) {
 	root := packageiotest.TempDir(t)
 	projectRoot := t.TempDir()
 	writeEmptyProject(t, projectRoot)
-	hosts, records, err := configureInstalledRuntimes(t.Context(), config{projectRoot: projectRoot, runtimeInstallRoot: root}, nil)
+	hosts, records, err := configureInstalledRuntimes(t.Context(), config{projectRoot: projectRoot, runtimeInstallRoot: root}, nil, nil)
 	if err != nil {
 		t.Fatalf("configure empty catalog: %v", err)
 	}
@@ -96,12 +96,12 @@ func TestConfigureInstalledRuntimesRegistersHostedCatalog(t *testing.T) {
 	root := writeInstalledFixture(t)
 	projectRoot := t.TempDir()
 	writeProjectLock(t, projectRoot, root)
-	if _, _, err := configureInstalledRuntimes(t.Context(), config{projectRoot: projectRoot, runtimeInstallRoot: root}, nil); err == nil || !strings.Contains(err.Error(), "AILUO_RUNTIME_HOST_ADDRESS") {
+	if _, _, err := configureInstalledRuntimes(t.Context(), config{projectRoot: projectRoot, runtimeInstallRoot: root}, nil, nil); err == nil || !strings.Contains(err.Error(), "AILUO_RUNTIME_HOST_ADDRESS") {
 		t.Fatalf("missing hosted address error=%v", err)
 	}
 	hosts, records, err := configureInstalledRuntimes(t.Context(), config{
 		projectRoot: projectRoot, runtimeInstallRoot: root, runtimeHostAddress: "unix:" + filepath.Join(root, "host.sock"),
-	}, nil)
+	}, nil, nil)
 	if err != nil {
 		t.Fatalf("configure hosted catalog: %v", err)
 	}
@@ -139,7 +139,7 @@ func TestConfigureInstalledRuntimesIgnoresUnlistedInstalledPackages(t *testing.T
 	hosts, records, err := configureInstalledRuntimes(t.Context(), config{
 		projectRoot: projectRoot, runtimeInstallRoot: root,
 		runtimeHostAddress: "unix:" + filepath.Join(root, "host.sock"),
-	}, nil)
+	}, nil, nil)
 	if err != nil {
 		t.Fatalf("configure locked catalog: %v", err)
 	}
