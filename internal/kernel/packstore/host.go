@@ -10,6 +10,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packagecontract"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader/wasmhost"
 )
 
 // StoreModule 是通用包存储宿主函数的模块名。guest 只能调用清单声明的函数，
@@ -98,7 +99,7 @@ type deleteResponse struct {
 // PackageID 与 namespace 由装配方固定；guest 只能声明作用域种类（system/user）。
 // 写操作必须对应声明为 write/external 的 Capability、携带幂等键，且只能写
 // 个人作用域——公共数据只经可信 Go 侧快照导入，guest 无系统级写入路径。
-func HostFunctions(store Store, packageID, namespace string, capabilities []capability.CapabilitySpec) []loader.HostedFunction {
+func HostFunctions(store Store, packageID, namespace string, capabilities []capability.CapabilitySpec) []wasmhost.HostedFunction {
 	capabilityByID := make(map[string]capability.CapabilitySpec, len(capabilities))
 	for _, spec := range capabilities {
 		capabilityByID[spec.ID] = spec
@@ -141,7 +142,7 @@ func HostFunctions(store Store, packageID, namespace string, capabilities []capa
 		}
 		return nil
 	}
-	return []loader.HostedFunction{
+	return []wasmhost.HostedFunction{
 		{
 			Module: StoreModule, Name: OpGet,
 			Call: storeBinding(OpGet, func(ctx context.Context, request contracts.RequestContext, body []byte) (any, error) {
@@ -273,7 +274,7 @@ func authorizeStoreOperation(request contracts.RequestContext, operation string,
 // ManifestFunctions 是装配期宿主函数提供者：按包清单返回绑定到该包
 // namespace 的存储宿主函数。声明了 ailuo.store.* 却未声明 [storage] 的清单
 // 直接拒绝（fail-closed）；未声明存储函数的包返回空集。
-func ManifestFunctions(store Store, manifest loader.Manifest) ([]loader.HostedFunction, error) {
+func ManifestFunctions(store Store, manifest loader.Manifest) ([]wasmhost.HostedFunction, error) {
 	declaredStore := false
 	for _, decl := range manifest.HostFunctions {
 		if decl.Module == StoreModule {

@@ -11,6 +11,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packageio"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader/wasmhost"
 )
 
 // VerifyHostedProtocol 在自动打包前用受限 WasmHost 逐组件执行一次协议探测。
@@ -22,7 +23,7 @@ func VerifyHostedProtocol(ctx context.Context, sourceDir string, manifest packag
 			continue
 		}
 		artifactPath := filepath.Join(sourceDir, component.Entrypoint)
-		host, err := loader.NewWasmHost(loader.WasmHostConfig{
+		host, err := wasmhost.NewWasmHost(wasmhost.WasmHostConfig{
 			ReadArtifact: func(context.Context, loader.Manifest) ([]byte, error) {
 				return packageio.ReadFileLimited(artifactPath, packagecontract.MaxArtifactBytes)
 			},
@@ -54,7 +55,7 @@ func VerifyHostedProtocol(ctx context.Context, sourceDir string, manifest packag
 				AppID: manifest.ID, EchoID: "package-verify", RequestID: capabilityID,
 				CapabilityID: capabilityID, Deadline: time.Now().UTC().Add(30 * time.Second),
 			}, []byte(`{}`))
-			if invokeErr != nil && !errors.Is(invokeErr, loader.ErrHostedCallRejected) {
+			if invokeErr != nil && !errors.Is(invokeErr, wasmhost.ErrHostedCallRejected) {
 				stopErr := stopRuntime()
 				if stopErr != nil {
 					return fmt.Errorf("packagesource: 组件 %s 协议校验失败且清理失败: %w", component.ID, errors.Join(invokeErr, stopErr))

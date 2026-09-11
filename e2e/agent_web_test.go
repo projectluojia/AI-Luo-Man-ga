@@ -33,6 +33,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/health"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/identity"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader/processhost"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/packstore"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime"
@@ -203,7 +204,7 @@ func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 		_ = deploymentCommand.Wait()
 	}()
 
-	executorHost, err := loader.NewProcessHost(loader.ProcessHostConfig{
+	executorHost, err := processhost.NewProcessHost(processhost.ProcessHostConfig{
 		Resolve: catalog.ResolveProcess, Verify: catalog.VerifyProcess,
 		Spawn:          false,
 		DialTimeout:    10 * time.Second,

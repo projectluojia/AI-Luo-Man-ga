@@ -23,6 +23,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/idempotency"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader/wasmhost"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/packstore"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/registry"
 	kernelruntime "github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtime"
@@ -160,14 +161,14 @@ func Register(t testing.TB, target *registry.Registry, store packstore.Store, sp
 		Capabilities:  manifest.Capabilities,
 		HostFunctions: manifest.Components[0].HostFunctions,
 	}
-	host, err := loader.NewWasmHost(loader.WasmHostConfig{
+	host, err := wasmhost.NewWasmHost(wasmhost.WasmHostConfig{
 		ReadArtifact: func(_ context.Context, m loader.Manifest) ([]byte, error) {
 			if m.ID != loaderManifest.ID || m.LockedDigest != loaderManifest.LockedDigest {
 				return nil, loader.ErrNotFound
 			}
 			return artifact, nil
 		},
-		HostFunctionsFor: func(m loader.Manifest) ([]loader.HostedFunction, error) {
+		HostFunctionsFor: func(m loader.Manifest) ([]wasmhost.HostedFunction, error) {
 			return packstore.ManifestFunctions(store, m)
 		},
 		RequireHostFunctions: true,

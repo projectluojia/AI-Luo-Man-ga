@@ -15,6 +15,7 @@ import (
 	runtimev1 "github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/runtimev1"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/runtimehost"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -103,7 +104,7 @@ func cloneIdentity(identity *runtimev1.RuntimeIdentity) *runtimev1.RuntimeIdenti
 func startRuntimeHost(t *testing.T, implementation runtimev1.RuntimeHostServer) (func(context.Context, string) (net.Conn, error), *atomic.Int32) {
 	t.Helper()
 	listener := bufconn.Listen(1 << 20)
-	server := grpc.NewServer(loader.RuntimeHostGRPCServerOptions()...)
+	server := grpc.NewServer(runtimehost.RuntimeHostGRPCServerOptions()...)
 	runtimev1.RegisterRuntimeHostServer(server, implementation)
 	go func() {
 		_ = server.Serve(listener)

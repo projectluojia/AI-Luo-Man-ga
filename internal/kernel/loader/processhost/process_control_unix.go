@@ -1,6 +1,6 @@
 //go:build unix
 
-package loader
+package processhost
 
 import (
 	"errors"
