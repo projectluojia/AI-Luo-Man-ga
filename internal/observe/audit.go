@@ -30,10 +30,11 @@ func sanitizeJSONValue(value any) any {
 	case map[string]any:
 		clean := make(map[string]any, len(typed))
 		for key, child := range typed {
+			cleanKey := sanitizeText(key, 4096)
 			if isSensitiveKey(key) {
-				clean[key] = redactedValue
+				clean[cleanKey] = redactedValue
 			} else {
-				clean[key] = sanitizeJSONValue(child)
+				clean[cleanKey] = sanitizeJSONValue(child)
 			}
 		}
 		return clean
@@ -44,7 +45,7 @@ func sanitizeJSONValue(value any) any {
 		}
 		return clean
 	case string:
-		return truncate(typed, 4096)
+		return sanitizeText(typed, 4096)
 	default:
 		return value
 	}

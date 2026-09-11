@@ -1,12 +1,39 @@
 package observe_test
 
 import (
+	"bytes"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/observe"
 )
+
+func TestHTTPLogsOmitUntrustedPathAndHeaders(t *testing.T) {
+	for _, format := range []string{"console", "json"} {
+		buffer := &bytes.Buffer{}
+		_, err := observe.Configure(observe.Config{Service: "test", Format: format, Level: slog.LevelDebug, Writer: buffer})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _, _ = observe.Configure(observe.Config{Service: "test"}) })
+		mux := http.NewServeMux()
+		mux.HandleFunc("GET /items/{id}", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) })
+		req := httptest.NewRequest(http.MethodGet, "/items/synthetic-private-path?detail=synthetic-private-query", nil)
+		req.Header.Set("User-Agent", "synthetic-private-header")
+		req.RemoteAddr = "192.0.2.123:1234"
+		observe.HTTPMiddleware("test", mux).ServeHTTP(httptest.NewRecorder(), req)
+		text := buffer.String()
+		if strings.Contains(text, "synthetic-private") || strings.Contains(text, "192.0.2.123") {
+			t.Fatal("HTTP 原始路径、请求头或 IP 进入日志")
+		}
+		if !strings.Contains(text, "/items/{id}") || !strings.Contains(text, "request_id") {
+			t.Fatal("路由模板与关联标识缺失")
+		}
+	}
+}
 
 func TestHTTPMiddlewarePropagatesCorrelationIDs(t *testing.T) {
 	var requestID string

@@ -129,6 +129,8 @@ AI珞 V3 是长期维护的生产级项目。功能范围可以窄，但已实�
 - 用户可见日志使用清晰中文；稳定字段键保持英文。
 - 适用时传播 `request_id`、`trace_id`、`app_id`、`echo_id`、`run_id`、`parent_run_id`、`call_id`、`capability_id`、`package_id`、`component_id`。
 - 新敏感字段必须加入净化并有 console/JSON 负向测试。
+- 日志消息使用固定事件说明；不拼接私有正文，不通过不透明对象序列化绕过字段净化。
+- AI 会话证据、截图与附件公开前按 `docs/协作材料脱敏与发布.md` 制作副本；原件受限保存在仓外，检查纳入既有 PR 评审。
 - 优先标准库；仅在维护良好的依赖显著降低风险时引入，并有意锁定版本。
 - 所有阻塞或外部 Go 操作传递 `context.Context`；Python async 保留取消和 deadline。
 - Isolated Runtime 只使用安装锁中的进程规格；Core 不继承自身环境，也不向包注入 Provider 或其他业务环境变量。

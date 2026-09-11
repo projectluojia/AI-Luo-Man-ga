@@ -6,6 +6,7 @@ import datetime
 import json
 import logging
 import os
+import re
 import sys
 import traceback
 from typing import Any, Iterator, TextIO
@@ -35,6 +36,21 @@ _max_length = 4096
 _environment = "development"
 _service = "ailuo-python-agent"
 
+# 与 Go 集中日志入口保持同一组明确凭据格式，不声称识别任意个人信息。
+_credential_patterns = tuple(re.compile(pattern, re.ASCII) for pattern in (
+    r'''(?i)\b(?:password|passwd|secret|(?:access[_-]?|refresh[_-]?)?token|api[_-]?key|authorization|cookie|credential)["']?\s*[:=]\s*\S''',
+    r"(?i)\b(?:bearer|basic)\s+\S+",
+    r"(?i)\b[a-z][a-z0-9+.-]{0,31}://[^\s/@]+@",
+    r"-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----",
+    r"\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,})",
+))
+
+
+def _clean_text(value: str) -> str:
+    if any(pattern.search(value) for pattern in _credential_patterns):
+        return "[已脱敏]"
+    return value[:_max_length] + "…[已截断]" if len(value) > _max_length else value
+
 # 正式配置完成前禁止 Python 的 lastResort handler 输出未脱敏异常。
 logging.getLogger().addHandler(logging.NullHandler())
 
@@ -50,7 +66,7 @@ def _is_sensitive(key: str) -> bool:
     )
 
 
-def _clean(key: str, value: Any) -> Any:
+def _clean(key: str, value: Any, depth: int = 0) -> Any:
     normalized = key.lower().replace("-", "_")
     safe_token_counts = {
         "input_tokens",
@@ -70,13 +86,18 @@ def _clean(key: str, value: Any) -> Any:
         and value >= 0
     ):
         return "[已脱敏]"
-    if isinstance(value, str) and len(value) > _max_length:
-        return value[:_max_length] + "…[已截断]"
+    if depth >= 8:
+        return "[已脱敏]"
+    if isinstance(value, str):
+        return _clean_text(value)
     if isinstance(value, dict):
-        return {child_key: _clean(child_key, child) for child_key, child in value.items()}
+        return {_clean_text(child_key): _clean(child_key, child, depth + 1)
+                for child_key, child in value.items() if isinstance(child_key, str)}
     if isinstance(value, (list, tuple)):
-        return [_clean(key, child) for child in value]
-    return value
+        return [_clean(key, child, depth + 1) for child in value]
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    return "[已脱敏]"
 
 
 class _ChineseFormatter(logging.Formatter):
@@ -95,10 +116,11 @@ class _ChineseFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         fields = dict(_context_fields.get())
         fields.update(getattr(record, "fields", {}))
-        fields = {key: _clean(key, value) for key, value in fields.items() if value not in (None, "")}
+        fields = {_clean_text(key): _clean(key, value) for key, value in fields.items()
+                  if isinstance(key, str) and value is not None}
         timestamp = datetime.datetime.fromtimestamp(record.created, datetime.timezone.utc).isoformat()
         level = self.levels.get(record.levelno, record.levelname)
-        message = _clean("message", record.getMessage())
+        message = _clean_text(record.getMessage())
         if record.exc_info:
             exception_type = record.exc_info[0]
             fields["exception_type"] = exception_type.__name__ if exception_type else "UnknownException"
@@ -112,7 +134,7 @@ class _ChineseFormatter(logging.Formatter):
                 "level": record.levelname,
                 "message": message,
                 "service": _service,
-                "environment": _environment,
+                "environment": _clean_text(_environment),
                 **fields,
             }, ensure_ascii=False, separators=(",", ":"))
         details = " ".join(f"{key}={json.dumps(value, ensure_ascii=False)}" for key, value in sorted(fields.items()))
@@ -138,6 +160,15 @@ class Logger:
 
     def exception(self, message: str, **fields: Any) -> None:
         self._logger.exception(message, extra={"fields": {"component": self._component, **fields}})
+
+
+class _SafeStreamHandler(logging.StreamHandler):
+    def handleError(self, record: logging.LogRecord) -> None:
+        # 标准 handleError 会回显原始 record/args；格式化或写入失败也不得泄露正文。
+        try:
+            sys.stderr.write("日志输出失败：记录已丢弃\n")
+        except Exception:
+            pass
 
 
 def configure(stream: TextIO | None = None) -> None:
@@ -168,7 +199,7 @@ def configure(stream: TextIO | None = None) -> None:
         raise ValueError(f"AILUO_LOG_FORMAT 不受支持: {output_format}")
     _environment = environment
     _max_length = max_length
-    handler = logging.StreamHandler(stream if stream is not None else sys.stdout)
+    handler = _SafeStreamHandler(stream if stream is not None else sys.stdout)
     handler.setFormatter(_ChineseFormatter(output_format))
     root = logging.getLogger()
     root.handlers.clear()
