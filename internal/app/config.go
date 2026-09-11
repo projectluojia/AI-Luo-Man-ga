@@ -20,6 +20,7 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/access/qq"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/adapters/packagesource"
 	controlconfig "github.com/projectluojia/AI-Luo-Man-ga/internal/controlplane/config"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/id"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader/processhost"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader/wasmhost"
@@ -29,15 +30,17 @@ import (
 )
 
 type config struct {
-	httpAddress         string
-	configUIAddress     string
-	localConfigRoot     string
-	databasePath        string
-	appID               string
-	executorID          string
-	executorConfig      json.RawMessage
-	executorTimeout     time.Duration
-	manageExecutor      bool
+	httpAddress     string
+	configUIAddress string
+	localConfigRoot string
+	databasePath    string
+	appID           string
+	executorID      string
+	executorConfig  json.RawMessage
+	executorTimeout time.Duration
+	// externalRuntimes 是部署方自行启动并托管的运行时 ID 集合：这些运行时
+	// 不由内核进程宿主启动，只按安装 lock 连接。
+	externalRuntimes    map[string]struct{}
 	environment         string
 	logLevel            slog.Level
 	logFormat           string
@@ -64,10 +67,6 @@ type config struct {
 }
 
 func loadConfig() (config, error) {
-	manageExecutor, err := envBool("AILUO_MANAGE_EXECUTOR", false)
-	if err != nil {
-		return config{}, err
-	}
 	logSource, err := envBool("AILUO_LOG_SOURCE", false)
 	if err != nil {
 		return config{}, err
@@ -91,12 +90,16 @@ func loadConfig() (config, error) {
 	if runtimeInstallRoot == "" {
 		runtimeInstallRoot = defaultRuntimeInstallRoot()
 	}
+	externalRuntimes, err := parseExternalRuntimes(os.Getenv("AILUO_EXTERNAL_RUNTIMES"))
+	if err != nil {
+		return config{}, err
+	}
 	result := config{
 		httpAddress:        envOr("AILUO_HTTP_ADDRESS", "127.0.0.1:8080"),
 		configUIAddress:    envOr("AILUO_CONFIG_UI_ADDRESS", configui.DefaultAddress),
 		localConfigRoot:    envOr("AILUO_CONFIG_DIR", "var"),
 		databasePath:       envOr("AILUO_DATABASE_PATH", "var/ailuo.db"),
-		manageExecutor:     manageExecutor,
+		externalRuntimes:   externalRuntimes,
 		environment:        envOr("AILUO_ENVIRONMENT", "development"),
 		logLevel:           logLevel,
 		logFormat:          envOr("AILUO_LOG_FORMAT", "console"),
@@ -114,6 +117,29 @@ func loadConfig() (config, error) {
 		return config{}, fmt.Errorf("configuration error: AILUO_RUNTIME_INSTALL_ROOT must be a clean absolute path")
 	}
 	return result, nil
+}
+
+// parseExternalRuntimes 解析部署方托管运行时的 ID 集合（逗号分隔）；每个 ID
+// 必须满足稳定标识约束，重复声明 fail-closed。
+func parseExternalRuntimes(value string) (map[string]struct{}, error) {
+	if value == "" {
+		return nil, nil
+	}
+	external := make(map[string]struct{})
+	for _, runtimeID := range strings.Split(value, ",") {
+		runtimeID = strings.TrimSpace(runtimeID)
+		if runtimeID == "" {
+			continue
+		}
+		if !id.AppID.MatchString(runtimeID) {
+			return nil, fmt.Errorf("configuration error: AILUO_EXTERNAL_RUNTIMES contains invalid runtime id %q", runtimeID)
+		}
+		if _, exists := external[runtimeID]; exists {
+			return nil, fmt.Errorf("configuration error: AILUO_EXTERNAL_RUNTIMES declares runtime id %q twice", runtimeID)
+		}
+		external[runtimeID] = struct{}{}
+	}
+	return external, nil
 }
 
 // defaultRuntimeInstallRoot 是 Core 的部署配置默认值。包管理器 CLI 独立维护
@@ -264,8 +290,10 @@ func configureInstalledRuntimes(ctx context.Context, cfg config, packageStore pa
 	if isolatedCount > 0 {
 		host, hostErr := processhost.NewProcessHost(processhost.ProcessHostConfig{
 			Resolve: catalog.ResolveProcess, Verify: catalog.VerifyProcess, Spawn: true,
+			// SpawnFor 只按部署声明分流：外部托管运行时不由内核启动。
 			SpawnFor: func(manifest loader.Manifest) bool {
-				return manifest.Role != loader.RoleExecutor || cfg.manageExecutor
+				_, external := cfg.externalRuntimes[manifest.ID]
+				return !external
 			},
 			DialTimeout:    secondsDuration(cfg.runtimeProcess.DialTimeoutSeconds),
 			StopGrace:      secondsDuration(cfg.runtimeProcess.StopGraceSeconds),

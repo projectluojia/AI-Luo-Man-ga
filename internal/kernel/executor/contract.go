@@ -32,3 +32,9 @@ func NewClient(conn grpc.ClientConnInterface) Client {
 type ClientProvider interface {
 	Client() Client
 }
+
+// RunDriver 是编排器消费执行者所需的窄面：驱动一个受治理 Run 会话。健康
+// 探针不依赖本面；需要完整协议客户端（Health）时取 ClientProvider。
+type RunDriver interface {
+	Run(ctx context.Context, opts ...grpc.CallOption) (RunStream, error)
+}
