@@ -4,7 +4,7 @@
 
 ## 品牌与升级契约
 
-项目统一使用产品名 **AI珞（爱珞）** 和技术命名空间 `ailuo`。部署环境变量统一使用 `AILUO_*`，Prometheus 指标统一使用 `ailuo_*`，默认数据库文件为 `var/ailuo.db`。Agent gRPC 与 Runtime Host gRPC 均使用 `ailuo.*.v1` 包名并协商协议版本 `2.0`；扩展安装目录使用 `ailuo.package.v2`。这是一次有意的破坏性品牌迁移：部署配置、监控查询、Agent/Runtime Host 构建产物和扩展安装清单必须原子升级，旧版本不会被误判为兼容。
+项目统一使用产品名 **AI珞（爱珞）** 和技术命名空间 `ailuo`。部署环境变量统一使用 `AILUO_*`，Prometheus 指标统一使用 `ailuo_*`，默认数据库文件为 `var/ailuo.db`。Agent gRPC 与 Runtime Host gRPC 均使用 `ailuo.*.v1` 包名并协商协议版本（当前分别为 `4.0` 与 `3.0`）；扩展安装目录使用 `ailuo.package.v3`。这是一次有意的破坏性品牌迁移：部署配置、监控查询、Agent/Runtime Host 构建产物和扩展安装清单必须原子升级，旧版本不会被误判为兼容。
 
 ## 已实现链路
 
@@ -67,7 +67,7 @@ Core 不再内置或自动播种业务演示数据；测试夹具通过通用 St
 - `GET /readyz`：检查是否仍接收工作、SQLite 与实际 Executor 就绪状态。
 - `GET /metrics`：Prometheus 文本指标；不包含 App、Echo、Run、调用标识或业务正文。
 
-完整契约见 `docs/openapi.yaml`；执行者跨进程契约见 `proto/executor.proto`，扩展 Runtime Host 契约见 `proto/runtime_host.proto`。生成后的 Go/Python 文件是提交构件，不得手工修改。
+Web 契约以 `internal/access/web/server.go` 路由与 `docs/目标架构.md` 为准；执行者跨进程契约见 `proto/executor.proto`，扩展 Runtime Host 契约见 `proto/runtime_host.proto`。生成后的 Go/Python 文件是提交构件，不得手工修改。
 
 ## 验证
 
@@ -76,7 +76,7 @@ make test
 make test-contracts
 make test-package-manager
 make test-agent
-make test-campus
+make test-hosted
 make test-race
 make vet
 make test-integration

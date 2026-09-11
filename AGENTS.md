@@ -4,7 +4,7 @@
 
 AI珞 V3 是长期维护的生产级项目。功能范围可以窄，但已实现的契约、信任边界、状态转换、持久化、错误路径和测试必须可长期保留。不得以 “MVP”“临时方案” 或 “以后重写” 降低正确性、安全性、耐久性、隔离性与可观测性。
 
-必须准确描述状态：区分设计、已实现基线、测试证据和剩余生产阻塞项。当前状态与路线图见 `docs/仓库状态与路线图.md`，不得把未实现设计描述为已完成。
+必须准确描述状态：区分设计、已实现基线、测试证据和剩余生产阻塞项。目标架构基线见 `docs/目标架构.md`，不得把未实现设计描述为已完成。
 
 用户是验收负责人。涉及产品范围、机构数据授权、部署信任边界或外部协调的重大决定由用户确认；普通实现细节自主完成。
 
@@ -26,11 +26,10 @@ AI珞 V3 是长期维护的生产级项目。功能范围可以窄，但已实�
 架构、协议、持久化、Agent Runtime 或安全改动前依次阅读：
 
 1. `AGENTS.md`
-2. `docs/v3_overall_design.md`
-3. `docs/仓库状态与路线图.md`
-4. `docs/校巴场景设计.md`
-5. `docs/日志与可观测性设计.md`
-6. `docs/数据需求与授权清单.md`（真实数据或采集工作）
+2. `docs/目标架构.md`
+3. `docs/校巴场景设计.md`
+4. `docs/日志与可观测性设计.md`
+5. `docs/数据需求与授权清单.md`（真实数据或采集工作）
 
 设计文档不是实现证据；必须检查当前代码与测试。
 
@@ -193,7 +192,7 @@ go test ./...
   go test ./...
   go vet ./...
 )
-make test-campus
+make test-hosted
 go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 '-checks=inherit,-SA1019' ./...
 actionlint .github/workflows/*.yml
 uv sync --project packages/agent/runtime --locked

@@ -92,12 +92,6 @@ type storeListRequest struct {
 	AfterID    string `json:"after_id,omitempty"`
 }
 
-type storeListResponse struct {
-	Docs      []Document   `json:"docs"`
-	Meta      SnapshotMeta `json:"meta"`
-	MetaFound bool         `json:"meta_found"`
-}
-
 // put 请求（宿主函数 ailuo.store put 的 ABI 信封）。
 type storePutRequest struct {
 	Scope      Scope           `json:"scope,omitempty"`
@@ -156,10 +150,11 @@ func (c *StoreClient) Get(scope Scope, collection, id string) (payload json.RawM
 }
 
 // ListPage 是一次分页读取：文档与快照元数据同源（宿主单事务读出）。
+// JSON 标签是 ailuo.store list 宿主函数响应的 ABI wire 格式，不得漂移。
 type ListPage struct {
-	Docs      []Document
-	Meta      SnapshotMeta
-	MetaFound bool
+	Docs      []Document   `json:"docs"`
+	Meta      SnapshotMeta `json:"meta"`
+	MetaFound bool         `json:"meta_found"`
 }
 
 // List 读取一页文档（默认系统作用域）。
@@ -172,14 +167,14 @@ func (c *StoreClient) List(scope Scope, collection string, limit int, afterID st
 	if response == nil {
 		return ListPage{}, errors.New("store list call failed")
 	}
-	var decoded storeListResponse
-	if err := json.Unmarshal(response, &decoded); err != nil {
+	var page ListPage
+	if err := json.Unmarshal(response, &page); err != nil {
 		return ListPage{}, err
 	}
-	if decoded.Docs == nil {
-		decoded.Docs = []Document{}
+	if page.Docs == nil {
+		page.Docs = []Document{}
 	}
-	return ListPage{Docs: decoded.Docs, Meta: decoded.Meta, MetaFound: decoded.MetaFound}, nil
+	return page, nil
 }
 
 // Put 以 upsert 语义写个人作用域文档。系统作用域写入没有 guest 路径，
