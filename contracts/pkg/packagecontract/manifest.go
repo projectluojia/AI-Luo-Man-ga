@@ -72,12 +72,22 @@ const (
 )
 
 // Lock 是安装目录的锁定记录：固定包版本、清单摘要与每组件工件/进程规格。
+// Signature 是发布方对 SignaturePayload 的 Ed25519 签名：含 isolated 组件的
+// 包必须由部署方信任的签名者签署才能装载（纯 hosted 沙箱包可免签）。
 type Lock struct {
 	SchemaVersion  string           `json:"schema_version"`
 	PackageID      string           `json:"package_id"`
 	PackageVersion string           `json:"package_version"`
 	ManifestSHA256 string           `json:"manifest_sha256"`
 	Artifacts      []LockedArtifact `json:"artifacts"`
+	Signature      *Signature       `json:"signature,omitempty"`
+}
+
+// Signature 是发布方信任链的载体：Signer 为 Ed25519 公钥的十六进制编码，
+// Value 为对 SignaturePayload 的签名。部署方按公钥本身授权（无密钥 ID 间接层）。
+type Signature struct {
+	Signer string `json:"signer"`
+	Value  string `json:"value"`
 }
 
 // LockedArtifact 是单个组件的锁定工件：路径、SHA-256 与（isolated 的）进程规格。
@@ -396,6 +406,17 @@ func IsPackageEntrypoint(value string) bool {
 func IsSHA256Hex(digest string) bool {
 	raw, err := hex.DecodeString(digest)
 	return err == nil && len(raw) == sha256.Size
+}
+
+// HasIsolatedComponent 判断清单是否含 isolated 组件：这类包以独立进程执行且
+// 可出站，是签名信任链的强制对象；纯 hosted 沙箱包不要求签名。
+func HasIsolatedComponent(manifest Manifest) bool {
+	for _, component := range manifest.Components {
+		if component.Mode == ModeIsolated {
+			return true
+		}
+	}
+	return false
 }
 
 // FindComponent 按稳定 ID 查找一个包组件。

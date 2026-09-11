@@ -4,6 +4,8 @@ package loader_test
 
 import (
 	"context"
+	"crypto/ed25519"
+	cryptorand "crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -112,11 +114,28 @@ func writeMultiComponentFixture(t *testing.T, root, version string) string {
 		}
 		locked = append(locked, artifact)
 	}
-	lock, err := json.Marshal(packagecontract.Lock{
+	multiLock := packagecontract.Lock{
 		SchemaVersion: packagecontract.SchemaVersion, PackageID: "test.multi",
 		PackageVersion: version, ManifestSHA256: hex.EncodeToString(manifestDigest[:]),
 		Artifacts: locked,
-	})
+	}
+	// 含 isolated 组件的包在装载期强制签名执法：用一次性密钥签署并把公钥
+	// 记入目录信任集合。
+	publicKey, privateKey, err := ed25519.GenerateKey(cryptorand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signature, err := packagecontract.Sign(multiLock, privateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	multiLock.Signature = &signature
+	signers, err := packagesource.ParseTrustedSigners(hex.EncodeToString(publicKey))
+	if err != nil {
+		t.Fatal(err)
+	}
+	setFixtureTrustedSigners(t, signers)
+	lock, err := json.Marshal(multiLock)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,10 +150,7 @@ func TestMultiComponentPackageRoutesCapabilitiesAndUpgradesGroup(t *testing.T) {
 	root := t.TempDir()
 	writeMultiComponentFixture(t, root, "1.0.0")
 
-	catalog, err := packagesource.NewCatalog(root)
-	if err != nil {
-		t.Fatal(err)
-	}
+	catalog := trustedSignerCatalog(t, root)
 	records, err := discoverCatalogLocked(t, catalog, root)
 	if err != nil {
 		t.Fatalf("Discover: %v", err)

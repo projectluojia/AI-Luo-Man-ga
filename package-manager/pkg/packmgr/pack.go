@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -24,7 +25,7 @@ const maxTarEntries = 4096
 
 // PackFromSource 用调用方提供的显式清单打包：校验清单与源目录工件，生成
 // tarball 并附带按工件 SHA-256 锁定的 lock.json。本函数不猜测或读取隐式清单。
-func PackFromSource(ctx context.Context, sourceDir, outputDir string, manifest packagecontract.Manifest, manifestBytes []byte) (string, error) {
+func PackFromSource(ctx context.Context, sourceDir, outputDir string, manifest packagecontract.Manifest, manifestBytes []byte, signingKey ed25519.PrivateKey) (string, error) {
 	if err := packagecontract.ValidateManifest(manifest); err != nil {
 		return "", err
 	}
@@ -117,12 +118,19 @@ func PackFromSource(ctx context.Context, sourceDir, outputDir string, manifest p
 		})
 	}
 	manifestDigest := sha256.Sum256(manifestBytes)
-	lockBytes, err := json.Marshal(packagecontract.Lock{
+	lock := packagecontract.Lock{
 		SchemaVersion: packagecontract.SchemaVersion, PackageID: manifest.ID,
 		PackageVersion: manifest.Version,
 		ManifestSHA256: hex.EncodeToString(manifestDigest[:]),
 		Artifacts:      lockEntries,
-	})
+	}
+	// 发布物 lock 携带发布方签名（未配置 AILUO_SIGNING_KEY 时保持未签名）：
+	// 签名载荷只含清单与工件摘要，安装器重写路径后依然可验证。
+	lock, err = signLock(lock, signingKey)
+	if err != nil {
+		return "", err
+	}
+	lockBytes, err := json.Marshal(lock)
 	if err != nil {
 		return "", err
 	}
