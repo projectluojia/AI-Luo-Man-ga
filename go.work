@@ -8,6 +8,7 @@ use (
 	./packages/classroom
 	./packages/calendar
 	./packages/guestkit
+	./packages/library
 	./packages/timetable
 	./packages/weather
 )
