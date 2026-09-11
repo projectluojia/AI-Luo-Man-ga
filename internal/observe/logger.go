@@ -191,6 +191,7 @@ func chineseConsoleAttrs(groups []string, attr slog.Attr) slog.Attr {
 type sanitizingHandler struct {
 	next           slog.Handler
 	maxValueLength int
+	privateGroup   bool
 }
 
 func (h *sanitizingHandler) Enabled(ctx context.Context, level slog.Level) bool {
@@ -200,7 +201,7 @@ func (h *sanitizingHandler) Enabled(ctx context.Context, level slog.Level) bool 
 func (h *sanitizingHandler) Handle(ctx context.Context, record slog.Record) error {
 	clean := slog.NewRecord(record.Time.UTC(), record.Level, sanitizeText(record.Message, h.maxValueLength), record.PC)
 	record.Attrs(func(attr slog.Attr) bool {
-		clean.AddAttrs(sanitizeAttr(attr, h.maxValueLength))
+		clean.AddAttrs(h.sanitize(attr))
 		return true
 	})
 	return h.next.Handle(ctx, clean)
@@ -209,13 +210,23 @@ func (h *sanitizingHandler) Handle(ctx context.Context, record slog.Record) erro
 func (h *sanitizingHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	clean := make([]slog.Attr, 0, len(attrs))
 	for _, attr := range attrs {
-		clean = append(clean, sanitizeAttr(attr, h.maxValueLength))
+		clean = append(clean, h.sanitize(attr))
 	}
-	return &sanitizingHandler{next: h.next.WithAttrs(clean), maxValueLength: h.maxValueLength}
+	return &sanitizingHandler{next: h.next.WithAttrs(clean), maxValueLength: h.maxValueLength, privateGroup: h.privateGroup}
 }
 
 func (h *sanitizingHandler) WithGroup(name string) slog.Handler {
-	return &sanitizingHandler{next: h.next.WithGroup(sanitizeText(name, h.maxValueLength)), maxValueLength: h.maxValueLength}
+	return &sanitizingHandler{
+		next: h.next.WithGroup(sanitizeText(name, h.maxValueLength)), maxValueLength: h.maxValueLength,
+		privateGroup: h.privateGroup || isSensitiveKey(name),
+	}
+}
+
+func (h *sanitizingHandler) sanitize(attr slog.Attr) slog.Attr {
+	if h.privateGroup {
+		return slog.String(sanitizeText(attr.Key, h.maxValueLength), redactedValue)
+	}
+	return sanitizeAttr(attr, h.maxValueLength)
 }
 
 func sanitizeAttr(attr slog.Attr, maxLength int) slog.Attr {

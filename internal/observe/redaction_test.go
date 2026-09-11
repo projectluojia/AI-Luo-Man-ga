@@ -69,6 +69,23 @@ func TestBoundLogFieldsUseSameRedaction(t *testing.T) {
 	}
 }
 
+func TestSensitiveBoundGroupsRedactTheirChildren(t *testing.T) {
+	for _, format := range []string{"console", "json"} {
+		buffer := &bytes.Buffer{}
+		_, err := observe.Configure(observe.Config{Service: "test", Format: format, Writer: buffer})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _, _ = observe.Configure(observe.Config{Service: "test"}) })
+		slog.Default().With("request_id", "request-1").WithGroup("credentials").
+			With("detail", "synthetic-private-content").WithGroup("nested").
+			Info("完成", "note", "synthetic-private-content")
+		if strings.Contains(buffer.String(), "synthetic-private-content") || !strings.Contains(buffer.String(), "request-1") {
+			t.Fatal("敏感绑定组未净化子字段，或丢失外部关联标识")
+		}
+	}
+}
+
 func TestOpaqueLogValuesCannotSerializePrivateContent(t *testing.T) {
 	for _, format := range []string{"console", "json"} {
 		buffer := &bytes.Buffer{}
