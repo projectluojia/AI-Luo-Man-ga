@@ -25,6 +25,7 @@ type ComponentSpec struct {
 // packageCandidate 是升级候选的加载结果。
 type packageCandidate struct {
 	runtime Runtime
+	faces   Faces
 	host    Host
 }
 
@@ -140,7 +141,7 @@ func (m *Manager) UpgradePackage(ctx context.Context, spec PackageSpec) error {
 			stopCandidates(candidates)
 			return errors.Join(ErrLoadFailed, result.err)
 		}
-		candidates = append(candidates, packageCandidate{runtime: result.runtime, host: host})
+		candidates = append(candidates, packageCandidate{runtime: result.runtime, faces: result.faces, host: host})
 	}
 	// 2. 原子切换：锁定全部条目，校验就绪后整体替换。
 	entries := group.order
@@ -177,6 +178,7 @@ func (m *Manager) UpgradePackage(ctx context.Context, spec PackageSpec) error {
 		item.manifest = spec.Components[index].Runtime
 		item.host = candidates[index].host
 		item.runtime = candidates[index].runtime
+		item.faces = candidates[index].faces
 		item.generation++
 		item.currentInFlight = 0
 		if old.inFlight > 0 {

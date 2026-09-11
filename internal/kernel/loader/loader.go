@@ -117,10 +117,17 @@ type Description struct {
 	Mode    string
 }
 
-// Runtime 是已加载运行时的生命周期面，全部角色共有。能力面按角色拆分：
-// 能力提供者实现 Invoker（被 Dispatcher 调用），AI 执行者实现
-// internal/kernel/executor.ClientProvider（驱动 Run 会话），角色由清单声明、
-// 加载期校验，不存在"不适用"的运行时方法。
+// Faces 是运行时按角色拆分的执行面集合：能力提供者携带 Invoker（被
+// Dispatcher 调用），执行者携带 Client（驱动 Run 会话）。加载期已强制
+// 角色与执行面一致，Acquire 无条件提取：执行者租约的 Invoker 为 nil，
+// 能力租约的 Client 为 nil，调用错面由 nil fail-closed。
+type Faces struct {
+	Invoker Invoker
+	Client  executor.Client
+}
+
+// Runtime 是已加载运行时的生命周期面，全部角色共有。能力面按角色拆分，
+// 见 Faces。
 type Runtime interface {
 	Describe(context.Context) (Description, error)
 	Start(context.Context) error
@@ -163,6 +170,7 @@ type entry struct {
 	mu              sync.Mutex
 	state           string
 	runtime         Runtime
+	faces           Faces
 	generation      uint64
 	inFlight        int
 	currentInFlight int
@@ -453,6 +461,7 @@ func (m *Manager) ensureLoaded(ctx context.Context, item *entry) error {
 			} else {
 				item.state = StateReady
 				item.runtime = loadErr.runtime
+				item.faces = loadErr.faces
 				item.generation++
 			}
 			close(wait)
@@ -484,6 +493,7 @@ func (m *Manager) ensureLoaded(ctx context.Context, item *entry) error {
 
 type loadResult struct {
 	runtime Runtime
+	faces   Faces
 	err     error
 }
 
@@ -504,12 +514,20 @@ func loadRuntime(ctx context.Context, host Host, manifest Manifest) loadResult {
 	}
 	// 角色与执行面一致性在加载期强制：能力提供者必须实现 Invoker；执行者
 	// 必须实现 internal/kernel/executor 契约（ClientProvider）。
+	var faces Faces
 	if manifest.Role == RoleProvider {
-		if _, ok := runtime.(Invoker); !ok {
+		invoker, ok := runtime.(Invoker)
+		if !ok {
 			return stopAfterLoadFailure(ctx, runtime, ErrInvalidManifest)
 		}
+		faces.Invoker = invoker
 	} else {
-		if _, ok := runtime.(executor.ClientProvider); !ok {
+		provider, ok := runtime.(executor.ClientProvider)
+		if !ok {
+			return stopAfterLoadFailure(ctx, runtime, ErrInvalidManifest)
+		}
+		faces.Client = provider.Client()
+		if faces.Client == nil {
 			return stopAfterLoadFailure(ctx, runtime, ErrInvalidManifest)
 		}
 	}
@@ -519,7 +537,7 @@ func loadRuntime(ctx context.Context, host Host, manifest Manifest) loadResult {
 	if err := runtime.Health(ctx); err != nil {
 		return stopAfterLoadFailure(ctx, runtime, err)
 	}
-	return loadResult{runtime: runtime}
+	return loadResult{runtime: runtime, faces: faces}
 }
 
 func stopAfterLoadFailure(ctx context.Context, runtime Runtime, primary error) loadResult {
@@ -535,8 +553,8 @@ func stopAfterLoadFailure(ctx context.Context, runtime Runtime, primary error) l
 type Lease struct {
 	entry      *entry
 	runtime    Runtime
+	faces      Faces
 	generation uint64
-	invoker    Invoker
 	once       sync.Once
 }
 
@@ -567,32 +585,22 @@ func (m *Manager) Acquire(ctx context.Context, id string) (*Lease, error) {
 		m.mu.RUnlock()
 		return nil, ErrUnavailable
 	}
-	var invoker Invoker
-	if item.manifest.Role == RoleProvider {
-		// 能力提供者的 Invoker 由加载期校验保证；取不到视为内部违例。
-		var ok bool
-		invoker, ok = item.runtime.(Invoker)
-		if !ok {
-			item.mu.Unlock()
-			m.mu.RUnlock()
-			return nil, ErrUnavailable
-		}
-	}
 	item.inFlight++
 	item.currentInFlight++
 	loadedRuntime := item.runtime
+	faces := item.faces
 	generation := item.generation
 	item.mu.Unlock()
 	m.mu.RUnlock()
 	observe.DefaultMetrics().RuntimeCallStarted()
-	return &Lease{entry: item, runtime: loadedRuntime, generation: generation, invoker: invoker}, nil
+	return &Lease{entry: item, runtime: loadedRuntime, faces: faces, generation: generation}, nil
 }
 
 func (l *Lease) Invoke(ctx context.Context, request contracts.RequestContext, payload json.RawMessage) (json.RawMessage, error) {
-	if l == nil || l.runtime == nil || l.invoker == nil {
+	if l == nil || l.runtime == nil || l.faces.Invoker == nil {
 		return nil, ErrUnavailable
 	}
-	result, err := l.invoker.Invoke(ctx, request, payload)
+	result, err := l.faces.Invoker.Invoke(ctx, request, payload)
 	if errors.Is(err, ErrUnavailable) || errors.Is(err, ErrRuntimeProtocol) {
 		l.entry.mu.Lock()
 		if l.entry.state == StateReady && l.entry.generation == l.generation {
@@ -603,12 +611,13 @@ func (l *Lease) Invoke(ctx context.Context, request contracts.RequestContext, pa
 	return result, err
 }
 
-// Runtime 返回租约持有的运行时（供调用方获取协议级客户端等）。
-func (l *Lease) Runtime() Runtime {
+// Faces 返回租约持有运行时的执行面：能力租约的 Invoker 非 nil，执行者
+// 租约的 Client 非 nil；调用错面取到 nil fail-closed。
+func (l *Lease) Faces() Faces {
 	if l == nil {
-		return nil
+		return Faces{}
 	}
-	return l.runtime
+	return l.faces
 }
 
 func (l *Lease) Release() {
@@ -669,30 +678,8 @@ func (m *Manager) Handler(id string) registry.Handler {
 	}
 }
 
-// Executor 解析本 Deployment 唯一的执行者运行时（清单声明 RoleExecutor），
-// 返回其租约；零个或多个执行者都 fail-closed，避免装配期不确定路由。调用方
-// 负责 Release，并按 internal/kernel/executor 契约取用客户端。
-func (m *Manager) Executor(ctx context.Context) (*Lease, error) {
-	m.mu.RLock()
-	var id string
-	matches := 0
-	for _, item := range m.entries {
-		if item.manifest.Role == RoleExecutor {
-			matches++
-			id = item.manifest.ID
-		}
-	}
-	m.mu.RUnlock()
-	switch matches {
-	case 1:
-		return m.Acquire(ctx, id)
-	case 0:
-		return nil, fmt.Errorf("%w: no executor runtime is registered", ErrNotFound)
-	default:
-		return nil, fmt.Errorf("%w: %d executor runtimes are registered, expected exactly one", ErrInvalidManifest, matches)
-	}
-}
-
+// Warmup 并发预热一批运行时：加载并执行一次健康检查，使其进入 ready 态。
+// id 集合去重排序后按组批量加载；进程型运行时由此启动或完成连接。
 func (m *Manager) Warmup(ctx context.Context, ids []string, concurrency int) error {
 	if concurrency < 1 || concurrency > 64 {
 		return ErrInvalidManifest
