@@ -1,4 +1,4 @@
-.PHONY: generate test test-contracts test-package-manager test-agent test-campus test-weather test-e2e test-race test-integration vet run
+.PHONY: generate test test-contracts test-package-manager test-agent test-campus test-weather test-hosted test-e2e test-race test-integration vet run
 
 UV ?= uv
 AGENT_PROJECT := packages/agent/runtime
@@ -34,6 +34,12 @@ test-campus:
 
 test-weather:
 	cd packages/weather && go mod verify && go mod tidy -diff && go vet ./src/... && go test ./src/...
+
+# hosted provider 包（guestkit 共享库 + 业务包）：module 校验 + 单元测试 +
+# wasip1 vet + 现场构建。集成测试（真实 wasm guest）在 testsupport 各套件。
+test-hosted:
+	cd packages/guestkit && go vet ./... && go test ./...
+	for pkg in timetable classroom calendar library sports ecard; do ( 		cd packages/$$pkg && go mod verify && go mod tidy -diff && go test ./... && GOOS=wasip1 GOARCH=wasm go vet ./src 	); done
 
 test-e2e:
 	$(UV) sync --project $(AGENT_PROJECT) --locked

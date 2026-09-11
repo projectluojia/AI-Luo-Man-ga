@@ -1,0 +1,112 @@
+name: Hosted packages
+
+# packages/ 下全部 hosted provider 包（guestkit 共享库 + 业务包）共享一条
+# 矩阵流水线：module 校验 + wasip1 vet + 单元测试 + pack + 冒烟安装。
+# 各包迁移到独立仓库时，把本文件的矩阵行复制为独立的 per-package workflow。
+# 该流程不参与 Core 的 ci-required。
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - packages/guestkit/**
+      - packages/timetable/**
+      - packages/classroom/**
+      - packages/calendar/**
+      - packages/library/**
+      - packages/sports/**
+      - packages/ecard/**
+      - package-manager/**
+      - go.work
+      - go.work.sum
+      - .github/workflows/hosted-packages.yml
+  pull_request:
+    paths:
+      - packages/guestkit/**
+      - packages/timetable/**
+      - packages/classroom/**
+      - packages/calendar/**
+      - packages/library/**
+      - packages/sports/**
+      - packages/ecard/**
+      - package-manager/**
+      - go.work
+      - go.work.sum
+      - .github/workflows/hosted-packages.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hosted-packages-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  package:
+    name: ${{ matrix.package }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        package:
+          - guestkit
+          - timetable
+          - classroom
+          - calendar
+          - library
+          - sports
+          - ecard
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: packages/${{ matrix.package }}/go.mod
+          cache: true
+          cache-dependency-path: |
+            packages/${{ matrix.package }}/go.mod
+            packages/guestkit/go.mod
+            go.work.sum
+      - name: 校验 ${{ matrix.package }} Go module 与 WASM 构建
+        working-directory: packages/${{ matrix.package }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          go mod verify
+          go mod tidy -diff
+          go test ./...
+        # guestkit 是纯共享库（无 src/、无 ailuo.toml），跳过 wasip1 vet。
+        if: matrix.package != 'guestkit'
+      - name: 校验 guestkit Go module
+        working-directory: packages/guestkit
+        if: matrix.package == 'guestkit'
+        shell: bash
+        run: |
+          set -euo pipefail
+          go mod verify
+          go mod tidy -diff
+          go test ./...
+      - name: 构建 Package Manager CLI
+        if: matrix.package != 'guestkit'
+        working-directory: package-manager
+        run: |
+          go build -o "$RUNNER_TEMP/ailuo" ./cmd/ailuo-pm
+      - name: 打包 ${{ matrix.package }}
+        if: matrix.package != 'guestkit'
+        run: |
+          "$RUNNER_TEMP/ailuo" pack "packages/${{ matrix.package }}" "$RUNNER_TEMP/package-dist"
+      - name: 安装并验证 ${{ matrix.package }} 发布物
+        if: matrix.package != 'guestkit'
+        shell: bash
+        run: |
+          set -euo pipefail
+          package_id="${{ matrix.package }}"
+          mapfile -t package_tarballs < <(find "$RUNNER_TEMP/package-dist" -maxdepth 1 -type f -name "${package_id}-*.tgz" -print)
+          test "${#package_tarballs[@]}" -eq 1
+          package_tgz="${package_tarballs[0]}"
+          package_version="$(tar -xzOf "$package_tgz" manifest.json | jq -er .version)"
+          "$RUNNER_TEMP/ailuo" install --root "$RUNNER_TEMP/package-root" "$package_tgz"
+          "$RUNNER_TEMP/ailuo" list --root "$RUNNER_TEMP/package-root" | grep -q "^${package_id}@${package_version}"
