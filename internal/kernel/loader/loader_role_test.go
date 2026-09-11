@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/projectluojia/AI-Luo-Man-ga/contracts/pkg/packagecontract"
+	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/contracts"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/executor"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
 
@@ -115,72 +116,54 @@ func TestLoaderRejectsExecutorRoleWithoutContract(t *testing.T) {
 	}
 }
 
-func TestManagerExecutorResolvesConfiguredExecutor(t *testing.T) {
+func TestLeaseFacesRouteByRole(t *testing.T) {
 	description := loader.Description{ID: "exec.unique", Version: "1.0.0", Mode: loader.ModeIsolated}
-	manager, err := loader.New(&fakeHost{mode: loader.ModeIsolated, runtime: &fakeExecutorRuntime{description: description}})
+	manager, err := loader.New(&idKeyedHost{mode: loader.ModeIsolated, runtimes: map[string]loader.Runtime{
+		"exec.unique": &fakeExecutorRuntime{description: description},
+		"cap.test":    &fakeRuntime{description: loader.Description{ID: "cap.test", Version: "1.0.0", Mode: loader.ModeIsolated}},
+	}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := manager.Register(context.Background(), loader.Manifest{
-		ID: description.ID, Version: description.Version, Mode: description.Mode,
+		ID: "exec.unique", Version: "1.0.0", Mode: loader.ModeIsolated,
 		Role: loader.RoleExecutor, LockedDigest: digest,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := manager.Warmup(context.Background(), []string{description.ID}, 1); err != nil {
-		t.Fatalf("warmup: %v", err)
-	}
-	lease, err := manager.Executor(context.Background())
-	if err != nil {
-		t.Fatalf("Executor: %v", err)
-	}
-	defer lease.Release()
-	if lease.ID() != description.ID {
-		t.Fatalf("executor id=%q, want %q", lease.ID(), description.ID)
-	}
-	if _, ok := lease.Runtime().(executor.ClientProvider); !ok {
-		t.Fatal("executor runtime does not expose the executor contract")
-	}
-}
-
-func TestManagerExecutorFailsClosedWithoutConfiguredExecutor(t *testing.T) {
-	manager, err := loader.New(&fakeHost{runtime: &fakeRuntime{description: loader.Description{ID: "cap.test", Version: "1.0.0", Mode: loader.ModeHosted}}})
-	if err != nil {
-		t.Fatal(err)
-	}
 	if err := manager.Register(context.Background(), loader.Manifest{
-		ID: "cap.test", Version: "1.0.0", Mode: loader.ModeHosted, ABIVersion: packagecontract.GuestABI1,
+		ID: "cap.test", Version: "1.0.0", Mode: loader.ModeIsolated,
 		Role: loader.RoleProvider, LockedDigest: digest,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := manager.Executor(context.Background()); !errors.Is(err, loader.ErrNotFound) {
-		t.Fatalf("Executor error=%v, want ErrNotFound", err)
-	}
-}
-
-func TestManagerExecutorRejectsMultipleExecutors(t *testing.T) {
-	host := &idKeyedHost{mode: loader.ModeIsolated, runtimes: map[string]loader.Runtime{
-		"exec.one": &fakeExecutorRuntime{description: loader.Description{ID: "exec.one", Version: "1.0.0", Mode: loader.ModeIsolated}},
-		"exec.two": &fakeExecutorRuntime{description: loader.Description{ID: "exec.two", Version: "1.0.0", Mode: loader.ModeIsolated}},
-	}}
-	manager, err := loader.New(host)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, id := range []string{"exec.one", "exec.two"} {
-		if err := manager.Register(context.Background(), loader.Manifest{
-			ID: id, Version: "1.0.0", Mode: loader.ModeIsolated,
-			Role: loader.RoleExecutor, LockedDigest: digest,
-		}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := manager.Warmup(context.Background(), []string{"exec.one", "exec.two"}, 2); err != nil {
+	if err := manager.Warmup(context.Background(), []string{"cap.test", "exec.unique"}, 2); err != nil {
 		t.Fatalf("warmup: %v", err)
 	}
-	if _, err := manager.Executor(context.Background()); !errors.Is(err, loader.ErrInvalidManifest) {
-		t.Fatalf("Executor error=%v, want ErrInvalidManifest", err)
+	executorLease, err := manager.Acquire(context.Background(), "exec.unique")
+	if err != nil {
+		t.Fatalf("acquire executor: %v", err)
+	}
+	defer executorLease.Release()
+	if executorLease.Faces().Client == nil {
+		t.Fatal("executor lease does not expose the executor client")
+	}
+	if executorLease.Faces().Invoker != nil {
+		t.Fatal("executor lease must not expose an invoker")
+	}
+	if _, err := executorLease.Invoke(context.Background(), contracts.RequestContext{CapabilityID: "executor.call"}, []byte(`{}`)); !errors.Is(err, loader.ErrUnavailable) {
+		t.Fatalf("invoke error = %v, want ErrUnavailable", err)
+	}
+	capabilityLease, err := manager.Acquire(context.Background(), "cap.test")
+	if err != nil {
+		t.Fatalf("acquire capability: %v", err)
+	}
+	defer capabilityLease.Release()
+	if capabilityLease.Faces().Invoker == nil {
+		t.Fatal("capability lease does not expose an invoker")
+	}
+	if capabilityLease.Faces().Client != nil {
+		t.Fatal("capability lease must not expose an executor client")
 	}
 }
 

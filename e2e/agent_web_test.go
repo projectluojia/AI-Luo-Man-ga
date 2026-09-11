@@ -29,7 +29,6 @@ import (
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/adapters/packagesource"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/appconfig"
 	kernelecho "github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/echo"
-	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/executor"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/health"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/identity"
 	"github.com/projectluojia/AI-Luo-Man-ga/internal/kernel/loader"
@@ -225,16 +224,14 @@ func TestGoPythonModelToolDatabaseLoop(t *testing.T) {
 	if err := executorManager.Warmup(ctx, executorManager.Pinned(), 1); err != nil {
 		t.Fatalf("warm executor: %v\n%s", err, logs.String())
 	}
-	executorLease, err := executorManager.Executor(ctx)
+	executorLease, err := executorManager.Acquire(ctx, executorRecord.Runtime.ID)
 	if err != nil {
-		t.Fatalf("resolve executor: %v", err)
+		t.Fatalf("resolve executor %q: %v", executorRecord.Runtime.ID, err)
 	}
-	executorRuntime := executorLease.Runtime()
-	clientProvider, ok := executorRuntime.(executor.ClientProvider)
-	if !ok {
-		t.Fatal("executor runtime does not expose an executor client")
+	executorClient := executorLease.Faces().Client
+	if executorClient == nil {
+		t.Fatalf("runtime %q does not expose an executor client", executorRecord.Runtime.ID)
 	}
-	executorClient := clientProvider.Client()
 	// 关闭顺序（defer 逆序）：Shutdown 需等待租约排空，故租约归还最后注册、最先执行。
 	defer func() {
 		shutdownContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
