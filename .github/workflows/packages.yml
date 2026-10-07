@@ -1,7 +1,7 @@
 name: Packages
 
-# packages/ 下全部可安装包共享一条矩阵流水线：module 校验 + 单元测试 +
-# pack + 冒烟安装；hosted 包加 wasip1 vet，isolated 包加原生 vet/test。
+# packages/ 下全部可安装包共享一条矩阵流水线：module 校验 + 测试 +
+# pack + 冒烟安装；hosted 包执行原生业务测试、已有集成测试与 wasip1 vet，isolated 包执行原生 vet/test。
 # guestkit（guest 侧共享 ABI 库，非可安装包）由独立 job 校验。
 # 各包迁移到独立仓库时，把对应 matrix 条目复制为独立 workflow。
 # 该流程不参与 Core 的 ci-required。
@@ -14,6 +14,10 @@ on:
       - guestkit/**
       - contracts/**
       - package-manager/**
+      - internal/**
+      - testsupport/**
+      - go.mod
+      - go.sum
       - go.work
       - go.work.sum
       - .github/workflows/packages.yml
@@ -23,6 +27,10 @@ on:
       - guestkit/**
       - contracts/**
       - package-manager/**
+      - internal/**
+      - testsupport/**
+      - go.mod
+      - go.sum
       - go.work
       - go.work.sum
       - .github/workflows/packages.yml
@@ -67,13 +75,14 @@ jobs:
       matrix:
         include:
           # hosted（wasm guest，ABI 1）；id 为安装发布物中的包 ID（目录名可不同）
-          - { package: timetable,   id: timetable, kind: hosted }
-          - { package: classroom,   id: classroom, kind: hosted }
-          - { package: calendar,    id: calendar,  kind: hosted }
-          - { package: library,     id: library,   kind: hosted }
-          - { package: sports,      id: sports,    kind: hosted }
-          - { package: ecard,       id: ecard,     kind: hosted }
-          - { package: campus-bus,  id: campus,    kind: hosted }
+          # 集成夹具位于根模块，必须显式选中；./... 只覆盖当前业务模块的原生测试。
+          - { package: timetable,   id: timetable, kind: hosted, test_targets: './... ../../testsupport/timetabletest' }
+          - { package: classroom,   id: classroom, kind: hosted, test_targets: './... ../../testsupport/classroomtest' }
+          - { package: calendar,    id: calendar,  kind: hosted, test_targets: './... ../../testsupport/calendartest' }
+          - { package: library,     id: library,   kind: hosted, test_targets: './... ../../testsupport/librarytest' }
+          - { package: sports,      id: sports,    kind: hosted, test_targets: './... ../../testsupport/sportstest' }
+          - { package: ecard,       id: ecard,     kind: hosted, test_targets: './... ../../testsupport/ecardtest' }
+          - { package: campus-bus,  id: campus,    kind: hosted, test_targets: './...' }
           # isolated（原生进程）
           - { package: weather,     id: weather,   kind: isolated }
           # agent 是 executor 包（isolated，Python runtime），由 agent-package.yml 校验
@@ -90,7 +99,7 @@ jobs:
             guestkit/go.mod
             contracts/go.sum
             package-manager/go.sum
-      - name: 校验 ${{ matrix.package }} Go module 与构建
+      - name: 校验 ${{ matrix.package }} Go module、静态检查与测试
         working-directory: packages/${{ matrix.package }}
         shell: bash
         run: |
@@ -98,6 +107,7 @@ jobs:
           go mod verify
           go mod tidy -diff
           if [ "${{ matrix.kind }}" = hosted ]; then
+            go test -count=1 -tags=integration -timeout=5m ${{ matrix.test_targets }}
             GOOS=wasip1 GOARCH=wasm go vet ./src
           else
             go vet ./src/...
